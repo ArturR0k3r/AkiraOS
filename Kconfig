@@ -1,0 +1,104 @@
+menu "Atym options"
+
+source "Kconfig.zephyr"
+
+config Atym
+	bool "Atym Runtime"
+	default y
+
+  select WAMR
+
+  select FLASH
+  select FLASH_MAP
+  select FLASH_PAGE_LAYOUT
+  select FILE_SYSTEM
+  select FILE_SYSTEM_LITTLEFS
+  select REBOOT
+  select MBEDTLS
+
+  select COAP
+
+  select ZCBOR
+#  select ZCBOR_VERBOSE
+  select PRINTK
+
+  select SMF
+  select SMF_ANCESTOR_SUPPORT
+  select SMF_INITIAL_TRANSITION
+
+  select SETTINGS
+  select SETTINGS_RUNTIME
+
+  select NETWORKING
+  select NET_SOCKETS
+  select NET_CONNECTION_MANAGER
+  select NET_UDP
+
+  select TLS_CREDENTIALS
+  select NET_SOCKETS_ENABLE_DTLS
+  select NET_SOCKETS_SOCKOPT_TLS
+  select MBEDTLS_KEY_EXCHANGE_PSK_ENABLED
+  select MBEDTLS_CIPHER_GCM_ENABLED
+
+  select EVENTS
+  select EVENTFD
+  #select POSIX_API
+
+  help
+	  Enable the Project Ocre runtime.
+
+config ATYM_WIFI_SSID
+  string "WiFi SSID"
+  default "my-wifi-ssid"
+  help
+    Configure the default WiFi SSID
+
+config ATYM_WIFI_PSK
+  string "WiFi PSK"
+  default "my-wifi-psk"
+  help
+    Configure the default WiFi PSK
+        
+config ATYM_HUB_URL
+  string "Atym Hub URL"
+  default "35.231.180.157"
+  help
+    Configure the default Atym Hub URL
+
+config ATYM_HUB_PSK_TAG
+  string "Atym Hub PSK tag"
+  default "SuperSecretKey"
+  help
+    Configure the PSK tag for TLS communications
+
+config ATYM_HUB_PSK_ID
+  string "Atym Hub PSK ID"
+  default "nubix@my-device"
+  help
+    Configure the PSK ID for TLS communications
+
+config OCRE_WAMR_HEAP_BUFFER_SIZE
+  int "WAMR heap buffer size in bytes"
+  default 204800
+  help
+    A static memory allocation for WAMR to use as a heap.
+
+config ATYM_TRACE_DM_STATE_MACHINE
+  bool "Enable tracing of the Device Manager state machine"
+  default n
+  help
+    Enable trace logging for the Atym Device Manager  state machine
+
+config ATYM_LOG_DEBUG
+  bool "Debug logging"
+  default n
+  help
+    Enable Atym debug logging
+
+config RNG_SENSOR
+    bool "RNG Sensor"
+    depends on SENSOR
+    help
+      Enable support for the custom RNG sensor.
+
+endmenu

@@ -1,0 +1,18 @@
+manifest:
+  projects:
+    - name: zephyr
+      revision: v3.7.0
+      url: https://github.com/zephyrproject-rtos/zephyr
+      west-commands: scripts/west-commands.yml
+      import: true
+    - name: project-ocre
+      revision: main
+      url: https://github.com/atym-io/ocre-runtime
+      path: ocre
+    - name: wasm-micro-runtime
+      revision: main
+      url: https://github.com/bytecodealliance/wasm-micro-runtime
+      path: wasm-micro-runtime
+      
+  self:
+    path: application   

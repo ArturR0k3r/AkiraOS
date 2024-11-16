@@ -1,0 +1,230 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		}
+	],
+	"settings": {
+		// Hush CMake
+		"cmake.configureOnOpen": false,
+		// CppTools and IntelliSense
+		"C_Cpp.workspaceParsingPriority": "medium",
+		"C_Cpp.default.cStandard": "c11",
+		"C_Cpp.default.browse.path": [
+			"${workspaceFolder}/application/src"
+		],
+		"C_Cpp.intelliSenseEngine": "default",
+		"C_Cpp.default.includePath": [
+			"${workspaceFolder}/application/src/",
+			"${workspaceFolder}/zephyr/include/",
+		],
+		"C_Cpp.default.forcedInclude": [
+			"${workspaceFolder}/build/zephyr/include/generated/zephyr/autoconf.h"
+		],
+		"C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+		// Files
+		"files.exclude": {
+			"**/.git": true,
+			"**/.svn": true,
+			"**/.hg": true,
+			"**/CVS": true,
+			"**/.DS_Store": true,
+			"**/Thumbs.db": true
+		},
+		// Kconfig
+		"kconfig.root": "${workspaceFolder}/application/Kconfig",
+		"files.associations": {
+			"*.h": "c",
+			"*.c": "c",
+			"typeinfo": "c",
+			"*.g": "c",
+			"array": "c",
+			"string": "c",
+			"string_view": "c",
+			"*.tcc": "c",
+			"system_error": "c",
+			"functional": "c",
+			"tuple": "c",
+			"type_traits": "c",
+			"utility": "c",
+			"numbers": "c"
+		},
+		"editor.formatOnType": true,
+		"cortex-debug.variableUseNaturalFormat": false,
+		"git.ignoreLimitWarning": true,
+		"cSpell.words": [
+			"blockwise",
+			"COAP",
+			"hexdump",
+			"OCRE",
+			"WASI",
+			"ZCBOR",
+			"zsock"
+		],
+		"cSpell.ignoreWords": [
+			"FOTA",
+			"IWASM",
+			"autoconnect",
+			"wamr"
+		],
+		"sonarlint.pathToCompileCommands": "${workspaceFolder}/build/compile_commands.json",
+	},
+	"tasks": {
+		"version": "2.0.0",
+		"tasks": [
+			{
+				"label": "West Build",
+				"type": "shell",
+				"group": {
+					"kind": "build",
+					"isDefault": true
+				},
+				"command": "west",
+				"args": [
+					"build",
+					"--pristine",
+					"-b",
+					"${input:board}",
+					"${workspaceFolder}/application",
+					"-d",
+					"${workspaceFolder}/build",
+					"--",
+					// "-DCONFIG_BOOTLOADER_MCUBOOT=y",
+					// "-DCONFIG_MCUBOOT_SIGNATURE_KEY_FILE=\\\"./bootloader/mcuboot/root-rsa-2048.pem\\\"",
+					"-DMODULE_EXT_ROOT=\"${workspaceFolder}/application\"",
+				],
+				"problemMatcher": [
+					"$gcc"
+				],
+			},
+			{
+				"label": "West Pristine Build",
+				"type": "shell",
+				"group": {
+					"kind": "build",
+				},
+				"command": "west",
+				"args": [
+					"build",
+					"-p",
+					"${input:pristine}",
+					"-b",
+					"${input:board}"
+				],
+				"problemMatcher": [
+					"$gcc"
+				]
+			},
+			{
+				"label": "Echo variable",
+				"type": "shell",
+				"command": "echo userHome: ${workspaceFolder}",
+			},
+			{
+				"label": "West Flash Application",
+				"type": "shell",
+				"command": "west",
+				"args": [
+					"flash"
+				],
+				"problemMatcher": [
+					"$gcc"
+				]
+			}
+		],
+		"inputs": [
+			{
+				"id": "board",
+				"type": "pickString",
+				"options": [
+					"native_sim",
+					"nrf5340dk_nrf5340_cpuapp",
+					"nucleo_h563zi",
+					"esp32c3_devkitm"
+				],
+				"default": "native_sim",
+				"description": "See https://docs.zephyrproject.org/latest/boards/index.html"
+			},
+			{
+				"id": "pristine",
+				"type": "pickString",
+				"description": "Choose when to run a pristine build",
+				"default": "auto",
+				"options": [
+					"auto",
+					"always",
+					"never"
+				]
+			}
+		]
+	},
+	"extensions": {
+		"recommendations": [
+			"ms-vscode.cpptools-extension-pack",
+			"ms-python.python",
+			"ms-vscode.vscode-embedded-tools",
+			"ms-vscode.vscode-serial-monitor",
+			"marus25.cortex-debug",
+		]
+	},
+	"launch": {
+		"version": "0.2.0",
+		"configurations": [
+			{
+				"name": "(gdb) Launch",
+				"type": "cppdbg",
+				"request": "launch",
+				"program": "${workspaceFolder}/build/zephyr/zephyr.exe",
+				"args": [
+					"-seed=$RANDOM",
+					"--flash=${workspaceFolder}/flash.bin"
+				],
+				"stopAtEntry": false,
+				"cwd": "${fileDirname}",
+				"environment": [],
+				"externalConsole": false,
+				"MIMode": "gdb",
+				"setupCommands": [
+					{
+						"description": "Enable pretty-printing for gdb",
+						"text": "-enable-pretty-printing",
+						"ignoreFailures": true
+					},
+					{
+						"description": "Set Disassembly Flavor to Intel",
+						"text": "-gdb-set disassembly-flavor intel",
+						"ignoreFailures": true
+					}
+				]
+			},
+			{
+				"name": "Cortex Debug - ST-LINK",
+				"request": "launch",
+				"cwd": "${workspaceFolder}",
+				"executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
+				"runToEntryPoint": "main",
+				"showDevDebugOutput": "none",
+				"type": "cortex-debug",
+				"servertype": "stlink",
+				"stm32cubeprogrammer": "",
+				"interface": "swd",
+				"serverArgs": [
+					"-m 1"
+				],
+				"device": "STM32H563ZI",
+				"v1": false
+			},
+			{
+				"name": "Cortex Debug - jlink",
+				"cwd": "${workspaceFolder}",
+				"executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
+				"device": "nRF5340_xxAA_APP",
+				"request": "launch",
+				"type": "cortex-debug",
+				"runToEntryPoint": "main",
+				"servertype": "jlink",
+				"interface": "swd"
+			}
+		]
+	}
+}
