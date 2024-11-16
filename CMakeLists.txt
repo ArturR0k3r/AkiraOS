@@ -1,66 +1,10 @@
-cmake_minimum_required(VERSION 3.20.0)
+cmake_minimum_required(VERSION 3.20.0w)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
-project(AtymRuntime VERSION ${APP_VERSION_MAJOR}.${APP_VERSION_MINOR}.${APP_PATCHLEVEL}.${APP_VERSION_TWEAK} LANGUAGES C ASM)
+project(iot-verse LANGUAGES C ASM)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-# Get the Git commit information and build version string
-execute_process(
-  	COMMAND git describe --long --dirty --always
-  	WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  	OUTPUT_VARIABLE RAW_GIT_VERSION
-  	OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
-  string(REPLACE "-dirty" "+" BUILD_INFO ${RAW_GIT_VERSION})
-
-  string(TIMESTAMP BUILD_DATE "%d-%m-%Y, %H:%M" UTC )
-
-  cmake_host_system_information(RESULT BUILD_MACHINE QUERY HOSTNAME)
-
- 	string(PREPEND BUILD_INFO dev-)
-
-  string(REPLACE "-" ";" GIT_INFO_LIST ${RAW_GIT_VERSION})
-  list(GET GIT_INFO_LIST 0 VERSION_NUMBER)
-  message("VERSION NUMBER: ${VERSION_NUMBER}")
-  zephyr_compile_options(-DVERSION_INFO="${VERSION_NUMBER}")
-  message("BUILD DATE: ${BUILD_DATE}")
-  zephyr_compile_options(-DVERSION_BUILD_DATE="${BUILD_DATE}")
-  message("BUILD MACHINE: ${BUILD_MACHINE}")
-  zephyr_compile_options(-DVERSION_BUILD_MACHINE="${BUILD_MACHINE}")
-  message("BUILD_INFO: ${BUILD_INFO}")
-  zephyr_compile_options(-DVERSION_BUILD_INFO="${BUILD_INFO}")
-
-##############
-
-message("Generating ZCBOR serializtion code.")
-add_custom_command(
-    OUTPUT
-      ${CMAKE_CURRENT_LIST_DIR}/src/net/messages/autogen/device_decode.c
-      ${CMAKE_CURRENT_LIST_DIR}/src/net/messages/autogen/device_decode.h
-      ${CMAKE_CURRENT_LIST_DIR}/src/net/messages/autogen/device_encode.c
-      ${CMAKE_CURRENT_LIST_DIR}/src/net/messages/autogen/device_encode.h
-      ${CMAKE_CURRENT_LIST_DIR}/src/net/messages/autogen/device_types.h
-    COMMAND zcbor code # Invoke code generation
-      --decode
-      --encode # Generate both encoding and decoding code
-      --short-names # Attempt to make generated symbol names shorter (at the risk of collision)
-      -c ${CMAKE_CURRENT_LIST_DIR}/src/net/messages/device_api.cddl  # Generate code for the data structures
-      -t PublishDeviceStatusRequest
-        PublishDeviceStatusResponse
-        DescribeDevicePackageResponse
-        ExampleDataType
-      --output-c ${CMAKE_CURRENT_LIST_DIR}/src/net/messages/autogen/device.c
-      --output-h ${CMAKE_CURRENT_LIST_DIR}/src/net/messages/autogen/device.h
-      --output-cmake ${CMAKE_CURRENT_LIST_DIR}/src/net/messages/autogen/device.cmake # The generated cmake file will be placed here
-    DEPENDS
-      ${CMAKE_CURRENT_LIST_DIR}/src/net/messages/device_api.cddl
-  )
-
-  ## TODO:  the above needs to be updated.  Here's the proper command:
-  ## zcbor code --decode --encode --short-names -c  ./src/ocre/net/messages/device_api.cddl -t publish-device-status-request publish-device-status-response describe-firmware-response list-device-package-apps-response  --output-c ./src/ocre/net/messages/autogen/device.c --output-h ./src/ocre/net/messages/autogen/device.h --output-cmake ./src/ocre/net/messages/autogen/device.cmake 
-
 
 # Determine the ISA of the target and set appropriately
 if (DEFINED CONFIG_ISA_THUMB2)
@@ -116,7 +60,7 @@ set (OCRE_ROOT_DIR ${ZEPHYR_PROJECT_OCRE_MODULE_DIR})
 include (modules/ocre/ocre.cmake)
 
 # Generate the messages header file
-set(MSG_INPUT_FILES ${OCRE_ROOT_DIR}/src/ocre/components/container_supervisor/component_supervisor.yaml ${CMAKE_CURRENT_LIST_DIR}/src/atym/components/device_manager/device_manager.yaml )
+set(MSG_INPUT_FILES ${OCRE_ROOT_DIR}/src/ocre/components/container_supervisor/component_supervisor.yaml)
 set(MSG_GENERATED_FILE ${CMAKE_CURRENT_LIST_DIR}/src/messaging/messages.g)
 
 add_custom_command(
@@ -138,9 +82,6 @@ set(atym_sources
 
 
   # Components
-
- 
-
 
 ) 
 

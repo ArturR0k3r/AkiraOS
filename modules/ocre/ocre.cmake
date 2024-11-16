@@ -4,7 +4,7 @@ set(ocre_sources
   # Libraries
   ${OCRE_ROOT_DIR}/src/ocre/sm/sm.c
   ${OCRE_ROOT_DIR}/src/ocre/fs/fs.c
-  ${OCRE_ROOT_DIR}/src/ocre/ocre_timers/ocre_timer.c
+  ${OCRE_ROOT_DIR}/src/ocre/timer/ocre_timer.c
   ${OCRE_ROOT_DIR}/src/ocre/container_healthcheck/ocre_container_healthcheck.c
   ${OCRE_ROOT_DIR}/src/ocre/ocre_container_runtime/ocre_container_runtime.c
   ${OCRE_ROOT_DIR}/src/ocre/component/component.c
