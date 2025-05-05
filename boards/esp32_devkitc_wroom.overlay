@@ -1,0 +1,83 @@
+/dts-v1/;
+#include <espressif/esp32.dtsi>
+
+/ {
+	model = "Akira Console";
+	compatible = "akira,akira-console";
+
+	chosen {
+		zephyr,sram = &sram0;
+		zephyr,console = &uart0;
+		zephyr,shell-uart = &uart0;
+		zephyr,flash = &flash0;
+		zephyr,code-partition = &slot0_partition;
+	};
+
+	aliases {
+		status-led = &led0;
+		power-led = &led1;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		led0: led_0 {
+			gpios = <&gpio0 26 GPIO_ACTIVE_HIGH>;
+			label = "Status LED";
+		};
+		led1: led_1 {
+			gpios = <&gpio0 27 GPIO_ACTIVE_HIGH>;
+			label = "Power LED";
+		};
+	};
+
+	buttons {
+		compatible = "gpio-keys";
+		reset: reset {
+			gpios = <&gpio0 14 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Reset Button";
+		};
+	};
+};
+
+&uart0 {
+	status = "okay";
+	current-speed = <115200>;
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&usb_serial {
+	status = "okay";
+};
+
+&flash0 {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		/* Flash partitioning for ESP32 */
+		boot_partition: partition@1000 {
+			label = "bootloader";
+			reg = <0x00001000 0x0000F000>;
+			read-only;
+		};
+
+		nvs_partition: partition@10000 {
+			label = "nvs";
+			reg = <0x00010000 0x00006000>;
+		};
+
+		storage_partition: partition@220000 {
+			label = "storage";
+			reg = <0x00220000 0x000E0000>;
+		};
+
+		slot0_partition: partition@16000 {
+			label = "image-0";
+			reg = <0x00016000 0x00200000>;
+		};
+	};
+};

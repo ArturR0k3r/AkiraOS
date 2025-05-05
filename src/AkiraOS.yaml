@@ -1,0 +1,17 @@
+identifier: akira_console
+name: Akira Console
+type: mcu
+arch: xtensa
+toolchain:
+  - zephyr
+  - xtools
+ram: 320
+flash: 4096
+supported:
+  - gpio
+  - i2c
+  - spi
+  - uart
+  - usb_device
+  - watchdog
+  - wifi
