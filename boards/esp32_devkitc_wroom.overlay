@@ -12,22 +12,24 @@
 		zephyr,flash = &flash0;
 		zephyr,code-partition = &slot0_partition;
 		zephyr,uart-mcumgr = &uart0;
+		zephyr,filesystem = &lfs1;  // Ensure filesystem auto-mount links properly
 	};
 
 	aliases {
 		status-led = &led0;
 		power-led = &led1;
 		display = &ili9341;
+		lfs1 = &user_data_partition;
 	};
 
 	leds {
 		compatible = "gpio-leds";
 		led0: led_0 {
-			gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>; /* Changed to GPIO2 (built-in LED) */
+			gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
 			label = "Status LED";
 		};
 		led1: led_1 {
-			gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>; /* Changed to GPIO4 */
+			gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>;
 			label = "Power LED";
 		};
 	};
@@ -35,7 +37,7 @@
 	buttons {
 		compatible = "gpio-keys";
 		reset: reset {
-			gpios = <&gpio0 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>; /* Changed to GPIO0 (boot button) */
+			gpios = <&gpio0 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "Reset Button";
 		};
 	};
@@ -44,8 +46,8 @@
 &uart0 {
 	status = "okay";
 	current-speed = <115200>;
-	tx-pin = <1>; /* GPIO1 */
-	rx-pin = <3>; /* GPIO3 */
+	tx-pin = <1>;
+	rx-pin = <3>;
 };
 
 &gpio0 {
@@ -54,21 +56,21 @@
 
 &spi2 {
 	status = "okay";
-	cs-gpios = <&gpio0 5 GPIO_ACTIVE_LOW>; /* Changed to GPIO5 */
+	cs-gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
 	pinctrl-0 = <&spim2_default>;
 	pinctrl-names = "default";
 
 	ili9341: ili9341@0 {
-		compatible = "ilitek,ili9341";
-		reg = <0>;
-		spi-max-frequency = <24000000>;
-		cmd-data-gpios = <&gpio0 23 GPIO_ACTIVE_LOW>; /* Changed to GPIO23 */
-		reset-gpios = <&gpio0 22 GPIO_ACTIVE_LOW>; /* Changed to GPIO22 */
-		led-gpios = <&gpio0 21 GPIO_ACTIVE_HIGH>; /* Changed to GPIO21 */
-		width = <240>;
-		height = <320>;
-		rotation = <0>;
-		pixel-format = <0x05>; // RGB565
+    	compatible = "ilitek,ili9341";
+    	reg = <0>;
+    	spi-max-frequency = <24000000>;
+    	cmd-data-gpios = <&gpio0 23 GPIO_ACTIVE_LOW>;
+    	reset-gpios = <&gpio0 22 GPIO_ACTIVE_LOW>;
+    	led-gpios = <&gpio0 21 GPIO_ACTIVE_HIGH>;  
+    	width = <240>;
+    	height = <320>;
+    	rotation = <0>;
+    	pixel-format = <0x05>;
 	};
 };
 
@@ -82,52 +84,46 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 
-		/* 0x00001000 - 0x0000FFFF (60KB) */
 		boot_partition: partition@1000 {
 			label = "bootloader";
 			reg = <0x00001000 0x0000F000>;
 			read-only;
 		};
 
-		/* 0x00010000 - 0x00015FFF (24KB) */
 		nvs_partition: partition@10000 {
 			label = "nvs";
 			reg = <0x00010000 0x00006000>;
 		};
 
-		/* 0x00016000 - 0x0001DFFF (32KB) */
 		otadata_partition: partition@16000 {
 			label = "otadata";
 			reg = <0x00016000 0x00002000>;
 		};
 
-		/* 0x0001E000 - 0x00100000 (904KB) */
 		slot0_partition: partition@1E000 {
 			label = "image-0";
 			reg = <0x0001E000 0x000E2000>;
 		};
 
-		/* 0x00100000 - 0x00110000 (64KB) */
 		storage_partition: partition@100000 {
 			label = "storage";
 			reg = <0x00100000 0x00010000>;
 		};
 
-		/* 0x00110000 - 0x00140000 (192KB) */
 		user_data_partition: partition@110000 {
 			label = "user-data";
 			reg = <0x00110000 0x00030000>;
+			compatible = "zephyr,flash-disk";
 		};
 	};
 };
 
-/* SPI2 pin configuration */
 &pinctrl {
 	spim2_default: spim2_default {
 		group1 {
 			pinmux = <SPIM2_MISO_GPIO19>,
-				 <SPIM2_MOSI_GPIO23>,
-				 <SPIM2_SCLK_GPIO18>;
+					 <SPIM2_MOSI_GPIO23>,
+					 <SPIM2_SCLK_GPIO18>;
 			output-low;
 		};
 	};

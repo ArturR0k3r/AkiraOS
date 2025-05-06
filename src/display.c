@@ -3,6 +3,7 @@
 #include <zephyr/drivers/display.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
+#include "display.h"
 
 LOG_MODULE_REGISTER(display, LOG_LEVEL_INF);
 

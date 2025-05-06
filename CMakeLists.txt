@@ -82,6 +82,7 @@ set(AkiraOS_sources
 
 
   # Components
+  src/display.c
 
 ) 
 

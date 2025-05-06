@@ -6,6 +6,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/gpio.h>
+#include "display.h"
 
 LOG_MODULE_REGISTER(akira_os, LOG_LEVEL_INF);
 
@@ -74,6 +75,9 @@ int main(void)
 ██║  ██║██║  ██╗██║██║  ██║██║  ██║      ╚██████╔╝███████║  \n\
 ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚═╝  ╚═╝       ╚═════╝ ╚══════╝  \n");
 
+    display_init();
+    display_backlight_set(1);
+    display_test_pattern();
     /* Main system loop */
     while (1)
     {
