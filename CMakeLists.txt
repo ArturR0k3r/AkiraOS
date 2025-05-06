@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20.0w)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
-project(iot-verse LANGUAGES C ASM)
+project(AkiraOS LANGUAGES C ASM)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -74,7 +74,7 @@ add_custom_target(generate_messages DEPENDS ${MSG_GENERATED_FILE})
 zephyr_library_include_directories(${ZEPHYR_BASE}/subsys/net/ip)
 zephyr_library_link_libraries(LITTLEFS)
 
-set(atym_sources
+set(AkiraOS_sources
   # Libraries
  
 
@@ -99,5 +99,5 @@ zephyr_include_directories(
   src/
 )
 
-target_sources(app PRIVATE ${WAMR_RUNTIME_LIB_SOURCE} ${ocre_sources} ${atym_sources} src/main.c)
+target_sources(app PRIVATE ${WAMR_RUNTIME_LIB_SOURCE} ${ocre_sources} ${AkiraOS_sources} src/main.c)
 add_dependencies(app generate_messages)

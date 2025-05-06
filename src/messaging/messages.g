@@ -59,10 +59,10 @@ struct ocre_message {
   uint32_t containerId;
   union {
     union {
-      struct install_msg install_msg;
-      struct uninstall_msg uninstall_msg;
       struct query_msg query_msg;
       struct app_manager_response_msg app_manager_response_msg;
+      struct install_msg install_msg;
+      struct uninstall_msg uninstall_msg;
       struct base_msg base_msg;
     } container_supervisor;
   } components;

@@ -1,9 +1,9 @@
-menu "Atym options"
+menu "AkiraOS options"
 
 source "Kconfig.zephyr"
 
-config Atym
-	bool "Atym Runtime"
+config AkiraOS
+	bool "AkiraOS"
 	default y
 
   select WAMR
@@ -47,53 +47,17 @@ config Atym
   help
 	  Enable the Project Ocre runtime.
 
-config ATYM_WIFI_SSID
-  string "WiFi SSID"
-  default "my-wifi-ssid"
-  help
-    Configure the default WiFi SSID
-
-config ATYM_WIFI_PSK
-  string "WiFi PSK"
-  default "my-wifi-psk"
-  help
-    Configure the default WiFi PSK
-        
-config ATYM_HUB_URL
-  string "Atym Hub URL"
-  default "35.231.180.157"
-  help
-    Configure the default Atym Hub URL
-
-config ATYM_HUB_PSK_TAG
-  string "Atym Hub PSK tag"
-  default "SuperSecretKey"
-  help
-    Configure the PSK tag for TLS communications
-
-config ATYM_HUB_PSK_ID
-  string "Atym Hub PSK ID"
-  default "nubix@my-device"
-  help
-    Configure the PSK ID for TLS communications
-
 config OCRE_WAMR_HEAP_BUFFER_SIZE
   int "WAMR heap buffer size in bytes"
   default 204800
   help
     A static memory allocation for WAMR to use as a heap.
 
-config ATYM_TRACE_DM_STATE_MACHINE
-  bool "Enable tracing of the Device Manager state machine"
-  default n
-  help
-    Enable trace logging for the Atym Device Manager  state machine
-
-config ATYM_LOG_DEBUG
+config AkiraOS_LOG_DEBUG
   bool "Debug logging"
   default n
   help
-    Enable Atym debug logging
+    Enable AkiraOS debug logging
 
 config RNG_SENSOR
     bool "RNG Sensor"
