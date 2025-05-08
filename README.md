@@ -13,9 +13,13 @@ Akira Console is a minimalist retro-cyberpunk game console powered by an ESP32-S
 ![DSC_0078](https://github.com/user-attachments/assets/8e9d29de-1b5c-471f-b80c-44f2f96c4fae)
 
 📌 Project Goals
+
 ✅ Build a compact and stylish console with a retro aesthetic
+
 ✅ Create a lightweight custom OS based on Zephyr
+
 ✅ Support WASM-based games and utilities
+
 ✅ Add a Hacker Terminal Mode for network tools and CLI access
 
 ⚙️ Tech Specs
