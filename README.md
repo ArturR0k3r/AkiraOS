@@ -23,7 +23,9 @@ Akira Console is a minimalist retro-cyberpunk game console powered by an ESP32-S
 ✅ Add a Hacker Terminal Mode for network tools and CLI access
 
 ⚙️ Tech Specs
+
 🧠 Hardware
+
 MCU: ESP32-S3-WROOM-32 (Wi-Fi + Bluetooth, WASM-capable)
 
 Display: 2.4" TFT SPI (ILI9341, 240×320 resolution)
