@@ -10,14 +10,22 @@
 🎮 Akira Console
 Akira Console is a minimalist retro-cyberpunk game console powered by an ESP32-S3 chip running a custom Zephyr RTOS. It supports applications written in WebAssembly (WASM) and aims to serve as both a portable gaming device and a hacker's toolkit.
 
+![DSC_0078](https://github.com/user-attachments/assets/8e9d29de-1b5c-471f-b80c-44f2f96c4fae)
+
 📌 Project Goals
+
 ✅ Build a compact and stylish console with a retro aesthetic
+
 ✅ Create a lightweight custom OS based on Zephyr
+
 ✅ Support WASM-based games and utilities
+
 ✅ Add a Hacker Terminal Mode for network tools and CLI access
 
 ⚙️ Tech Specs
+
 🧠 Hardware
+
 MCU: ESP32-S3-WROOM-32 (Wi-Fi + Bluetooth, WASM-capable)
 
 Display: 2.4" TFT SPI (ILI9341, 240×320 resolution)
@@ -26,6 +34,7 @@ Power: Li-ion Battery with USB-C TP4056 charging module
 
 Controls: 4 for a standard D-Pad + 4 action buttons 
 
+![DSC_0081](https://github.com/user-attachments/assets/5d010761-cffb-4be3-8abe-2f69cc3b8900)
 
 
 🖥 Software
