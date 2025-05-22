@@ -8,25 +8,17 @@
 #include <zephyr/drivers/gpio.h>
 #include "display.h"
 
-LOG_MODULE_REGISTER(akira_os, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(akira_os, LOG_LEVEL_DBG);
 
-/* Status LED */
 static const struct gpio_dt_spec status_led = GPIO_DT_SPEC_GET_OR(DT_ALIAS(status_led), gpios, {0});
 
-/* Define stack size for main thread */
 #define STACK_SIZE 4096
 #define PRIORITY 5
 
-/**
- * @brief Initialize hardware components
- *
- * @return int 0 on success, negative error code otherwise
- */
 static int initialize_hardware(void)
 {
     int ret;
 
-    /* Configure status LED if available */
     if (status_led.port != NULL)
     {
         if (!device_is_ready(status_led.port))
@@ -42,7 +34,6 @@ static int initialize_hardware(void)
             return ret;
         }
 
-        /* Blink LED to indicate successful hardware init */
         gpio_pin_toggle_dt(&status_led);
         k_sleep(K_MSEC(500));
         gpio_pin_toggle_dt(&status_led);
@@ -51,14 +42,10 @@ static int initialize_hardware(void)
     return 0;
 }
 
-/**
- * @brief Main function
- */
 int main(void)
 {
     LOG_INF("Starting AkiraOS");
 
-    /* Initialize hardware */
     if (initialize_hardware() != 0)
     {
         LOG_ERR("Hardware initialization failed");
@@ -67,6 +54,7 @@ int main(void)
 
     LOG_INF("Hardware initialized");
     LOG_INF("AkiraOS initialization complete");
+
     printf("\n\
  █████╗ ██╗  ██╗██╗██████╗  █████╗        ██████╗ ███████╗  \n\
 ██╔══██╗██║ ██╔╝██║██╔══██╗██╔══██╗      ██╔═══██╗██╔════╝  \n\
@@ -75,10 +63,22 @@ int main(void)
 ██║  ██║██║  ██╗██║██║  ██║██║  ██║      ╚██████╔╝███████║  \n\
 ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚═╝  ╚═╝       ╚═════╝ ╚══════╝  \n");
 
-    display_init();
+    int ret = display_init();
+    if (ret != 0)
+    {
+        LOG_ERR("Display initialization failed: %d", ret);
+    }
+    else
+    {
+        LOG_INF("Display initialized");
+    }
+
     display_backlight_set(1);
+    LOG_INF("Display backlight enabled");
+
     display_test_pattern();
-    /* Main system loop */
+    LOG_INF("Display test pattern shown");
+
     while (1)
     {
         if (status_led.port != NULL)

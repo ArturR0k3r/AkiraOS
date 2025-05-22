@@ -5,9 +5,7 @@
 		}
 	],
 	"settings": {
-		// Hush CMake
 		"cmake.configureOnOpen": false,
-		// CppTools and IntelliSense
 		"C_Cpp.workspaceParsingPriority": "medium",
 		"C_Cpp.default.cStandard": "c11",
 		"C_Cpp.default.browse.path": [
@@ -16,13 +14,12 @@
 		"C_Cpp.intelliSenseEngine": "default",
 		"C_Cpp.default.includePath": [
 			"${workspaceFolder}/application/src/",
-			"${workspaceFolder}/zephyr/include/",
+			"${workspaceFolder}/zephyr/include/"
 		],
 		"C_Cpp.default.forcedInclude": [
 			"${workspaceFolder}/build/zephyr/include/generated/zephyr/autoconf.h"
 		],
 		"C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
-		// Files
 		"files.exclude": {
 			"**/.git": true,
 			"**/.svn": true,
@@ -31,54 +28,22 @@
 			"**/.DS_Store": true,
 			"**/Thumbs.db": true
 		},
-		// Kconfig
 		"kconfig.root": "${workspaceFolder}/application/Kconfig",
-		"files.associations": {
-			"*.h": "c",
-			"*.c": "c",
-			"typeinfo": "c",
-			"*.g": "c",
-			"array": "c",
-			"string": "c",
-			"string_view": "c",
-			"*.tcc": "c",
-			"system_error": "c",
-			"functional": "c",
-			"tuple": "c",
-			"type_traits": "c",
-			"utility": "c",
-			"numbers": "c"
-		},
 		"editor.formatOnType": true,
-		"cortex-debug.variableUseNaturalFormat": false,
 		"git.ignoreLimitWarning": true,
-		"cSpell.words": [
-			"blockwise",
-			"COAP",
-			"hexdump",
-			"OCRE",
-			"WASI",
-			"ZCBOR",
-			"zsock"
-		],
-		"cSpell.ignoreWords": [
-			"FOTA",
-			"IWASM",
-			"autoconnect",
-			"wamr"
-		],
-		"sonarlint.pathToCompileCommands": "${workspaceFolder}/build/compile_commands.json",
+		"files.associations": {
+			"display.h": "c",
+			"gpio.h": "c",
+			"kernel.h": "c",
+			"log.h": "c"
+		}
 	},
 	"tasks": {
 		"version": "2.0.0",
 		"tasks": [
 			{
-				"label": "West Build",
+				"label": "Akira Console Build",
 				"type": "shell",
-				"group": {
-					"kind": "build",
-					"isDefault": true
-				},
 				"command": "west",
 				"args": [
 					"build",
@@ -89,39 +54,18 @@
 					"-d",
 					"${workspaceFolder}/build",
 					"--",
-					// "-DCONFIG_BOOTLOADER_MCUBOOT=y",
-					// "-DCONFIG_MCUBOOT_SIGNATURE_KEY_FILE=\\\"./bootloader/mcuboot/root-rsa-2048.pem\\\"",
-					"-DMODULE_EXT_ROOT=\"${workspaceFolder}/application\"",
+					"-DMODULE_EXT_ROOT=${workspaceFolder}/application"
 				],
-				"problemMatcher": [
-					"$gcc"
-				],
-			},
-			{
-				"label": "West Pristine Build",
-				"type": "shell",
 				"group": {
 					"kind": "build",
+					"isDefault": true
 				},
-				"command": "west",
-				"args": [
-					"build",
-					"-p",
-					"${input:pristine}",
-					"-b",
-					"${input:board}"
-				],
 				"problemMatcher": [
 					"$gcc"
 				]
 			},
 			{
-				"label": "Echo variable",
-				"type": "shell",
-				"command": "echo userHome: ${workspaceFolder}",
-			},
-			{
-				"label": "West Flash Application",
+				"label": "Akira Console Flash",
 				"type": "shell",
 				"command": "west",
 				"args": [
@@ -129,7 +73,11 @@
 				],
 				"problemMatcher": [
 					"$gcc"
-				]
+				],
+				"dependsOn": [
+					"Akira Console Build"
+				],
+				"group": "build"
 			}
 		],
 		"inputs": [
@@ -141,46 +89,20 @@
 					"esp32_devkitc_wroom"
 				],
 				"default": "native_sim",
-				"description": "See https://docs.zephyrproject.org/latest/boards/index.html"
-			},
-			{
-				"id": "pristine",
-				"type": "pickString",
-				"description": "Choose when to run a pristine build",
-				"default": "auto",
-				"options": [
-					"auto",
-					"always",
-					"never"
-				]
+				"description": "Выберите целевую плату"
 			}
-		]
-	},
-	"extensions": {
-		"recommendations": [
-			"ms-vscode.cpptools-extension-pack",
-			"ms-python.python",
-			"ms-vscode.vscode-embedded-tools",
-			"ms-vscode.vscode-serial-monitor",
-			"marus25.cortex-debug",
 		]
 	},
 	"launch": {
 		"version": "0.2.0",
 		"configurations": [
 			{
-				"name": "(gdb) Launch",
+				"name": "Akira Console (native_sim)",
 				"type": "cppdbg",
 				"request": "launch",
 				"program": "${workspaceFolder}/build/zephyr/zephyr.exe",
-				"args": [
-					"-seed=$RANDOM",
-					"--flash=${workspaceFolder}/flash.bin"
-				],
 				"stopAtEntry": false,
 				"cwd": "${fileDirname}",
-				"environment": [],
-				"externalConsole": false,
 				"MIMode": "gdb",
 				"setupCommands": [
 					{
@@ -196,32 +118,16 @@
 				]
 			},
 			{
-				"name": "Cortex Debug - ST-LINK",
+				"name": "Akira Console (esp32_devkitc_wroom)",
+				"type": "cortex-debug",
 				"request": "launch",
 				"cwd": "${workspaceFolder}",
 				"executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
-				"runToEntryPoint": "main",
-				"showDevDebugOutput": "none",
-				"type": "cortex-debug",
-				"servertype": "stlink",
-				"stm32cubeprogrammer": "",
-				"interface": "swd",
-				"serverArgs": [
-					"-m 1"
-				],
-				"device": "STM32H563ZI",
-				"v1": false
-			},
-			{
-				"name": "Cortex Debug - jlink",
-				"cwd": "${workspaceFolder}",
-				"executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
-				"device": "nRF5340_xxAA_APP",
-				"request": "launch",
-				"type": "cortex-debug",
-				"runToEntryPoint": "main",
 				"servertype": "jlink",
-				"interface": "swd"
+				"device": "ESP32",
+				"interface": "swd",
+				"runToEntryPoint": "main",
+				"preLaunchTask": "Akira Console Build"
 			}
 		]
 	}
