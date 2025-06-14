@@ -95,3 +95,7 @@ west build --pristine -b esp32_devkitc_wroom ~/zephyrdemo/bootloader/mcuboot/boo
 ```shell
 west build --pristine -b esp32_devkitc_wroom ~/zephyrdemo/application -d build  -- -DCONFIG_BOOTLOADER_MCUBOOT=y  -DCONFIG_MCUBOOT_SIGNATURE_KEY_FILE=\"bootloader/mcuboot/root-rsa-2048.pem\" -DMODULE_EXT_ROOT=.
 ```
+
+
+Join the journey on Telegram: t.me/thguywithpen
+
