@@ -2,6 +2,10 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
+# Force disable Kconfig warnings
+set(KCONFIG_WARN_UNDEF OFF CACHE BOOL "Disable Kconfig warnings" FORCE)
+set(KCONFIG_WERROR OFF CACHE BOOL "Disable Kconfig warnings as errors" FORCE)
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(akira_os VERSION 1.0.0)
 
