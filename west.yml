@@ -4,21 +4,21 @@ manifest:
     # Zephyr RTOS
     - name: zephyr
       url: https://github.com/zephyrproject-rtos/zephyr
-      revision: v4.2-branch
+      revision: v3.7-branch
       west-commands: scripts/west-commands.yml
       import: true
       
     # WASM Micro Runtime
     - name: wasm-micro-runtime
-      url: https://github.com/bytecodealliance/wasm-micro-runtime.git
-      revision: main
-      path: modules/wamr
+      revision: dev/zephyr_file_socket
+      url: https://github.com/atym-io/wasm-micro-runtime/
+      path: wasm-micro-runtime
       
     # OCRE Runtime 
-    - name: ocre-runtime
-      url: https://github.com/project-ocre/ocre-runtime.git
+    - name: project-ocre
       revision: main
-      path: modules/ocre
+      url: https://github.com/project-ocre/ocre-runtime
+      path: ocre
       
   self:
     path: akira-os
