@@ -1,0 +1,7 @@
+board:
+  name: native_sim
+  arch: native
+  dts: native_sim.dts
+  soc:
+    - native_sim
+    

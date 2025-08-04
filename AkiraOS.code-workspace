@@ -1,0 +1,464 @@
+{
+    "folders": [
+        {
+            "name": "AkiraOS",
+            "path": "."
+        }
+    ],
+    "settings": {
+        // Hush CMake
+        "cmake.configureOnOpen": false,
+        // CppTools and IntelliSense for AkiraOS
+        "C_Cpp.workspaceParsingPriority": "medium",
+        "C_Cpp.default.cStandard": "c11",
+        "C_Cpp.default.cppStandard": "c++17",
+        "C_Cpp.default.browse.path": [
+            "${workspaceFolder}/src",
+            "${workspaceFolder}/boards",
+            "${workspaceFolder}/zephyr/include",
+            "${workspaceFolder}/modules/wamr/core/iwasm/include"
+        ],
+        "C_Cpp.intelliSenseEngine": "default",
+        "C_Cpp.default.includePath": [
+            "${workspaceFolder}/src/",
+            "${workspaceFolder}/src/drivers/",
+            "${workspaceFolder}/src/runtime/",
+            "${workspaceFolder}/src/apps/",
+            "${workspaceFolder}/src/ui/",
+            "${workspaceFolder}/src/lib/",
+            "${workspaceFolder}/zephyr/include/",
+            "${workspaceFolder}/zephyr/include/zephyr/",
+            "${workspaceFolder}/zephyr/drivers/",
+            "${workspaceFolder}/modules/wamr/core/iwasm/include/",
+            "${workspaceFolder}/modules/wamr/core/shared/include/",
+            "${workspaceFolder}/modules/ocre/include/"
+        ],
+        "C_Cpp.default.forcedInclude": [
+            "${workspaceFolder}/build/zephyr/include/generated/zephyr/autoconf.h"
+        ],
+        "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+        "C_Cpp.default.defines": [
+            "CONFIG_ZEPHYR=1",
+            "CONFIG_ESP32=1",
+            "AKIRA_VERSION_MAJOR=1",
+            "AKIRA_VERSION_MINOR=0",
+            "AKIRA_VERSION_PATCH=0"
+        ],
+        // Files configuration
+        "files.exclude": {
+            "**/.git": true,
+            "**/.svn": true,
+            "**/.hg": true,
+            "**/CVS": true,
+            "**/.DS_Store": true,
+            "**/Thumbs.db": true,
+            "build/": false,
+            ".west/": true,
+            "**/zephyr.elf": true,
+            "**/zephyr.bin": true,
+            "**/zephyr.hex": true,
+            "**/__pycache__": true,
+            "akira-env/": true
+        },
+        "files.watcherExclude": {
+            "**/build/**": true,
+            "**/.west/**": true,
+            "**/zephyr/**": true,
+            "**/modules/**": true
+        },
+        // Kconfig support
+        "kconfig.root": "${workspaceFolder}/Kconfig",
+        // File associations for AkiraOS
+        "files.associations": {
+            "*.h": "c",
+            "*.c": "c",
+            "*.dts": "dts",
+            "*.dtsi": "dts",
+            "*.overlay": "dts",
+            "*.conf": "kconfig",
+            "*.defconfig": "kconfig",
+            "Kconfig*": "kconfig",
+            "prj.conf": "kconfig",
+            "west.yml": "yaml",
+            "CMakeLists.txt": "cmake",
+            "*.cmake": "cmake",
+            "*.wasm": "wasm",
+            "*.wat": "wasm"
+        },
+        // Editor settings
+        "editor.formatOnType": true,
+        "editor.formatOnSave": true,
+        "editor.insertSpaces": true,
+        "editor.tabSize": 4,
+        "editor.detectIndentation": false,
+        "editor.rulers": [
+            80,
+            120
+        ],
+        // Git settings
+        "git.ignoreLimitWarning": true,
+        "git.detectSubmodules": false,
+        // Cortex Debug
+        "cortex-debug.variableUseNaturalFormat": false,
+        "cortex-debug.registerUseNaturalFormat": false,
+        // Spell checker - cyberpunk and embedded terms
+        "cSpell.words": [
+            "Akira",
+            "cyberpunk",
+            "LVGL",
+            "ILI9341",
+            "XPT2046",
+            "WAMR",
+            "IWASM",
+            "OCRE",
+            "WASI",
+            "ESP32",
+            "Zephyr",
+            "GPIO",
+            "SPI",
+            "UART",
+            "PWM",
+            "ADC",
+            "DMA",
+            "RTOS",
+            "MCU",
+            "bootloader",
+            "devicetree",
+            "Kconfig",
+            "prj",
+            "defconfig",
+            "DTSI",
+            "ZCBOR",
+            "zsock",
+            "hexdump",
+            "blockwise",
+            "autoconnect",
+            "FOTA"
+        ],
+        "cSpell.ignoreWords": [
+            "dts",
+            "dtsi",
+            "espressif",
+            "zephyr",
+            "cmake"
+        ],
+        // SonarLint
+        "sonarlint.pathToCompileCommands": "${workspaceFolder}/build/compile_commands.json",
+        // Terminal
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "terminal.integrated.defaultProfile.windows": "PowerShell",
+        "terminal.integrated.cwd": "${workspaceFolder}",
+        // Python settings for West
+        "python.defaultInterpreterPath": "${workspaceFolder}/akira-env/bin/python",
+        "python.terminal.activateEnvironment": true,
+        // West-specific settings
+        "west.zephyrBase": "${workspaceFolder}/zephyr",
+        "west.topdir": "${workspaceFolder}",
+        // Search settings
+        "search.exclude": {
+            "**/build": true,
+            "**/.west": true,
+            "**/zephyr": true,
+            "**/modules": true,
+            "**/akira-env": true
+        }
+    },
+    "tasks": {
+        "version": "2.0.0",
+        "tasks": [
+            {
+                "label": "West Build (AkiraOS)",
+                "type": "shell",
+                "group": {
+                    "kind": "build",
+                    "isDefault": true
+                },
+                "command": "west",
+                "args": [
+                    "build",
+                    "-b",
+                    "${input:board}",
+                    "-d",
+                    "${workspaceFolder}/build",
+                    "--",
+                    "-DBOARD_ROOT=${workspaceFolder}",
+                    "-DDTC_OVERLAY_FILE=${workspaceFolder}/akira.overlay"
+                ],
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                },
+                "problemMatcher": [
+                    "$gcc"
+                ],
+                "presentation": {
+                    "echo": true,
+                    "reveal": "always",
+                    "focus": false,
+                    "panel": "shared",
+                    "showReuseMessage": true,
+                    "clear": false
+                }
+            },
+            {
+                "label": "West Pristine Build",
+                "type": "shell",
+                "group": "build",
+                "command": "west",
+                "args": [
+                    "build",
+                    "-p",
+                    "${input:pristine}",
+                    "-b",
+                    "${input:board}",
+                    "-d",
+                    "${workspaceFolder}/build"
+                ],
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                },
+                "problemMatcher": [
+                    "$gcc"
+                ]
+            },
+            {
+                "label": "West Flash",
+                "type": "shell",
+                "group": "test",
+                "command": "west",
+                "args": [
+                    "flash",
+                    "-d",
+                    "${workspaceFolder}/build"
+                ],
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                },
+                "dependsOn": "West Build (AkiraOS)",
+                "problemMatcher": []
+            },
+            {
+                "label": "West Monitor (Serial)",
+                "type": "shell",
+                "command": "west",
+                "args": [
+                    "espressif",
+                    "monitor",
+                    "-d",
+                    "${workspaceFolder}/build"
+                ],
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                },
+                "isBackground": true,
+                "problemMatcher": []
+            },
+            {
+                "label": "West Update Dependencies",
+                "type": "shell",
+                "command": "west",
+                "args": [
+                    "update"
+                ],
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                },
+                "problemMatcher": []
+            },
+            {
+                "label": "Build WASM App",
+                "type": "shell",
+                "group": "build",
+                "command": "cmake",
+                "args": [
+                    "--build",
+                    ".",
+                    "--target",
+                    "${input:wasmApp}"
+                ],
+                "options": {
+                    "cwd": "${workspaceFolder}/wasm-apps/${input:wasmApp}/build"
+                },
+                "problemMatcher": [
+                    "$gcc"
+                ]
+            },
+            {
+                "label": "Clean Build",
+                "type": "shell",
+                "command": "rm",
+                "args": [
+                    "-rf",
+                    "build"
+                ],
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                },
+                "group": "build"
+            },
+            {
+                "label": "Menuconfig",
+                "type": "shell",
+                "command": "west",
+                "args": [
+                    "build",
+                    "-t",
+                    "menuconfig"
+                ],
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                },
+                "group": "build"
+            },
+            {
+                "label": "Generate Compile Commands",
+                "type": "shell",
+                "command": "west",
+                "args": [
+                    "build",
+                    "-t",
+                    "compile_commands"
+                ],
+                "options": {
+                    "cwd": "${workspaceFolder}"
+                }
+            }
+        ],
+        "inputs": [
+            {
+                "id": "board",
+                "type": "pickString",
+                "options": [
+                    "akira_basic_esp32",
+                    "esp32_devkitc_wroom",
+                    "esp32c3_devkitm",
+                    "native_sim"
+                ],
+                "default": "akira_basic_esp32",
+                "description": "Target board for AkiraOS"
+            },
+            {
+                "id": "pristine",
+                "type": "pickString",
+                "description": "Choose when to run a pristine build",
+                "default": "auto",
+                "options": [
+                    "auto",
+                    "always",
+                    "never"
+                ]
+            },
+            {
+                "id": "wasmApp",
+                "type": "pickString",
+                "description": "WASM application to build",
+                "options": [
+                    "tetris",
+                    "snake",
+                    "terminal",
+                    "calculator",
+                    "demo"
+                ],
+                "default": "demo"
+            }
+        ]
+    },
+    "extensions": {
+        "recommendations": [
+            // C/C++ Development
+            "ms-vscode.cpptools-extension-pack",
+            "ms-vscode.cpptools",
+            "ms-vscode.cmake-tools",
+            // Embedded Development
+            "ms-vscode.vscode-embedded-tools",
+            "marus25.cortex-debug",
+            "ms-vscode.vscode-serial-monitor",
+            // Languages & Formats
+            "ms-python.python",
+            "redhat.vscode-yaml",
+            "ms-vscode.vscode-json",
+            // DeviceTree & Kconfig
+            "trond-snekvik.kconfig-lang",
+            "trond-snekvik.gnu-mapfiles",
+            // WebAssembly
+            "dtsvet.vscode-wasm",
+            // Git & Version Control
+            "eamodio.gitlens",
+            // Utilities
+            "streetsidesoftware.code-spell-checker",
+            "sonarsource.sonarlint-vscode",
+            "ms-vscode.hexeditor",
+            "formulahendry.terminal-here"
+        ]
+    },
+    "launch": {
+        "version": "0.2.0",
+        "configurations": [
+            {
+                "name": "Debug AkiraOS (Native Simulator)",
+                "type": "cppdbg",
+                "request": "launch",
+                "program": "${workspaceFolder}/build/zephyr/zephyr.exe",
+                "args": [
+                    "-seed=$RANDOM",
+                    "--flash=${workspaceFolder}/flash.bin"
+                ],
+                "stopAtEntry": false,
+                "cwd": "${workspaceFolder}",
+                "environment": [],
+                "externalConsole": false,
+                "MIMode": "gdb",
+                "setupCommands": [
+                    {
+                        "description": "Enable pretty-printing for gdb",
+                        "text": "-enable-pretty-printing",
+                        "ignoreFailures": true
+                    },
+                    {
+                        "description": "Set Disassembly Flavor to Intel",
+                        "text": "-gdb-set disassembly-flavor intel",
+                        "ignoreFailures": true
+                    }
+                ],
+                "preLaunchTask": "West Build (AkiraOS)"
+            },
+            {
+                "name": "Debug ESP32 (OpenOCD)",
+                "type": "cortex-debug",
+                "request": "launch",
+                "cwd": "${workspaceFolder}",
+                "executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
+                "servertype": "openocd",
+                "configFiles": [
+                    "board/esp32-wrover-kit-3.3v.cfg"
+                ],
+                "toolchainPrefix": "xtensa-esp32-elf",
+                "openOCDLaunchCommands": [
+                    "adapter speed 20000"
+                ],
+                "gdbTarget": "localhost:3333",
+                "device": "ESP32",
+                "interface": "ftdi",
+                "runToEntryPoint": "main",
+                "showDevDebugOutput": "parsed",
+                "preLaunchTask": "West Build (AkiraOS)"
+            },
+            {
+                "name": "Debug ESP32 (ESP-IDF Monitor)",
+                "type": "espidf.monitor",
+                "request": "launch"
+            },
+            {
+                "name": "Attach to Running ESP32",
+                "type": "cortex-debug",
+                "request": "attach",
+                "cwd": "${workspaceFolder}",
+                "executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
+                "servertype": "openocd",
+                "configFiles": [
+                    "board/esp32-wrover-kit-3.3v.cfg"
+                ],
+                "gdbTarget": "localhost:3333"
+            }
+        ]
+    }
+}

@@ -1,0 +1,24 @@
+# west.yml - West workspace manifest
+manifest: 
+  projects:
+    # Zephyr RTOS
+    - name: zephyr
+      url: https://github.com/zephyrproject-rtos/zephyr
+      revision: v4.2-branch
+      west-commands: scripts/west-commands.yml
+      import: true
+      
+    # WASM Micro Runtime
+    - name: wasm-micro-runtime
+      url: https://github.com/bytecodealliance/wasm-micro-runtime.git
+      revision: main
+      path: modules/wamr
+      
+    # OCRE Runtime 
+    - name: ocre-runtime
+      url: https://github.com/project-ocre/ocre-runtime.git
+      revision: main
+      path: modules/ocre
+      
+  self:
+    path: akira-os

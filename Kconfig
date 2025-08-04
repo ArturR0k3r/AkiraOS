@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+
+mainmenu "AkiraOS Configuration"
+
+config AKIRA_OS
+    bool "Enable AkiraOS features"
+    default y
+    help
+      Enable AkiraOS specific features and drivers.
+
+if AKIRA_OS
+
+config AKIRA_DISPLAY_ILI9341
+    bool "Enable ILI9341 display driver"
+    default y
+    depends on DISPLAY && SPI
+    help
+      Enable ILI9341 TFT display driver.
+
+config AKIRA_TOUCH_XPT2046  
+    bool "Enable XPT2046 touch controller"
+    default y
+    depends on INPUT && SPI
+    help
+      Enable XPT2046 touch screen controller.
+
+config AKIRA_WASM_RUNTIME
+    bool "Enable WebAssembly runtime"
+    default y
+    depends on NEWLIB_LIBC
+    help
+      Enable WebAssembly application runtime support.
+
+config AKIRA_TERMINAL_MODE
+    bool "Enable hacker terminal mode"  
+    default y
+    depends on SHELL && NETWORKING
+    help
+      Enable cyberpunk hacker terminal with network tools.
+
+config AKIRA_CYBERPUNK_THEME
+    bool "Enable cyberpunk UI theme"
+    default y
+    depends on LVGL
+    help
+      Enable cyberpunk-style user interface theme.
+
+endif # AKIRA_OS

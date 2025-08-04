@@ -53,3 +53,43 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Build directories
+build/
+.build/
+outdir/
+
+# West workspace
+.west/
+
+# Zephyr specific
+**/zephyr.elf
+**/zephyr.bin
+**/zephyr.hex
+**/zephyr.map
+**/zephyr.dts
+**/zephyr.config
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+akira-env/
+venv/
+env/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
