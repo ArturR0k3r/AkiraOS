@@ -1,7 +1,6 @@
 {
 	"folders": [
 		{
-			"name": "AkiraOS",
 			"path": "."
 		}
 	],
@@ -16,11 +15,11 @@
 		"C_Cpp.workspaceParsingPriority": "medium",
 		"C_Cpp.default.cStandard": "c11",
 		"C_Cpp.default.browse.path": [
-			"${workspaceFolder}/application/src"
+			"${workspaceFolder}/AkiraOS/src"
 		],
 		"C_Cpp.intelliSenseEngine": "default",
 		"C_Cpp.default.includePath": [
-			"${workspaceFolder}/application/src/",
+			"${workspaceFolder}/AkiraOS/src/",
 			"${workspaceFolder}/zephyr/include/",
 		],
 		"C_Cpp.default.forcedInclude": [
@@ -37,7 +36,7 @@
 			"**/Thumbs.db": true
 		},
 		// Kconfig
-		"kconfig.root": "${workspaceFolder}/application/Kconfig",
+		"kconfig.root": "${workspaceFolder}/AkiraOS/Kconfig",
 		"files.associations": {
 			"*.h": "c",
 			"*.c": "c",
@@ -68,7 +67,8 @@
 			"vector": "c",
 			"charconv": "c",
 			"chrono": "c",
-			"cstdlib": "c"
+			"cstdlib": "c",
+			"cstdint": "c"
 		},
 		"editor.formatOnType": true,
 		"cortex-debug.variableUseNaturalFormat": false,

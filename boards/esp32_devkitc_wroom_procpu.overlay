@@ -1,10 +1,11 @@
 /*
  * Copyright (c) 2025 AkiraOS
  *
- * SPDX-License-License: Apache-2.0
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <dt-bindings/pinctrl/esp32-pinctrl.h>
+#include <zephyr/dt-bindings/display/ili9xxx.h>
 
 / {
     model = "Akira Console";
@@ -17,17 +18,107 @@
         zephyr,flash = &flash0;
         zephyr,code-partition = &slot0_partition;
         zephyr,uart-mcumgr = &uart0;
+        
+        zephyr,display = &adafruit_2_8_tft_touch_v2_ili9340;
     };
 
     aliases {
-        status-led = &led0;
+        status-led = &status_led;
+        charge-led = &charge_led;
     };
+
+
+
+	adafruit_2_8_tft_touch_v2_mipi_dbi: adafruit_2_8_tft_touch_v2_mipi_dbi {
+		compatible = "zephyr,mipi-dbi-spi";
+		spi-dev = <&spi2>;
+		dc-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;	/* D9 */
+		write-only;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		adafruit_2_8_tft_touch_v2_ili9340: ili9340@0 {
+			compatible = "ilitek,ili9340";
+			mipi-max-frequency = <15151515>;
+			reg = <0>;
+			width = <320>;
+			height = <240>;
+			pixel-format = <ILI9XXX_PIXEL_FORMAT_RGB888>;
+			rotation = <90>;
+			frmctr1 = [00 18];
+			pwctrl1 = [23 00];
+			vmctrl1 = [3e 28];
+			vmctrl2 = [86];
+			pgamctrl = [0f 31 2b 0c 0e 08 4e f1 37 07 10 03 0e 09 00];
+			ngamctrl = [00 0e 14 03 11 07 31 c1 48 08 0f 0c 31 36 0f];
+		};
+	};
 
     leds {
         compatible = "gpio-leds";
-        led0: led_0 {
-            gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
-            label = "Status LED";
+        
+        status_led: status_led {
+            gpios = <&gpio0 12 GPIO_ACTIVE_HIGH>;
+            label = "Status LED (Blue)";
+        };
+        
+        charge_led: charge_led {
+            gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+            label = "Charge LED (Yellow)";
+        };
+    };
+
+    gpio_keys {
+        compatible = "gpio-keys";
+        
+        key_up: key_up {
+            gpios = <&gpio0 36 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key UP";
+        };
+        
+        key_right: key_right {
+            gpios = <&gpio0 39 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key RIGHT";
+        };
+        
+        key_down: key_down {
+            gpios = <&gpio0 34 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key DOWN";
+        };
+        
+        key_left: key_left {
+            gpios = <&gpio0 35 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key LEFT";
+        };
+        
+        key5: key5 {
+            gpios = <&gpio0 32 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key 5";
+        };
+        
+        key6: key6 {
+            gpios = <&gpio0 33 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key 6";
+        };
+        
+        key7: key7 {
+            gpios = <&gpio0 25 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key 7";
+        };
+        
+        key8: key8 {
+            gpios = <&gpio0 26 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key 8";
+        };
+        
+        key_settings: key_settings {
+            gpios = <&gpio0 27 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Settings Key";
+        };
+        
+        key_power: key_power {
+            gpios = <&gpio0 14 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Power Key";
         };
     };
 };
@@ -45,18 +136,23 @@
 
 &pinctrl {
     uart0_default: uart0_default {
-        pins = <
-            ESP32_PINMUX(1, 1, 0)
-            ESP32_PINMUX(3, 2, 0)
-        >;
+        group1 {
+            pinmux = <UART0_TX_GPIO1>;
+        };
+        group2 {
+            pinmux = <UART0_RX_GPIO3>;
+        };
     };
 
     spim2_default: spim2_default {
-        pins = <
-            ESP32_PINMUX(13, 7, 0)  /* MOSI */
-            ESP32_PINMUX(12, 8, 0)   /* MISO */
-            ESP32_PINMUX(14, 6, 0) /* SCK */
-        >;
+        group1 {
+            pinmux = <SPIM2_MOSI_GPIO23>,
+                     <SPIM2_SCLK_GPIO18>;
+        };
+        group2 {
+            pinmux = <SPIM2_MISO_GPIO19>;
+            bias-pull-up;
+        };
     };
 };
 
@@ -64,7 +160,11 @@
     status = "okay";
     pinctrl-0 = <&spim2_default>;
     pinctrl-names = "default";
-    cs-gpios = <&gpio0 12 GPIO_ACTIVE_LOW>;
+    cs-gpios = <&gpio0 5 GPIO_ACTIVE_LOW>,   /* Display CS */
+               <&gpio0 15 GPIO_ACTIVE_LOW>;  /* SD Card CS */
+    #address-cells = <1>;
+    #size-cells = <0>;
+    
 };
 
 &flash0 {
