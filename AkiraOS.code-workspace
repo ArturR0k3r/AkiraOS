@@ -8,7 +8,7 @@
 		// Workspace defaults
 		"window.openFoldersInNewWindow": "off",
 		"workbench.startupEditor": "none",
-		"files.defaultFolder": "/workspaces/atym-runtime",
+		"files.defaultFolder": "/workspaces/AkiraOS",
 		// Hush CMake
 		"cmake.configureOnOpen": false,
 		// CppTools and IntelliSense
