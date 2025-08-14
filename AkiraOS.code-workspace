@@ -133,7 +133,7 @@
 				"type": "pickString",
 				"options": [
 					"native_sim",
-					"esp32_devkitc_wroom",
+					"esp32_devkitc/esp32/procpu",
 				],
 				"default": "native_sim",
 				"description": "See https://docs.zephyrproject.org/latest/boards/index.html"

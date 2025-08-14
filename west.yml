@@ -4,7 +4,7 @@ manifest:
     # Zephyr RTOS
     - name: zephyr
       url: https://github.com/zephyrproject-rtos/zephyr
-      revision: v3.7-branch
+      revision: v4.2-branch
       west-commands: scripts/west-commands.yml
       import: true
       

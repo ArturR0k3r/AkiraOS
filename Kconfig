@@ -10,35 +10,6 @@ config AKIRA_OS
     help
       Enable AkiraOS specific features and drivers.
     select PRINTK
-    select EVENTS
-    select EVENTFD
-    select FLASH
-    select FLASH_MAP
-    select FLASH_PAGE_LAYOUT
-    select FILE_SYSTEM
-    select FILE_SYSTEM_LITTLEFS
-    select REBOOT
-
-    select SETTINGS
-    select SETTINGS_RUNTIME
-
-    select NETWORKING
-    select NET_SOCKETS
-    select NET_CONNECTION_MANAGER
-    select NET_UDP
-    select MBEDTLS
-    select TLS_CREDENTIALS
-    select NET_SOCKETS_ENABLE_DTLS
-    select NET_SOCKETS_SOCKOPT_TLS
-    select MBEDTLS_KEY_EXCHANGE_PSK_ENABLED
-    select MBEDTLS_CIPHER_GCM_ENABLED
-
-    select COAP
-    select ZCBOR
-
-    select SMF
-    select SMF_ANCESTOR_SUPPORT
-    select SMF_INITIAL_TRANSITION
 
 config AKIRA_DISPLAY_ILI9341
     bool "Enable ILI9341 display driver"
@@ -49,30 +20,30 @@ config AKIRA_DISPLAY_ILI9341
 
 config AKIRA_TOUCH_XPT2046  
     bool "Enable XPT2046 touch controller"
-    default y
+    default n
     depends on INPUT && SPI
     help
       Enable XPT2046 touch screen controller.
 
 config AKIRA_WASM_RUNTIME
     bool "Enable WebAssembly runtime"
-    default y
+    default n
     depends on NEWLIB_LIBC
     help
       Enable WebAssembly application runtime support.
 
 config AKIRA_TERMINAL_MODE
     bool "Enable hacker terminal mode"  
-    default y
+    default n
     depends on SHELL && NETWORKING
     help
       Enable cyberpunk hacker terminal with network tools.
 
 config AKIRA_CYBERPUNK_THEME
     bool "Enable cyberpunk UI theme"
-    default y
+    default n
     depends on LVGL
     help
       Enable cyberpunk-style user interface theme.
 
-endmenu 
+endmenu
