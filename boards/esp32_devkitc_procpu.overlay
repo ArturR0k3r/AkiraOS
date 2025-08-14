@@ -1,5 +1,5 @@
 // File: boards/esp32_devkitc_procpu.overlay
-// Fixed for Zephyr 4.2 ILI9341 binding
+// Alternative: Custom SPI-based display without specific driver
 
 // Configure SPI pins first
 &pinctrl {
@@ -19,27 +19,29 @@
     pinctrl-0 = <&spim2_default>;
     pinctrl-names = "default";
 
-    ili9341: ili9341@0 {
-        compatible = "ilitek,ili9341";
+    // Generic SPI device that we'll control manually
+    spi_display: spi_display@0 {
+        compatible = "zephyr,spi-device";
         reg = <0>;
         spi-max-frequency = <25000000>;
-
-        dc-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;      // GPIO2 - Data/Command
-        reset-gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;    // GPIO4 - Reset
-
-        width = <240>;
-        height = <320>;
-
-        pixel-format = <0>;     // RGB565
-        rotation = <0>;
-
         status = "okay";
     };
 };
 
 / {
-    chosen {
-        zephyr,display = &ili9341;
+    // GPIO definitions for display control
+    display_gpios {
+        compatible = "gpio-keys";
+        
+        display_dc: display_dc {
+            gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+            label = "Display DC";
+        };
+        
+        display_reset: display_reset {
+            gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;
+            label = "Display Reset";
+        };
     };
 
     // Simple GPIO-based backlight control
