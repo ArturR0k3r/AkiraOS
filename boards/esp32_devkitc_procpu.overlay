@@ -1,12 +1,25 @@
 // File: boards/esp32_devkitc_procpu.overlay
-// Corrected for Zephyr 4.2 ILI9341 binding
+// Fixed for Zephyr 4.2 ILI9341 binding
+
+// Configure SPI pins first
+&pinctrl {
+    spim2_default: spim2_default {
+        group1 {
+            pinmux = <SPIM2_MISO_GPIO19>,
+                     <SPIM2_MOSI_GPIO23>,
+                     <SPIM2_SCLK_GPIO18>;
+        };
+    };
+};
 
 &spi2 {
     status = "okay";
     #address-cells = <1>;
     #size-cells = <0>;
+    pinctrl-0 = <&spim2_default>;
+    pinctrl-names = "default";
 
-    ili9341@0 {
+    ili9341: ili9341@0 {
         compatible = "ilitek,ili9341";
         reg = <0>;
         spi-max-frequency = <25000000>;
@@ -19,36 +32,15 @@
 
         pixel-format = <0>;     // RGB565
         rotation = <0>;
-        display-inversion;       // boolean, present = true
-
-        // Power control settings (as byte arrays)
-        pwctrl1 = <0x23 0x00>;
-        pwctrl2 = <0x10>;
-
-        // VCOM control
-        vmctrl1 = <0x2B 0x2B>;
-        vmctrl2 = <0xC0>;
-
-        // Interface control
-        ifctl = <0x01 0x00 0x06>;
-
-        // Entry mode
-        etmod = <0x07>;
-
-        // Display function control
-        disctrl = <0x00 0xC2 0xA2>;
-
-        // Gamma correction
-        pgamctrl = <0x0F 0x31 0x2B 0x0C 0x0E 0x08 0x4E 0xF1 0x37 0x07 0x10 0x03 0x0E 0x09 0x00>;
-        ngamctrl = <0x00 0x0E 0x14 0x03 0x11 0x07 0x31 0xC1 0x48 0x08 0x0F 0x0C 0x31 0x36 0x0F>;
 
         status = "okay";
-
-        label = "ili9341";  // <--- This is required
     };
 };
 
- / {
+/ {
+    chosen {
+        zephyr,display = &ili9341;
+    };
 
     // Simple GPIO-based backlight control
     backlight {

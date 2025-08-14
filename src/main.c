@@ -182,8 +182,8 @@ int main(void)
     printk("=== ESP32 ILI9341 Display Test Starting ===\n");
     LOG_INF("ESP32 ILI9341 Display Test Starting...");
     
-    // Get display device
-    display_dev = device_get_binding("ili9341");
+    // Get display device using device tree
+    display_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
     if (!device_is_ready(display_dev)) {
         LOG_ERR("Display device not ready");
         printk("ERROR: Display device not ready!\n");
