@@ -23,16 +23,7 @@ endif()
 # Add source files
 target_sources(app PRIVATE
     src/main.c
-#    src/drivers/display_ili9341.c
-#    src/drivers/touch_xpt2046.c  
-#    src/drivers/input_buttons.c
-#    src/drivers/sdcard.c
-#    src/runtime/wasm_manager.c
-#    src/apps/launcher.c
-#    src/apps/terminal.c
-#    src/ui/ui_manager.c
-#    src/ui/cyberpunk_theme.c
-#    src/lib/utils.c
+    src/drivers/display_ili9341.c
 )
 
 # Include directories

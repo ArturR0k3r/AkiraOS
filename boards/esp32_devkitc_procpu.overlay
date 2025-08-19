@@ -5,51 +5,81 @@
 &pinctrl {
     spim2_default: spim2_default {
         group1 {
-            pinmux = <SPIM2_MISO_GPIO19>,
-                     <SPIM2_MOSI_GPIO23>,
-                     <SPIM2_SCLK_GPIO18>;
+            pinmux = <SPIM2_MISO_GPIO25>,   // MISO
+                     <SPIM2_MOSI_GPIO23>,   // MOSI
+                     <SPIM2_SCLK_GPIO18>;   // SCK
         };
     };
 };
 
 &spi2 {
     status = "okay";
-    #address-cells = <1>;
-    #size-cells = <0>;
+    cs-gpios = <&gpio0 22 GPIO_ACTIVE_LOW>; // CS: GPIO22
     pinctrl-0 = <&spim2_default>;
     pinctrl-names = "default";
-
-    // Generic SPI device that we'll control manually
     spi_display: spi_display@0 {
         compatible = "zephyr,spi-device";
         reg = <0>;
-        spi-max-frequency = <25000000>;
+        spi-max-frequency = <10000000>;
         status = "okay";
     };
 };
 
-/ {
-    // GPIO definitions for display control
-    display_gpios {
-        compatible = "gpio-keys";
-        
-        display_dc: display_dc {
-            gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
-            label = "Display DC";
-        };
-        
-        display_reset: display_reset {
-            gpios = <&gpio0 4 GPIO_ACTIVE_LOW>;
-            label = "Display Reset";
-        };
+&gpio0 {
+    status = "okay";
+    ili9341_dc: ili9341_dc {
+        gpio-hog;
+        gpios = <21 GPIO_ACTIVE_HIGH>;
+        output-high;
     };
-
-    // Simple GPIO-based backlight control
-    backlight {
-        compatible = "gpio-leds";
-        backlight_led: backlight_led {
-            gpios = <&gpio0 16 GPIO_ACTIVE_HIGH>;
-            label = "Display Backlight";
-        };
+    ili9341_reset: ili9341_reset {
+        gpio-hog;
+        gpios = <18 GPIO_ACTIVE_HIGH>;
+        output-high;
+    };
+    ili9341_bl: ili9341_bl {
+        gpio-hog;
+        gpios = <27 GPIO_ACTIVE_HIGH>;
+        output-high;
+    };
+    btn_onoff: btn_onoff {
+        gpio-hog;
+        gpios = <12 GPIO_ACTIVE_HIGH>;
+    };
+    btn_settings: btn_settings {
+        gpio-hog;
+        gpios = <16 GPIO_ACTIVE_HIGH>;
+    };
+    btn_up: btn_up {
+        gpio-hog;
+        gpios = <34 GPIO_ACTIVE_HIGH>;
+    };
+    btn_down: btn_down {
+        gpio-hog;
+        gpios = <33 GPIO_ACTIVE_HIGH>;
+    };
+    btn_right: btn_right {
+        gpio-hog;
+        gpios = <32 GPIO_ACTIVE_HIGH>;
+    };
+    btn_left: btn_left {
+        gpio-hog;
+        gpios = <39 GPIO_ACTIVE_HIGH>;
+    };
+    btn_a: btn_a {
+        gpio-hog;
+        gpios = <17 GPIO_ACTIVE_HIGH>;
+    };
+    btn_b: btn_b {
+        gpio-hog;
+        gpios = <14 GPIO_ACTIVE_HIGH>;
+    };
+    btn_x: btn_x {
+        gpio-hog;
+        gpios = <35 GPIO_ACTIVE_HIGH>;
+    };
+    btn_y: btn_y {
+        gpio-hog;
+        gpios = <13 GPIO_ACTIVE_HIGH>;
     };
 };
