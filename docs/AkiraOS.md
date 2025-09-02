@@ -116,66 +116,34 @@ stateDiagram-v2
 
 ```
 
-## GPIO Pinout Configuration
+## Hardware Configuration
 
-### ESP32 GPIO Mapping
+### ESP32 DevKit C to ILI9341 Display Pin Mapping
 
-| Component | Function | GPIO Pin | Notes |
-| --- | --- | --- | --- |
-| **Display (ILI9341)** |  |  |  |
-|  | MOSI (SDI) | GPIO23 | SPI Data Out |
-|  | MISO (SDO) | GPIO19 | SPI Data In |
-|  | SCK | GPIO18 | SPI Clock |
-|  | CS | GPIO5 | Chip Select |
-|  | DC | GPIO2 | Data/Command |
-|  | RESET | GPIO4 | Display Reset |
-|  | LED (Backlight) | GPIO16 | PWM Control |
-| **Touch Controller (XPT2046)** |  |  |  |
-|  | T_CLK | GPIO18 | Shared with display SCK |
-|  | T_CS | GPIO17 | Touch Chip Select |
-|  | T_DIN | GPIO23 | Shared with display MOSI |
-|  | T_DO | GPIO19 | Shared with display MISO |
-|  | T_IRQ | GPIO21 | Touch Interrupt |
-| **SD Card** |  |  |  |
-|  | SD_CS | GPIO15 | SD Card Chip Select |
-|  | SD_MOSI | GPIO23 | Shared with SPI |
-|  | SD_MISO | GPIO19 | Shared with SPI |
-|  | SD_SCK | GPIO18 | Shared with SPI |
-| **Control Buttons** |  |  |  |
-|  | KEY1 (UP) | GPIO36 | Input only, pull-up |
-|  | KEY2 (RIGHT) | GPIO39 | Input only, pull-up |
-|  | KEY3 (DOWN) | GPIO34 | Input only, pull-up |
-|  | KEY4 (LEFT) | GPIO35 | Input only, pull-up |
-|  | KEY5 | GPIO32 | General purpose |
-|  | KEY6 | GPIO33 | General purpose |
-|  | KEY7 | GPIO25 | General purpose |
-|  | KEY8 | GPIO26 | General purpose |
-|  | KEY_SETTINGS | GPIO27 | Settings button |
-|  | KEY_ON/OFF | GPIO14 | Power button |
-| **Audio** |  |  |  |
-|  | SOUND | GPIO22 | PWM/I2S Audio Out |
-| **System** |  |  |  |
-|  | EN (Reset) | EN | Hardware reset |
-|  | GPIO0 | GPIO0 | Boot mode select |
-| **UART (Programming)** |  |  |  |
-|  | RX | GPIO3 | UART0 RX |
-|  | TX | GPIO1 | UART0 TX |
-| **Status LEDs** |  |  |  |
-|  | STATUS (Blue) | GPIO12 | System status |
-|  | CHARGE (Yellow) | GPIO13 | Battery charging |
-| **Expansion Header** |  |  |  |
-|  | GPIO4 | GPIO4 | Available for expansion |
-|  | GPIO6 | GPIO6 | Available for expansion |
-|  | GPIO7 | GPIO7 | Available for expansion |
-|  | GPIO8 | GPIO8 | Available for expansion |
-|  | GPIO10 | GPIO10 | Available for expansion |
-|  | GPIO11 | GPIO11 | Available for expansion |
+#### SPI Display Connections
+| ESP32 GPIO | ILI9341 Pin | Function | Notes |
+|------------|-------------|----------|--------|
+| GPIO23     | MOSI (SDI)  | SPI Data Out | Data from ESP32 to display |
+| GPIO25     | MISO (SDO)  | SPI Data In  | Optional - for reading display |
+| **GPIO19** | SCK         | SPI Clock    | **Main clock line** |
+| GPIO22     | CS          | Chip Select  | Manual control |
+| GPIO21     | DC          | Data/Command | Low=Command, High=Data |
+| GPIO18     | RESET       | Reset        | Hardware reset |
+| GPIO27     | LED         | Backlight    | PWM capable for dimming |
 
-### Power Management
+#### Gaming Control Buttons
+| ESP32 GPIO | Button | Type | Notes |
+|------------|--------|------|--------|
+| GPIO12     | Power/Menu | Input | Pull-up enabled |
+| GPIO16     | Settings | Input | Pull-up enabled |
+| GPIO34     | D-Pad Up | Input Only | ⚠️ No pull-up (external required) |
+| GPIO33     | D-Pad Down | Input | Pull-up enabled |
+| GPIO32     | D-Pad Left | Input | Pull-up enabled |
+| GPIO39     | D-Pad Right | Input Only | ⚠️ No pull-up (external required) |
+| GPIO17     | A Button | Input | Pull-up enabled |
+| GPIO14     | B Button | Input | Pull-up enabled |
+| GPIO35     | X Button | Input Only | ⚠️ No pull-up (external required) |
+| GPIO13     | Y Button | Input | Pull-up enabled |
 
-| Component | Voltage | Current | Notes |
-| --- | --- | --- | --- |
-| ESP32 Core | 3.3V | ~240mA active | Deep sleep: ~10µA |
-| Display | 3.3V | ~20mA | Backlight: ~100mA |
-| Battery | 3.7V Li-Po | 1000-2000mAh | Via MCP73832T charger |
-| USB Power | 5V | 500mA max | Type-C connector |
+
+

@@ -73,6 +73,9 @@ Zephyr Project – for the powerful RTOS base
 WebAssembly – for bringing platform-agnostic apps to embedded systems
 
 
+
+
+
 # Start-up
 You should have installed Zephyr, Python and so on checkout how to install zephyr
 https://docs.zephyrproject.org/latest/develop/getting_started/index.html 

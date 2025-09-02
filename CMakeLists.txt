@@ -12,7 +12,7 @@ project(akira_os VERSION 1.0.0)
 
 # Set default board
 set(BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR}/boards)
-set(DTC_OVERLAY_FILE ${CMAKE_CURRENT_LIST_DIR}/akira.overlay)
+# set(DTC_OVERLAY_FILE ${CMAKE_CURRENT_LIST_DIR}/akira.overlay)  # Not needed, handled by board overlay
 
 # Include WASM Micro Runtime if available
 if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/modules/wamr)

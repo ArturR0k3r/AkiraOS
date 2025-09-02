@@ -1,85 +1,114 @@
 // File: boards/esp32_devkitc_procpu.overlay
-// Alternative: Custom SPI-based display without specific driver
+// ESP32 ILI9341 Display + Gaming Controls Configuration
 
-// Configure SPI pins first
+// Configure SPI pins - Fixed pin mapping
 &pinctrl {
     spim2_default: spim2_default {
         group1 {
-            pinmux = <SPIM2_MISO_GPIO25>,   // MISO
-                     <SPIM2_MOSI_GPIO23>,   // MOSI
-                     <SPIM2_SCLK_GPIO18>;   // SCK
+            pinmux = <SPIM2_MISO_GPIO25>,   // MISO - GPIO25
+                     <SPIM2_MOSI_GPIO23>,   // MOSI - GPIO23  
+                     <SPIM2_SCLK_GPIO19>;   // SCK  - GPIO19 (Fixed from GPIO18)
         };
     };
 };
 
 &spi2 {
     status = "okay";
-    cs-gpios = <&gpio0 22 GPIO_ACTIVE_LOW>; // CS: GPIO22
     pinctrl-0 = <&spim2_default>;
     pinctrl-names = "default";
-    spi_display: spi_display@0 {
-        compatible = "zephyr,spi-device";
-        reg = <0>;
-        spi-max-frequency = <10000000>;
-        status = "okay";
-    };
+    cs-gpios = <&gpio0 22 GPIO_ACTIVE_LOW>;  // Manual CS control
+    
+
 };
 
 &gpio0 {
     status = "okay";
+    
+    // ILI9341 Display Control Pins
+    ili9341_cs: ili9341_cs {
+        gpio-hog;
+        gpios = <22 GPIO_ACTIVE_LOW>;   // CS - GPIO22
+        output-high;                    // CS idle high
+    };
+    
     ili9341_dc: ili9341_dc {
         gpio-hog;
-        gpios = <21 GPIO_ACTIVE_HIGH>;
-        output-high;
+        gpios = <21 GPIO_ACTIVE_HIGH>;  // DC - GPIO21
+        output-low;                     // DC starts low (command mode)
     };
+    
     ili9341_reset: ili9341_reset {
         gpio-hog;
-        gpios = <18 GPIO_ACTIVE_HIGH>;
-        output-high;
+        gpios = <18 GPIO_ACTIVE_HIGH>;  // RESET - GPIO18
+        output-high;                    // RESET idle high
     };
+    
     ili9341_bl: ili9341_bl {
         gpio-hog;
-        gpios = <27 GPIO_ACTIVE_HIGH>;
-        output-high;
+        gpios = <27 GPIO_ACTIVE_HIGH>;  // Backlight - GPIO27
+        output-high;                    // Backlight on
     };
+    
+    // Gaming Control Buttons
     btn_onoff: btn_onoff {
         gpio-hog;
-        gpios = <12 GPIO_ACTIVE_HIGH>;
+        gpios = <12 GPIO_ACTIVE_LOW>;   // Power/Menu button
+        input;
     };
+    
     btn_settings: btn_settings {
         gpio-hog;
-        gpios = <16 GPIO_ACTIVE_HIGH>;
+        gpios = <16 GPIO_ACTIVE_LOW>;   // Settings button
+        input;
     };
+    
+    // D-Pad buttons
     btn_up: btn_up {
         gpio-hog;
-        gpios = <34 GPIO_ACTIVE_HIGH>;
+        gpios = <34 GPIO_ACTIVE_LOW>;   // D-Pad Up (input only pin)
+        input;
     };
+    
     btn_down: btn_down {
         gpio-hog;
-        gpios = <33 GPIO_ACTIVE_HIGH>;
+        gpios = <33 GPIO_ACTIVE_LOW>;   // D-Pad Down
+        input;
     };
-    btn_right: btn_right {
-        gpio-hog;
-        gpios = <32 GPIO_ACTIVE_HIGH>;
-    };
+    
     btn_left: btn_left {
         gpio-hog;
-        gpios = <39 GPIO_ACTIVE_HIGH>;
+        gpios = <32 GPIO_ACTIVE_LOW>;   // D-Pad Left
+        input;
     };
+    
+    btn_right: btn_right {
+        gpio-hog;
+        gpios = <39 GPIO_ACTIVE_LOW>;   // D-Pad Right (input only pin)
+        input;
+    };
+    
+    // Action buttons (A, B, X, Y)
     btn_a: btn_a {
         gpio-hog;
-        gpios = <17 GPIO_ACTIVE_HIGH>;
+        gpios = <17 GPIO_ACTIVE_LOW>;   // A button
+        input;
     };
+    
     btn_b: btn_b {
         gpio-hog;
-        gpios = <14 GPIO_ACTIVE_HIGH>;
+        gpios = <14 GPIO_ACTIVE_LOW>;   // B button  
+        input;
     };
+    
     btn_x: btn_x {
         gpio-hog;
-        gpios = <35 GPIO_ACTIVE_HIGH>;
+        gpios = <35 GPIO_ACTIVE_LOW>;   // X button (input only pin)
+        input;
     };
+    
     btn_y: btn_y {
         gpio-hog;
-        gpios = <13 GPIO_ACTIVE_HIGH>;
+        gpios = <13 GPIO_ACTIVE_LOW>;   // Y button
+        input;
     };
 };
