@@ -101,6 +101,6 @@ void ili9341_draw_text(int x, int y, const char *text, uint16_t color, FontType 
 void ili9341_draw_pixel(int x, int y, uint16_t color);
 void ili9341_crt_screensaver(void);
 
-// TO DO add fill_screen, clear_screen,
+// TO DO add fill_screen, clear_screen, on/off display 
 
 #endif // __DISPLAY_ILI9341_H__

@@ -17,8 +17,6 @@
     pinctrl-0 = <&spim2_default>;
     pinctrl-names = "default";
     cs-gpios = <&gpio0 22 GPIO_ACTIVE_LOW>;  // Manual CS control
-    
-
 };
 
 &gpio0 {
@@ -48,67 +46,30 @@
         gpios = <27 GPIO_ACTIVE_HIGH>;  // Backlight - GPIO27
         output-high;                    // Backlight on
     };
-    
-    // Gaming Control Buttons
-    btn_onoff: btn_onoff {
-        gpio-hog;
-        gpios = <12 GPIO_ACTIVE_LOW>;   // Power/Menu button
-        input;
-    };
-    
-    btn_settings: btn_settings {
-        gpio-hog;
-        gpios = <16 GPIO_ACTIVE_LOW>;   // Settings button
-        input;
-    };
-    
-    // D-Pad buttons
-    btn_up: btn_up {
-        gpio-hog;
-        gpios = <34 GPIO_ACTIVE_LOW>;   // D-Pad Up (input only pin)
-        input;
-    };
-    
-    btn_down: btn_down {
-        gpio-hog;
-        gpios = <33 GPIO_ACTIVE_LOW>;   // D-Pad Down
-        input;
-    };
-    
-    btn_left: btn_left {
-        gpio-hog;
-        gpios = <32 GPIO_ACTIVE_LOW>;   // D-Pad Left
-        input;
-    };
-    
-    btn_right: btn_right {
-        gpio-hog;
-        gpios = <39 GPIO_ACTIVE_LOW>;   // D-Pad Right (input only pin)
-        input;
-    };
-    
-    // Action buttons (A, B, X, Y)
-    btn_a: btn_a {
-        gpio-hog;
-        gpios = <17 GPIO_ACTIVE_LOW>;   // A button
-        input;
-    };
-    
-    btn_b: btn_b {
-        gpio-hog;
-        gpios = <14 GPIO_ACTIVE_LOW>;   // B button  
-        input;
-    };
-    
-    btn_x: btn_x {
-        gpio-hog;
-        gpios = <35 GPIO_ACTIVE_LOW>;   // X button (input only pin)
-        input;
-    };
-    
-    btn_y: btn_y {
-        gpio-hog;
-        gpios = <13 GPIO_ACTIVE_LOW>;   // Y button
-        input;
+};
+
+/ {
+    buttons {
+        compatible = "gpio-keys";
+
+        btn_up: btn_up {
+            gpios = <&gpio0 34 GPIO_ACTIVE_LOW>;
+            label = "UP Button";
+        };
+
+        btn_down: btn_down {
+            gpios = <&gpio0 33 GPIO_ACTIVE_LOW>;
+            label = "DOWN Button";
+        };
+
+        btn_a: btn_a {
+            gpios = <&gpio0 17 GPIO_ACTIVE_LOW>;
+            label = "A Button";
+        };
+
+        btn_b: btn_b {
+            gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
+            label = "B Button";
+        };
     };
 };

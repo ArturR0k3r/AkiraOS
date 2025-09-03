@@ -131,7 +131,7 @@ stateDiagram-v2
 | GPIO18     | RESET       | Reset        | Hardware reset |
 | GPIO27     | LED         | Backlight    | PWM capable for dimming |
 
-#### Gaming Control Buttons
+#### Control Buttons
 | ESP32 GPIO | Button | Type | Notes |
 |------------|--------|------|--------|
 | GPIO12     | Power/Menu | Input | Pull-up enabled |
@@ -144,6 +144,7 @@ stateDiagram-v2
 | GPIO14     | B Button | Input | Pull-up enabled |
 | GPIO35     | X Button | Input Only | ⚠️ No pull-up (external required) |
 | GPIO13     | Y Button | Input | Pull-up enabled |
+| GPIO2      | Status LED | Output | |
 
 
 

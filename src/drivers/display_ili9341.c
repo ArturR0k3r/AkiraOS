@@ -96,7 +96,7 @@ int ili9341_init(const struct device *spi_dev, const struct device *gpio_dev,
     gpio_dev_local = gpio_dev;
     spi_cfg_local = spi_cfg;
 
-    LOG_INF("Starting ILI9341 initialization...");
+    LOG_DBG("Starting ILI9341 initialization...");
 
     // Hardware reset (already done in main, but ensure proper timing)
     k_msleep(10);
@@ -367,28 +367,14 @@ int ili9341_fill_color(uint16_t color)
     return 0;
 }
 
-int ili9341_draw_color_bars(void)
+int ili9341_backlight_init(const struct device *gpio_dev, int pin)
 {
-    uint16_t colors[] = {WHITE_COLOR, RED_COLOR, GREEN_COLOR, BLUE_COLOR,
-                         YELLOW_COLOR, MAGENTA_COLOR, CYAN_COLOR, BLACK_COLOR};
-    int bar_height = ILI9341_DISPLAY_HEIGHT / 8;
+    int ret = gpio_pin_configure(gpio_dev, pin, GPIO_OUTPUT_ACTIVE);
+    if (ret < 0)
+        return ret;
 
-    for (int i = 0; i < 8; i++)
-    {
-        int y_start = i * bar_height;
-        int y_end = (i == 7) ? ILI9341_DISPLAY_HEIGHT - 1 : (i + 1) * bar_height - 1;
-
-        ili9341_set_area(0, y_start, ILI9341_DISPLAY_WIDTH - 1, y_end);
-        ili9341_send_cmd(ILI9341_RAMWR);
-
-        uint8_t color_bytes[2] = {colors[i] >> 8, colors[i] & 0xFF};
-        int pixels_in_bar = ILI9341_DISPLAY_WIDTH * (y_end - y_start + 1);
-
-        for (int p = 0; p < pixels_in_bar; p++)
-        {
-            ili9341_send_data(color_bytes, 2);
-        }
-    }
+    gpio_pin_set(gpio_dev, pin, 1);
+    LOG_INF("Backlight initialized on GPIO %d", pin);
     return 0;
 }
 
@@ -405,7 +391,6 @@ void ili9341_draw_pixel(int x, int y, uint16_t color)
     ili9341_send_data(color_bytes, 2);
 }
 
-// New text drawing function using fonts.c API
 void ili9341_draw_text(int x, int y, const char *text, uint16_t color, FontType font)
 {
     draw_string(x, y, text, color, ili9341_draw_pixel, font);
@@ -436,13 +421,27 @@ void ili9341_crt_screensaver(void)
     }
 }
 
-int ili9341_backlight_init(const struct device *gpio_dev, int pin)
+int ili9341_draw_color_bars(void)
 {
-    int ret = gpio_pin_configure(gpio_dev, pin, GPIO_OUTPUT_ACTIVE);
-    if (ret < 0)
-        return ret;
+    uint16_t colors[] = {WHITE_COLOR, RED_COLOR, GREEN_COLOR, BLUE_COLOR,
+                         YELLOW_COLOR, MAGENTA_COLOR, CYAN_COLOR, BLACK_COLOR};
+    int bar_height = ILI9341_DISPLAY_HEIGHT / 8;
 
-    gpio_pin_set(gpio_dev, pin, 1);
-    LOG_INF("Backlight initialized on GPIO %d", pin);
+    for (int i = 0; i < 8; i++)
+    {
+        int y_start = i * bar_height;
+        int y_end = (i == 7) ? ILI9341_DISPLAY_HEIGHT - 1 : (i + 1) * bar_height - 1;
+
+        ili9341_set_area(0, y_start, ILI9341_DISPLAY_WIDTH - 1, y_end);
+        ili9341_send_cmd(ILI9341_RAMWR);
+
+        uint8_t color_bytes[2] = {colors[i] >> 8, colors[i] & 0xFF};
+        int pixels_in_bar = ILI9341_DISPLAY_WIDTH * (y_end - y_start + 1);
+
+        for (int p = 0; p < pixels_in_bar; p++)
+        {
+            ili9341_send_data(color_bytes, 2);
+        }
+    }
     return 0;
 }

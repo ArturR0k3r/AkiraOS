@@ -5,44 +5,31 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
 #include "drivers/display_ili9341.h"
+#include "drivers/user_led.h"
+#include "drivers/buttons.h"
 
-LOG_MODULE_REGISTER(akira_main, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(akira_main, LOG_LEVEL_DBG);
 
-void draw_startup_screen(void)
+// Simpler, robust test callback for button events
+void button_test_callback(int button_id, button_event_t event)
 {
-    ili9341_fill_color(BLACK_COLOR);
+    static const char *btn_names[BUTTON_COUNT] = {
+        "ON/OFF", "SETTINGS", "UP", "DOWN", "LEFT", "RIGHT", "A", "B", "X", "Y"};
+    static const char *evt_names[] = {
+        "NONE", "SINGLE_CLICK", "DOUBLE_CLICK", "TRIPLE_CLICK", "LONG_PRESS"};
+    if (button_id < 0 || button_id >= BUTTON_COUNT || event == BUTTON_EVENT_NONE)
+        return;
+    LOG_INF("Button %s: %s", btn_names[button_id], evt_names[event]);
 
-    // Draw ASCII logo line by line
-    const char *logo[] = {
-        "AKIRA-OS",
-        "",
-        "Cyberpunk Console",
-        "WASM, Zephyr OS",
-        "",
-        "Press any button..."};
-
-    int y = 10;
-    for (int i = 0; i < sizeof(logo) / sizeof(logo[0]); i++)
+    if (button_id == BUTTON_ID_A && event == BUTTON_EVENT_SINGLE_CLICK)
     {
-        ili9341_draw_text(10, y, logo[i], CYAN_COLOR, FONT_7X10);
-        y += 16;
-    }
-}
-
-void draw_screensaver(void)
-{
-    for (int frame = 0; frame < 100; frame++)
-    {
-        ili9341_fill_color((frame % 2) ? MAGENTA_COLOR : CYAN_COLOR);
-        ili9341_draw_text(10, 10, "Welcome to Akira Console!", CYAN_COLOR, FONT_7X10);
-        k_sleep(K_SECONDS(2));
-        ili9341_crt_screensaver();
+        user_led_toggle();
     }
 }
 
 int main(void)
 {
-    LOG_INF("=== Akira Display Test ===\n");
+    LOG_INF("=== Akira Full Hardware Test ===\n");
 
     int ret;
     const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
@@ -141,19 +128,34 @@ int main(void)
         return ret;
     }
 
-    ili9341_fill_color(WHITE_COLOR);
-    LOG_INF("=== AkiraOS v1.0.0 ===");
-    ili9341_draw_text(10, 30, "=== AkiraOS v1.0.0 ===", BLACK_COLOR, FONT_7X10);
-    LOG_INF("Cyberpunk Gaming Console");
-    ili9341_draw_text(10, 50, "Cyberpunk Gaming Console", BLACK_COLOR, FONT_7X10);
-    LOG_INF("Hardware: Akira Basic ESP32");
-    ili9341_draw_text(10, 70, "Hardware: Akira Basic ESP32", BLACK_COLOR, FONT_7X10);
-    LOG_INF("Build: %s %s", __DATE__, __TIME__);
+    if (!device_is_ready(btn_up.port))
+    {
+        LOG_ERR("GPIO device not ready");
+    }
+    ret = user_led_init();
+    if (ret < 0)
+    {
+        LOG_ERR("User LED initialization failed: %d\n", ret);
+    }
+    user_led_on();
 
-    // Main loop
+    ili9341_fill_color(WHITE_COLOR);
+    LOG_INF("=== Akira Full Hardware Test ===\n");
+    ili9341_draw_text(50, 30, "=== Akira Full Hardware Test ===", BLACK_COLOR, FONT_7X10);
+    LOG_INF("=== AkiraOS v1.0.0 ===");
+    ili9341_draw_text(50, 50, "=== AkiraOS v1.0.0 ===", BLACK_COLOR, FONT_7X10);
+    LOG_INF("Cyberpunk Gaming Console");
+    ili9341_draw_text(50, 70, "Cyberpunk Gaming Console", BLACK_COLOR, FONT_7X10);
+    LOG_INF("Hardware: Akira Basic ESP32");
+    ili9341_draw_text(50, 90, "Hardware: Akira Basic ESP32", BLACK_COLOR, FONT_7X10);
+    LOG_INF("Build: %s %s", __DATE__, __TIME__);
+    char build_info[50];
+    snprintf(build_info, sizeof(build_info), "Build: %s %s", __DATE__, __TIME__);
+    ili9341_draw_text(50, 110, build_info, BLACK_COLOR, FONT_7X10);
+
     while (1)
     {
-        k_sleep(K_SECONDS(1));
+        k_sleep(K_MSEC(1000));
     }
 
     return 0;
