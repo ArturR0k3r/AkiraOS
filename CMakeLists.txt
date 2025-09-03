@@ -24,6 +24,8 @@ endif()
 target_sources(app PRIVATE
     src/main.c
     src/drivers/display_ili9341.c
+    src/drivers/fonts.c
+    src/drivers/font_data.c
 )
 
 # Include directories

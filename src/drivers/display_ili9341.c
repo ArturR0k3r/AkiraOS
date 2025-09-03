@@ -1,11 +1,12 @@
 #include "display_ili9341.h"
+#include "fonts.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/sys/__assert.h>
 #include <stdlib.h>
 
-LOG_MODULE_REGISTER(ili9341, LOG_LEVEL_DBG);
+LOG_MODULE_REGISTER(ili9341, LOG_LEVEL_INF);
 
 static const struct device *spi_dev_local;
 static const struct device *gpio_dev_local;
@@ -39,10 +40,6 @@ static int ili9341_send_cmd(uint8_t cmd)
     {
         LOG_ERR("SPI CMD write failed: %d", ret);
     }
-    else
-    {
-        LOG_DBG("SPI CMD: 0x%02X", cmd);
-    }
 
     return ret;
 }
@@ -74,10 +71,6 @@ static int ili9341_send_data(uint8_t *data, size_t len)
     if (ret < 0)
     {
         LOG_ERR("SPI DATA write failed: %d", ret);
-    }
-    else
-    {
-        LOG_DBG("SPI DATA: len=%d", (int)len);
     }
 
     return ret;
@@ -374,7 +367,6 @@ int ili9341_fill_color(uint16_t color)
     return 0;
 }
 
-// Rest of the functions remain the same...
 int ili9341_draw_color_bars(void)
 {
     uint16_t colors[] = {WHITE_COLOR, RED_COLOR, GREEN_COLOR, BLUE_COLOR,
@@ -400,16 +392,6 @@ int ili9341_draw_color_bars(void)
     return 0;
 }
 
-// Keep the existing font and drawing functions...
-static const uint8_t font8x8_basic[96][8] = {
-    // Space (32)
-    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
-    // '!' (33)
-    {0x18, 0x3C, 0x3C, 0x18, 0x18, 0x00, 0x18, 0x00},
-    // Add rest of font data...
-    // (keeping existing font data for brevity)
-};
-
 void ili9341_draw_pixel(int x, int y, uint16_t color)
 {
     if (x < 0 || x >= ILI9341_DISPLAY_WIDTH || y < 0 || y >= ILI9341_DISPLAY_HEIGHT)
@@ -423,33 +405,10 @@ void ili9341_draw_pixel(int x, int y, uint16_t color)
     ili9341_send_data(color_bytes, 2);
 }
 
-static void ili9341_draw_char(int x, int y, char c, uint16_t color)
+// New text drawing function using fonts.c API
+void ili9341_draw_text(int x, int y, const char *text, uint16_t color, FontType font)
 {
-    if (c < 32 || c > 127)
-        return;
-
-    const uint8_t *bitmap = font8x8_basic[c - 32];
-    for (int row = 0; row < 8; row++)
-    {
-        for (int col = 0; col < 8; col++)
-        {
-            if (bitmap[row] & (1 << col))
-            {
-                ili9341_draw_pixel(x + col, y + row, color);
-            }
-        }
-    }
-}
-
-void ili9341_draw_text(int x, int y, const char *text, uint16_t color)
-{
-    int cursor_x = x;
-    while (*text)
-    {
-        ili9341_draw_char(cursor_x, y, *text, color);
-        cursor_x += 8;
-        text++;
-    }
+    draw_string(x, y, text, color, ili9341_draw_pixel, font);
 }
 
 void ili9341_crt_screensaver(void)
@@ -471,7 +430,7 @@ void ili9341_crt_screensaver(void)
 
         // Draw scrolling text
         int scroll_y = (frame * 2) % (ILI9341_DISPLAY_HEIGHT - 8);
-        ili9341_draw_text(10, scroll_y, "AKIRA CONSOLE", CYAN_COLOR);
+        ili9341_draw_text(10, scroll_y, "AKIRA CONSOLE", CYAN_COLOR, FONT_7X10);
 
         k_sleep(K_MSEC(100));
     }

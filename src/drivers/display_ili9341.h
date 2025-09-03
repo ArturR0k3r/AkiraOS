@@ -1,7 +1,9 @@
-#pragma once
+#ifndef __DISPLAY_ILI9341_H__
+#define __DISPLAY_ILI9341_H__
 #include <zephyr/device.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/gpio.h>
+#include "fonts.h"
 
 #define ILI9341_DISPLAY_WIDTH 320
 #define ILI9341_DISPLAY_HEIGHT 240
@@ -95,12 +97,10 @@ int ili9341_fill_color(uint16_t color);
 int ili9341_draw_color_bars(void);
 int ili9341_draw_test_pattern(void);
 int ili9341_backlight_init(const struct device *gpio_dev, int pin);
-void ili9341_draw_text(int x, int y, const char *text, uint16_t color);
+void ili9341_draw_text(int x, int y, const char *text, uint16_t color, FontType font);
 void ili9341_draw_pixel(int x, int y, uint16_t color);
 void ili9341_crt_screensaver(void);
 
-// Gaming-specific functions
-// int gaming_buttons_init(const struct device *gpio_dev);
-// bool is_button_pressed(const struct device *gpio_dev, int pin);
-// void draw_game_ui(void);
-// void process_button_input(void);
+// TO DO add fill_screen, clear_screen,
+
+#endif // __DISPLAY_ILI9341_H__
