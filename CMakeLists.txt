@@ -26,6 +26,11 @@ target_sources(app PRIVATE
     src/drivers/display_ili9341.c
     src/drivers/fonts.c
     src/drivers/font_data.c
+    src/shell/akira_shell.c
+    src/settings/settings.c
+    src/OTA/ota_manager.c
+    src/OTA/web_server.c
+    
 )
 
 # Include directories
@@ -36,7 +41,11 @@ target_include_directories(app PRIVATE
     src/apps/
     src/ui/
     src/lib/
-)   
+    src/OTA/
+    src/settings/
+    src/shell/
+    src/drivers/
+)
 
 # Compile definitions
 target_compile_definitions(app PRIVATE

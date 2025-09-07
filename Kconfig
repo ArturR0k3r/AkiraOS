@@ -46,4 +46,10 @@ config AKIRA_CYBERPUNK_THEME
     help
       Enable cyberpunk-style user interface theme.
 
+config FS_FATFS_VOLUME_COUNT
+    int "Number of FAT volumes"
+    default 1
+    help
+      Maximum number of FAT volumes supported.
+
 endmenu

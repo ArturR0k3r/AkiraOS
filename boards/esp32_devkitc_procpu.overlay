@@ -1,5 +1,6 @@
-// File: boards/esp32_devkitc_procpu.overlay
-// ESP32 ILI9341 Display + Gaming Controls Configuration
+// Include required headers
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/spi/spi.h>
 
 // Configure SPI pins - Fixed pin mapping
 &pinctrl {
@@ -7,7 +8,7 @@
         group1 {
             pinmux = <SPIM2_MISO_GPIO25>,   // MISO - GPIO25
                      <SPIM2_MOSI_GPIO23>,   // MOSI - GPIO23  
-                     <SPIM2_SCLK_GPIO19>;   // SCK  - GPIO19 (Fixed from GPIO18)
+                     <SPIM2_SCLK_GPIO19>;   // SCK  - GPIO19
         };
     };
 };
@@ -17,13 +18,10 @@
     pinctrl-0 = <&spim2_default>;
     pinctrl-names = "default";
     cs-gpios = <&gpio0 22 GPIO_ACTIVE_LOW>;  // Manual CS control
-    
-
 };
 
 &gpio0 {
     status = "okay";
-    
     // ILI9341 Display Control Pins
     ili9341_cs: ili9341_cs {
         gpio-hog;
@@ -48,67 +46,34 @@
         gpios = <27 GPIO_ACTIVE_HIGH>;  // Backlight - GPIO27
         output-high;                    // Backlight on
     };
-    
-    // Gaming Control Buttons
-    btn_onoff: btn_onoff {
-        gpio-hog;
-        gpios = <12 GPIO_ACTIVE_LOW>;   // Power/Menu button
-        input;
-    };
-    
-    btn_settings: btn_settings {
-        gpio-hog;
-        gpios = <16 GPIO_ACTIVE_LOW>;   // Settings button
-        input;
-    };
-    
-    // D-Pad buttons
-    btn_up: btn_up {
-        gpio-hog;
-        gpios = <34 GPIO_ACTIVE_LOW>;   // D-Pad Up (input only pin)
-        input;
-    };
-    
-    btn_down: btn_down {
-        gpio-hog;
-        gpios = <33 GPIO_ACTIVE_LOW>;   // D-Pad Down
-        input;
-    };
-    
-    btn_left: btn_left {
-        gpio-hog;
-        gpios = <32 GPIO_ACTIVE_LOW>;   // D-Pad Left
-        input;
-    };
-    
-    btn_right: btn_right {
-        gpio-hog;
-        gpios = <39 GPIO_ACTIVE_LOW>;   // D-Pad Right (input only pin)
-        input;
-    };
-    
-    // Action buttons (A, B, X, Y)
-    btn_a: btn_a {
-        gpio-hog;
-        gpios = <17 GPIO_ACTIVE_LOW>;   // A button
-        input;
-    };
-    
-    btn_b: btn_b {
-        gpio-hog;
-        gpios = <14 GPIO_ACTIVE_LOW>;   // B button  
-        input;
-    };
-    
-    btn_x: btn_x {
-        gpio-hog;
-        gpios = <35 GPIO_ACTIVE_LOW>;   // X button (input only pin)
-        input;
-    };
-    
-    btn_y: btn_y {
-        gpio-hog;
-        gpios = <13 GPIO_ACTIVE_LOW>;   // Y button
-        input;
+};
+
+// WiFi configuration
+&wifi {
+    status = "okay";
+    // WiFi credentbgials will be managed by settings module
+};
+
+// UART configuration for shell and logging
+&uart0 {
+    status = "okay";
+    current-speed = <115200>;
+};
+
+// I2C configuration (for future expansion)
+&i2c0 {
+    status = "okay";
+    clock-frequency = <I2C_BITRATE_STANDARD>;
+    // Reserved for future peripherals:
+    // - IMU/Accelerometer
+    // - Audio codec
+    // - Battery management IC
+};
+
+// Chosen nodes for Zephyr configuration
+/ {
+    chosen {
+        zephyr,console = &uart0;
+        zephyr,shell-uart = &uart0;
     };
 };
