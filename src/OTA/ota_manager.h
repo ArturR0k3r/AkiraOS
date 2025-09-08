@@ -138,14 +138,7 @@ enum ota_result ota_abort_update(void);
  */
 const struct ota_progress *ota_get_progress(void);
 
-/**
- * @brief Get current firmware status
- *
- * @param is_confirmed Set to true if current firmware is confirmed
- * @param is_pending_revert Set to true if revert is pending
- * @return 0 on success, negative error code on failure
- */
-int ota_get_status(bool *is_confirmed, bool *is_pending_revert);
+
 
 /**
  * @brief Confirm current firmware as permanent

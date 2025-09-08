@@ -1,68 +1,58 @@
 /**
  * @file web_server.c
- * @brief Web Server and OTA Handler Implementation - Fixed for Zephyr 4.2
+ * @brief Optimized Web Server Implementation for ESP32
  *
- * Complete web server module with OTA support running on dedicated thread.
- * Handles HTTP requests, firmware uploads, and provides web interface.
  */
 
 #include "web_server.h"
 #include "ota_manager.h"
 #include <zephyr/logging/log.h>
 #include <zephyr/net/socket.h>
-#include <zephyr/net/http/service.h>
 #include <zephyr/kernel.h>
 #include <string.h>
 #include <stdio.h>
 
 LOG_MODULE_REGISTER(web_server, LOG_LEVEL_INF);
 
-static const struct http_header content_type_html[] = {
-    {.name = "Content-Type", .value = "text/html"},
-    {.name = "Cache-Control", .value = "no-cache"}};
+/* Optimized constants */
+#define HTTP_BUFFER_SIZE 1024
+#define HTTP_RESPONSE_BUFFER_SIZE 2048
+#define UPLOAD_CHUNK_SIZE 512
+#define MAX_CONNECTIONS 2
 
-static const struct http_header content_type_json[] = {
-    {.name = "Content-Type", .value = "application/json"}};
-
-static const struct http_header content_type_plain[] = {
-    {.name = "Content-Type", .value = "text/plain"}};
-
-/* Thread stack and control block */
-static K_THREAD_STACK_DEFINE(web_server_stack, WEB_SERVER_STACK_SIZE);
+/* Thread stack - optimized size */
+static K_THREAD_STACK_DEFINE(web_server_stack, 4096);
 static struct k_thread web_server_thread_data;
 static k_tid_t web_server_thread_id;
 
-/* Server state */
-static struct web_server_stats server_stats = {0};
-static struct web_server_callbacks server_callbacks = {0};
-static bool network_connected = false;
-static char server_ip[16] = {0};
-static enum web_server_state current_state = WEB_SERVER_STOPPED;
-static const char *custom_headers = NULL;
+/* Compact server state */
+static struct
+{
+    enum web_server_state state;
+    uint32_t requests_handled;
+    uint32_t bytes_transferred;
+    uint8_t active_connections;
+    bool network_connected;
+    char server_ip[16];
+} server_state __aligned(4);
 
-/* HTTP service configuration */
-static struct http_service_desc web_service;
-static struct sockaddr_in server_addr;
-
-/* Synchronization */
+static struct web_server_callbacks callbacks = {0};
 static K_MUTEX_DEFINE(server_mutex);
-static K_SEM_DEFINE(server_ready_sem, 0, 1);
 
-/* Message queue for server operations */
-#define SERVER_MSG_QUEUE_SIZE 20
+/* Message queue - reduced size */
+#define SERVER_MSG_QUEUE_SIZE 8
 
 enum server_msg_type
 {
-    MSG_START_SERVER,
+    MSG_START_SERVER = 1,
     MSG_STOP_SERVER,
-    MSG_NETWORK_STATUS_CHANGED,
-    MSG_REFRESH_DATA,
-    MSG_BROADCAST_LOG
+    MSG_NETWORK_STATUS_CHANGED
 };
 
 struct server_msg
 {
-    enum server_msg_type type;
+    enum server_msg_type type : 8;
+    uint8_t reserved;
     union
     {
         struct
@@ -70,359 +60,502 @@ struct server_msg
             bool connected;
             char ip_address[16];
         } network_status;
-        struct
-        {
-            char message[256];
-            size_t length;
-        } log_broadcast;
     } data;
-};
+} __packed;
 
 K_MSGQ_DEFINE(server_msgq, sizeof(struct server_msg), SERVER_MSG_QUEUE_SIZE, 4);
 
-/* Web interface HTML (same as before) */
-static const char web_interface_html[] =
-    "<!DOCTYPE html>"
-    "<html><head><title>ESP32 Gaming Device Control</title>"
-    "<meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"
+/* Compressed HTML - critical parts only */
+static const char html_header[] =
+    "<!DOCTYPE html><html><head><title>ESP32 OTA</title>"
+    "<meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
     "<style>"
-    "body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;color:#fff}"
-    ".container{max-width:1200px;margin:0 auto;padding:20px}"
-    ".header{text-align:center;padding:30px;background:rgba(255,255,255,0.1);margin-bottom:30px;border-radius:20px;backdrop-filter:blur(10px)}"
-    ".header h1{margin:0;font-size:2.5em;text-shadow:2px 2px 4px rgba(0,0,0,0.3)}"
-    ".header p{margin:10px 0;opacity:0.9}"
-    ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:20px;margin-bottom:20px}"
-    ".panel{background:rgba(255,255,255,0.1);padding:25px;border-radius:15px;backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.2);box-shadow:0 8px 32px rgba(0,0,0,0.1)}"
-    ".panel h3{margin-top:0;color:#fff;display:flex;align-items:center;gap:10px}"
-    ".panel h3::before{font-size:1.2em}"
-    ".btn{background:linear-gradient(45deg,#ff6b6b,#ff8e53);color:white;padding:12px 24px;border:none;border-radius:25px;cursor:pointer;margin:8px 5px;font-weight:600;transition:all 0.3s ease;box-shadow:0 4px 15px rgba(255,107,107,0.3)}"
-    ".btn:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(255,107,107,0.4)}"
-    ".btn-success{background:linear-gradient(45deg,#51cf66,#40c057)}"
-    ".btn-danger{background:linear-gradient(45deg,#ff6b6b,#fa5252)}"
-    ".btn-info{background:linear-gradient(45deg,#339af0,#228be6)}"
-    ".status{display:inline-block;padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;margin:5px}"
-    ".status.online{background:#51cf66;color:white;box-shadow:0 0 10px rgba(81,207,102,0.5)}"
-    ".status.offline{background:#ff6b6b;color:white}"
-    ".upload-area{border:2px dashed rgba(255,255,255,0.5);padding:40px;text-align:center;border-radius:15px;transition:all 0.3s ease;cursor:pointer}"
-    ".upload-area:hover{border-color:#fff;background:rgba(255,255,255,0.1)}"
-    ".upload-area.drag-over{border-color:#51cf66;background:rgba(81,207,102,0.2)}"
-    ".progress{width:100%;height:8px;background:rgba(255,255,255,0.2);border-radius:4px;overflow:hidden;margin:15px 0}"
-    ".progress-bar{height:100%;background:linear-gradient(45deg,#51cf66,#40c057);width:0%;transition:width 0.3s ease}"
-    ".terminal{background:rgba(0,0,0,0.8);color:#00ff41;font-family:'Courier New',monospace;padding:20px;border-radius:10px;max-height:300px;overflow-y:auto;font-size:14px;line-height:1.4}"
-    ".terminal .prompt{color:#00ff41;font-weight:bold}"
-    ".terminal .output{color:#fff;margin:5px 0}"
-    ".terminal .error{color:#ff6b6b}"
-    ".input-group{display:flex;gap:10px;align-items:center;margin-top:15px}"
-    ".input-group input{flex:1;padding:12px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.3);border-radius:8px;color:#fff;font-size:14px}"
-    ".input-group input::placeholder{color:rgba(255,255,255,0.7)}"
-    ".data-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px;font-size:14px}"
-    ".data-item{padding:10px;background:rgba(255,255,255,0.1);border-radius:8px}"
-    ".data-item strong{color:#51cf66}"
-    "@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.7}}"
-    ".pulsing{animation:pulse 2s infinite}"
-    "</style></head>"
-    "<body>"
-    "<div class='container'>"
-    "<div class='header'>"
-    "<h1>🎮 ESP32 Gaming Device</h1>"
-    "<p>Advanced OTA Management & System Control Interface</p>"
-    "<div>Status: <span class='status online' id='deviceStatus'>Online</span></div>"
-    "<div><small>IP: <span id='deviceIP'>Loading...</span></small></div>"
-    "</div>"
-    "<div class='grid'>"
-    "<div class='panel'>"
-    "<h3>🔄 Firmware Update</h3>"
-    "<div class='upload-area' id='uploadArea' onclick='document.getElementById(\"firmwareFile\").click()' ondragover='handleDragOver(event)' ondrop='handleDrop(event)'>"
-    "<div>📁 Click or drag firmware file (.bin)</div>"
-    "<small>Supports MCUboot signed binaries</small>"
-    "<input type='file' id='firmwareFile' accept='.bin' style='display:none' onchange='uploadFirmware()'>"
-    "</div>"
-    "<div class='progress' id='uploadProgress' style='display:none'>"
-    "<div class='progress-bar' id='uploadProgressBar'></div>"
-    "</div>"
-    "<div id='uploadStatus'></div>"
-    "<div style='margin-top:15px'>"
-    "<button class='btn btn-info' onclick='checkOTAStatus()'>Check OTA Status</button>"
-    "<button class='btn btn-success' onclick='confirmFirmware()'>Confirm Firmware</button>"
-    "</div>"
-    "</div>"
-    "<div class='panel'>"
-    "<h3>⚙️ System Information</h3>"
-    "<div class='data-grid' id='systemInfo'>Loading...</div>"
-    "<div style='margin-top:15px'>"
-    "<button class='btn btn-info' onclick='refreshSystemInfo()'>Refresh</button>"
-    "<button class='btn btn-danger' onclick='rebootSystem()'>Reboot System</button>"
-    "</div>"
-    "</div>"
-    "<div class='panel'>"
-    "<h3>🎮 Gaming Controls</h3>"
-    "<div id='buttonStates'>Loading button states...</div>"
-    "<div style='margin-top:15px'>"
-    "<button class='btn btn-info' onclick='readButtons()'>Read Buttons</button>"
-    "<button class='btn' onclick='testDisplay()'>Test Display</button>"
-    "</div>"
-    "</div>"
-    "</div>"
-    "</div>"
-    "<script>"
-    "let uploadInProgress=false;"
-    "function handleDragOver(e){e.preventDefault();document.getElementById('uploadArea').classList.add('drag-over')}"
-    "function handleDrop(e){e.preventDefault();const area=document.getElementById('uploadArea');area.classList.remove('drag-over');const files=e.dataTransfer.files;if(files.length>0){document.getElementById('firmwareFile').files=files;uploadFirmware()}}"
-    "function uploadFirmware(){"
-    "if(uploadInProgress){alert('Upload already in progress');return}"
-    "const file=document.getElementById('firmwareFile').files[0];"
-    "if(!file){alert('Please select a firmware file');return}"
-    "if(!file.name.endsWith('.bin')){alert('Please select a .bin file');return}"
-    "uploadInProgress=true;"
-    "const formData=new FormData();formData.append('firmware',file);"
-    "const progress=document.getElementById('uploadProgress');"
-    "const progressBar=document.getElementById('uploadProgressBar');"
-    "const status=document.getElementById('uploadStatus');"
-    "progress.style.display='block';status.innerHTML='<div class=\"pulsing\">Uploading firmware...</div>';status.className='status';"
-    "const xhr=new XMLHttpRequest();"
-    "xhr.upload.onprogress=function(e){if(e.lengthComputable){const pct=(e.loaded/e.total)*100;progressBar.style.width=pct+'%';status.innerHTML='<div>Upload progress: '+Math.round(pct)+'%</div>'}}"
-    "xhr.onload=function(){uploadInProgress=false;if(xhr.status===200){status.innerHTML='<div style=\"color:#51cf66\">✅ Upload successful! Device will reboot in 5 seconds...</div>';progressBar.style.background='linear-gradient(45deg,#51cf66,#40c057)';setTimeout(()=>location.reload(),8000)}else{status.innerHTML='<div style=\"color:#ff6b6b\">❌ Upload failed: '+xhr.responseText+'</div>';progressBar.style.background='linear-gradient(45deg,#ff6b6b,#fa5252)'}}"
-    "xhr.onerror=function(){uploadInProgress=false;status.innerHTML='<div style=\"color:#ff6b6b\">❌ Network error during upload</div>'};"
-    "xhr.open('POST','/upload');xhr.send(formData)}"
-    "function refreshSystemInfo(){fetch('/api/system').then(r=>r.json()).then(data=>{const info=document.getElementById('systemInfo');info.innerHTML=`<div class='data-item'><strong>Uptime:</strong> ${data.uptime}</div><div class='data-item'><strong>Memory:</strong> ${data.memory}</div><div class='data-item'><strong>WiFi:</strong> ${data.wifi}</div><div class='data-item'><strong>CPU:</strong> ${data.cpu}</div><div class='data-item'><strong>Temperature:</strong> ${data.temp}</div><div class='data-item'><strong>Threads:</strong> ${data.threads||'N/A'}</div>`}).catch(e=>console.error('Failed to load system info:',e))}"
-    "function readButtons(){fetch('/api/buttons').then(r=>r.json()).then(data=>{const states=document.getElementById('buttonStates');let html='<div class=\"data-grid\">';Object.entries(data).forEach(([btn,pressed])=>{const color=pressed?'#51cf66':'#666';html+=`<div class='data-item' style='border-left:4px solid ${color}'><strong>${btn.toUpperCase()}:</strong> ${pressed?'PRESSED':'Released'}</div>`});html+='</div>';states.innerHTML=html}).catch(e=>console.error('Failed to read buttons:',e))}"
-    "function checkOTAStatus(){fetch('/api/ota/status').then(r=>r.json()).then(data=>{alert(`OTA Status:\\nState: ${data.state}\\nProgress: ${data.progress}%\\nMessage: ${data.message}`)}).catch(e=>alert('Failed to get OTA status'))}"
-    "function confirmFirmware(){if(confirm('Confirm current firmware as permanent?\\nThis prevents automatic rollback.')){fetch('/api/ota/confirm',{method:'POST'}).then(r=>r.text()).then(data=>alert(data)).catch(e=>alert('Failed to confirm firmware'))}}"
-    "function testDisplay(){fetch('/api/display/test',{method:'POST'}).then(r=>r.text()).then(data=>alert(data)).catch(e=>alert('Display test failed'))}"
-    "function rebootSystem(){if(confirm('⚠️ This will reboot the device. Continue?')){fetch('/api/reboot',{method:'POST'}).then(()=>{alert('Reboot command sent. Device will restart in a few seconds.');setTimeout(()=>location.reload(),5000)}).catch(e=>alert('Failed to send reboot command'))}}"
-    "setInterval(refreshSystemInfo,10000);setInterval(readButtons,2000);"
-    "refreshSystemInfo();readButtons();"
-    "</script></body></html>";
+    "body{font-family:sans-serif;margin:20px;background:#f0f0f0}"
+    ".container{max-width:800px;margin:0 auto;background:white;padding:20px;border-radius:8px}"
+    ".panel{background:#f8f9fa;padding:15px;margin:10px 0;border-radius:5px;border-left:4px solid #007bff}"
+    ".btn{background:#007bff;color:white;padding:8px 16px;border:none;border-radius:4px;cursor:pointer;margin:5px}"
+    ".btn:hover{background:#0056b3}"
+    ".btn-success{background:#28a745}"
+    ".btn-danger{background:#dc3545}"
+    ".progress{width:100%;height:20px;background:#e9ecef;border-radius:4px;overflow:hidden}"
+    ".progress-bar{height:100%;background:#007bff;transition:width 0.3s}"
+    ".status{padding:5px 10px;border-radius:3px;font-size:12px;margin:5px 0}"
+    ".online{background:#d4edda;color:#155724}"
+    ".offline{background:#f8d7da;color:#721c24}"
+    "</style></head><body><div class='container'>";
 
-/* Simple HTTP request handler function */
-static int simple_http_handler(int client_fd, void *user_data)
+static const char html_footer[] = "</div></body></html>";
+
+/* HTTP response helpers */
+static int send_http_response(int client_fd, int status_code, const char *content_type,
+                              const char *body, size_t body_len)
 {
-    char buffer[1024];
-    int bytes_received;
-    char *response = (char *)user_data;
+    char response[HTTP_RESPONSE_BUFFER_SIZE];
+    int header_len;
 
-    // Read request
-    bytes_received = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
-    if (bytes_received <= 0)
+    if (body_len == 0 && body)
+    {
+        body_len = strlen(body);
+    }
+
+    header_len = snprintf(response, sizeof(response),
+                          "HTTP/1.1 %d %s\r\n"
+                          "Content-Type: %s\r\n"
+                          "Content-Length: %zu\r\n"
+                          "Connection: close\r\n"
+                          "Cache-Control: no-cache\r\n"
+                          "\r\n",
+                          status_code,
+                          (status_code == 200) ? "OK" : "Error",
+                          content_type,
+                          body_len);
+
+    if (header_len >= sizeof(response))
     {
         return -1;
     }
 
-    buffer[bytes_received] = '\0';
+    /* Send header */
+    if (send(client_fd, response, header_len, 0) != header_len)
+    {
+        return -1;
+    }
 
-    // Simple HTTP response
-    char http_response[8192];
-    int response_len = snprintf(http_response, sizeof(http_response),
-                                "HTTP/1.1 200 OK\r\n"
-                                "Content-Type: text/html\r\n"
-                                "Content-Length: %d\r\n"
-                                "Connection: close\r\n"
-                                "\r\n"
-                                "%s",
-                                (int)strlen(response), response);
-
-    send(client_fd, http_response, response_len, 0);
-    close(client_fd);
-
-    k_mutex_lock(&server_mutex, K_FOREVER);
-    server_stats.requests_handled++;
-    k_mutex_unlock(&server_mutex);
+    /* Send body if present */
+    if (body && body_len > 0)
+    {
+        if (send(client_fd, body, body_len, 0) != body_len)
+        {
+            return -1;
+        }
+    }
 
     return 0;
 }
 
-/* Simplified web server using raw sockets */
-static int run_simple_web_server(void)
+/* Optimized HTML generation */
+static int generate_main_page(char *buffer, size_t buffer_size)
+{
+    const struct ota_progress *ota = ota_get_progress();
+    size_t used = 0;
+
+    /* Header */
+    used += snprintf(buffer + used, buffer_size - used, "%s", html_header);
+
+    /* System status panel */
+    used += snprintf(buffer + used, buffer_size - used,
+                     "<div class='panel'><h3>System Status</h3>"
+                     "<div>Device: <span class='status online'>Online</span></div>"
+                     "<div>IP: %s</div>"
+                     "<div>OTA State: %s (%d%%)</div>"
+                     "</div>",
+                     server_state.server_ip,
+                     ota_state_to_string(ota->state),
+                     ota->percentage);
+
+    /* OTA panel */
+    used += snprintf(buffer + used, buffer_size - used,
+                     "<div class='panel'><h3>Firmware Update</h3>"
+                     "<form action='/upload' method='post' enctype='multipart/form-data'>"
+                     "<input type='file' name='firmware' accept='.bin' required>"
+                     "<button type='submit' class='btn'>Upload</button>"
+                     "</form>");
+
+    if (ota->state == OTA_STATE_RECEIVING || ota->state == OTA_STATE_VALIDATING)
+    {
+        used += snprintf(buffer + used, buffer_size - used,
+                         "<div class='progress'><div class='progress-bar' style='width:%d%%'></div></div>",
+                         ota->percentage);
+    }
+
+    used += snprintf(buffer + used, buffer_size - used, "</div>");
+
+    /* Control panel */
+    used += snprintf(buffer + used, buffer_size - used,
+                     "<div class='panel'><h3>System Control</h3>"
+                     "<button class='btn btn-success' onclick='confirmFirmware()'>Confirm Firmware</button>"
+                     "<button class='btn btn-danger' onclick='rebootSystem()'>Reboot</button>"
+                     "</div>");
+
+    /* JavaScript */
+    used += snprintf(buffer + used, buffer_size - used,
+                     "<script>"
+                     "function confirmFirmware(){if(confirm('Confirm firmware?')){"
+                     "fetch('/api/ota/confirm',{method:'POST'}).then(r=>r.text())"
+                     ".then(d=>alert(d)).catch(e=>alert('Failed'))}}"
+                     "function rebootSystem(){if(confirm('Reboot device?')){"
+                     "fetch('/api/reboot',{method:'POST'}).then(()=>{"
+                     "alert('Rebooting...');setTimeout(()=>location.reload(),5000)"
+                     "}).catch(e=>alert('Failed'))}}"
+                     "setTimeout(()=>location.reload(),30000);" // Auto-refresh
+                     "</script>");
+
+    /* Footer */
+    used += snprintf(buffer + used, buffer_size - used, "%s", html_footer);
+
+    return (used < buffer_size) ? 0 : -1;
+}
+
+/* HTTP request parser */
+static int parse_http_request(const char *buffer, char *method, char *path, size_t path_size)
+{
+    const char *space1 = strchr(buffer, ' ');
+    const char *space2 = space1 ? strchr(space1 + 1, ' ') : NULL;
+
+    if (!space1 || !space2)
+    {
+        return -1;
+    }
+
+    /* Extract method */
+    size_t method_len = space1 - buffer;
+    if (method_len >= 8)
+        return -1; // Max method length
+
+    memcpy(method, buffer, method_len);
+    method[method_len] = '\0';
+
+    /* Extract path */
+    size_t path_len = space2 - space1 - 1;
+    if (path_len >= path_size)
+        return -1;
+
+    memcpy(path, space1 + 1, path_len);
+    path[path_len] = '\0';
+
+    return 0;
+}
+
+/* Handle firmware upload */
+static int handle_firmware_upload(int client_fd, const char *request_data, size_t content_length)
+{
+    if (content_length == 0 || content_length > (1024 * 1024))
+    { // Max 1MB
+        send_http_response(client_fd, 400, "text/plain", "Invalid file size", 0);
+        return -1;
+    }
+
+    /* Start OTA update */
+    enum ota_result result = ota_start_update(content_length);
+    if (result != OTA_OK)
+    {
+        send_http_response(client_fd, 500, "text/plain", ota_result_to_string(result), 0);
+        return -1;
+    }
+
+    /* Receive and write firmware data */
+    char upload_buffer[UPLOAD_CHUNK_SIZE];
+    size_t total_received = 0;
+
+    while (total_received < content_length)
+    {
+        size_t chunk_size = MIN(UPLOAD_CHUNK_SIZE, content_length - total_received);
+        ssize_t received = recv(client_fd, upload_buffer, chunk_size, 0);
+
+        if (received <= 0)
+        {
+            ota_abort_update();
+            return -1;
+        }
+
+        result = ota_write_chunk((uint8_t *)upload_buffer, received);
+        if (result != OTA_OK)
+        {
+            ota_abort_update();
+            send_http_response(client_fd, 500, "text/plain", ota_result_to_string(result), 0);
+            return -1;
+        }
+
+        total_received += received;
+    }
+
+    /* Finalize update */
+    result = ota_finalize_update();
+    if (result != OTA_OK)
+    {
+        send_http_response(client_fd, 500, "text/plain", ota_result_to_string(result), 0);
+        return -1;
+    }
+
+    send_http_response(client_fd, 200, "text/plain", "Upload successful", 0);
+
+    /* Schedule reboot */
+    ota_reboot_to_apply_update(5000);
+    return 0;
+}
+
+/* Handle API requests */
+static int handle_api_request(int client_fd, const char *path)
+{
+    char response[512];
+
+    if (strcmp(path, "/api/ota/status") == 0)
+    {
+        const struct ota_progress *ota = ota_get_progress();
+        snprintf(response, sizeof(response),
+                 "{\"state\":\"%s\",\"progress\":%d,\"message\":\"%s\"}",
+                 ota_state_to_string(ota->state), ota->percentage, ota->status_message);
+        return send_http_response(client_fd, 200, "application/json", response, 0);
+    }
+
+    if (strcmp(path, "/api/ota/confirm") == 0)
+    {
+        enum ota_result result = ota_confirm_firmware();
+        const char *msg = (result == OTA_OK) ? "Firmware confirmed" : ota_result_to_string(result);
+        return send_http_response(client_fd, (result == OTA_OK) ? 200 : 500, "text/plain", msg, 0);
+    }
+
+    if (strcmp(path, "/api/reboot") == 0)
+    {
+        send_http_response(client_fd, 200, "text/plain", "Rebooting", 0);
+        ota_reboot_to_apply_update(2000);
+        return 0;
+    }
+
+    if (strcmp(path, "/api/system") == 0)
+    {
+        snprintf(response, sizeof(response),
+                 "{\"uptime\":\"%.1f hours\",\"memory\":\"Available\",\"wifi\":\"Connected\",\"cpu\":\"ESP32\"}",
+                 (float)k_uptime_get() / 3600000.0f);
+        return send_http_response(client_fd, 200, "application/json", response, 0);
+    }
+
+    return send_http_response(client_fd, 404, "text/plain", "API not found", 0);
+}
+
+/* Main HTTP request handler */
+static int handle_http_request(int client_fd)
+{
+    char buffer[HTTP_BUFFER_SIZE];
+    char method[16], path[128];
+    ssize_t received;
+
+    /* Receive request */
+    received = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
+    if (received <= 0)
+    {
+        return -1;
+    }
+    buffer[received] = '\0';
+
+    /* Parse request line */
+    if (parse_http_request(buffer, method, path, sizeof(path)) != 0)
+    {
+        send_http_response(client_fd, 400, "text/plain", "Bad Request", 0);
+        return -1;
+    }
+
+    LOG_DBG("HTTP %s %s", method, path);
+
+    /* Route request */
+    if (strcmp(method, "GET") == 0)
+    {
+        if (strcmp(path, "/") == 0)
+        {
+            /* Main page */
+            static char page_buffer[4096];
+            if (generate_main_page(page_buffer, sizeof(page_buffer)) == 0)
+            {
+                return send_http_response(client_fd, 200, "text/html", page_buffer, 0);
+            }
+            return send_http_response(client_fd, 500, "text/plain", "Page generation failed", 0);
+        }
+
+        if (strncmp(path, "/api/", 5) == 0)
+        {
+            return handle_api_request(client_fd, path);
+        }
+
+        return send_http_response(client_fd, 404, "text/plain", "Not Found", 0);
+    }
+
+    if (strcmp(method, "POST") == 0)
+    {
+        if (strcmp(path, "/upload") == 0)
+        {
+            /* Parse Content-Length */
+            char *content_length_header = strstr(buffer, "Content-Length:");
+            if (!content_length_header)
+            {
+                return send_http_response(client_fd, 400, "text/plain", "Missing Content-Length", 0);
+            }
+
+            size_t content_length = strtoul(content_length_header + 15, NULL, 10);
+            return handle_firmware_upload(client_fd, buffer, content_length);
+        }
+
+        if (strncmp(path, "/api/", 5) == 0)
+        {
+            return handle_api_request(client_fd, path);
+        }
+    }
+
+    return send_http_response(client_fd, 405, "text/plain", "Method Not Allowed", 0);
+}
+
+/* Simplified web server */
+static int run_web_server(void)
 {
     int server_fd, client_fd;
-    struct sockaddr_in client_addr;
+    struct sockaddr_in server_addr, client_addr;
     socklen_t client_len = sizeof(client_addr);
 
     server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (server_fd < 0)
     {
-        LOG_ERR("Failed to create socket: %d", errno);
+        LOG_ERR("Socket creation failed: %d", errno);
         return -1;
     }
 
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
+    memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(HTTP_PORT);
 
     if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
     {
-        LOG_ERR("Failed to bind socket: %d", errno);
+        LOG_ERR("Bind failed: %d", errno);
         close(server_fd);
         return -1;
     }
 
-    if (listen(server_fd, 5) < 0)
+    if (listen(server_fd, MAX_CONNECTIONS) < 0)
     {
-        LOG_ERR("Failed to listen on socket: %d", errno);
+        LOG_ERR("Listen failed: %d", errno);
         close(server_fd);
         return -1;
     }
 
-    LOG_INF("Web server listening on port %d", HTTP_PORT);
+    LOG_INF("HTTP server listening on port %d", HTTP_PORT);
 
-    while (current_state == WEB_SERVER_RUNNING)
+    while (server_state.state == WEB_SERVER_RUNNING)
     {
         client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_len);
         if (client_fd < 0)
         {
-            if (current_state == WEB_SERVER_RUNNING)
+            if (server_state.state == WEB_SERVER_RUNNING)
             {
-                LOG_ERR("Failed to accept connection: %d", errno);
+                LOG_ERR("Accept failed: %d", errno);
             }
             continue;
         }
 
-        // Handle request in a simple way
-        simple_http_handler(client_fd, (void *)web_interface_html);
+        /* Handle request */
+        if (handle_http_request(client_fd) == 0)
+        {
+            k_mutex_lock(&server_mutex, K_FOREVER);
+            server_state.requests_handled++;
+            k_mutex_unlock(&server_mutex);
+        }
+
+        close(client_fd);
     }
 
     close(server_fd);
     return 0;
 }
 
-/* Web server thread operations */
-static int do_start_server(void)
+/* Server operations */
+static void do_start_server(void)
 {
-    if (current_state == WEB_SERVER_RUNNING)
+    if (server_state.state == WEB_SERVER_RUNNING)
     {
-        return 0; // Already running
+        return;
     }
 
-    current_state = WEB_SERVER_STARTING;
+    server_state.state = WEB_SERVER_STARTING;
 
-    // Start simple HTTP server
-    if (run_simple_web_server() != 0)
+    if (run_web_server() == 0)
     {
-        LOG_ERR("Failed to start HTTP server");
-        current_state = WEB_SERVER_ERROR;
-        return -1;
+        server_state.state = WEB_SERVER_RUNNING;
+        LOG_INF("Web server started");
     }
-
-    current_state = WEB_SERVER_RUNNING;
-
-    k_mutex_lock(&server_mutex, K_FOREVER);
-    server_stats.state = WEB_SERVER_RUNNING;
-    k_mutex_unlock(&server_mutex);
-
-    LOG_INF("Web server started successfully on port %d", HTTP_PORT);
-    return 0;
+    else
+    {
+        server_state.state = WEB_SERVER_ERROR;
+        LOG_ERR("Web server start failed");
+    }
 }
 
-static int do_stop_server(void)
+static void do_stop_server(void)
 {
-    if (current_state == WEB_SERVER_STOPPED)
-    {
-        return 0; // Already stopped
-    }
-
-    current_state = WEB_SERVER_STOPPED;
-
-    k_mutex_lock(&server_mutex, K_FOREVER);
-    server_stats.state = WEB_SERVER_STOPPED;
-    k_mutex_unlock(&server_mutex);
-
+    server_state.state = WEB_SERVER_STOPPED;
     LOG_INF("Web server stopped");
-    return 0;
 }
 
 static void do_network_status_changed(bool connected, const char *ip_address)
 {
-    network_connected = connected;
+    server_state.network_connected = connected;
 
     if (connected && ip_address)
     {
-        strncpy(server_ip, ip_address, sizeof(server_ip) - 1);
-        server_ip[sizeof(server_ip) - 1] = '\0';
-        LOG_INF("Network connected - Web interface: http://%s:%d", server_ip, HTTP_PORT);
+        strncpy(server_state.server_ip, ip_address, sizeof(server_state.server_ip) - 1);
+        server_state.server_ip[sizeof(server_state.server_ip) - 1] = '\0';
+        LOG_INF("Network connected: http://%s:%d", server_state.server_ip, HTTP_PORT);
 
-        if (current_state == WEB_SERVER_STOPPED)
+        if (server_state.state == WEB_SERVER_STOPPED)
         {
             do_start_server();
         }
     }
     else
     {
-        server_ip[0] = '\0';
+        server_state.server_ip[0] = '\0';
         LOG_INF("Network disconnected");
     }
 }
 
-/* Main web server thread */
+/* Web server thread */
 static void web_server_thread_main(void *p1, void *p2, void *p3)
 {
     struct server_msg msg;
 
     LOG_INF("Web server thread started");
 
-    /* Signal that thread is ready */
-    k_sem_give(&server_ready_sem);
-
     while (1)
     {
-        /* Process messages */
-        if (k_msgq_get(&server_msgq, &msg, K_MSEC(1000)) == 0)
+        if (k_msgq_get(&server_msgq, &msg, K_MSEC(5000)) == 0)
         {
             switch (msg.type)
             {
             case MSG_START_SERVER:
                 do_start_server();
                 break;
-
             case MSG_STOP_SERVER:
                 do_stop_server();
                 break;
-
             case MSG_NETWORK_STATUS_CHANGED:
                 do_network_status_changed(msg.data.network_status.connected,
                                           msg.data.network_status.ip_address);
                 break;
-
-            case MSG_REFRESH_DATA:
-                LOG_DBG("Data refresh requested");
-                break;
-
-            case MSG_BROADCAST_LOG:
-                LOG_DBG("Log broadcast: %s", msg.data.log_broadcast.message);
-                break;
             }
         }
 
-        /* Periodic health check */
-        if (current_state == WEB_SERVER_RUNNING)
+        /* Periodic housekeeping */
+        if (server_state.state == WEB_SERVER_RUNNING)
         {
             k_mutex_lock(&server_mutex, K_FOREVER);
-            server_stats.active_connections = 1;
+            server_state.active_connections = 0; // Reset counter
             k_mutex_unlock(&server_mutex);
         }
     }
 }
 
-/* Public API Implementation */
-int web_server_start(const struct web_server_callbacks *callbacks)
+/* Public API */
+int web_server_start(const struct web_server_callbacks *cb)
 {
-    if (!callbacks)
+    if (cb)
     {
-        return -EINVAL;
+        memcpy(&callbacks, cb, sizeof(callbacks));
     }
 
-    /* Store callbacks */
-    memcpy(&server_callbacks, callbacks, sizeof(server_callbacks));
+    memset(&server_state, 0, sizeof(server_state));
+    server_state.state = WEB_SERVER_STOPPED;
+    strcpy(server_state.server_ip, "0.0.0.0");
 
-    /* Initialize statistics */
-    k_mutex_lock(&server_mutex, K_FOREVER);
-    memset(&server_stats, 0, sizeof(server_stats));
-    server_stats.state = WEB_SERVER_STARTING;
-    k_mutex_unlock(&server_mutex);
-
-    /* Create and start web server thread */
     web_server_thread_id = k_thread_create(&web_server_thread_data,
                                            web_server_stack,
                                            K_THREAD_STACK_SIZEOF(web_server_stack),
@@ -433,36 +566,26 @@ int web_server_start(const struct web_server_callbacks *callbacks)
 
     k_thread_name_set(web_server_thread_id, "web_server");
 
-    /* Wait for thread to be ready */
-    k_sem_take(&server_ready_sem, K_SECONDS(5));
-
-    LOG_INF("Web server module initialized");
+    LOG_INF("Web server initialized");
     return 0;
 }
 
 int web_server_stop(void)
 {
-    struct server_msg msg = {
-        .type = MSG_STOP_SERVER};
-
-    if (k_msgq_put(&server_msgq, &msg, K_NO_WAIT) != 0)
-    {
-        LOG_ERR("Failed to send stop message to web server thread");
-        return -ENOMEM;
-    }
-
-    return 0;
+    struct server_msg msg = {.type = MSG_STOP_SERVER};
+    return (k_msgq_put(&server_msgq, &msg, K_NO_WAIT) == 0) ? 0 : -ENOMEM;
 }
 
 int web_server_get_stats(struct web_server_stats *stats)
 {
     if (!stats)
-    {
         return -EINVAL;
-    }
 
     k_mutex_lock(&server_mutex, K_FOREVER);
-    memcpy(stats, &server_stats, sizeof(server_stats));
+    stats->state = server_state.state;
+    stats->requests_handled = server_state.requests_handled;
+    stats->bytes_transferred = server_state.bytes_transferred;
+    stats->active_connections = server_state.active_connections;
     k_mutex_unlock(&server_mutex);
 
     return 0;
@@ -470,12 +593,12 @@ int web_server_get_stats(struct web_server_stats *stats)
 
 bool web_server_is_running(void)
 {
-    return (current_state == WEB_SERVER_RUNNING);
+    return (server_state.state == WEB_SERVER_RUNNING);
 }
 
 enum web_server_state web_server_get_state(void)
 {
-    return current_state;
+    return server_state.state;
 }
 
 void web_server_notify_network_status(bool connected, const char *ip_address)
@@ -488,6 +611,7 @@ void web_server_notify_network_status(bool connected, const char *ip_address)
     {
         strncpy(msg.data.network_status.ip_address, ip_address,
                 sizeof(msg.data.network_status.ip_address) - 1);
+        msg.data.network_status.ip_address[sizeof(msg.data.network_status.ip_address) - 1] = '\0';
     }
     else
     {
@@ -495,34 +619,4 @@ void web_server_notify_network_status(bool connected, const char *ip_address)
     }
 
     k_msgq_put(&server_msgq, &msg, K_NO_WAIT);
-}
-
-void web_server_broadcast_log(const char *message, size_t length)
-{
-    if (!message || length == 0 || length >= sizeof(((struct server_msg *)0)->data.log_broadcast.message))
-    {
-        return;
-    }
-
-    struct server_msg msg = {
-        .type = MSG_BROADCAST_LOG,
-        .data.log_broadcast.length = length};
-
-    memcpy(msg.data.log_broadcast.message, message, length);
-    msg.data.log_broadcast.message[length] = '\0';
-
-    k_msgq_put(&server_msgq, &msg, K_NO_WAIT);
-}
-
-void web_server_refresh_data(void)
-{
-    struct server_msg msg = {
-        .type = MSG_REFRESH_DATA};
-
-    k_msgq_put(&server_msgq, &msg, K_NO_WAIT);
-}
-
-void web_server_set_custom_headers(const char *headers)
-{
-    custom_headers = headers;
 }

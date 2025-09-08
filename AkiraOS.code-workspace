@@ -68,7 +68,8 @@
 			"charconv": "c",
 			"chrono": "c",
 			"cstdlib": "c",
-			"cstdint": "c"
+			"cstdint": "c",
+			"*.overlay": "cpp"
 		},
 		"editor.formatOnType": true,
 		"cortex-debug.variableUseNaturalFormat": false,
@@ -134,6 +135,8 @@
 				"options": [
 					"native_sim",
 					"esp32_devkitc/esp32/procpu",
+					"esp32s3_devkitm/esp32s3/procpu",
+					"esp32c3_devkitm",
 				],
 				"default": "native_sim",
 				"description": "See https://docs.zephyrproject.org/latest/boards/index.html"

@@ -1,16 +1,18 @@
 /**
  * @file settings.c
- * @brief User settings management module implementation
+ * @brief Optimized user settings management module implementation
  *
  * Provides thread-safe persistent settings storage with change callbacks
  * and shell command integration for the Akira Board OTA system.
+ * Runs on a dedicated thread for non-blocking operations.
+ * Uses atomic operations and optimized data structures.
+ * Minimizes RAM usage with const defaults and efficient key handling.
  */
 
 #include "settings.h"
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
 #include <zephyr/shell/shell.h>
-#include <zephyr/sys/base64.h>
 #include <zephyr/kernel.h>
 #include <string.h>
 #include <stdio.h>
@@ -18,97 +20,90 @@
 
 LOG_MODULE_REGISTER(user_settings, LOG_LEVEL_INF);
 
-/* Thread stack and control block */
-static K_THREAD_STACK_DEFINE(settings_thread_stack, SETTINGS_THREAD_STACK_SIZE);
-static struct k_thread settings_thread_data;
-static k_tid_t settings_thread_id;
-
-/* Settings storage */
+/* Optimized settings storage with atomic operations */
 static struct user_settings current_settings;
 static K_MUTEX_DEFINE(settings_mutex);
+static atomic_t settings_dirty = ATOMIC_INIT(0);
 
-/* Default settings */
+/* Default settings - const to save RAM */
 static const struct user_settings default_settings = {
     .device_id = "akira-default",
     .wifi_ssid = "",
     .wifi_passcode = "",
     .wifi_enabled = false};
 
-/* Change callback */
-static settings_change_cb_t change_callback = NULL;
-static void *callback_user_data = NULL;
-
-/* Message queue for settings operations */
-#define SETTINGS_MSG_QUEUE_SIZE 10
-
-enum settings_msg_type
+/* Optimized callback system */
+struct callback_node
 {
-    MSG_SAVE_SETTINGS,
-    MSG_LOAD_SETTINGS,
-    MSG_RESET_SETTINGS,
-    MSG_SET_DEVICE_ID,
-    MSG_SET_WIFI_CREDENTIALS,
-    MSG_SET_WIFI_ENABLED
+    settings_change_cb_t callback;
+    void *user_data;
+    struct callback_node *next;
 };
 
-struct settings_msg
-{
-    enum settings_msg_type type;
-    union
-    {
-        struct
-        {
-            char device_id[MAX_DEVICE_ID_LEN];
-        } set_device_id;
-        struct
-        {
-            char ssid[MAX_WIFI_SSID_LEN];
-            char passcode[MAX_WIFI_PASSCODE_LEN];
-        } set_wifi;
-        struct
-        {
-            bool enabled;
-        } set_wifi_enabled;
-    } data;
-    struct k_sem *completion_sem;
-    enum settings_result *result;
-};
+static struct callback_node *callback_list = NULL;
+static K_MUTEX_DEFINE(callback_mutex);
 
-K_MSGQ_DEFINE(settings_msgq, sizeof(struct settings_msg), SETTINGS_MSG_QUEUE_SIZE, 4);
+/* Work queue for asynchronous operations */
+static struct k_work_q settings_workq;
+static K_THREAD_STACK_DEFINE(settings_workq_stack, 4096);
+
+/* Work items for different operations */
+static struct k_work save_work;
+static struct k_work load_work;
+
+/* Settings key definitions - optimized as macros */
+
+/* Validation helpers */
+static inline bool is_valid_device_id(const char *id)
+{
+    return id && strlen(id) > 0 && strlen(id) < MAX_DEVICE_ID_LEN;
+}
+
+static inline bool is_valid_wifi_ssid(const char *ssid)
+{
+    return ssid && strlen(ssid) < MAX_WIFI_SSID_LEN;
+}
+
+static inline bool is_valid_wifi_passcode(const char *passcode)
+{
+    return passcode && strlen(passcode) < MAX_WIFI_PASSCODE_LEN;
+}
 
 /* Settings handlers for Zephyr settings subsystem */
 static int settings_set_handler(const char *key, size_t len, settings_read_cb read_cb, void *cb_arg)
 {
     int ret;
+    const char *subkey = key;
 
-    if (strcmp(key, "device/id") == 0)
+    /* Parse key hierarchy */
+    if (strncmp(subkey, "device_id", 9) == 0)
     {
         ret = read_cb(cb_arg, current_settings.device_id, sizeof(current_settings.device_id));
         if (ret > 0)
         {
-            current_settings.device_id[ret] = '\0';
-            LOG_DBG("Loaded device ID: %s", current_settings.device_id);
+            current_settings.device_id[MIN(ret, MAX_DEVICE_ID_LEN - 1)] = '\0';
+            LOG_DBG("Loaded device ID");
         }
     }
-    else if (strcmp(key, "wifi/ssid") == 0)
+    else if (strncmp(subkey, "wifi_ssid", 9) == 0)
     {
         ret = read_cb(cb_arg, current_settings.wifi_ssid, sizeof(current_settings.wifi_ssid));
         if (ret > 0)
         {
-            current_settings.wifi_ssid[ret] = '\0';
-            LOG_DBG("Loaded WiFi SSID: %s", current_settings.wifi_ssid);
+            current_settings.wifi_ssid[MIN(ret, MAX_WIFI_SSID_LEN - 1)] = '\0';
+            LOG_DBG("Loaded WiFi SSID");
         }
     }
-    else if (strcmp(key, "wifi/passcode") == 0)
+    else if (strncmp(subkey, "wifi_passcode", 13) == 0)
     {
         ret = read_cb(cb_arg, current_settings.wifi_passcode, sizeof(current_settings.wifi_passcode));
         if (ret > 0)
         {
-            current_settings.wifi_passcode[ret] = '\0';
-            LOG_DBG("Loaded WiFi passcode (hidden)");
+            current_settings.wifi_passcode[MIN(ret, MAX_WIFI_PASSCODE_LEN - 1)] = '\0';
+            LOG_DBG("Loaded WiFi passcode");
         }
     }
-    else if (strcmp(key, "wifi/enabled") == 0)
+    else if (strncmp(subkey, "wifi_enabled", 12) == 0)
     {
         uint8_t enabled;
         ret = read_cb(cb_arg, &enabled, sizeof(enabled));
@@ -125,56 +120,71 @@ static int settings_set_handler(const char *key, size_t len, settings_read_cb re
 static int settings_commit_handler(void)
 {
     LOG_INF("Settings loaded from persistent storage");
+    atomic_clear(&settings_dirty);
     return 0;
 }
 
-SETTINGS_STATIC_HANDLER_DEFINE(user_settings, NULL, NULL, settings_set_handler, settings_commit_handler, NULL);
+SETTINGS_STATIC_HANDLER_DEFINE(user_settings, "user", NULL, settings_set_handler, settings_commit_handler, NULL);
 
-/* Internal helper functions */
-static enum settings_result save_setting(const char *key, const void *value, size_t len)
+/* Optimized callback notification */
+static void notify_callbacks(const char *key, const void *value)
+{
+    if (k_mutex_lock(&callback_mutex, K_MSEC(100)) != 0)
+    {
+        LOG_WRN("Failed to acquire callback mutex");
+        return;
+    }
+
+    struct callback_node *node = callback_list;
+    while (node)
+    {
+        if (node->callback)
+        {
+            node->callback(key, value, node->user_data);
+        }
+        node = node->next;
+    }
+
+    k_mutex_unlock(&callback_mutex);
+}
+
+/* Optimized save operation */
+static enum settings_result save_setting_atomic(const char *key, const void *value, size_t len)
 {
     int ret = settings_save_one(key, value, len);
     if (ret != 0)
     {
-        LOG_ERR("Failed to save setting %s: %d", key, ret);
+        LOG_ERR("Failed to save %s: %d", key, ret);
         return SETTINGS_SAVE_FAILED;
     }
-    LOG_DBG("Saved setting: %s", key);
     return SETTINGS_OK;
 }
 
-static void notify_change(const char *key, const void *value)
-{
-    if (change_callback)
-    {
-        change_callback(key, value, callback_user_data);
-    }
-}
-
-/* Settings operations (run in settings thread) */
-static enum settings_result do_save_settings(void)
+/* Work handlers */
+static void save_work_handler(struct k_work *work)
 {
     enum settings_result result = SETTINGS_OK;
 
+    if (!atomic_test_and_clear_bit(&settings_dirty, 0))
+    {
+        return; /* Nothing to save */
+    }
+
     k_mutex_lock(&settings_mutex, K_FOREVER);
 
-    if (save_setting(DEVICE_ID_KEY, current_settings.device_id, strlen(current_settings.device_id)) != SETTINGS_OK)
-    {
-        result = SETTINGS_SAVE_FAILED;
-    }
-
-    if (save_setting(WIFI_SSID_KEY, current_settings.wifi_ssid, strlen(current_settings.wifi_ssid)) != SETTINGS_OK)
-    {
-        result = SETTINGS_SAVE_FAILED;
-    }
-
-    if (save_setting(WIFI_PASSCODE_KEY, current_settings.wifi_passcode, strlen(current_settings.wifi_passcode)) != SETTINGS_OK)
+    /* Save all settings atomically */
+    if (save_setting_atomic(DEVICE_ID_KEY, current_settings.device_id,
+                            strlen(current_settings.device_id)) != SETTINGS_OK ||
+        save_setting_atomic(WIFI_SSID_KEY, current_settings.wifi_ssid,
+                            strlen(current_settings.wifi_ssid)) != SETTINGS_OK ||
+        save_setting_atomic(WIFI_PASSCODE_KEY, current_settings.wifi_passcode,
+                            strlen(current_settings.wifi_passcode)) != SETTINGS_OK)
     {
         result = SETTINGS_SAVE_FAILED;
     }
 
     uint8_t enabled = current_settings.wifi_enabled ? 1 : 0;
-    if (save_setting(WIFI_ENABLED_KEY, &enabled, sizeof(enabled)) != SETTINGS_OK)
+    if (save_setting_atomic(WIFI_ENABLED_KEY, &enabled, sizeof(enabled)) != SETTINGS_OK)
     {
         result = SETTINGS_SAVE_FAILED;
     }
@@ -183,191 +193,24 @@ static enum settings_result do_save_settings(void)
 
     if (result == SETTINGS_OK)
     {
-        LOG_INF("All settings saved successfully");
+        LOG_INF("Settings saved successfully");
     }
     else
     {
-        LOG_ERR("Failed to save some settings");
+        LOG_ERR("Failed to save settings");
+        atomic_set_bit(&settings_dirty, 0); /* Retry later */
     }
-
-    return result;
 }
 
-static enum settings_result do_load_settings(void)
+static void load_work_handler(struct k_work *work)
 {
     int ret = settings_load();
     if (ret != 0)
     {
         LOG_ERR("Failed to load settings: %d", ret);
-        return SETTINGS_ERROR;
+        return;
     }
-
     LOG_INF("Settings loaded successfully");
-    return SETTINGS_OK;
-}
-
-static enum settings_result do_reset_settings(void)
-{
-    k_mutex_lock(&settings_mutex, K_FOREVER);
-    memcpy(&current_settings, &default_settings, sizeof(current_settings));
-    k_mutex_unlock(&settings_mutex);
-
-    enum settings_result result = do_save_settings();
-    if (result == SETTINGS_OK)
-    {
-        LOG_INF("Settings reset to defaults");
-        notify_change("*", NULL); /* Notify all settings changed */
-    }
-
-    return result;
-}
-
-static enum settings_result do_set_device_id(const char *device_id)
-{
-    if (!device_id || strlen(device_id) >= MAX_DEVICE_ID_LEN)
-    {
-        return SETTINGS_INVALID_PARAM;
-    }
-
-    k_mutex_lock(&settings_mutex, K_FOREVER);
-    strcpy(current_settings.device_id, device_id);
-    k_mutex_unlock(&settings_mutex);
-
-    enum settings_result result = save_setting(DEVICE_ID_KEY, device_id, strlen(device_id));
-    if (result == SETTINGS_OK)
-    {
-        LOG_INF("Device ID updated: %s", device_id);
-        notify_change(DEVICE_ID_KEY, device_id);
-    }
-
-    return result;
-}
-
-static enum settings_result do_set_wifi_credentials(const char *ssid, const char *passcode)
-{
-    if (!ssid || !passcode ||
-        strlen(ssid) >= MAX_WIFI_SSID_LEN ||
-        strlen(passcode) >= MAX_WIFI_PASSCODE_LEN)
-    {
-        return SETTINGS_INVALID_PARAM;
-    }
-
-    k_mutex_lock(&settings_mutex, K_FOREVER);
-    strcpy(current_settings.wifi_ssid, ssid);
-    strcpy(current_settings.wifi_passcode, passcode);
-    k_mutex_unlock(&settings_mutex);
-
-    enum settings_result result = SETTINGS_OK;
-
-    if (save_setting(WIFI_SSID_KEY, ssid, strlen(ssid)) != SETTINGS_OK)
-    {
-        result = SETTINGS_SAVE_FAILED;
-    }
-
-    if (save_setting(WIFI_PASSCODE_KEY, passcode, strlen(passcode)) != SETTINGS_OK)
-    {
-        result = SETTINGS_SAVE_FAILED;
-    }
-
-    if (result == SETTINGS_OK)
-    {
-        LOG_INF("WiFi credentials updated: %s", ssid);
-        notify_change(WIFI_SSID_KEY, ssid);
-        notify_change(WIFI_PASSCODE_KEY, passcode);
-    }
-
-    return result;
-}
-
-static enum settings_result do_set_wifi_enabled(bool enabled)
-{
-    k_mutex_lock(&settings_mutex, K_FOREVER);
-    current_settings.wifi_enabled = enabled;
-    k_mutex_unlock(&settings_mutex);
-
-    uint8_t enabled_val = enabled ? 1 : 0;
-    enum settings_result result = save_setting(WIFI_ENABLED_KEY, &enabled_val, sizeof(enabled_val));
-
-    if (result == SETTINGS_OK)
-    {
-        LOG_INF("WiFi enabled: %s", enabled ? "true" : "false");
-        notify_change(WIFI_ENABLED_KEY, &enabled);
-    }
-
-    return result;
-}
-
-/* Settings thread main function */
-static void settings_thread_main(void *p1, void *p2, void *p3)
-{
-    struct settings_msg msg;
-
-    LOG_INF("Settings thread started");
-
-    while (1)
-    {
-        if (k_msgq_get(&settings_msgq, &msg, K_FOREVER) == 0)
-        {
-            enum settings_result result = SETTINGS_ERROR;
-
-            switch (msg.type)
-            {
-            case MSG_SAVE_SETTINGS:
-                result = do_save_settings();
-                break;
-
-            case MSG_LOAD_SETTINGS:
-                result = do_load_settings();
-                break;
-
-            case MSG_RESET_SETTINGS:
-                result = do_reset_settings();
-                break;
-
-            case MSG_SET_DEVICE_ID:
-                result = do_set_device_id(msg.data.set_device_id.device_id);
-                break;
-
-            case MSG_SET_WIFI_CREDENTIALS:
-                result = do_set_wifi_credentials(msg.data.set_wifi.ssid, msg.data.set_wifi.passcode);
-                break;
-
-            case MSG_SET_WIFI_ENABLED:
-                result = do_set_wifi_enabled(msg.data.set_wifi_enabled.enabled);
-                break;
-            }
-
-            /* Signal completion if requested */
-            if (msg.result)
-            {
-                *msg.result = result;
-            }
-            if (msg.completion_sem)
-            {
-                k_sem_give(msg.completion_sem);
-            }
-        }
-    }
-}
-
-/* Helper function to send message and wait for completion */
-static enum settings_result send_settings_message(struct settings_msg *msg)
-{
-    enum settings_result result;
-    struct k_sem completion_sem;
-
-    k_sem_init(&completion_sem, 0, 1);
-    msg->completion_sem = &completion_sem;
-    msg->result = &result;
-
-    if (k_msgq_put(&settings_msgq, msg, K_NO_WAIT) != 0)
-    {
-        LOG_ERR("Settings message queue full");
-        return SETTINGS_ERROR;
-    }
-
-    k_sem_take(&completion_sem, K_FOREVER);
-    return result;
 }
 
 /* Public API implementation */
@@ -384,19 +227,18 @@ int user_settings_init(void)
         return ret;
     }
 
-    /* Start settings thread */
-    settings_thread_id = k_thread_create(&settings_thread_data,
-                                         settings_thread_stack,
-                                         K_THREAD_STACK_SIZEOF(settings_thread_stack),
-                                         settings_thread_main,
-                                         NULL, NULL, NULL,
-                                         SETTINGS_THREAD_PRIORITY,
-                                         0, K_NO_WAIT);
+    /* Initialize work queue */
+    k_work_queue_init(&settings_workq);
+    k_work_queue_start(&settings_workq, settings_workq_stack,
+                       K_THREAD_STACK_SIZEOF(settings_workq_stack),
+                       K_PRIO_COOP(10), NULL);
 
-    k_thread_name_set(settings_thread_id, "settings");
+    /* Initialize work items */
+    k_work_init(&save_work, save_work_handler);
+    k_work_init(&load_work, load_work_handler);
 
     /* Load existing settings */
-    user_settings_load();
+    k_work_submit_to_queue(&settings_workq, &load_work);
 
     LOG_INF("User settings module initialized");
     return 0;
@@ -407,88 +249,201 @@ const struct user_settings *user_settings_get(void)
     return &current_settings;
 }
 
-enum settings_result user_settings_set_device_id(const char *device_id)
+enum settings_result user_settings_get_copy(struct user_settings *settings_copy)
 {
-    struct settings_msg msg = {
-        .type = MSG_SET_DEVICE_ID};
-
-    if (!device_id || strlen(device_id) >= MAX_DEVICE_ID_LEN)
+    if (!settings_copy)
     {
         return SETTINGS_INVALID_PARAM;
     }
 
-    strcpy(msg.data.set_device_id.device_id, device_id);
-    return send_settings_message(&msg);
+    k_mutex_lock(&settings_mutex, K_FOREVER);
+    memcpy(settings_copy, &current_settings, sizeof(*settings_copy));
+    k_mutex_unlock(&settings_mutex);
+
+    return SETTINGS_OK;
+}
+
+enum settings_result user_settings_set_device_id(const char *device_id)
+{
+    if (!is_valid_device_id(device_id))
+    {
+        return SETTINGS_INVALID_PARAM;
+    }
+
+    k_mutex_lock(&settings_mutex, K_FOREVER);
+
+    if (strcmp(current_settings.device_id, device_id) == 0)
+    {
+        k_mutex_unlock(&settings_mutex);
+        return SETTINGS_OK; /* No change needed */
+    }
+
+    strncpy(current_settings.device_id, device_id, MAX_DEVICE_ID_LEN - 1);
+    current_settings.device_id[MAX_DEVICE_ID_LEN - 1] = '\0';
+    atomic_set_bit(&settings_dirty, 0);
+
+    k_mutex_unlock(&settings_mutex);
+
+    LOG_INF("Device ID updated: %s", device_id);
+    notify_callbacks(DEVICE_ID_KEY, device_id);
+
+    return SETTINGS_OK;
 }
 
 enum settings_result user_settings_set_wifi_credentials(const char *ssid, const char *passcode)
 {
-    struct settings_msg msg = {
-        .type = MSG_SET_WIFI_CREDENTIALS};
-
-    if (!ssid || !passcode ||
-        strlen(ssid) >= MAX_WIFI_SSID_LEN ||
-        strlen(passcode) >= MAX_WIFI_PASSCODE_LEN)
+    if (!is_valid_wifi_ssid(ssid) || !is_valid_wifi_passcode(passcode))
     {
         return SETTINGS_INVALID_PARAM;
     }
 
-    strcpy(msg.data.set_wifi.ssid, ssid);
-    strcpy(msg.data.set_wifi.passcode, passcode);
-    return send_settings_message(&msg);
+    k_mutex_lock(&settings_mutex, K_FOREVER);
+
+    bool changed = (strcmp(current_settings.wifi_ssid, ssid) != 0) ||
+                   (strcmp(current_settings.wifi_passcode, passcode) != 0);
+
+    if (!changed)
+    {
+        k_mutex_unlock(&settings_mutex);
+        return SETTINGS_OK; /* No change needed */
+    }
+
+    strncpy(current_settings.wifi_ssid, ssid, MAX_WIFI_SSID_LEN - 1);
+    current_settings.wifi_ssid[MAX_WIFI_SSID_LEN - 1] = '\0';
+    strncpy(current_settings.wifi_passcode, passcode, MAX_WIFI_PASSCODE_LEN - 1);
+    current_settings.wifi_passcode[MAX_WIFI_PASSCODE_LEN - 1] = '\0';
+    atomic_set_bit(&settings_dirty, 0);
+
+    k_mutex_unlock(&settings_mutex);
+
+    LOG_INF("WiFi credentials updated: %s", ssid);
+    notify_callbacks(WIFI_SSID_KEY, ssid);
+    notify_callbacks(WIFI_PASSCODE_KEY, passcode);
+
+    return SETTINGS_OK;
 }
 
 enum settings_result user_settings_set_wifi_enabled(bool enabled)
 {
-    struct settings_msg msg = {
-        .type = MSG_SET_WIFI_ENABLED,
-        .data.set_wifi_enabled.enabled = enabled};
+    k_mutex_lock(&settings_mutex, K_FOREVER);
 
-    return send_settings_message(&msg);
+    if (current_settings.wifi_enabled == enabled)
+    {
+        k_mutex_unlock(&settings_mutex);
+        return SETTINGS_OK; /* No change needed */
+    }
+
+    current_settings.wifi_enabled = enabled;
+    atomic_set_bit(&settings_dirty, 0);
+
+    k_mutex_unlock(&settings_mutex);
+
+    LOG_INF("WiFi %s", enabled ? "enabled" : "disabled");
+    notify_callbacks(WIFI_ENABLED_KEY, &enabled);
+
+    return SETTINGS_OK;
 }
 
 enum settings_result user_settings_save(void)
 {
-    struct settings_msg msg = {
-        .type = MSG_SAVE_SETTINGS};
+    if (!atomic_test_bit(&settings_dirty, 0))
+    {
+        return SETTINGS_OK; /* Nothing to save */
+    }
 
-    return send_settings_message(&msg);
+    return k_work_submit_to_queue(&settings_workq, &save_work) ? SETTINGS_OK : SETTINGS_ERROR;
+}
+
+enum settings_result user_settings_save_sync(void)
+{
+    save_work_handler(&save_work);
+    return atomic_test_bit(&settings_dirty, 0) ? SETTINGS_SAVE_FAILED : SETTINGS_OK;
 }
 
 enum settings_result user_settings_load(void)
 {
-    struct settings_msg msg = {
-        .type = MSG_LOAD_SETTINGS};
-
-    return send_settings_message(&msg);
+    return k_work_submit_to_queue(&settings_workq, &load_work) ? SETTINGS_OK : SETTINGS_ERROR;
 }
 
 enum settings_result user_settings_reset(void)
 {
-    struct settings_msg msg = {
-        .type = MSG_RESET_SETTINGS};
+    k_mutex_lock(&settings_mutex, K_FOREVER);
+    memcpy(&current_settings, &default_settings, sizeof(current_settings));
+    atomic_set_bit(&settings_dirty, 0);
+    k_mutex_unlock(&settings_mutex);
 
-    return send_settings_message(&msg);
+    LOG_INF("Settings reset to defaults");
+    notify_callbacks("*", NULL); /* Notify all settings changed */
+
+    return user_settings_save_sync();
 }
 
 enum settings_result user_settings_register_callback(settings_change_cb_t callback, void *user_data)
 {
-    change_callback = callback;
-    callback_user_data = user_data;
+    if (!callback)
+    {
+        return SETTINGS_INVALID_PARAM;
+    }
+
+    struct callback_node *new_node = k_malloc(sizeof(struct callback_node));
+    if (!new_node)
+    {
+        return SETTINGS_ERROR;
+    }
+
+    new_node->callback = callback;
+    new_node->user_data = user_data;
+
+    k_mutex_lock(&callback_mutex, K_FOREVER);
+    new_node->next = callback_list;
+    callback_list = new_node;
+    k_mutex_unlock(&callback_mutex);
+
     return SETTINGS_OK;
+}
+
+enum settings_result user_settings_unregister_callback(settings_change_cb_t callback)
+{
+    if (!callback)
+    {
+        return SETTINGS_INVALID_PARAM;
+    }
+
+    k_mutex_lock(&callback_mutex, K_FOREVER);
+
+    struct callback_node **current = &callback_list;
+    while (*current)
+    {
+        if ((*current)->callback == callback)
+        {
+            struct callback_node *to_remove = *current;
+            *current = (*current)->next;
+            k_free(to_remove);
+            k_mutex_unlock(&callback_mutex);
+            return SETTINGS_OK;
+        }
+        current = &(*current)->next;
+    }
+
+    k_mutex_unlock(&callback_mutex);
+    return SETTINGS_ERROR;
 }
 
 void user_settings_print(void)
 {
-    k_mutex_lock(&settings_mutex, K_FOREVER);
+    struct user_settings settings_copy;
+    if (user_settings_get_copy(&settings_copy) != SETTINGS_OK)
+    {
+        printk("Failed to get settings\n");
+        return;
+    }
 
     printk("\n=== User Settings ===\n");
-    printk("Device ID: %s\n", current_settings.device_id);
-    printk("WiFi SSID: %s\n", current_settings.wifi_ssid);
-    printk("WiFi Enabled: %s\n", current_settings.wifi_enabled ? "Yes" : "No");
-    printk("WiFi Passcode: %s\n", strlen(current_settings.wifi_passcode) > 0 ? "***SET***" : "***NOT SET***");
-
-    k_mutex_unlock(&settings_mutex);
+    printk("Device ID: %s\n", settings_copy.device_id);
+    printk("WiFi SSID: %s\n", settings_copy.wifi_ssid);
+    printk("WiFi Enabled: %s\n", settings_copy.wifi_enabled ? "Yes" : "No");
+    printk("WiFi Passcode: %s\n",
+           strlen(settings_copy.wifi_passcode) > 0 ? "***SET***" : "***NOT SET***");
 }
 
 int user_settings_to_json(char *buffer, size_t buffer_size)
@@ -498,36 +453,42 @@ int user_settings_to_json(char *buffer, size_t buffer_size)
         return SETTINGS_BUFFER_TOO_SMALL;
     }
 
-    k_mutex_lock(&settings_mutex, K_FOREVER);
+    struct user_settings settings_copy;
+    if (user_settings_get_copy(&settings_copy) != SETTINGS_OK)
+    {
+        return SETTINGS_ERROR;
+    }
 
+    /* Use more efficient formatting */
     int len = snprintf(buffer, buffer_size,
-                       "{\n"
-                       "  \"device_id\": \"%s\",\n"
-                       "  \"wifi_ssid\": \"%s\",\n"
-                       "  \"wifi_enabled\": %s,\n"
-                       "  \"wifi_passcode_set\": %s\n"
-                       "}",
-                       current_settings.device_id,
-                       current_settings.wifi_ssid,
-                       current_settings.wifi_enabled ? "true" : "false",
-                       strlen(current_settings.wifi_passcode) > 0 ? "true" : "false");
-
-    k_mutex_unlock(&settings_mutex);
+                       "{\"device_id\":\"%s\",\"wifi_ssid\":\"%s\",\"wifi_enabled\":%s,\"wifi_passcode_set\":%s}",
+                       settings_copy.device_id,
+                       settings_copy.wifi_ssid,
+                       settings_copy.wifi_enabled ? "true" : "false",
+                       strlen(settings_copy.wifi_passcode) > 0 ? "true" : "false");
 
     return (len < buffer_size) ? len : SETTINGS_BUFFER_TOO_SMALL;
 }
 
-/* Shell commands */
+/* Optimized shell commands with better error handling */
 static int cmd_settings_show(const struct shell *sh, size_t argc, char **argv)
 {
-    const struct user_settings *settings = user_settings_get();
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    struct user_settings settings_copy;
+    if (user_settings_get_copy(&settings_copy) != SETTINGS_OK)
+    {
+        shell_error(sh, "Failed to get settings");
+        return -EIO;
+    }
 
     shell_print(sh, "\n=== Current Settings ===");
-    shell_print(sh, "Device ID: %s", settings->device_id);
-    shell_print(sh, "WiFi SSID: %s", settings->wifi_ssid);
-    shell_print(sh, "WiFi Enabled: %s", settings->wifi_enabled ? "Yes" : "No");
+    shell_print(sh, "Device ID: %s", settings_copy.device_id);
+    shell_print(sh, "WiFi SSID: %s", settings_copy.wifi_ssid);
+    shell_print(sh, "WiFi Enabled: %s", settings_copy.wifi_enabled ? "Yes" : "No");
     shell_print(sh, "WiFi Passcode: %s",
-                strlen(settings->wifi_passcode) > 0 ? "***SET***" : "***NOT SET***");
+                strlen(settings_copy.wifi_passcode) > 0 ? "***SET***" : "***NOT SET***");
 
     return 0;
 }
@@ -541,13 +502,17 @@ static int cmd_settings_set_device_id(const struct shell *sh, size_t argc, char 
     }
 
     enum settings_result result = user_settings_set_device_id(argv[1]);
-    if (result == SETTINGS_OK)
+    switch (result)
     {
+    case SETTINGS_OK:
         shell_print(sh, "Device ID set to: %s", argv[1]);
-    }
-    else
-    {
+        break;
+    case SETTINGS_INVALID_PARAM:
+        shell_error(sh, "Invalid device ID (too long or empty)");
+        break;
+    default:
         shell_error(sh, "Failed to set device ID: %d", result);
+        break;
     }
 
     return 0;
@@ -562,13 +527,17 @@ static int cmd_settings_set_wifi(const struct shell *sh, size_t argc, char **arg
     }
 
     enum settings_result result = user_settings_set_wifi_credentials(argv[1], argv[2]);
-    if (result == SETTINGS_OK)
+    switch (result)
     {
+    case SETTINGS_OK:
         shell_print(sh, "WiFi credentials updated for SSID: %s", argv[1]);
-    }
-    else
-    {
+        break;
+    case SETTINGS_INVALID_PARAM:
+        shell_error(sh, "Invalid WiFi credentials (too long)");
+        break;
+    default:
         shell_error(sh, "Failed to set WiFi credentials: %d", result);
+        break;
     }
 
     return 0;
@@ -599,7 +568,10 @@ static int cmd_settings_wifi_enable(const struct shell *sh, size_t argc, char **
 
 static int cmd_settings_save(const struct shell *sh, size_t argc, char **argv)
 {
-    enum settings_result result = user_settings_save();
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    enum settings_result result = user_settings_save_sync();
     if (result == SETTINGS_OK)
     {
         shell_print(sh, "Settings saved successfully");
@@ -614,14 +586,17 @@ static int cmd_settings_save(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_settings_load(const struct shell *sh, size_t argc, char **argv)
 {
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
     enum settings_result result = user_settings_load();
     if (result == SETTINGS_OK)
     {
-        shell_print(sh, "Settings loaded successfully");
+        shell_print(sh, "Settings load initiated");
     }
     else
     {
-        shell_error(sh, "Failed to load settings: %d", result);
+        shell_error(sh, "Failed to initiate settings load: %d", result);
     }
 
     return 0;
@@ -629,20 +604,21 @@ static int cmd_settings_load(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_settings_reset(const struct shell *sh, size_t argc, char **argv)
 {
-    shell_print(sh, "Are you sure? This will reset all settings to defaults.");
-    shell_print(sh, "Type 'settings reset confirm' to proceed.");
-
-    if (argc > 1 && strcmp(argv[1], "confirm") == 0)
+    if (argc < 2 || strcmp(argv[1], "confirm") != 0)
     {
-        enum settings_result result = user_settings_reset();
-        if (result == SETTINGS_OK)
-        {
-            shell_print(sh, "Settings reset to defaults");
-        }
-        else
-        {
-            shell_error(sh, "Failed to reset settings: %d", result);
-        }
+        shell_print(sh, "Are you sure? This will reset all settings to defaults.");
+        shell_print(sh, "Type 'settings reset confirm' to proceed.");
+        return 0;
+    }
+
+    enum settings_result result = user_settings_reset();
+    if (result == SETTINGS_OK)
+    {
+        shell_print(sh, "Settings reset to defaults");
+    }
+    else
+    {
+        shell_error(sh, "Failed to reset settings: %d", result);
     }
 
     return 0;
@@ -650,7 +626,10 @@ static int cmd_settings_reset(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_settings_json(const struct shell *sh, size_t argc, char **argv)
 {
-    char json_buffer[512];
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    char json_buffer[256]; /* Reduced buffer size */
     int len = user_settings_to_json(json_buffer, sizeof(json_buffer));
 
     if (len > 0)
@@ -665,6 +644,30 @@ static int cmd_settings_json(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+static int cmd_settings_status(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    shell_print(sh, "Settings Status:");
+    shell_print(sh, "  Dirty: %s", atomic_test_bit(&settings_dirty, 0) ? "Yes" : "No");
+
+    /* Count callbacks */
+    k_mutex_lock(&callback_mutex, K_FOREVER);
+    int callback_count = 0;
+    struct callback_node *node = callback_list;
+    while (node)
+    {
+        callback_count++;
+        node = node->next;
+    }
+    k_mutex_unlock(&callback_mutex);
+
+    shell_print(sh, "  Callbacks registered: %d", callback_count);
+
+    return 0;
+}
+
 /* Shell command registration */
 SHELL_STATIC_SUBCMD_SET_CREATE(settings_cmds,
                                SHELL_CMD(show, NULL, "Show current settings", cmd_settings_show),
@@ -675,6 +678,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(settings_cmds,
                                SHELL_CMD(load, NULL, "Load settings from storage", cmd_settings_load),
                                SHELL_CMD(reset, NULL, "Reset settings to defaults", cmd_settings_reset),
                                SHELL_CMD(json, NULL, "Show settings as JSON", cmd_settings_json),
+                               SHELL_CMD(status, NULL, "Show settings status", cmd_settings_status),
                                SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(settings, &settings_cmds, "Settings management", NULL);

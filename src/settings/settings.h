@@ -21,10 +21,11 @@
 #define SETTINGS_THREAD_PRIORITY 7
 
 /* Settings keys */
-#define DEVICE_ID_KEY "device/id"
-#define WIFI_SSID_KEY "wifi/ssid"
-#define WIFI_PASSCODE_KEY "wifi/passcode"
-#define WIFI_ENABLED_KEY "wifi/enabled"
+#define SETTING_KEY(suffix) "user/" suffix
+#define DEVICE_ID_KEY SETTING_KEY("device_id")
+#define WIFI_SSID_KEY SETTING_KEY("wifi_ssid")
+#define WIFI_PASSCODE_KEY SETTING_KEY("wifi_passcode")
+#define WIFI_ENABLED_KEY SETTING_KEY("wifi_enabled")
 
 /**
  * @brief User settings structure

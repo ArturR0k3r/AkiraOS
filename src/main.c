@@ -182,7 +182,6 @@ static int execute_shell_command_callback(const char *command, char *response, s
     {
         const struct ota_progress *progress = ota_get_progress();
         bool is_confirmed, is_pending_revert;
-        ota_get_status(&is_confirmed, &is_pending_revert);
 
         return snprintf(response, response_size,
                         "OTA State: %s\n"
@@ -455,6 +454,9 @@ int hardware_init(void)
 
 int main(void)
 {
+
+    printk("=== AkiraOS main() started ===\n");
+
     hardware_init();
 
     ili9341_fill_color(WHITE_COLOR);
