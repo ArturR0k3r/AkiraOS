@@ -15,8 +15,9 @@
 #include <zephyr/kernel.h>
 #include <string.h>
 #include <stdlib.h>
+#include "../akira.h"
 
-LOG_MODULE_REGISTER(ota_manager, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(ota_manager, AKIRA_LOG_LEVEL);
 
 #define FLASH_AREA_IMAGE_PRIMARY FIXED_PARTITION_ID(slot0_partition)
 #define FLASH_AREA_IMAGE_SECONDARY FIXED_PARTITION_ID(slot1_partition)
@@ -168,20 +169,33 @@ static enum ota_result flush_write_buffer(void)
         return OTA_OK;
     }
 
-    /* Align to flash write boundary if needed */
-    uint16_t aligned_size = (buffer_pos + 3) & ~3;
+    /* Get flash write alignment requirement */
+    size_t write_alignment = flash_area_align(secondary_fa);
+
+    /* Align buffer size up to write alignment boundary */
+    uint16_t aligned_size = ROUND_UP(buffer_pos, write_alignment);
+
+    if (aligned_size > OTA_WRITE_BUFFER_SIZE)
+    {
+        LOG_ERR("Aligned size too large: %u > %u", aligned_size, OTA_WRITE_BUFFER_SIZE);
+        return OTA_ERROR_FLASH_WRITE_FAILED;
+    }
+
+    /* Pad with 0xFF (flash erase value) */
     if (aligned_size > buffer_pos)
     {
         memset(&write_buffer[buffer_pos], 0xFF, aligned_size - buffer_pos);
     }
 
-    int ret = flash_area_write(secondary_fa,
-                               ota_status.bytes_written - buffer_pos,
-                               write_buffer,
-                               aligned_size);
+    /* Calculate write offset atomically */
+    k_mutex_lock(&ota_mutex, K_FOREVER);
+    uint32_t write_offset = ota_status.bytes_written - buffer_pos;
+    k_mutex_unlock(&ota_mutex);
+
+    int ret = flash_area_write(secondary_fa, write_offset, write_buffer, aligned_size);
     if (ret)
     {
-        LOG_ERR("Flash write failed: %d", ret);
+        LOG_ERR("Flash write failed at offset %u: %d", write_offset, ret);
         return OTA_ERROR_FLASH_WRITE_FAILED;
     }
 
@@ -242,12 +256,24 @@ static enum ota_result do_write_chunk(const uint8_t *data, uint16_t length)
 
     if (ota_status.state != OTA_STATE_RECEIVING)
     {
+        LOG_ERR("Write chunk called in wrong state: %d", ota_status.state);
         return OTA_ERROR_INVALID_PARAM;
     }
 
-    /* Check space */
+    /* FIXED: Check bounds before writing */
     if (ota_status.bytes_written + length > secondary_fa->fa_size)
     {
+        LOG_ERR("Write would exceed flash size: %u + %u > %u",
+                ota_status.bytes_written, length, secondary_fa->fa_size);
+        return OTA_ERROR_INSUFFICIENT_SPACE;
+    }
+
+    /* FIXED: Check total expected size if set */
+    if (ota_status.total_size > 0 &&
+        ota_status.bytes_written + length > ota_status.total_size)
+    {
+        LOG_ERR("Write would exceed expected size: %u + %u > %u",
+                ota_status.bytes_written, length, ota_status.total_size);
         return OTA_ERROR_INSUFFICIENT_SPACE;
     }
 
@@ -259,11 +285,23 @@ static enum ota_result do_write_chunk(const uint8_t *data, uint16_t length)
     {
         uint16_t copy_size = MIN(remaining, OTA_WRITE_BUFFER_SIZE - buffer_pos);
 
+        /* FIXED: Validate buffer bounds */
+        if (buffer_pos + copy_size > OTA_WRITE_BUFFER_SIZE)
+        {
+            LOG_ERR("Buffer overflow prevented: %u + %u > %u",
+                    buffer_pos, copy_size, OTA_WRITE_BUFFER_SIZE);
+            return OTA_ERROR_INVALID_PARAM;
+        }
+
         memcpy(&write_buffer[buffer_pos], src, copy_size);
         buffer_pos += copy_size;
         src += copy_size;
         remaining -= copy_size;
+
+        /* Update bytes written counter atomically */
+        k_mutex_lock(&ota_mutex, K_FOREVER);
         ota_status.bytes_written += copy_size;
+        k_mutex_unlock(&ota_mutex);
 
         /* Flush buffer when full */
         if (buffer_pos >= OTA_WRITE_BUFFER_SIZE)
@@ -274,8 +312,10 @@ static enum ota_result do_write_chunk(const uint8_t *data, uint16_t length)
         /* Progress reporting optimization */
         if (ota_status.bytes_written >= ota_status.last_progress_report + OTA_PROGRESS_REPORT_INTERVAL)
         {
+            k_mutex_lock(&ota_mutex, K_FOREVER);
             update_progress_fast(OTA_STATE_RECEIVING);
             ota_status.last_progress_report = ota_status.bytes_written;
+            k_mutex_unlock(&ota_mutex);
 
             if (progress_callback)
             {
@@ -447,21 +487,26 @@ static void ota_thread_main(void *p1, void *p2, void *p3)
 /* Optimized message sending */
 static enum ota_result send_ota_message_sync(struct ota_msg *msg)
 {
-    enum ota_result result;
+    enum ota_result result = OTA_ERROR_TIMEOUT;
     struct k_sem completion_sem;
 
     k_sem_init(&completion_sem, 0, 1);
     msg->completion_sem = &completion_sem;
     msg->result = &result;
 
-    if (k_msgq_put(&ota_msgq, msg, K_NO_WAIT) != 0)
+    if (k_msgq_put(&ota_msgq, msg, K_MSEC(1000)) != 0)
     {
+        LOG_ERR("Failed to send OTA message (queue full)");
         return OTA_ERROR_TIMEOUT;
     }
 
-    printk("OTA: Waiting for completion semaphore...\n");
-    k_sem_take(&completion_sem, K_FOREVER);
-    printk("OTA: Completion semaphore taken.\n");
+    /* Wait with timeout to prevent infinite blocking */
+    if (k_sem_take(&completion_sem, K_MSEC(30000)) != 0)
+    {
+        LOG_ERR("OTA operation timed out");
+        return OTA_ERROR_TIMEOUT;
+    }
+
     return result;
 }
 
@@ -500,14 +545,12 @@ enum ota_result ota_write_chunk(const uint8_t *data, size_t length)
         return OTA_ERROR_INVALID_PARAM;
     }
 
-    /* Send async for performance */
+    /* For write operations, we need synchronous handling to detect errors */
     struct ota_msg msg = {
         .type = MSG_WRITE_CHUNK,
-        .payload.chunk = {.data = data, .length = (uint16_t)length},
-        .completion_sem = NULL,
-        .result = NULL};
+        .payload.chunk = {.data = data, .length = (uint16_t)length}};
 
-    return (k_msgq_put(&ota_msgq, &msg, K_NO_WAIT) == 0) ? OTA_OK : OTA_ERROR_TIMEOUT;
+    return send_ota_message_sync(&msg);
 }
 
 enum ota_result ota_finalize_update(void)

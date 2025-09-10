@@ -11,8 +11,9 @@
 #include <zephyr/kernel.h>
 #include <string.h>
 #include <stdio.h>
+#include "../akira.h"
 
-LOG_MODULE_REGISTER(web_server, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(web_server, AKIRA_LOG_LEVEL);
 
 /* Optimized constants */
 #define HTTP_BUFFER_SIZE 1024
@@ -85,6 +86,83 @@ static const char html_header[] =
     "</style></head><body><div class='container'>";
 
 static const char html_footer[] = "</div></body></html>";
+
+static size_t parse_content_length(const char *request_data)
+{
+    const char *content_length_header = strstr(request_data, "Content-Length:");
+    if (!content_length_header)
+    {
+        return 0; // No Content-Length header
+    }
+
+    content_length_header += 15; // Skip "Content-Length:"
+
+    /* Skip whitespace */
+    while (*content_length_header == ' ' || *content_length_header == '\t')
+    {
+        content_length_header++;
+    }
+
+    /* Parse number with bounds checking */
+    char *endptr;
+    unsigned long length = strtoul(content_length_header, &endptr, 10);
+
+    /* Validate parsing */
+    if (endptr == content_length_header || length > SIZE_MAX)
+    {
+        LOG_ERR("Invalid Content-Length value");
+        return 0;
+    }
+
+    /* Reasonable size limits for embedded device */
+    if (length > (2 * 1024 * 1024))
+    { // Max 2MB
+        LOG_ERR("Content-Length too large: %lu", length);
+        return 0;
+    }
+
+    return (size_t)length;
+}
+
+static int find_multipart_boundary(const char *request_data, char *boundary, size_t boundary_size)
+{
+    const char *content_type = strstr(request_data, "Content-Type:");
+    if (!content_type)
+    {
+        return -1;
+    }
+
+    const char *boundary_start = strstr(content_type, "boundary=");
+    if (!boundary_start)
+    {
+        return -1;
+    }
+
+    boundary_start += 9; // Skip "boundary="
+
+    /* Find end of boundary (space, newline, or semicolon) */
+    const char *boundary_end = boundary_start;
+    while (*boundary_end && *boundary_end != ' ' &&
+           *boundary_end != '\r' && *boundary_end != '\n' &&
+           *boundary_end != ';')
+    {
+        boundary_end++;
+    }
+
+    size_t boundary_len = boundary_end - boundary_start;
+    if (boundary_len == 0 || boundary_len >= boundary_size - 2)
+    {
+        return -1;
+    }
+
+    /* Add "--" prefix for multipart boundary */
+    boundary[0] = '-';
+    boundary[1] = '-';
+    memcpy(boundary + 2, boundary_start, boundary_len);
+    boundary[boundary_len + 2] = '\0';
+
+    return 0;
+}
 
 /* HTTP response helpers */
 static int send_http_response(int client_fd, int status_code, const char *content_type,
@@ -227,13 +305,23 @@ static int parse_http_request(const char *buffer, char *method, char *path, size
 }
 
 /* Handle firmware upload */
-static int handle_firmware_upload(int client_fd, const char *request_data, size_t content_length)
+static int handle_firmware_upload(int client_fd, const char *request_headers, size_t content_length)
 {
-    if (content_length == 0 || content_length > (1024 * 1024))
-    { // Max 1MB
+    if (content_length == 0 || content_length > (2 * 1024 * 1024))
+    {
         send_http_response(client_fd, 400, "text/plain", "Invalid file size", 0);
         return -1;
     }
+
+    /* Find multipart boundary */
+    char boundary[128];
+    if (find_multipart_boundary(request_headers, boundary, sizeof(boundary)) != 0)
+    {
+        send_http_response(client_fd, 400, "text/plain", "Invalid multipart format", 0);
+        return -1;
+    }
+
+    LOG_INF("Using multipart boundary: %s", boundary);
 
     /* Start OTA update */
     enum ota_result result = ota_start_update(content_length);
@@ -243,9 +331,11 @@ static int handle_firmware_upload(int client_fd, const char *request_data, size_
         return -1;
     }
 
-    /* Receive and write firmware data */
+    /* Receive multipart data */
     char upload_buffer[UPLOAD_CHUNK_SIZE];
     size_t total_received = 0;
+    bool found_file_data = false;
+    size_t boundary_len = strlen(boundary);
 
     while (total_received < content_length)
     {
@@ -254,19 +344,64 @@ static int handle_firmware_upload(int client_fd, const char *request_data, size_
 
         if (received <= 0)
         {
+            LOG_ERR("Receive failed during upload: %d", errno);
             ota_abort_update();
             return -1;
         }
 
-        result = ota_write_chunk((uint8_t *)upload_buffer, received);
-        if (result != OTA_OK)
+        /* Look for file data start if not found yet */
+        if (!found_file_data)
         {
-            ota_abort_update();
-            send_http_response(client_fd, 500, "text/plain", ota_result_to_string(result), 0);
-            return -1;
+            /* Look for double CRLF indicating end of headers */
+            char *data_start = strstr(upload_buffer, "\r\n\r\n");
+            if (data_start)
+            {
+                data_start += 4; // Skip \r\n\r\n
+                found_file_data = true;
+
+                /* Write only the file data part */
+                size_t file_data_len = received - (data_start - upload_buffer);
+                if (file_data_len > 0)
+                {
+                    result = ota_write_chunk((uint8_t *)data_start, file_data_len);
+                    if (result != OTA_OK)
+                    {
+                        ota_abort_update();
+                        send_http_response(client_fd, 500, "text/plain",
+                                           ota_result_to_string(result), 0);
+                        return -1;
+                    }
+                }
+            }
+        }
+        else
+        {
+            /* Check for boundary indicating end of file data */
+            if (memmem(upload_buffer, received, boundary, boundary_len))
+            {
+                /* Found boundary - stop processing file data */
+                break;
+            }
+
+            /* Write chunk to OTA */
+            result = ota_write_chunk((uint8_t *)upload_buffer, received);
+            if (result != OTA_OK)
+            {
+                ota_abort_update();
+                send_http_response(client_fd, 500, "text/plain",
+                                   ota_result_to_string(result), 0);
+                return -1;
+            }
         }
 
         total_received += received;
+    }
+
+    if (!found_file_data)
+    {
+        ota_abort_update();
+        send_http_response(client_fd, 400, "text/plain", "No file data found", 0);
+        return -1;
     }
 
     /* Finalize update */
@@ -277,10 +412,18 @@ static int handle_firmware_upload(int client_fd, const char *request_data, size_
         return -1;
     }
 
-    send_http_response(client_fd, 200, "text/plain", "Upload successful", 0);
+    /* Send redirect to main page */
+    const char *redirect_response =
+        "HTTP/1.1 302 Found\r\n"
+        "Location: /\r\n"
+        "Content-Length: 0\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+
+    send(client_fd, redirect_response, strlen(redirect_response), 0);
 
     /* Schedule reboot */
-    ota_reboot_to_apply_update(5000);
+    ota_reboot_to_apply_update(3000);
     return 0;
 }
 
@@ -330,12 +473,18 @@ static int handle_http_request(int client_fd)
     char method[16], path[128];
     ssize_t received;
 
-    /* Receive request */
+    /* Set receive timeout */
+    struct timeval timeout = {.tv_sec = 30, .tv_usec = 0};
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+    /* Receive request with timeout */
     received = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
     if (received <= 0)
     {
+        LOG_WRN("Request receive failed or timeout: %d", errno);
         return -1;
     }
+
     buffer[received] = '\0';
 
     /* Parse request line */
@@ -373,14 +522,14 @@ static int handle_http_request(int client_fd)
     {
         if (strcmp(path, "/upload") == 0)
         {
-            /* Parse Content-Length */
-            char *content_length_header = strstr(buffer, "Content-Length:");
-            if (!content_length_header)
+            /* Parse Content-Length with validation */
+            size_t content_length = parse_content_length(buffer);
+            if (content_length == 0)
             {
-                return send_http_response(client_fd, 400, "text/plain", "Missing Content-Length", 0);
+                return send_http_response(client_fd, 400, "text/plain",
+                                          "Missing or invalid Content-Length", 0);
             }
 
-            size_t content_length = strtoul(content_length_header + 15, NULL, 10);
             return handle_firmware_upload(client_fd, buffer, content_length);
         }
 

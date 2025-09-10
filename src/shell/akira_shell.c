@@ -26,8 +26,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "../akira.h"
 
-LOG_MODULE_REGISTER(akira_shell, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(akira_shell, AKIRA_LOG_LEVEL);
 
 /* Optimized data structures */
 struct __packed display_state

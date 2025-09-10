@@ -17,8 +17,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "../akira.h"
 
-LOG_MODULE_REGISTER(user_settings, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(user_settings, AKIRA_LOG_LEVEL);
 
 /* Optimized settings storage with atomic operations */
 static struct user_settings current_settings;

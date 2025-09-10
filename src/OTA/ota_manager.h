@@ -23,6 +23,7 @@
 enum ota_state
 {
     OTA_STATE_IDLE = 0,
+    OTA_STATE_IN_PROGRESS,
     OTA_STATE_RECEIVING,
     OTA_STATE_VALIDATING,
     OTA_STATE_INSTALLING,
@@ -137,8 +138,6 @@ enum ota_result ota_abort_update(void);
  * @return Pointer to current progress information
  */
 const struct ota_progress *ota_get_progress(void);
-
-
 
 /**
  * @brief Confirm current firmware as permanent

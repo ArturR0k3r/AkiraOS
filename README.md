@@ -101,7 +101,7 @@ AkiraOS.code-workspace // file used to open the workspace
 ```Shell 
 cd < root where AkiraOS is located >
 
-unset ZEPHYR_WASM_MICRO_RUNTIME_KCONFIG && west build -b esp32_devkitc/esp32/procpu bootloader/mcuboot/boot/zephyr -- -DMCUBOOT_LOG_LEVEL=4
+unset ZEPHYR_WASM_MICRO_RUNTIME_KCONFIG && west build --pristine -b esp32_devkitc/esp32/procpu bootloader/mcuboot/boot/zephyr -- -DMCUBOOT_LOG_LEVEL=4
 
 unset ZEPHYR_BASE && west build --pristine -b esp32_devkitc/esp32/procpu /home/artur_ubuntu/Akira/AkiraOS -d build -- -DMODULE_EXT_ROOT=/home/artur_ubuntu/Akira/AkiraOS
 ```

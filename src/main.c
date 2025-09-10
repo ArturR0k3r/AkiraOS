@@ -14,8 +14,9 @@
 #include "OTA/ota_manager.h"
 #include "shell/akira_shell.h"
 #include "OTA/web_server.h"
+#include "../akira.h"
 
-LOG_MODULE_REGISTER(akira_main, LOG_LEVEL_INF);
+LOG_MODULE_REGISTER(akira_main, AKIRA_LOG_LEVEL);
 
 static bool wifi_connected = false;
 static struct net_mgmt_event_callback wifi_cb;
@@ -235,15 +236,12 @@ static void wifi_event_handler(struct net_mgmt_event_callback *cb,
 
     case NET_EVENT_IPV4_ADDR_ADD:
         LOG_INF("IPv4 address assigned");
-
         if (wifi_connected)
         {
-            struct net_if *iface = netif;
             struct in_addr *addr;
             char addr_str[NET_IPV4_ADDR_LEN];
 
-            /* Get the preferred IPv4 global address */
-            addr = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
+            addr = net_if_ipv4_get_global_addr(netif, NET_ADDR_PREFERRED);
             if (addr)
             {
                 net_addr_ntop(AF_INET, addr, addr_str, sizeof(addr_str));
@@ -323,7 +321,11 @@ static void on_settings_changed(const char *key, const void *value, void *user_d
 
     if (strcmp(key, WIFI_SSID_KEY) == 0 || strcmp(key, WIFI_PASSCODE_KEY) == 0)
     {
-        LOG_INF("WiFi credentials updated - reconnection may be required");
+        LOG_INF("WiFi credentials updated - reconnecting...");
+        if (user_settings_get()->wifi_enabled)
+        {
+            initialize_wifi();
+        }
     }
     else if (strcmp(key, WIFI_ENABLED_KEY) == 0)
     {
@@ -341,6 +343,11 @@ static void on_ota_progress(const struct ota_progress *progress, void *user_data
 {
     static uint8_t last_percentage = 255;
 
+    if (progress->state == OTA_STATE_IN_PROGRESS && last_percentage == 255)
+    {
+        LOG_INF("OTA update started...");
+    }
+
     if (progress->percentage != last_percentage)
     {
         LOG_INF("OTA: %s (%d%%)", progress->status_message, progress->percentage);
@@ -357,8 +364,9 @@ static void on_ota_progress(const struct ota_progress *progress, void *user_data
     }
 }
 
-int hardware_init(void)
+int main(void)
 {
+    printk("=== AkiraOS main() started ===\n");
     int ret;
     const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
     const struct device *spi_dev = DEVICE_DT_GET(DT_NODELABEL(spi2));
@@ -367,40 +375,34 @@ int hardware_init(void)
     if (!device_is_ready(gpio_dev))
     {
         LOG_ERR("GPIO device not ready!\n");
-        return -ENODEV;
     }
     if (!device_is_ready(spi_dev))
     {
         LOG_ERR("SPI device not ready!\n");
-        return -ENODEV;
     }
 
     ret = gpio_pin_configure(gpio_dev, ILI9341_CS_PIN, GPIO_OUTPUT_ACTIVE);
     if (ret < 0)
     {
         LOG_ERR("Failed to configure CS pin: %d\n", ret);
-        return ret;
     }
 
     ret = gpio_pin_configure(gpio_dev, ILI9341_DC_PIN, GPIO_OUTPUT_ACTIVE);
     if (ret < 0)
     {
         printk("Failed to configure DC pin: %d\n", ret);
-        return ret;
     }
 
     ret = gpio_pin_configure(gpio_dev, ILI9341_RESET_PIN, GPIO_OUTPUT_ACTIVE);
     if (ret < 0)
     {
         printk("Failed to configure RESET pin: %d\n", ret);
-        return ret;
     }
 
     ret = gpio_pin_configure(gpio_dev, ILI9341_BL_PIN, GPIO_OUTPUT_ACTIVE);
     if (ret < 0)
     {
         printk("Failed to configure backlight pin: %d\n", ret);
-        return ret;
     }
 
     gpio_pin_set(gpio_dev, ILI9341_CS_PIN, 1);
@@ -438,7 +440,6 @@ int hardware_init(void)
     if (ret < 0)
     {
         LOG_ERR("SPI write failed: %d\n", ret);
-        return ret;
     }
 
     k_msleep(150);
@@ -447,19 +448,9 @@ int hardware_init(void)
     if (ret < 0)
     {
         LOG_ERR("Display initialization failed: %d\n", ret);
-        return ret;
     }
-    return ret;
-}
 
-int main(void)
-{
-
-    printk("=== AkiraOS main() started ===\n");
-
-    hardware_init();
-
-    ili9341_fill_color(WHITE_COLOR);
+    LOG_INF("✅ ILI9341 display initialized");
     LOG_INF("=== AkiraOS v1.0.0 Test ===");
     ili9341_draw_text(10, 30, "=== AkiraOS v1.0.0 ===", BLACK_COLOR, FONT_7X10);
     LOG_INF("Hardware platform: Akira console");
@@ -468,77 +459,67 @@ int main(void)
     ili9341_draw_text(10, 70, "Features: OTA Updates, Web Interface, Gaming Controls", BLACK_COLOR, FONT_7X10);
     LOG_INF("Build: %s %s", __DATE__, __TIME__);
 
-    int ret = 0;
-
+    // Initialize settings
     ret = user_settings_init();
     if (ret)
     {
         LOG_ERR("Settings initialization failed: %d", ret);
-        return ret;
     }
     LOG_INF("✅ Settings module initialized");
 
+    // Register settings change callback
+    user_settings_register_callback(on_settings_changed, NULL);
+
+    // Initialize OTA manager
     ret = ota_manager_init();
     if (ret)
     {
         LOG_ERR("OTA manager initialization failed: %d", ret);
-        return ret;
     }
     LOG_INF("✅ OTA manager initialized");
 
+    // Register OTA progress callback
+    ota_register_progress_callback(on_ota_progress, NULL);
+
+    // Initialize Akira shell
     ret = akira_shell_init();
     if (ret)
     {
         LOG_ERR("Akira shell initialization failed: %d", ret);
-        return ret;
     }
     LOG_INF("✅ Akira shell initialized");
 
-    user_settings_register_callback(on_settings_changed, NULL);
-    ota_register_progress_callback(on_ota_progress, NULL);
-
+    // Prepare web server callbacks
     struct web_server_callbacks web_callbacks = {
         .get_system_info = get_system_info_callback,
         .get_button_state = get_button_state_callback,
         .get_settings_info = get_settings_info_callback,
         .execute_shell_command = execute_shell_command_callback};
 
+    // Start web server
     ret = web_server_start(&web_callbacks);
     if (ret)
     {
         LOG_ERR("Web server initialization failed: %d", ret);
-        return ret;
     }
     LOG_INF("✅ Web server initialized and started");
 
+    // Initialize WiFi
     ret = initialize_wifi();
     if (ret)
     {
         LOG_WRN("WiFi initialization failed: %d - continuing without WiFi", ret);
         LOG_INF("💡 Configure WiFi: settings set_wifi <ssid> <password>");
     }
-
-    uint32_t status_counter = 0;
+    else
+    {
+        LOG_INF("✅ WiFi initialization started");
+    }
 
     while (1)
     {
-        k_sleep(K_SECONDS(1));
-
-        if (++status_counter >= 10)
-        {
-            status_counter = 0;
-
-            struct system_stats stats;
-            if (shell_get_system_stats(&stats) == 0)
-            {
-                LOG_INF("[Status] Uptime: %llu ms | Memory: %zu/%zu KB | WiFi: %s | CPU: %u%%",
-                        stats.uptime_ms,
-                        stats.heap_used / 1024,
-                        (stats.heap_used + stats.heap_free) / 1024,
-                        stats.wifi_connected ? "Connected" : "Disconnected",
-                        stats.cpu_usage_percent);
-            }
-        }
+        LOG_INF("... AkiraOS main loop running ...");
+        k_sleep(K_SECONDS(30));
     }
 
     return 0;
