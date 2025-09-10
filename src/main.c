@@ -522,7 +522,7 @@ int main(void)
 
     while (1)
     {
-        k_sleep(K_SECONDS(30));
+        k_sleep(K_SECONDS(1));
 
         if (++status_counter >= 10)
         {

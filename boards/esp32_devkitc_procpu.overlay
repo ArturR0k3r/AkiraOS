@@ -13,8 +13,7 @@
     };
 };
 
-&spi2
-{
+&spi2 {
     status = "okay";
     pinctrl-0 = <&spim2_default>;
     pinctrl-names = "default";
@@ -52,7 +51,7 @@
 // WiFi configuration
 &wifi {
     status = "okay";
-    // WiFi credentbgials will be managed by settings module
+    // WiFi credentials will be managed by settings module
 };
 
 // UART configuration for shell and logging
@@ -78,3 +77,4 @@
         zephyr,shell-uart = &uart0;
     };
 };
+

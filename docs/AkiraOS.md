@@ -1,17 +1,29 @@
 ## **Architecture**
 
 ```c
-┌─────────────────┐
-│   WASM Apps     │ ← Игры и инструменты
-├─────────────────┤
-│   OCRE Runtime  │ ← Изоляция и безопасность  
-├─────────────────┤
-│ WASM-Micro-RT   │ ← WASM исполнение
-├─────────────────┤
-│   Zephyr OS     │ ← RTOS и драйверы
-├─────────────────┤
-│   ESP32 HAL     │ ← Железо
-└─────────────────┘
+┌─────────────────────────────┐
+│      AkiraOS WASM Apps      │ ← Games, Tools, Utilities, User Apps
+├─────────────────────────────┤
+│      OCRE Runtime           │ ← Open Container Runtime (OCI/WASM), Security, Sandboxing
+├─────────────────────────────┤
+│    WASM-Micro-RT            │ ← WASM Execution Environment for OCRE
+├─────────────────────────────┤
+│      Akira Shell            │ ← Command-line, Debug Console, Scripting
+├─────────────────────────────┤
+│      OTA Manager            │ ← Firmware Updates, MCUboot Integration
+├─────────────────────────────┤
+│      Settings Module        │ ← Persistent User/Device Settings
+├─────────────────────────────┤
+│      Networking Stack       │ ← WiFi, TCP/IP, HTTP, Web Server
+├─────────────────────────────┤
+│         Akira               │
+│      graphic engine         │ ← Hardware drivers and libs, Framebuffer, UI Rendering ... 
+│      and Hardware drivers   │
+├─────────────────────────────┤
+│      Zephyr OS              │ ← RTOS, Device Drivers, Kernel Services
+├─────────────────────────────┤
+│      ESP32 HAL              │ ← Hardware Abstraction, GPIO, SPI, UART, I2C
+└─────────────────────────────┘
 ```
 
 ## AkiraOS State Diagram

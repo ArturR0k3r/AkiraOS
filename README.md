@@ -96,8 +96,47 @@ west update
 AkiraOS.code-workspace // file used to open the workspace
 ```
 
-ctrl+shift+B -for build 
 
+# Build 
+```Shell 
+cd < root where AkiraOS is located >
+
+unset ZEPHYR_WASM_MICRO_RUNTIME_KCONFIG && west build -b esp32_devkitc/esp32/procpu bootloader/mcuboot/boot/zephyr -- -DMCUBOOT_LOG_LEVEL=4
+
+unset ZEPHYR_BASE && west build --pristine -b esp32_devkitc/esp32/procpu /home/artur_ubuntu/Akira/AkiraOS -d build -- -DMODULE_EXT_ROOT=/home/artur_ubuntu/Akira/AkiraOS
+```
+or 
+```Shell 
+ctrl+shift+B -for application build 
+```
+or
+```Shell 
+chmod +x build_both.sh
+./build_both.sh clean
+```
+
+
+
+# Flash
+```shell
+# 1. Flash MCUboot: 
+esptool write-flash 0x1000 build-mcuboot/zephyr/zephyr.bin
+
+# 2. Flash AkiraOS: 
+esptool write-flash 0x20000 build/zephyr/zephyr.signed.bin
+# (or use: west flash -d build)"
+```
+or
+```Shell 
+chmod +x flash.sh
+# Flash both
+./flash.sh
+# Flash only the bootloader:
+./flash.sh --bootloader-only
+# Flash only the application:
+./flash.sh --app-only
+```
+Ы
 # Bootload 
 ```shell
 west build --pristine -b esp32_devkitc_wroom ~/zephyrdemo/bootloader/mcuboot/boot/zephyr -d build-mcuboot -- -DCONFIG_BOOT_MAX_IMG_SECTORS=1024 -DDTC_OVERLAY_FILE="~/zephyrdemo/application/boards/esp32_devkitc_wroom.overlay;~/zephyrdemo/bootloader/mcuboot/boot/zephyr/app.overlay" -DMODULE_EXT_ROOT=../../../../application

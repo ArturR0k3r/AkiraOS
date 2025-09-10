@@ -8,12 +8,6 @@ manifest:
       west-commands: scripts/west-commands.yml
       import: true
       
-    # WASM Micro Runtime
-    - name: wasm-micro-runtime
-      revision: dev/zephyr_file_socket
-      url: https://github.com/atym-io/wasm-micro-runtime/
-      path: wasm-micro-runtime
-      
     # OCRE Runtime 
     - name: project-ocre
       revision: main
