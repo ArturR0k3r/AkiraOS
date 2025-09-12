@@ -103,7 +103,7 @@ cd < root where AkiraOS is located >
 
 unset ZEPHYR_WASM_MICRO_RUNTIME_KCONFIG && west build --pristine -b esp32_devkitc/esp32/procpu bootloader/mcuboot/boot/zephyr -- -DMCUBOOT_LOG_LEVEL=4
 
-unset ZEPHYR_BASE && west build --pristine -b esp32_devkitc/esp32/procpu <path_to_AkiraOS> -d build -- -DMODULE_EXT_ROOT=<path_to_AkiraOS>
+unset ZEPHYR_BASE && west build --pristine -b esp32_devkitc/esp32/procpu path_to_AkiraOS -d build -- -DMODULE_EXT_ROOT=path_to_AkiraOS
 ```
 or 
 ```Shell 
