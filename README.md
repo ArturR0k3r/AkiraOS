@@ -89,6 +89,7 @@ git clone https://github.com/ArturR0k3r/AkiraOS.git
 cd AkiraOS/
 west init -l .  
 west update
+west blobs fetch hal_espressif
 ```
 
 
