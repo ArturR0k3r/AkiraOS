@@ -1,7 +1,7 @@
-# AkiraOS
-Retro gaming console with ESP32, Zephyr OS, and WebAssembly support and CyberSec networking tools 
 
-```c
+# AkiraOS
+
+```
  █████╗ ██╗  ██╗██╗██████╗  █████╗        ██████╗ ███████╗  
 ██╔══██╗██║ ██╔╝██║██╔══██╗██╔══██╗      ██╔═══██╗██╔════╝  
 ███████║█████╔╝ ██║██████╔╝███████║█████╗██║   ██║███████╗  
@@ -10,141 +10,216 @@ Retro gaming console with ESP32, Zephyr OS, and WebAssembly support and CyberSec
 ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═╝╚═╝  ╚═╝       ╚═════╝ ╚══════╝  
 ```
 
-🎮 Akira Console
-Akira Console is a minimalist retro-cyberpunk game console powered by an ESP32-S3 chip running a custom Zephyr RTOS. It supports applications written in WebAssembly (WASM) and aims to serve as both a portable gaming device and a hacker's toolkit.
+**A minimalist retro-cyberpunk gaming console and hacker toolkit powered by ESP32 and WebAssembly**
 
-![DSC_0078](https://github.com/user-attachments/assets/8e9d29de-1b5c-471f-b80c-44f2f96c4fae)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
+[![Zephyr RTOS](https://img.shields.io/badge/RTOS-Zephyr-blue)](https://zephyrproject.org/)
+[![WebAssembly](https://img.shields.io/badge/Runtime-WASM-purple)](https://webassembly.org/)
 
-📌 Project Goals
+---
 
-✅ Build a compact and stylish console with a retro aesthetic
+## 🎮 Overview
 
-✅ Create a lightweight custom OS based on Zephyr
+AkiraOS is an open-source gaming console that combines the power of modern embedded systems with the nostalgic appeal of retro gaming. Built on the ESP32-S3 microcontroller and running a custom Zephyr RTOS, it supports WebAssembly applications and doubles as a cybersecurity toolkit for ethical hacking and network analysis.
 
-✅ Support WASM-based games and utilities
+![AkiraOS Console](https://github.com/user-attachments/assets/8e9d29de-1b5c-471f-b80c-44f2f96c4fae)
 
-✅ Add a Hacker Terminal Mode for network tools and CLI access
+### Key Features
 
-⚙️ Tech Specs
+- 🎯 **Retro Gaming**: Run classic-style games compiled to WebAssembly
+- 🔧 **Hacker Toolkit**: Built-in cybersecurity tools and CLI access
+- 🌐 **Network Capable**: Wi-Fi and Bluetooth connectivity
+- 🔋 **Portable**: Battery-powered with USB-C charging
+- 🎨 **Customizable**: Cyberpunk-themed UI with multiple skins
+- 📱 **Modern Architecture**: WebAssembly runtime on embedded hardware
 
-🧠 Hardware
+## 🛠️ Technical Specifications
 
-MCU: ESP32-S3-WROOM-32 (Wi-Fi + Bluetooth, WASM-capable)
+### Hardware
 
-Display: 2.4" TFT SPI (ILI9341, 240×320 resolution)
+| Component | Specification |
+|-----------|---------------|
+| **Microcontroller** | ESP32-S3-WROOM-32 |
+| **Connectivity** | Wi-Fi 802.11 b/g/n, Bluetooth 5.0 |
+| **Display** | 2.4" TFT SPI (ILI9341) - 240×320 resolution |
+| **Power** | Li-ion battery with USB-C TP4056 charging |
+| **Controls** | D-Pad + 4 action buttons |
+| **Memory** | 512KB SRAM, 8MB PSRAM, 16MB Flash |
 
-Power: Li-ion Battery with USB-C TP4056 charging module
+### Software Architecture
 
-Controls: 4 for a standard D-Pad + 4 action buttons 
+- **Operating System**: Custom Zephyr RTOS
+- **Runtime**: WAMR (WebAssembly Micro Runtime)
+- **Container Support**: OCRE (Open Containers Runtime Environment)
+- **Development Languages**: C/C++/Rust → WebAssembly
+- **Graphics**: Custom pixel-art renderer with CRT effects
 
-![DSC_0081](https://github.com/user-attachments/assets/5d010761-cffb-4be3-8abe-2f69cc3b8900)
+![Hardware Image](https://github.com/user-attachments/assets/5d010761-cffb-4be3-8abe-2f69cc3b8900)
 
+## 🚀 Quick Start
 
-🖥 Software
-OS
-Based on Zephyr RTOS — lightweight, low-power, modular
+### Prerequisites
 
-Custom core with clean API for apps
+- **Zephyr SDK**: Follow the [official installation guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html)
+- **Python 3.8+**: For build tools
+- **West Tool**: Zephyr's meta-tool for project management
+- **ESP-IDF Tools**: For ESP32 development
 
-Applications
-Written in C/C++/Rust, compiled to WASM
+> **Note**: Development is recommended on WSL (Windows Subsystem for Linux) or native Linux/macOS.
 
-Powered by WAMR(WebAssembly Micro Runtime) and OCRE(Open Containers Runtime Enviroenment)
+### Installation
 
-Simple API framework (graphics, input, sound) for easy development
+1. **Clone the repository**
+   ```bash
+   mkdir AkiraOS-workspace
+   cd AkiraOS-workspace
+   git clone https://github.com/ArturR0k3r/AkiraOS.git
+   cd AkiraOS/
+   ```
 
-Hacker Mode Features
-Soon...
+2. **Initialize West workspace**
+   ```bash
+   west init -l .
+   west update
+   west blobs fetch hal_espressif
+   ```
 
-🎨 Design & UX
-Minimalist UI with pixel-art and retro themes
+3. **Open development environment**
+   ```bash
+   code AkiraOS.code-workspace
+   ```
 
-Cyberpunk skins: neon colors, ASCII/CRT visual effects
+## 🔨 Building
 
-Terminal-style menu with CRT/glitch animations
+### Method 1: Command Line
 
-🙏 Acknowledgements
-Special thanks to:
+```bash
+# Build bootloader (MCUboot)
+unset ZEPHYR_WASM_MICRO_RUNTIME_KCONFIG && \
+west build --pristine -b esp32_devkitc/esp32/procpu \
+    bootloader/mcuboot/boot/zephyr \
+    -- -DMCUBOOT_LOG_LEVEL=4
 
-OCRE Project – for inspiration and open tooling
-
-Zephyr Project – for the powerful RTOS base
-
-WebAssembly – for bringing platform-agnostic apps to embedded systems
-
-
-
-
-
-# Start-up
-You should have installed Zephyr, Python and so on checkout how to install zephyr
-https://docs.zephyrproject.org/latest/develop/getting_started/index.html 
-it should be done in WSL 
-
-
-```shell
-mkdir Akira 
-cd Akira 
-git clone https://github.com/ArturR0k3r/AkiraOS.git
-cd AkiraOS/
-west init -l .  
-west update
-west blobs fetch hal_espressif
+# Build AkiraOS application  
+unset ZEPHYR_BASE && \
+west build --pristine -b esp32_devkitc/esp32/procpu \
+    path_to_AkiraOS -d build \
+    -- -DMODULE_EXT_ROOT=path_to_AkiraOS
 ```
 
+### Method 2: VS Code
 
-```shell
-AkiraOS.code-workspace // file used to open the workspace
-```
+Press `Ctrl+Shift+B` to run the configured build task.
 
+### Method 3: Build Script
 
-# Build 
-```Shell 
-cd < root where AkiraOS is located >
-
-unset ZEPHYR_WASM_MICRO_RUNTIME_KCONFIG && west build --pristine -b esp32_devkitc/esp32/procpu bootloader/mcuboot/boot/zephyr -- -DMCUBOOT_LOG_LEVEL=4
-
-unset ZEPHYR_BASE && west build --pristine -b esp32_devkitc/esp32/procpu path_to_AkiraOS -d build -- -DMODULE_EXT_ROOT=path_to_AkiraOS
-```
-or 
-```Shell 
-ctrl+shift+B -for application build 
-```
-or
-```Shell 
+```bash
 chmod +x build_both.sh
 ./build_both.sh clean
 ```
 
+## 📱 Flashing Firmware
 
+### Manual Flashing
 
-# Flash
-```shell
-# 1. Flash MCUboot: 
+```bash
+# Flash MCUboot bootloader
 esptool write-flash 0x1000 build-mcuboot/zephyr/zephyr.bin
 
-# 2. Flash AkiraOS: 
+# Flash AkiraOS application
 esptool write-flash 0x20000 build/zephyr/zephyr.signed.bin
-# (or use: west flash -d build)"
 ```
-or
-```Shell 
+
+### Automated Flashing
+
+```bash
 chmod +x flash.sh
-# Flash both
+
+# Flash both bootloader and application
 ./flash.sh
-# Flash only the bootloader:
+
+# Flash only bootloader
 ./flash.sh --bootloader-only
-# Flash only the application:
+
+# Flash only application  
 ./flash.sh --app-only
 ```
-Ы
-# Bootload 
-```shell
-west build --pristine -b esp32_devkitc_wroom ~/zephyrdemo/bootloader/mcuboot/boot/zephyr -d build-mcuboot -- -DCONFIG_BOOT_MAX_IMG_SECTORS=1024 -DDTC_OVERLAY_FILE="~/zephyrdemo/application/boards/esp32_devkitc_wroom.overlay;~/zephyrdemo/bootloader/mcuboot/boot/zephyr/app.overlay" -DMODULE_EXT_ROOT=../../../../application
-```
 
-# Firmware
-```shell
-west build --pristine -b esp32_devkitc_wroom ~/zephyrdemo/application -d build  -- -DCONFIG_BOOTLOADER_MCUBOOT=y  -DCONFIG_MCUBOOT_SIGNATURE_KEY_FILE=\"bootloader/mcuboot/root-rsa-2048.pem\" -DMODULE_EXT_ROOT=.
-```
+## 🎮 Usage
 
+### Gaming Mode
+
+1. Power on the console
+2. Use the D-pad to navigate the menu
+3. Select games from the installed WASM applications
+4. Use action buttons for gameplay
+
+### Hacker Mode
+
+> **Coming Soon**: Terminal interface with network analysis tools, Wi-Fi scanning, and cybersecurity utilities.
+
+## 🧩 Development
+
+### Creating WASM Applications
+
+For detailed information on developing WASM applications for AkiraOS, please refer to our comprehensive [API Documentation](docs/api-reference.md) and [Game Development Tutorial](docs/game-development.md).
+
+## 🤝 Contributing
+
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+
+### Development Workflow
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes
+4. Test on hardware if possible
+5. Commit your changes (`git commit -m 'Add amazing feature'`)
+6. Push to the branch (`git push origin feature/amazing-feature`)
+7. Open a Pull Request
+
+### Code Style
+
+- Follow Zephyr coding standards
+- Use clear, descriptive variable names
+- Comment complex logic
+- Include unit tests where applicable
+
+## 📚 Documentation
+
+- [Hardware Assembly Guide](docs/hardware-assembly.md)
+- [API Documentation](docs/api-reference.md)
+- [Troubleshooting](docs/troubleshooting.md)
+
+## 🛒 Hardware Availability
+
+**Hardware kits will be available for purchase later.** Stay tuned for updates on availability and pricing.
+
+
+## 🙏 Acknowledgments
+
+- **[Zephyr Project](https://zephyrproject.org/)** - Powerful embedded RTOS
+- **[OCRE Project](https://opencontainers.org/)** - Open container runtime environment
+- **[WebAssembly](https://webassembly.org/)** - Platform-agnostic runtime
+- **[WAMR](https://github.com/bytecodealliance/wasm-micro-runtime)** - WebAssembly micro runtime
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 📞 Support
+
+- **Issues**: [GitHub Issues](https://github.com/ArturR0k3r/AkiraOS/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/ArturR0k3r/AkiraOS/discussions)
+- **Email**: support@pen.engineering
+
+---
+
+<div align="center">
+
+**Made with ❤️ by the AkiraOS community**
+
+[⭐ Star this repo](https://github.com/ArturR0k3r/AkiraOS) | [🐛 Report Bug](https://github.com/ArturR0k3r/AkiraOS/issues) | [💡 Request Feature](https://github.com/ArturR0k3r/AkiraOS/issues)
+
+</div>
