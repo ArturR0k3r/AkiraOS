@@ -159,3 +159,16 @@ stateDiagram-v2
 
 
 
+| ESP32S3 GPIO | Button | Type | Notes |
+|------------|--------|------|--------|
+| GPIO7      | Power/Menu | Input | Pull-up enabled |
+| GPIO42     | Settings | Input | Pull-up enabled |
+| GPIO3      | D-Pad Up | Input Only | ⚠️ No pull-up (external required) |
+| GPIO41     | D-Pad Down | Input | Pull-up enabled |
+| GPIO47     | D-Pad Left | Input | Pull-up enabled |
+| GPIO40     | D-Pad Right | Input Only | ⚠️ No pull-up (external required) |
+| GPIO46     | A Button | Input | Pull-up enabled |
+| GPIO14     | B Button | Input | Pull-up enabled |
+| GPIO15     | X Button | Input Only | ⚠️ No pull-up (external required) |
+| GPIO39     | Y Button | Input | Pull-up enabled |
+

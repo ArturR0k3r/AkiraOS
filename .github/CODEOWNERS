@@ -1,0 +1,25 @@
+# CODEOWNERS file for AkiraOS
+
+# Global ownership - default reviewers for all files
+* @ArturR0k3r
+
+# Core system files
+/src/ @ArturR0k3r
+/OTA/ @ArturR0k3r
+/drivers/ @ArturR0k3r
+/settings/ @ArturR0k3r
+/shell/ @ArturR0k3r
+
+# Build and configuration
+Makefile @ArturR0k3r
+*.mk @ArturR0k3r
+*.cmake @ArturR0k3r
+CMakeLists.txt @ArturR0k3r
+
+# Documentation
+/docs/ @ArturR0k3r
+README.md @ArturR0k3r
+*.md @ArturR0k3r
+
+# GitHub workflow files
+/.github/ @ArturR0k3r

@@ -3,68 +3,84 @@
 #include <zephyr/dt-bindings/spi/spi.h>
 
 // Configure SPI pins - Fixed pin mapping
-&pinctrl {
-    spim2_default: spim2_default {
-        group1 {
-            pinmux = <SPIM2_MISO_GPIO25>,   // MISO - GPIO25
-                     <SPIM2_MOSI_GPIO23>,   // MOSI - GPIO23  
-                     <SPIM2_SCLK_GPIO19>;   // SCK  - GPIO19
+&pinctrl
+{
+spim2_default:
+    spim2_default
+    {
+        group1
+        {
+            pinmux = <SPIM2_MISO_GPIO13>, // MISO - GPIO13
+                <SPIM2_MOSI_GPIO11>,      // MOSI - GPIO11
+                <SPIM2_SCLK_GPIO12>;      // SCK  - GPIO12
         };
     };
 };
 
-&spi2 {
+&spi2
+{
     status = "okay";
-    pinctrl-0 = <&spim2_default>;
-    pinctrl-names = "default";
-    cs-gpios = <&gpio0 22 GPIO_ACTIVE_LOW>;  // Manual CS control
+    pinctrl - 0 = <&spim2_default>;
+    pinctrl - names = "default";
+    cs - gpios = <&gpio0 10 GPIO_ACTIVE_LOW>; // Manual CS control
 };
 
-&gpio0 {
+&gpio0
+{
     status = "okay";
-    // ILI9341 Display Control Pins
-    ili9341_cs: ili9341_cs {
-        gpio-hog;
-        gpios = <22 GPIO_ACTIVE_LOW>;   // CS - GPIO22
-        output-high;                    // CS idle high
+// ILI9341 Display Control Pins
+ili9341_cs:
+    ili9341_cs
+    {
+        gpio - hog;
+        gpios = <10 GPIO_ACTIVE_LOW>; // CS - GPIO10
+        output - high;                // CS idle high
     };
-    
-    ili9341_dc: ili9341_dc {
-        gpio-hog;
-        gpios = <21 GPIO_ACTIVE_HIGH>;  // DC - GPIO21
-        output-low;                     // DC starts low (command mode)
+
+ili9341_dc:
+    ili9341_dc
+    {
+        gpio - hog;
+        gpios = <21 GPIO_ACTIVE_HIGH>; // DC - GPIO21
+        output - low;                  // DC starts low (command mode)
     };
-    
-    ili9341_reset: ili9341_reset {
-        gpio-hog;
-        gpios = <18 GPIO_ACTIVE_HIGH>;  // RESET - GPIO18
-        output-high;                    // RESET idle high
+
+ili9341_reset:
+    ili9341_reset
+    {
+        gpio - hog;
+        gpios = <18 GPIO_ACTIVE_HIGH>; // RESET - GPIO18
+        output - high;                 // RESET idle high
     };
-    
-    ili9341_bl: ili9341_bl {
-        gpio-hog;
-        gpios = <27 GPIO_ACTIVE_HIGH>;  // Backlight - GPIO27
-        output-high;                    // Backlight on
+
+ili9341_bl:
+    ili9341_bl
+    {
+        gpio - hog;
+        gpios = <6 GPIO_ACTIVE_HIGH>; // Backlight - GPIO6
+        output - high;                // Backlight on
     };
 };
-
 
 // WiFi configuration
-&wifi {
+&wifi
+{
     status = "okay";
     // WiFi credentbgials will be managed by settings module
 };
 
 // UART configuration for shell and logging
-&uart0 {
+&uart0
+{
     status = "okay";
-    current-speed = <115200>;
+    current - speed = <115200>;
 };
 
 // I2C configuration (for future expansion)
-&i2c0 {
+&i2c0
+{
     status = "okay";
-    clock-frequency = <I2C_BITRATE_STANDARD>;
+    clock - frequency = <I2C_BITRATE_STANDARD>;
     // Reserved for future peripherals:
     // - IMU/Accelerometer
     // - Audio codec
@@ -72,10 +88,11 @@
 };
 
 // Chosen nodes for Zephyr configuration
-/ {
-    chosen {
-        zephyr,console = &uart0;
-        zephyr,shell-uart = &uart0;
+/
+{
+    chosen
+    {
+        zephyr, console = &uart0;
+        zephyr, shell - uart = &uart0;
     };
-
 };
