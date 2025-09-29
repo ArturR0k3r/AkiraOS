@@ -22,8 +22,8 @@
 ## 🎮 Overview
 
 AkiraOS is an open-source gaming console that combines the power of modern embedded systems with the nostalgic appeal of retro gaming. Built on the ESP32-S3 microcontroller and running a custom Zephyr RTOS, it supports WebAssembly applications and doubles as a cybersecurity toolkit for ethical hacking and network analysis.
+![DSC_0078](https://github.com/user-attachments/assets/631810c2-bb2a-4731-b8fc-b11a841c5733)
 
-![AkiraOS Console](https://github.com/user-attachments/assets/8e9d29de-1b5c-471f-b80c-44f2f96c4fae)
 
 ### Key Features
 
@@ -55,7 +55,7 @@ AkiraOS is an open-source gaming console that combines the power of modern embed
 - **Development Languages**: C/C++/Rust → WebAssembly
 - **Graphics**: Custom pixel-art renderer with CRT effects
 
-![Hardware Image](https://github.com/user-attachments/assets/5d010761-cffb-4be3-8abe-2f69cc3b8900)
+![DSC_0081](https://github.com/user-attachments/assets/8a6ec23f-e7b3-4180-b24c-6537f7b01069)
 
 ## 🚀 Quick Start
 
