@@ -10,6 +10,7 @@
 #include <zephyr/net/socket.h>
 #include <zephyr/net/net_ip.h>
 #include "drivers/display_ili9341.h"
+#include "drivers/akira_hal.h"
 #include "settings/settings.h"
 #include "OTA/ota_manager.h"
 #include "shell/akira_shell.h"
@@ -182,19 +183,16 @@ static int execute_shell_command_callback(const char *command, char *response, s
     else if (strcmp(command, "ota status") == 0)
     {
         const struct ota_progress *progress = ota_get_progress();
-        bool is_confirmed, is_pending_revert;
 
         return snprintf(response, response_size,
                         "OTA State: %s\n"
                         "Progress: %d%% (%zu/%zu bytes)\n"
-                        "Status: %s\n"
-                        "Firmware: %s",
+                        "Status: %s",
                         ota_state_to_string(progress->state),
                         progress->percentage,
                         progress->bytes_written,
                         progress->total_size,
-                        progress->status_message,
-                        is_confirmed ? "Confirmed" : "Test (needs confirmation)");
+                        progress->status_message);
     }
     else if (strcmp(command, "debug threads") == 0)
     {
@@ -264,6 +262,13 @@ static void wifi_event_handler(struct net_mgmt_event_callback *cb,
 
 static int initialize_wifi(void)
 {
+    /* Check if WiFi hardware is available */
+    if (!akira_has_wifi())
+    {
+        LOG_INF("WiFi not available on this platform - skipping");
+        return 0;
+    }
+
     struct net_if *iface = net_if_get_default();
     if (!iface)
     {
@@ -368,95 +373,128 @@ int main(void)
 {
     printk("=== AkiraOS main() started ===\n");
     int ret;
-    const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
-    const struct device *spi_dev = DEVICE_DT_GET(DT_NODELABEL(spi2));
+
+    /* Initialize Akira HAL */
+    ret = akira_hal_init();
+    if (ret < 0)
+    {
+        LOG_ERR("Akira HAL initialization failed: %d", ret);
+        return ret;
+    }
+
+    LOG_INF("Platform: %s", akira_get_platform_name());
+    LOG_INF("Display: %s", akira_has_display() ? "Available" : "Not Available");
+    LOG_INF("WiFi: %s", akira_has_wifi() ? "Available" : "Not Available");
+    LOG_INF("SPI: %s", akira_has_spi() ? "Available" : "Not Available");
+
+    const struct device *gpio_dev = NULL;
+    const struct device *spi_dev = NULL;
     struct spi_config spi_cfg = {0};
 
-    if (!device_is_ready(gpio_dev))
+    /* Initialize hardware if available */
+    if (akira_has_display())
     {
-        LOG_ERR("GPIO device not ready!\n");
+        gpio_dev = akira_get_gpio_device("gpio0");
+        spi_dev = akira_get_spi_device("spi2");
+
+        if (!gpio_dev)
+        {
+            LOG_ERR("GPIO device not available");
+        }
+        if (!spi_dev)
+        {
+            LOG_ERR("SPI device not available");
+        }
+
+        if (gpio_dev && spi_dev)
+        {
+            ret = akira_gpio_pin_configure(gpio_dev, ILI9341_CS_PIN, GPIO_OUTPUT_ACTIVE);
+            if (ret < 0)
+            {
+                LOG_ERR("Failed to configure CS pin: %d", ret);
+            }
+
+            ret = akira_gpio_pin_configure(gpio_dev, ILI9341_DC_PIN, GPIO_OUTPUT_ACTIVE);
+            if (ret < 0)
+            {
+                LOG_ERR("Failed to configure DC pin: %d", ret);
+            }
+
+            ret = akira_gpio_pin_configure(gpio_dev, ILI9341_RESET_PIN, GPIO_OUTPUT_ACTIVE);
+            if (ret < 0)
+            {
+                LOG_ERR("Failed to configure RESET pin: %d", ret);
+            }
+
+            ret = akira_gpio_pin_configure(gpio_dev, ILI9341_BL_PIN, GPIO_OUTPUT_ACTIVE);
+            if (ret < 0)
+            {
+                LOG_ERR("Failed to configure backlight pin: %d", ret);
+            }
+
+            akira_gpio_pin_set(gpio_dev, ILI9341_CS_PIN, 1);
+            akira_gpio_pin_set(gpio_dev, ILI9341_DC_PIN, 0);
+            akira_gpio_pin_set(gpio_dev, ILI9341_BL_PIN, 1);
+
+            printk("Performing hardware reset...\n");
+            akira_gpio_pin_set(gpio_dev, ILI9341_RESET_PIN, 1);
+            k_msleep(10);
+            akira_gpio_pin_set(gpio_dev, ILI9341_RESET_PIN, 0);
+            k_msleep(10);
+            akira_gpio_pin_set(gpio_dev, ILI9341_RESET_PIN, 1);
+            k_msleep(120);
+
+            spi_cfg.operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB | SPI_OP_MODE_MASTER;
+            spi_cfg.frequency = 10000000;
+            spi_cfg.slave = 0;
+
+            printk("spi_cfg: freq=%u, op=0x%08x, slave=%d\n",
+                   spi_cfg.frequency, spi_cfg.operation, spi_cfg.slave);
+
+            akira_gpio_pin_set(gpio_dev, ILI9341_CS_PIN, 0);
+            akira_gpio_pin_set(gpio_dev, ILI9341_DC_PIN, 0);
+            k_usleep(1);
+
+            uint8_t reset_cmd = 0x01;
+            struct spi_buf tx_buf = {.buf = &reset_cmd, .len = 1};
+            struct spi_buf_set tx_bufs = {.buffers = &tx_buf, .count = 1};
+
+            ret = akira_spi_write(spi_dev, &spi_cfg, &tx_bufs);
+
+            k_usleep(1);
+            akira_gpio_pin_set(gpio_dev, ILI9341_CS_PIN, 1);
+
+            if (ret < 0)
+            {
+                LOG_ERR("SPI write failed: %d", ret);
+            }
+
+            k_msleep(150);
+
+            ret = ili9341_init(spi_dev, gpio_dev, &spi_cfg);
+            if (ret < 0)
+            {
+                LOG_ERR("Display initialization failed: %d", ret);
+            }
+            else
+            {
+                LOG_INF("✅ ILI9341 display initialized");
+                LOG_INF("=== AkiraOS v1.0.0 Test ===");
+                ili9341_draw_text(10, 30, "=== AkiraOS v1.0.0 ===", BLACK_COLOR, FONT_7X10);
+                LOG_INF("Hardware platform: %s", akira_get_platform_name());
+                char platform_text[64];
+                snprintf(platform_text, sizeof(platform_text), "Platform: %s", akira_get_platform_name());
+                ili9341_draw_text(10, 50, platform_text, BLACK_COLOR, FONT_7X10);
+                LOG_INF("Features: OTA Updates, Web Interface, Gaming Controls");
+                ili9341_draw_text(10, 70, "Features: OTA Updates, Web Interface", BLACK_COLOR, FONT_7X10);
+            }
+        }
     }
-    if (!device_is_ready(spi_dev))
+    else
     {
-        LOG_ERR("SPI device not ready!\n");
+        LOG_INF("Display hardware not available");
     }
 
-    ret = gpio_pin_configure(gpio_dev, ILI9341_CS_PIN, GPIO_OUTPUT_ACTIVE);
-    if (ret < 0)
-    {
-        LOG_ERR("Failed to configure CS pin: %d\n", ret);
-    }
-
-    ret = gpio_pin_configure(gpio_dev, ILI9341_DC_PIN, GPIO_OUTPUT_ACTIVE);
-    if (ret < 0)
-    {
-        printk("Failed to configure DC pin: %d\n", ret);
-    }
-
-    ret = gpio_pin_configure(gpio_dev, ILI9341_RESET_PIN, GPIO_OUTPUT_ACTIVE);
-    if (ret < 0)
-    {
-        printk("Failed to configure RESET pin: %d\n", ret);
-    }
-
-    ret = gpio_pin_configure(gpio_dev, ILI9341_BL_PIN, GPIO_OUTPUT_ACTIVE);
-    if (ret < 0)
-    {
-        printk("Failed to configure backlight pin: %d\n", ret);
-    }
-
-    gpio_pin_set(gpio_dev, ILI9341_CS_PIN, 1);
-    gpio_pin_set(gpio_dev, ILI9341_DC_PIN, 0);
-    gpio_pin_set(gpio_dev, ILI9341_BL_PIN, 1);
-
-    printk("Performing hardware reset...\n");
-    gpio_pin_set(gpio_dev, ILI9341_RESET_PIN, 1);
-    k_msleep(10);
-    gpio_pin_set(gpio_dev, ILI9341_RESET_PIN, 0);
-    k_msleep(10);
-    gpio_pin_set(gpio_dev, ILI9341_RESET_PIN, 1);
-    k_msleep(120);
-
-    spi_cfg.operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB | SPI_OP_MODE_MASTER;
-    spi_cfg.frequency = 10000000;
-    spi_cfg.slave = 0;
-
-    printk("spi_cfg: freq=%u, op=0x%08x, slave=%d\n",
-           spi_cfg.frequency, spi_cfg.operation, spi_cfg.slave);
-
-    gpio_pin_set(gpio_dev, ILI9341_CS_PIN, 0);
-    gpio_pin_set(gpio_dev, ILI9341_DC_PIN, 0);
-    k_usleep(1);
-
-    uint8_t reset_cmd = 0x01;
-    struct spi_buf tx_buf = {.buf = &reset_cmd, .len = 1};
-    struct spi_buf_set tx_bufs = {.buffers = &tx_buf, .count = 1};
-
-    ret = spi_write(spi_dev, &spi_cfg, &tx_bufs);
-
-    k_usleep(1);
-    gpio_pin_set(gpio_dev, ILI9341_CS_PIN, 1);
-
-    if (ret < 0)
-    {
-        LOG_ERR("SPI write failed: %d\n", ret);
-    }
-
-    k_msleep(150);
-
-    ret = ili9341_init(spi_dev, gpio_dev, &spi_cfg);
-    if (ret < 0)
-    {
-        LOG_ERR("Display initialization failed: %d\n", ret);
-    }
-
-    LOG_INF("✅ ILI9341 display initialized");
-    LOG_INF("=== AkiraOS v1.0.0 Test ===");
-    ili9341_draw_text(10, 30, "=== AkiraOS v1.0.0 ===", BLACK_COLOR, FONT_7X10);
-    LOG_INF("Hardware platform: Akira console");
-    ili9341_draw_text(10, 50, "Hardware platform: Akira console", BLACK_COLOR, FONT_7X10);
-    LOG_INF("Features: OTA Updates, Web Interface, Gaming Controls");
-    ili9341_draw_text(10, 70, "Features: OTA Updates, Web Interface, Gaming Controls", BLACK_COLOR, FONT_7X10);
     LOG_INF("Build: %s %s", __DATE__, __TIME__);
 
     // Initialize settings

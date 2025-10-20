@@ -36,16 +36,26 @@ AkiraOS is an open-source gaming console that combines the power of modern embed
 
 ## 🛠️ Technical Specifications
 
-### Hardware
+### Supported Platforms
+
+AkiraOS runs on **multiple platforms** with a unified codebase:
+
+| Platform | Status | Use Case |
+|----------|--------|----------|
+| **ESP32-S3** | ✅ Production | Full hardware support (display, WiFi, OTA) |
+| **ESP32** | ✅ Production | Full hardware support (display, WiFi, OTA) |
+| **native_sim** | ✅ Development | x86 simulation for testing |
+
+### Hardware (Production Boards)
 
 | Component | Specification |
 |-----------|---------------|
-| **Microcontroller** | ESP32-S3-WROOM-32 |
+| **Microcontroller** | ESP32-S3-WROOM-32 / ESP32-WROOM-32 |
 | **Connectivity** | Wi-Fi 802.11 b/g/n, Bluetooth 5.0 |
 | **Display** | 2.4" TFT SPI (ILI9341) - 240×320 resolution |
 | **Power** | Li-ion battery with USB-C TP4056 charging |
 | **Controls** | D-Pad + 4 action buttons |
-| **Memory** | 512KB SRAM, 8MB PSRAM, 16MB Flash |
+| **Memory** | 512KB SRAM, 8MB PSRAM, 16MB Flash (ESP32-S3) |
 
 ### Software Architecture
 
@@ -92,32 +102,46 @@ AkiraOS is an open-source gaming console that combines the power of modern embed
 
 ## 🔨 Building
 
-### Method 1: Command Line
+### Quick Start - Build All Platforms
 
 ```bash
-# Build bootloader (MCUboot)
-unset ZEPHYR_WASM_MICRO_RUNTIME_KCONFIG && \
-west build --pristine -b esp32_devkitc/esp32/procpu \
-    bootloader/mcuboot/boot/zephyr \
-    -- -DMCUBOOT_LOG_LEVEL=4
-
-# Build AkiraOS application  
-unset ZEPHYR_BASE && \
-west build --pristine -b esp32_devkitc/esp32/procpu \
-    path_to_AkiraOS -d build \
-    -- -DMODULE_EXT_ROOT=path_to_AkiraOS
+# Build for all platforms at once
+./build_all.sh
 ```
 
-### Method 2: VS Code
+This will build:
+- ✅ native_sim (simulation/testing)
+- ✅ ESP32-S3 (full hardware)
+- ✅ ESP32 (full hardware)
+
+### Platform-Specific Builds
+
+#### Native Simulation (Testing)
+```bash
+cd /path/to/Akira
+west build --pristine -b native_sim AkiraOS -d build_native_sim
+
+# Run simulation
+./build_native_sim/zephyr/zephyr.exe
+```
+
+#### ESP32-S3 DevKitM
+```bash
+cd /path/to/Akira
+west build --pristine -b esp32s3_devkitm/esp32s3/procpu AkiraOS -d build_esp32s3
+west flash -d build_esp32s3
+```
+
+#### ESP32 DevKitC (Original)
+```bash
+cd /path/to/Akira
+west build --pristine -b esp32_devkitc/esp32/procpu AkiraOS -d build_esp32
+west flash -d build_esp32
+```
+
+### VS Code Integration
 
 Press `Ctrl+Shift+B` to run the configured build task.
-
-### Method 3: Build Script
-
-```bash
-chmod +x build_both.sh
-./build_both.sh clean
-```
 
 ## 📱 Flashing Firmware
 

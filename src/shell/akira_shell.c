@@ -14,6 +14,7 @@
  */
 
 #include "akira_shell.h"
+#include "../drivers/akira_hal.h"
 #include <zephyr/logging/log.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/drivers/gpio.h>
@@ -117,6 +118,13 @@ static inline uint16_t index_to_rotation(uint8_t index)
 
 static int init_gpio_pins(void)
 {
+    /* Check if platform has real GPIO hardware */
+    if (!akira_has_gpio())
+    {
+        LOG_INF("Platform does not have real GPIO - using simulated button states");
+        return 0;
+    }
+
     if (ARRAY_SIZE(button_specs) == 0)
     {
         LOG_WRN("No button GPIO specs defined - using placeholder");
@@ -283,6 +291,16 @@ uint32_t shell_read_buttons(void)
     }
 
     uint32_t button_state = 0;
+
+    /* If platform doesn't have real GPIO, get simulated button state */
+    if (!akira_has_gpio())
+    {
+        /* Get simulated button state from HAL */
+        button_state = akira_sim_read_buttons();
+        atomic_set(&shell_state.button_cache, button_state);
+        shell_state.last_button_read = now;
+        return button_state;
+    }
 
     for (size_t i = 0; i < ARRAY_SIZE(button_specs); i++)
     {

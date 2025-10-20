@@ -4,13 +4,10 @@
 		zephyr,shell-uart = &uart0;
 		zephyr,uart-mcumgr = &uart0;
 	};
-
 };
 
-
-
+/* Delete existing storage partition if it exists */
 /delete-node/ &storage_partition;
-/delete-node/ &scratch_partition;
 
 &flash0 {
 	partitions {
@@ -18,17 +15,15 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 
-        user_data_partition: partition@de000 {
-            label = "user-data";
-            reg = <0x000de000 0x0001e000>;
-        };
-        storage_partition: partition@100000 {
-            label = "storage";
-            reg = <0x100000 0x00004000>;
-        };
+		/* Native sim flash partitions - simplified */
+		user_data_partition: partition@de000 {
+			label = "user-data";
+			reg = <0x000de000 0x0001e000>;
+		};
+
+		storage_partition: partition@100000 {
+			label = "storage";
+			reg = <0x00100000 0x00004000>;
+		};
 	};
 };
-
-
-
-
