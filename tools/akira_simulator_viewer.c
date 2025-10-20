@@ -347,7 +347,6 @@ int main(int argc, char *argv[])
     printf("🎮 Akira Console Simulator Viewer\n");
     printf("==================================\n\n");
 
-
     /* Initialize SDL */
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) < 0)
     {
@@ -377,7 +376,6 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-
     /* Create renderer */
     renderer = SDL_CreateRenderer(window, -1,
                                   SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -389,7 +387,6 @@ int main(int argc, char *argv[])
         SDL_Quit();
         return 1;
     }
-
 
     /* Load PCB photo as background */
     SDL_Surface *pcb_surface = IMG_Load("tools/akira_pcb.png");
@@ -541,7 +538,8 @@ int main(int argc, char *argv[])
     }
 
     SDL_DestroyTexture(display_texture);
-    if (pcb_texture) SDL_DestroyTexture(pcb_texture);
+    if (pcb_texture)
+        SDL_DestroyTexture(pcb_texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     IMG_Quit();
