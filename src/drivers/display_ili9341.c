@@ -1,5 +1,6 @@
 #include "display_ili9341.h"
 #include "fonts.h"
+#include "akira_hal.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
@@ -24,17 +25,17 @@ static int ili9341_send_cmd(uint8_t cmd)
     struct spi_buf_set tx_bufs = {.buffers = &tx_buf, .count = 1};
 
     // Set DC low for command
-    gpio_pin_set(gpio_dev_local, DC_GPIO_PIN, 0);
+    akira_gpio_pin_set(gpio_dev_local, DC_GPIO_PIN, 0);
 
     // CS low to start transaction
-    gpio_pin_set(gpio_dev_local, ILI9341_CS_PIN, 0);
+    akira_gpio_pin_set(gpio_dev_local, ILI9341_CS_PIN, 0);
     k_usleep(1);
 
-    int ret = spi_write(spi_dev_local, spi_cfg_local, &tx_bufs);
+    int ret = akira_spi_write(spi_dev_local, spi_cfg_local, &tx_bufs);
 
     k_usleep(1);
     // CS high to end transaction
-    gpio_pin_set(gpio_dev_local, ILI9341_CS_PIN, 1);
+    akira_gpio_pin_set(gpio_dev_local, ILI9341_CS_PIN, 1);
 
     if (ret < 0)
     {
@@ -56,17 +57,17 @@ static int ili9341_send_data(uint8_t *data, size_t len)
     struct spi_buf_set tx_bufs = {.buffers = &tx_buf, .count = 1};
 
     // Set DC high for data
-    gpio_pin_set(gpio_dev_local, DC_GPIO_PIN, 1);
+    akira_gpio_pin_set(gpio_dev_local, DC_GPIO_PIN, 1);
 
     // CS low to start transaction
-    gpio_pin_set(gpio_dev_local, ILI9341_CS_PIN, 0);
+    akira_gpio_pin_set(gpio_dev_local, ILI9341_CS_PIN, 0);
     k_usleep(1);
 
-    int ret = spi_write(spi_dev_local, spi_cfg_local, &tx_bufs);
+    int ret = akira_spi_write(spi_dev_local, spi_cfg_local, &tx_bufs);
 
     k_usleep(1);
     // CS high to end transaction
-    gpio_pin_set(gpio_dev_local, ILI9341_CS_PIN, 1);
+    akira_gpio_pin_set(gpio_dev_local, ILI9341_CS_PIN, 1);
 
     if (ret < 0)
     {
@@ -438,11 +439,11 @@ void ili9341_crt_screensaver(void)
 
 int ili9341_backlight_init(const struct device *gpio_dev, int pin)
 {
-    int ret = gpio_pin_configure(gpio_dev, pin, GPIO_OUTPUT_ACTIVE);
+    int ret = akira_gpio_pin_configure(gpio_dev, pin, GPIO_OUTPUT_ACTIVE);
     if (ret < 0)
         return ret;
 
-    gpio_pin_set(gpio_dev, pin, 1);
+    akira_gpio_pin_set(gpio_dev, pin, 1);
     LOG_INF("Backlight initialized on GPIO %d", pin);
     return 0;
 }

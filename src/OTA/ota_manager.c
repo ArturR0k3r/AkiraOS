@@ -8,8 +8,6 @@
 
 #include "ota_manager.h"
 #include <zephyr/logging/log.h>
-#include <zephyr/storage/flash_map.h>
-#include <zephyr/dfu/mcuboot.h>
 #include <zephyr/sys/reboot.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/kernel.h>
@@ -17,10 +15,21 @@
 #include <stdlib.h>
 #include "../akira.h"
 
+/* Include flash and MCUboot APIs only if available */
+#if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
+#include <zephyr/storage/flash_map.h>
+#include <zephyr/dfu/mcuboot.h>
+#define OTA_FLASH_AVAILABLE 1
+#else
+#define OTA_FLASH_AVAILABLE 0
+#endif
+
 LOG_MODULE_REGISTER(ota_manager, AKIRA_LOG_LEVEL);
 
+#if OTA_FLASH_AVAILABLE
 #define FLASH_AREA_IMAGE_PRIMARY FIXED_PARTITION_ID(slot0_partition)
 #define FLASH_AREA_IMAGE_SECONDARY FIXED_PARTITION_ID(slot1_partition)
+#endif
 
 /* Optimized buffer sizes */
 #define OTA_WRITE_BUFFER_SIZE 4096        // Align with flash page size

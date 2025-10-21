@@ -9,6 +9,7 @@
 /drivers/ @ArturR0k3r
 /settings/ @ArturR0k3r
 /shell/ @ArturR0k3r
+/apps/ @ArturR0k3r @LivingLegendLL
 
 # Build and configuration
 Makefile @ArturR0k3r
@@ -17,9 +18,9 @@ Makefile @ArturR0k3r
 CMakeLists.txt @ArturR0k3r
 
 # Documentation
-/docs/ @ArturR0k3r
-README.md @ArturR0k3r
-*.md @ArturR0k3r
+/docs/ @ArturR0k3r @LivingLegendLL
+README.md @ArturR0k3r @LivingLegendLL
+*.md @ArturR0k3r @LivingLegendLL
 
 # GitHub workflow files
 /.github/ @ArturR0k3r

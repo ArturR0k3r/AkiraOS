@@ -26,12 +26,18 @@ target_sources(app PRIVATE
     src/drivers/display_ili9341.c
     src/drivers/fonts.c
     src/drivers/font_data.c
+    src/drivers/akira_hal.c
     src/shell/akira_shell.c
     src/settings/settings.c
-    src/OTA/ota_manager.c
     src/OTA/web_server.c
-    
 )
+
+# Conditional OTA manager based on flash availability
+if(CONFIG_FLASH_MAP AND CONFIG_BOOTLOADER_MCUBOOT)
+    target_sources(app PRIVATE src/OTA/ota_manager.c)
+else()
+    target_sources(app PRIVATE src/OTA/ota_manager_stub.c)
+endif()
 
 # Include directories
 target_include_directories(app PRIVATE
@@ -46,6 +52,12 @@ target_include_directories(app PRIVATE
     src/shell/
     src/drivers/
 )
+
+# SDL2 simulator uses external viewer (tools/akira_viewer)
+# No need to build SDL2 code within Zephyr build system
+# if(CONFIG_BOARD_NATIVE_SIM)
+#     add_subdirectory(src/drivers/sim)
+# endif()
 
 # Compile definitions
 target_compile_definitions(app PRIVATE

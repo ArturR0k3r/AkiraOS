@@ -19,23 +19,6 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Validate PR title
-        run: |
-          PR_TITLE="${{ github.event.pull_request.title }}"
-          echo "PR Title: $PR_TITLE"
-          
-          # Check if title follows conventional commits
-          if [[ ! "$PR_TITLE" =~ ^(feat|fix|docs|style|refactor|test|chore|ci|perf|build|hw)(\(.+\))?: ]]; then
-            echo "❌ PR title should follow format: type(scope): description"
-            echo "   Types: feat, fix, docs, style, refactor, test, chore, ci, perf, build, hw"
-            echo "   Examples:"
-            echo "   - feat(esp32): add WebAssembly support"
-            echo "   - fix(display): resolve ILI9341 initialization issue"
-            echo "   - hw(board): update ESP32-S3 pin configuration"
-            exit 1
-          fi
-          echo "✅ PR title is valid"
-
       - name: Check for merge conflicts
         run: |
           git fetch origin ${{ github.base_ref }}
