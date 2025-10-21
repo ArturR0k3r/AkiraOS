@@ -7,6 +7,12 @@
 #include <zephyr/logging/log.h>
 #include <string.h>
 
+#if defined(CONFIG_BOARD_NATIVE_SIM) || defined(CONFIG_NATIVE_SIM) || defined(__linux__)
+#ifndef AKIRA_PLATFORM_NATIVE_SIM
+#define AKIRA_PLATFORM_NATIVE_SIM 1
+#endif
+#endif
+
 #if AKIRA_PLATFORM_NATIVE_SIM
 #include <sys/mman.h>
 #include <fcntl.h>
@@ -41,8 +47,7 @@ int akira_hal_init(void)
     memset(sim_framebuffer, 0, sizeof(sim_framebuffer));
 
     /* Create shared memory for external SDL2 viewer */
-    shm_framebuffer_fd = shm_open("/akira_framebuffer",
-                                  O_CREAT | O_RDWR, 0666);
+    shm_framebuffer_fd = open("/tmp/akira_framebuffer", O_CREAT | O_RDWR, 0666);
     if (shm_framebuffer_fd >= 0)
     {
         ftruncate(shm_framebuffer_fd, 240 * 320 * 2);
@@ -53,22 +58,21 @@ int akira_hal_init(void)
         {
             /* Initialize shared framebuffer to black */
             memset(shared_framebuffer, 0, 240 * 320 * 2);
-            LOG_INF("✅ Framebuffer shared memory created (/akira_framebuffer)");
+            LOG_INF("✅ Framebuffer file mapped (/tmp/akira_framebuffer)");
         }
         else
         {
-            LOG_WRN("⚠️  Failed to mmap framebuffer shared memory");
+            LOG_WRN("⚠️  Failed to mmap framebuffer file: errno=%d (%s)", errno, strerror(errno));
             shared_framebuffer = NULL;
         }
     }
     else
     {
-        LOG_WRN("⚠️  Failed to create framebuffer shared memory");
+        LOG_WRN("⚠️  Failed to create framebuffer file: errno=%d (%s)", errno, strerror(errno));
     }
 
     /* Create shared memory for buttons */
-    shm_buttons_fd = shm_open("/akira_buttons",
-                              O_CREAT | O_RDWR, 0666);
+    shm_buttons_fd = open("/tmp/akira_buttons", O_CREAT | O_RDWR, 0666);
     if (shm_buttons_fd >= 0)
     {
         ftruncate(shm_buttons_fd, sizeof(uint32_t));
@@ -78,17 +82,17 @@ int akira_hal_init(void)
         if (shared_buttons != MAP_FAILED)
         {
             *shared_buttons = 0;
-            LOG_INF("✅ Button shared memory created (/akira_buttons)");
+            LOG_INF("✅ Button file mapped (/tmp/akira_buttons)");
         }
         else
         {
-            LOG_WRN("⚠️  Failed to mmap button shared memory");
+            LOG_WRN("⚠️  Failed to mmap button file: errno=%d (%s)", errno, strerror(errno));
             shared_buttons = NULL;
         }
     }
     else
     {
-        LOG_WRN("⚠️  Failed to create button shared memory");
+        LOG_WRN("⚠️  Failed to create button file: errno=%d (%s)", errno, strerror(errno));
     }
 
     if (shared_framebuffer || shared_buttons)
