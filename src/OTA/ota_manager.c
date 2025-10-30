@@ -59,9 +59,51 @@ static const struct flash_area *secondary_fa = NULL;
 static uint8_t write_buffer[OTA_WRITE_BUFFER_SIZE] __aligned(4);
 static uint16_t buffer_pos = 0;
 
-/* Progress callback */
+/* Modular OTA transport support */
+#define MAX_OTA_TRANSPORTS 4
+static const ota_transport_t *ota_transports[MAX_OTA_TRANSPORTS];
+static int ota_transport_count = 0;
+
+/* Progress callback (restored for compatibility) */
+typedef void (*ota_progress_cb_t)(const struct ota_progress *progress, void *user_data);
 static ota_progress_cb_t progress_callback = NULL;
 static void *callback_user_data = NULL;
+
+int ota_manager_register_transport(const ota_transport_t *transport)
+{
+    if (!transport || !transport->name)
+        return OTA_ERROR_INVALID_PARAM;
+    if (ota_transport_count >= MAX_OTA_TRANSPORTS)
+        return OTA_ERROR_INSUFFICIENT_SPACE;
+    for (int i = 0; i < ota_transport_count; ++i)
+    {
+        if (strcmp(ota_transports[i]->name, transport->name) == 0)
+        {
+            return OTA_ERROR_ALREADY_IN_PROGRESS; // Already registered
+        }
+    }
+    ota_transports[ota_transport_count++] = transport;
+    return OTA_OK;
+}
+
+int ota_manager_unregister_transport(const char *name)
+{
+    if (!name)
+        return OTA_ERROR_INVALID_PARAM;
+    for (int i = 0; i < ota_transport_count; ++i)
+    {
+        if (strcmp(ota_transports[i]->name, name) == 0)
+        {
+            for (int j = i; j < ota_transport_count - 1; ++j)
+            {
+                ota_transports[j] = ota_transports[j + 1];
+            }
+            ota_transports[--ota_transport_count] = NULL;
+            return OTA_OK;
+        }
+    }
+    return OTA_ERROR_NOT_INITIALIZED;
+}
 
 /* Reduced message queue size */
 #define OTA_MSG_QUEUE_SIZE 8

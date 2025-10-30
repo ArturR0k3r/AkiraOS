@@ -1,3 +1,14 @@
+# ℹ️ About
+
+The Akira Console SDL2 Visual Simulator provides a faithful, interactive simulation of the Akira Console hardware for Zephyr's `native_sim` platform. It enables developers to run and test AkiraOS firmware on a PC with a graphical window that closely mimics the real device, including:
+
+- A live, hardware-accurate 240x320 TFT display simulation
+- Interactive button input (D-Pad, action, power, settings) via mouse and keyboard
+- Visual layout and controls matching the physical console
+- Real-time updates and low-latency input for rapid development and debugging
+
+This simulator is ideal for firmware development, UI prototyping, and automated testing—no physical hardware required. It is tightly integrated with the Zephyr build system and automatically included when building for `native_sim`.
+
 # 🎮 Akira Console SDL2 Visual Simulator
 
 This module provides a graphical simulation of the Akira Console hardware when building for Zephyr's `native_sim` platform.

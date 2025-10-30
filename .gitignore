@@ -96,4 +96,5 @@ Thumbs.db
 
 .modules/
 modules/
+build_esp32s3/
 .build_esp32s3/

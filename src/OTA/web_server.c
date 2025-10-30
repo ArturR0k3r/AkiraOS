@@ -6,6 +6,47 @@
 
 #include "web_server.h"
 #include "ota_manager.h"
+
+/* WebServer OTA transport implementation */
+static int webserver_ota_start(void *user_data)
+{
+    /* Start OTA via HTTP upload */
+    return OTA_OK;
+}
+
+static int webserver_ota_stop(void *user_data)
+{
+    /* Stop OTA upload */
+    return OTA_OK;
+}
+
+static int webserver_ota_send_chunk(const uint8_t *data, size_t len, void *user_data)
+{
+    /* Pass chunk to OTA manager */
+    // Example: ota_manager_write_chunk(data, len);
+    return OTA_OK;
+}
+
+static int webserver_ota_report_progress(uint8_t percent, void *user_data)
+{
+    /* Report progress to HTTP client */
+    return OTA_OK;
+}
+
+static ota_transport_t webserver_ota_transport = {
+    .name = "webserver",
+    .start = webserver_ota_start,
+    .stop = webserver_ota_stop,
+    .send_chunk = webserver_ota_send_chunk,
+    .report_progress = webserver_ota_report_progress,
+    .user_data = NULL};
+
+static void register_webserver_ota_transport(void)
+{
+    ota_manager_register_transport(&webserver_ota_transport);
+}
+
+/* Call register_webserver_ota_transport() during web server init */
 #include <zephyr/logging/log.h>
 #include <zephyr/net/socket.h>
 #include <zephyr/kernel.h>

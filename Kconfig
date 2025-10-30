@@ -52,4 +52,29 @@ config FS_FATFS_VOLUME_COUNT
     help
       Maximum number of FAT volumes supported.
 
+config MAX_CONTAINERS
+    int "Maximum number of OCRE containers"
+    default 4
+    range 1 16
+    help
+      Maximum number of containers that can be managed by OCRE.
+
+config OCRE_WAMR_HEAP_BUFFER_SIZE
+    int "WAMR heap buffer size"
+    default 65536
+    help
+      Size of the heap buffer for WAMR runtime.
+
+config OCRE_CONTAINER_DEFAULT_STACK_SIZE
+    int "Default container stack size"
+    default 8192
+    help
+      Default stack size for OCRE containers.
+
+config OCRE_CONTAINER_DEFAULT_HEAP_SIZE
+    int "Default container heap size"
+    default 32768
+    help
+      Default heap size for OCRE containers.
+
 endmenu

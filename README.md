@@ -1,3 +1,88 @@
+# AkiraOS now uses OCRE as its container and WASM runtime
+
+AkiraOS integrates [OCRE](https://github.com/project-ocre/ocre-runtime) for secure, lightweight container and WebAssembly app management on Zephyr and ESP32 platforms. All app lifecycle operations (upload, start, stop, list) are handled via OCRE APIs.
+
+## Build Instructions (OCRE Integration)
+
+- OCRE is included as a west module (see `west.yml`).
+- The build system automatically links OCRE sources and headers.
+- No stub logic: all app/container management is delegated to OCRE.
+
+### Example Usage
+
+```c
+// Upload a WASM app or container
+ocre_runtime_load_app("my_app", binary, size);
+// Start the app
+ocre_runtime_start_app("my_app");
+// Stop the app
+ocre_runtime_stop_app("my_app");
+// List all containers/apps
+ocre_runtime_list_apps(app_list, max_count);
+```
+
+## Features
+- Secure container runtime for embedded devices
+- WebAssembly app support
+- Unified API for upload, start, stop, and list operations
+- Zephyr and ESP32-S3/ESP32 support
+
+## For full technical details, see docs/api-reference.md and OCRE documentation.
+
+---
+
+## Core Features & Implementation
+
+### Graphics System
+- Pixel-perfect renderer, tile engine, sprite system
+- CRT effects (scanlines, bloom, curvature)
+- UI framework for cyberpunk widgets
+- Double buffering and DMA transfer for display
+
+### Input System
+- Debounced button input, event queue
+- Combo detection, long/short press, rapid-fire
+- Input recording/playback for demos
+
+### Security Toolkit
+- Wi-Fi scanner, deauth detector, packet sniffer, ARP scanner, network mapper
+- BLE tools, password generator, hash calculator, QR code utilities
+- Ethical use notice: for education and authorized testing only
+
+### WASM/OCRE Integration
+- WAMR executes sandboxed WASM modules (games, tools)
+- OCRE provides container isolation and resource limits
+- Host APIs for graphics, input, audio, network, security
+
+See `src/akiraos.c` and `docs/api-reference.md` for integration details.
+# AkiraOS: Comprehensive Architecture & Strategic Positioning
+
+## Executive Summary
+
+AkiraOS is a minimalist retro-cyberpunk gaming console and hacker toolkit powered by ESP32-S3 and WebAssembly. It uniquely positions itself as a dual-purpose embedded platform: a nostalgic gaming device AND a portable cybersecurity toolkit, running on Zephyr RTOS with WASM runtime support.
+
+---
+
+## System Logic Overview
+
+AkiraOS is built from modular subsystems:
+- **System Services**: Managed by `service_manager` (graphics, input, network, storage, audio, security, UI)
+- **Event System**: Central event bus for inter-module communication
+- **Process Management**: Launches and tracks native/WASM apps
+- **WASM Runtime (WAMR)**: Executes sandboxed WASM modules
+- **OCRE Runtime**: Container isolation for apps
+- **Drivers**: Display, buttons, storage, audio, etc.
+- **OTA/Bluetooth/Shell/Settings**: Modular, extensible system services
+
+### Main System Logic
+See `src/akiraos.c` for initialization and orchestration of all subsystems.
+
+### Extensibility
+The architecture supports future features (audio, SD card, multiplayer, advanced graphics, security tools, etc.) via modular service registration and event-driven design.
+
+---
+
+## For full technical and strategic details, see `docs/api-reference.md` and the architecture section below.
 
 # AkiraOS
 

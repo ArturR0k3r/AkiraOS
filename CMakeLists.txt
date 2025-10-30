@@ -20,6 +20,19 @@ if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/modules/wamr)
     target_compile_definitions(app PRIVATE CONFIG_WAMR_ENABLE=1)
 endif()
 
+# OCRE Integration
+set(OCRE_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/../ocre")
+if(EXISTS "${OCRE_ROOT_DIR}/src")
+    include("${CMAKE_CURRENT_LIST_DIR}/modules/ocre/ocre.cmake")
+    target_sources(app PRIVATE ${ocre_component_sources} ${ocre_lib_sources})
+    target_include_directories(app PRIVATE
+        ${OCRE_ROOT_DIR}/src/
+        ${OCRE_ROOT_DIR}/src/ocre
+        ${OCRE_ROOT_DIR}/src/shared/platform
+    )
+    target_compile_definitions(app PRIVATE CONFIG_OCRE_ENABLE=1)
+endif()
+
 # Add source files
 target_sources(app PRIVATE
     src/main.c
@@ -51,6 +64,8 @@ target_include_directories(app PRIVATE
     src/settings/
     src/shell/
     src/drivers/
+    ${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime/core/iwasm/include
+    ${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime/core/shared/utils
 )
 
 # SDL2 simulator uses external viewer (tools/akira_viewer)
