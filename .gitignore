@@ -95,5 +95,5 @@ Thumbs.db
 *.log
 
 .modules/
-
+modules/
 .build_esp32s3/
