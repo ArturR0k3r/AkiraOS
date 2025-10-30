@@ -15,6 +15,20 @@ spim2_default:
                 <SPIM2_SCLK_GPIO12>;      // SCK  - GPIO12
         };
     };
+
+sdmmc0_default:
+    sdmmc0_default
+    {
+        group1
+        {
+            pinmux = <SDMMC_CLK_GPIO14>,  // CLK - GPIO14
+                     <SDMMC_CMD_GPIO15>,  // CMD - GPIO15
+                     <SDMMC_D0_GPIO2>,    // D0 - GPIO2
+                     <SDMMC_D1_GPIO4>,    // D1 - GPIO4
+                     <SDMMC_D2_GPIO5>,    // D2 - GPIO5
+                     <SDMMC_D3_GPIO16>;   // D3 - GPIO16
+        };
+    };
 };
 
 &spi2
@@ -107,5 +121,22 @@ ili9341_bl:
 {
     aliases {
         user_data_partition = &storage_partition;
+    };
+};
+
+// SD Card support
+sdmmc {
+    compatible = "zephyr,sdmmc-disk";
+    status = "okay";
+    sdmmc = <&sdmmc0>;
+};
+
+&sdmmc0 {
+    status = "okay";
+    pinctrl-0 = <&sdmmc0_default>;
+    pinctrl-names = "default";
+    sdmmc {
+        compatible = "espressif,esp32-sdmmc";
+        status = "okay";
     };
 };

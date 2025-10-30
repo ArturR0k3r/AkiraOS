@@ -9,6 +9,10 @@
 #include <zephyr/net/wifi_mgmt.h>
 #include <zephyr/net/socket.h>
 #include <zephyr/net/net_ip.h>
+#include <zephyr/fs/fs.h>
+#include <zephyr/storage/disk_access.h>
+#include <zephyr/drivers/disk.h>
+#include <ff.h>
 #include "drivers/display_ili9341.h"
 #include "drivers/akira_hal.h"
 #include "settings/settings.h"
@@ -21,6 +25,12 @@ LOG_MODULE_REGISTER(akira_main, AKIRA_LOG_LEVEL);
 
 static bool wifi_connected = false;
 static struct net_mgmt_event_callback wifi_cb;
+static FATFS fatfs;
+static struct fs_mount_t fs = {
+    .type = FS_FATFS,
+    .fs_data = &fatfs,
+    .mnt_point = "/SD:",
+};
 
 static void wifi_event_handler(struct net_mgmt_event_callback *cb,
                                uint64_t mgmt_event, struct net_if *iface);
@@ -110,6 +120,29 @@ static int get_button_state_callback(char *buffer, size_t buffer_size)
                     (button_state & BTN_B) ? "true" : "false",
                     (button_state & BTN_X) ? "true" : "false",
                     (button_state & BTN_Y) ? "true" : "false");
+}
+
+static int initialize_sd_card(void)
+{
+    int ret;
+    static const char *disk_pdrv = "SD";
+
+    LOG_INF("Initializing SD card...");
+
+    ret = disk_access_init(disk_pdrv);
+    if (ret != 0) {
+        LOG_ERR("SD card initialization failed: %d", ret);
+        return ret;
+    }
+
+    ret = fs_mount(&fs);
+    if (ret != 0) {
+        LOG_ERR("SD card mount failed: %d", ret);
+        return ret;
+    }
+
+    LOG_INF("✅ SD card mounted successfully at %s", fs.mnt_point);
+    return 0;
 }
 
 static int get_settings_info_callback(char *buffer, size_t buffer_size)
@@ -496,6 +529,17 @@ int main(void)
     }
 
     LOG_INF("Build: %s %s", __DATE__, __TIME__);
+
+    // Initialize SD card
+    ret = initialize_sd_card();
+    if (ret)
+    {
+        LOG_WRN("SD card initialization failed: %d - continuing without SD card", ret);
+    }
+    else
+    {
+        LOG_INF("✅ SD card initialized");
+    }
 
     // Initialize settings
     ret = user_settings_init();
