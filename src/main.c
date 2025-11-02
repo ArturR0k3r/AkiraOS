@@ -11,6 +11,7 @@
 #include <zephyr/net/net_ip.h>
 #include "drivers/display_ili9341.h"
 #include "drivers/akira_hal.h"
+#include "drivers/akira_audio.h"
 #include "settings/settings.h"
 #include "OTA/ota_manager.h"
 #include "shell/akira_shell.h"
@@ -526,6 +527,27 @@ int main(void)
         LOG_ERR("Akira shell initialization failed: %d", ret);
     }
     LOG_INF("✅ Akira shell initialized");
+
+#ifdef CONFIG_AKIRA_AUDIO
+    // Initialize audio subsystem
+    ret = akira_audio_init();
+    if (ret == 0)
+    {
+        LOG_INF("✅ Audio subsystem initialized (Piezo MEMS)");
+        // Play startup sound to confirm audio is working
+        akira_audio_sfx_startup();
+    }
+    else if (ret == -ENOTSUP)
+    {
+        LOG_INF("Audio not supported on this platform");
+    }
+    else
+    {
+        LOG_WRN("Audio initialization failed: %d", ret);
+    }
+#else
+    LOG_INF("Audio support not enabled (CONFIG_AKIRA_AUDIO=n)");
+#endif
 
     // Prepare web server callbacks
     struct web_server_callbacks web_callbacks = {

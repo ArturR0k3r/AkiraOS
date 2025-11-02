@@ -87,6 +87,35 @@ ili9341_bl:
     // - Battery management IC
 };
 
+// PWM configuration for audio output (LEDC peripheral)
+&ledc0
+{
+    status = "okay";
+    pinctrl - 0 = <&ledc0_default>;
+    pinctrl - names = "default";
+    #address - cells = <1>;
+    #size - cells = <0>;
+    
+    // Channel 0 for audio output
+    channel@0
+    {
+        reg = <0x0>;
+        timer = <0>;
+    };
+};
+
+&pinctrl
+{
+    ledc0_default: ledc0_default
+    {
+        group2
+        {
+            pinmux = <LEDC_CH0_GPIO9>; // Audio output on GPIO9
+            output - enable;
+        };
+    };
+};
+
 // Chosen nodes for Zephyr configuration
 /
 {
@@ -94,5 +123,10 @@ ili9341_bl:
     {
         zephyr, console = &uart0;
         zephyr, shell - uart = &uart0;
+    };
+    
+    aliases
+    {
+        pwm - audio = &ledc0;
     };
 };
