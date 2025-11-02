@@ -27,7 +27,9 @@ target_sources(app PRIVATE
     src/drivers/fonts.c
     src/drivers/font_data.c
     src/drivers/akira_hal.c
+    src/drivers/akira_audio.c
     src/shell/akira_shell.c
+    src/shell/akira_audio_shell.c
     src/settings/settings.c
     src/OTA/web_server.c
 )

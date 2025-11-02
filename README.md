@@ -28,6 +28,7 @@ AkiraOS is an open-source gaming console that combines the power of modern embed
 ### Key Features
 
 - 🎯 **Retro Gaming**: Run classic-style games compiled to WebAssembly
+- 🎵 **Piezo MEMS Audio**: Integrated micro-speaker for game sounds and notifications
 - 🔧 **Hacker Toolkit**: Built-in cybersecurity tools and CLI access
 - 🌐 **Network Capable**: Wi-Fi and Bluetooth connectivity
 - 🔋 **Portable**: Battery-powered with USB-C charging
@@ -53,6 +54,7 @@ AkiraOS runs on **multiple platforms** with a unified codebase:
 | **Microcontroller** | ESP32-S3-WROOM-32 / ESP32-WROOM-32 |
 | **Connectivity** | Wi-Fi 802.11 b/g/n, Bluetooth 5.0 |
 | **Display** | 2.4" TFT SPI (ILI9341) - 240×320 resolution |
+| **Audio** | Piezo MEMS micro-speaker (500 Hz - 8 kHz) |
 | **Power** | Li-ion battery with USB-C TP4056 charging |
 | **Controls** | D-Pad + 4 action buttons |
 | **Memory** | 512KB SRAM, 8MB PSRAM, 16MB Flash (ESP32-S3) |
@@ -182,6 +184,74 @@ chmod +x flash.sh
 ### Hacker Mode
 
 > **Coming Soon**: Terminal interface with network analysis tools, Wi-Fi scanning, and cybersecurity utilities.
+
+## 🎵 Audio System (Piezo MEMS Integration)
+
+AkiraOS features an integrated piezoelectric MEMS micro-speaker system, developed as part of the [ST Piezo MEMS Design Challenge](https://www.st.com/content/st_com/en/events/piezo-mems-design-challenge.html).
+
+### Audio Features
+
+- **PWM-Driven Audio Output**: Efficient piezoelectric actuation using ESP32-S3 LEDC peripheral
+- **Frequency Range**: 500 Hz - 8 kHz (optimized for retro gaming audio)
+- **Sound Effects Library**: Pre-defined game sounds (coin collect, jump, explosion, power-up, etc.)
+- **Low Power Consumption**: < 50 mW typical audio playback
+- **WASM API**: High-level audio synthesis interface for applications
+- **Shell Commands**: Interactive testing and debugging via CLI
+
+### Audio Shell Commands
+
+```bash
+# Test audio system
+akira:~$ audio test_tone
+
+# Play specific tone (frequency, duration, volume)
+akira:~$ audio tone 1000 500 80
+
+# Frequency sweep for testing
+akira:~$ audio sweep 500 5000 100
+
+# Play sound effects
+akira:~$ audio sfx coin
+akira:~$ audio sfx jump
+akira:~$ audio sfx explosion
+
+# Demo all sound effects
+akira:~$ audio sfx demo
+
+# Set master volume
+akira:~$ audio volume 70
+
+# Check audio status
+akira:~$ audio status
+```
+
+### Hardware Setup
+
+For prototype testing with discrete piezo buzzer:
+
+```
+ESP32-S3 GPIO9 ──[ 100Ω ]──┬──(+) Piezo Buzzer (-)──┐
+                            │                         │
+                            └─────────────────────────┴── GND
+```
+
+For production with custom MEMS device, see [Piezo MEMS Design Documentation](docs/piezo-mems-speaker-design.md).
+
+### Documentation
+
+- **[Device Design Concept](docs/piezo-mems-speaker-design.md)** - Complete MEMS micro-speaker specifications
+- **[Prototype Validation Guide](docs/piezo-prototype-validation.md)** - Testing procedures and measurement methods
+- **[ST Challenge Submission Guide](docs/st-challenge-submission-guide.md)** - Competition submission preparation
+
+### Building with Audio Support
+
+Audio support is enabled by default. To disable:
+
+```bash
+# Disable audio in prj.conf
+CONFIG_AKIRA_AUDIO=n
+CONFIG_PWM=n
+```
 
 ## 🧩 Development
 
