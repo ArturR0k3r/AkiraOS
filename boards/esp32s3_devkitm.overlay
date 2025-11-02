@@ -91,10 +91,10 @@ ili9341_bl:
 &ledc0
 {
     status = "okay";
-    pinctrl - 0 = <&ledc0_default>;
-    pinctrl - names = "default";
-    #address - cells = <1>;
-    #size - cells = <0>;
+    pinctrl-0 = <&ledc0_default>;
+    pinctrl-names = "default";
+    #address-cells = <1>;
+    #size-cells = <0>;
     
     // Channel 0 for audio output
     channel@0
@@ -111,7 +111,7 @@ ili9341_bl:
         group2
         {
             pinmux = <LEDC_CH0_GPIO9>; // Audio output on GPIO9
-            output - enable;
+            output-enable;
         };
     };
 };
@@ -127,6 +127,6 @@ ili9341_bl:
     
     aliases
     {
-        pwm - audio = &ledc0;
+        pwm_audio = &ledc0;
     };
 };
