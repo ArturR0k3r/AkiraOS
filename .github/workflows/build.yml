@@ -71,7 +71,7 @@ jobs:
       uses: actions/upload-artifact@v4
       if: success()
       with:
-        name: akira-os-${{ matrix.board }}
+        name: akira-os-${{ replace(matrix.board, '/', '-') }}
         path: |
           build/zephyr/zephyr.bin
           build/zephyr/zephyr.elf
