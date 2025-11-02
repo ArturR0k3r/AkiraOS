@@ -73,6 +73,7 @@ check_esptool() {
     print_info "Using esptool: $ESPTOOL"
 }
 
+
 # Detect port
 detect_port() {
     if [[ -z "$PORT" ]]; then
