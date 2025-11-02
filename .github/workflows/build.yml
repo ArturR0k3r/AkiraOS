@@ -34,7 +34,7 @@ jobs:
     
     - name: Install Python dependencies
       run: |
-        pip3 install --user -U west pyelftools intelhex cbor2 cryptography
+        pip3 install --user -U west pyelftools intelhex cbor2 cryptography requests
 
     - name: Install West and add to PATH
       run: |
