@@ -13,34 +13,28 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/zephyrproject-rtos/ci:v0.26-branch
+      options: --user root
     strategy:
       matrix:
         board:
+          - native_sim
           - esp32s3_devkitm/esp32s3/procpu
           - esp32_devkitc/esp32/procpu
     
     steps:
-    - name: Checkout code to akira-os subdirectory
-      uses: actions/checkout@v4
-      with:
-        path: akira-os
-    
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install Zephyr dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends git cmake ninja-build gperf \
-          ccache dfu-util device-tree-compiler wget \
-          python3-dev python3-pip python3-setuptools python3-tk python3-wheel xz-utils file \
-          make gcc gcc-multilib g++-multilib libsdl2-dev
-    
-    - name: Install Python dependencies
-      run: |
-        pip3 install --user -U west pyelftools intelhex cbor2 cryptography
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: application
+      
+      - name: Setup Zephyr project
+        uses: zephyrproject-rtos/action-zephyr-setup@v1
+        with:
+          app-path: application
+          sdk-version: 0.16.8
+          toolchains: xtensa-espressif_esp32_zephyr-elf:xtensa-espressif_esp32s3_zephyr-elf
 
     - name: Install West and add to PATH
       run: |
