@@ -7,14 +7,22 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        board:
+          - esp32s3_devkitm/esp32s3/procpu
+          - esp32_devkitc/esp32/procpu
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code to akira-os subdirectory
+      uses: actions/checkout@v4
+      with:
+        path: akira-os
     
     - name: Setup Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.8'
+        python-version: '3.11'
     
     - name: Install Zephyr dependencies
       run: |
@@ -24,40 +32,47 @@ jobs:
           python3-dev python3-pip python3-setuptools python3-tk python3-wheel xz-utils file \
           make gcc gcc-multilib g++-multilib libsdl2-dev
     
-
-    - name: Install Python dependencies for Zephyr (requests)
+    - name: Install Python dependencies
       run: |
-        pip3 install --user -U requests
+        pip3 install --user -U west pyelftools intelhex cbor2 cryptography
 
-    - name: Install West and Zephyr tools
+    - name: Install West and add to PATH
       run: |
-        pip3 install --user -U west
         echo "$HOME/.local/bin" >> $GITHUB_PATH
     
     - name: Initialize West workspace
       run: |
-        west init -l .
+        west init -l akira-os
         west update
         west blobs fetch hal_espressif
     
     - name: Install Zephyr SDK
       run: |
         cd ~
-        wget https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.16.4/zephyr-sdk-0.16.4_linux-x86_64.tar.xz
-        tar xvf zephyr-sdk-0.16.4_linux-x86_64.tar.xz
-        cd zephyr-sdk-0.16.4
-        ./setup.sh -t all -h -c
+        wget -q https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.16.8/zephyr-sdk-0.16.8_linux-x86_64_minimal.tar.xz
+        tar xf zephyr-sdk-0.16.8_linux-x86_64_minimal.tar.xz
+        cd zephyr-sdk-0.16.8
+        ./setup.sh -t xtensa-espressif_esp32_zephyr-elf -t xtensa-espressif_esp32s3_zephyr-elf -h -c
     
-    - name: Build MCUboot bootloader
+    - name: Build MCUboot bootloader for ${{ matrix.board }}
       run: |
-        unset ZEPHYR_WASM_MICRO_RUNTIME_KCONFIG
-        west build --pristine -b esp32_devkitc/esp32/procpu \
+        west build --pristine -b ${{ matrix.board }} \
           bootloader/mcuboot/boot/zephyr \
+          -d build-mcuboot \
           -- -DMCUBOOT_LOG_LEVEL=4
     
-    - name: Build AkiraOS application
+    - name: Build AkiraOS application for ${{ matrix.board }}
       run: |
-        unset ZEPHYR_BASE
-        west build --pristine -b esp32_devkitc/esp32/procpu \
-          . -d build \
-          -- -DMODULE_EXT_ROOT=.
+        west build --pristine -b ${{ matrix.board }} \
+          akira-os -d build \
+          -- -DMODULE_EXT_ROOT=${{ github.workspace }}/akira-os
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      if: success()
+      with:
+        name: akira-os-${{ matrix.board }}
+        path: |
+          build/zephyr/zephyr.bin
+          build/zephyr/zephyr.elf
+          build-mcuboot/zephyr/zephyr.bin
