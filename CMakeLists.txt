@@ -33,6 +33,11 @@ if(EXISTS "${OCRE_ROOT_DIR}/src")
     target_compile_definitions(app PRIVATE CONFIG_OCRE_ENABLE=1)
 endif()
 
+# Akira Module System (Core functionality, not third-party)
+if(CONFIG_AKIRA_MODULE)
+    add_subdirectory(src/akira_modules)
+endif()
+
 # Add source files
 target_sources(app PRIVATE
     src/main.c

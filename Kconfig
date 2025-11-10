@@ -77,4 +77,7 @@ config OCRE_CONTAINER_DEFAULT_HEAP_SIZE
     help
       Default heap size for OCRE containers.
 
+# Akira Module System (Core AkiraOS functionality)
+rsource "src/akira_modules/Kconfig"
+
 endmenu

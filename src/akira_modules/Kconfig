@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: Apache-2.0
+# Akira Module System Configuration
+
+menuconfig AKIRA_MODULE
+	bool "Akira Module System"
+	default n
+	help
+	  Enable Akira Module System for integrating Akira hardware
+	  and controls into external projects.
+
+if AKIRA_MODULE
+
+config AKIRA_MODULE_MAX_MODULES
+	int "Maximum number of registered modules"
+	default 16
+	help
+	  Maximum number of Akira modules that can be registered.
+
+config AKIRA_MODULE_MAX_NAME_LEN
+	int "Maximum module name length"
+	default 32
+	help
+	  Maximum length of module names.
+
+config AKIRA_MODULE_THREAD_STACK_SIZE
+	int "Akira module thread stack size"
+	default 2048
+	help
+	  Stack size for Akira module management thread.
+
+config AKIRA_MODULE_THREAD_PRIORITY
+	int "Akira module thread priority"
+	default 5
+	help
+	  Priority for Akira module management thread.
+
+menu "Communication Interfaces"
+
+config AKIRA_MODULE_COMM_UART
+	bool "UART Communication Interface"
+	depends on UART
+	default y
+	help
+	  Enable UART communication for Akira modules.
+
+config AKIRA_MODULE_COMM_SPI
+	bool "SPI Communication Interface"
+	depends on SPI
+	default n
+	help
+	  Enable SPI communication for Akira modules.
+
+config AKIRA_MODULE_COMM_I2C
+	bool "I2C Communication Interface"
+	depends on I2C
+	default n
+	help
+	  Enable I2C communication for Akira modules.
+
+config AKIRA_MODULE_COMM_NETWORK
+	bool "Network Communication Interface"
+	depends on NETWORKING
+	default y
+	help
+	  Enable network (WiFi/Ethernet) communication for Akira modules.
+
+endmenu # Communication Interfaces
+
+menu "Protocol Support"
+
+config AKIRA_MODULE_PROTOCOL_JSON
+	bool "JSON Protocol Support"
+	default y
+	help
+	  Enable JSON protocol for module communication.
+
+config AKIRA_MODULE_PROTOCOL_MSGPACK
+	bool "MessagePack Protocol Support"
+	default n
+	help
+	  Enable MessagePack protocol for efficient binary communication.
+
+endmenu # Protocol Support
+
+menu "Hardware Control"
+
+config AKIRA_MODULE_HW_DISPLAY
+	bool "Display Control"
+	depends on DISPLAY
+	default y
+	help
+	  Enable display control through module interface.
+
+config AKIRA_MODULE_HW_BUTTONS
+	bool "Button/Input Control"
+	depends on INPUT
+	default y
+	help
+	  Enable button and input device control.
+
+config AKIRA_MODULE_HW_AUDIO
+	bool "Audio Control"
+	default n
+	help
+	  Enable audio playback/recording control.
+
+config AKIRA_MODULE_HW_GPIO
+	bool "GPIO Control"
+	depends on GPIO
+	default y
+	help
+	  Enable GPIO pin control through module interface.
+
+endmenu # Hardware Control
+
+config AKIRA_MODULE_DEBUG
+	bool "Enable Akira Module Debug Logging"
+	default n
+	help
+	  Enable detailed debug logging for Akira modules.
+
+endif # AKIRA_MODULE
