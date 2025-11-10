@@ -47,7 +47,7 @@ config AKIRA_CYBERPUNK_THEME
       Enable cyberpunk-style user interface theme.
 
 # Sensor Drivers
-config NRF24L01
+config AKIRA_NRF24L01
     bool "Enable NRF24L01+ wireless transceiver"
     default n
     depends on SPI && GPIO
@@ -55,7 +55,7 @@ config NRF24L01
       Enable NRF24L01+ 2.4GHz wireless transceiver driver.
       Provides low-power wireless communication with up to 2Mbps data rate.
 
-config LSM6DS3
+config AKIRA_LSM6DS3
     bool "Enable LSM6DS3 6-axis IMU"
     default n
     depends on I2C
@@ -63,7 +63,7 @@ config LSM6DS3
       Enable LSM6DS3 6-axis inertial measurement unit driver.
       Provides 3-axis accelerometer and 3-axis gyroscope data.
 
-config INA219
+config AKIRA_INA219
     bool "Enable INA219 current/power monitor"
     default n
     depends on I2C

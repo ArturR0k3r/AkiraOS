@@ -51,15 +51,15 @@ target_sources(app PRIVATE
 )
 
 # Conditional sensor drivers
-if(CONFIG_NRF24L01)
+if(CONFIG_AKIRA_NRF24L01)
     target_sources(app PRIVATE src/drivers/nrf24l01.c)
 endif()
 
-if(CONFIG_LSM6DS3)
+if(CONFIG_AKIRA_LSM6DS3)
     target_sources(app PRIVATE src/drivers/lsm6ds3.c)
 endif()
 
-if(CONFIG_INA219)
+if(CONFIG_AKIRA_INA219)
     target_sources(app PRIVATE src/drivers/ina219.c)
 endif()
 

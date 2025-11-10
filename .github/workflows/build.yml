@@ -1,78 +1,33 @@
 name: Build
 
 on:
-  push:
-    branches:
-      - main
-      - System-implementation-and-core-integrations
   pull_request:
-    branches:
-      - main
-  workflow_dispatch:
+    branches: [ main ]
 
 jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: zephyr-xlarge-runner
     container:
       image: ghcr.io/zephyrproject-rtos/ci:v0.26-branch
       options: --user root
-    strategy:
-      matrix:
-        board:
-          - native_sim
-          - esp32s3_devkitm/esp32s3/procpu
-          - esp32_devkitc/esp32/procpu
     
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           path: application
-      
+          fetch-depth: 0
+    
       - name: Setup Zephyr project
         uses: zephyrproject-rtos/action-zephyr-setup@v1
         with:
           app-path: application
-          sdk-version: 0.16.8
-          toolchains: xtensa-espressif_esp32_zephyr-elf:xtensa-espressif_esp32s3_zephyr-elf
+          sdk-version: 0.16.4
 
-    - name: Install West and add to PATH
-      run: |
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
-    
-    - name: Initialize West workspace
-      run: |
-        west init -l akira-os
-        west update
-        west blobs fetch hal_espressif
-    
-    - name: Install Zephyr SDK
-      run: |
-        cd ~
-        wget -q https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.16.8/zephyr-sdk-0.16.8_linux-x86_64_minimal.tar.xz
-        tar xf zephyr-sdk-0.16.8_linux-x86_64_minimal.tar.xz
-        cd zephyr-sdk-0.16.8
-        ./setup.sh -t xtensa-espressif_esp32_zephyr-elf -t xtensa-espressif_esp32s3_zephyr-elf -h -c
-    
-    - name: Build MCUboot bootloader for ${{ matrix.board }}
-      run: |
-        west build --pristine -b ${{ matrix.board }} \
-          bootloader/mcuboot/boot/zephyr \
-          -d build-mcuboot \
-          -- -DMCUBOOT_LOG_LEVEL=4
-    
-    - name: Build AkiraOS application for ${{ matrix.board }}
-      run: |
-        west build --pristine -b ${{ matrix.board }} \
-          akira-os -d build \
-          -- -DMODULE_EXT_ROOT=${{ github.workspace }}/akira-os
-    
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      if: success()
-      with:
-        name: akira-os-${{ matrix.board }}
-        path: |
-          build/zephyr/zephyr.bin
-          build/zephyr/zephyr.elf
-          build-mcuboot/zephyr/zephyr.bin
+      - name: Build Zephyr application
+        run: |
+          west build --pristine -b esp32_devkitc/esp32/procpu ./application -d build -- -DMODULE_EXT_ROOT=$(pwd)/application
+
+      - name: Build MCUboot bootloader
+        run: |
+          west build --pristine -b esp32_devkitc/esp32/procpu ./bootloader/mcuboot/boot/zephyr -d build-bootloader
