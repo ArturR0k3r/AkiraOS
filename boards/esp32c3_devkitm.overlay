@@ -2,23 +2,9 @@
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/i2c/i2c.h>
 
-// Configure SPI pins - ESP32-C3 uses GPIO matrix, pins configured in Kconfig/runtime
+// SPI2 for future expansion (display, sensors, etc.)
 &spi2 {
     status = "okay";
-    #address-cells = <1>;
-    #size-cells = <0>;
-    cs-gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;
-    
-    ili9341@0 {
-        compatible = "ilitek,ili9341";
-        reg = <0>;
-        spi-max-frequency = <25000000>;
-        reset-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>;
-        cmd-data-gpios = <&gpio0 21 GPIO_ACTIVE_HIGH>;
-        width = <240>;
-        height = <320>;
-        rotation = <0>;
-    };
 };
 
 
