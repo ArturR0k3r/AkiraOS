@@ -189,7 +189,14 @@ west build -b esp32s3_devkitm -- -DOVERLAY_CONFIG=boards/sensors.conf
 
 ## Hardware Connections
 
-### ESP32-S3 DevKit M Example
+> **Platform Note:** These sensor configurations work on all supported platforms:
+> - **ESP32-S3** - Akira Console (primary target)
+> - **ESP32** - Akira Console (legacy)
+> - **ESP32-C3** - Akira Modules only (remote sensors/peripherals)
+> 
+> See [BUILD_PLATFORMS.md](BUILD_PLATFORMS.md) for platform-specific details.
+
+### ESP32-S3 DevKit M Example (Akira Console)
 
 **NRF24L01+ (SPI2):**
 - MOSI: GPIO 11

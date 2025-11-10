@@ -127,9 +127,12 @@ AkiraOS runs on **multiple platforms** with a unified codebase:
 
 | Platform | Status | Use Case |
 |----------|--------|----------|
-| **ESP32-S3** | ✅ Production | Full hardware support (display, WiFi, OTA) |
-| **ESP32** | ✅ Production | Full hardware support (display, WiFi, OTA) |
+| **ESP32-S3** | ✅ Production | **Akira Console** - Full hardware support (display, WiFi, OTA) |
+| **ESP32** | ✅ Production | **Akira Console** (Legacy) - Full hardware support |
+| **ESP32-C3** | ✅ Production | **Akira Modules Only** - Remote sensors/peripherals |
 | **native_sim** | ✅ Development | x86 simulation for testing |
+
+> **Important:** ESP32-C3 is designed exclusively for **Akira Modules** (remote sensor nodes, wireless peripherals, distributed control). It is **NOT** suitable for the Akira Console handheld device. See [docs/BUILD_PLATFORMS.md](docs/BUILD_PLATFORMS.md) for details.
 
 ### Hardware (Production Boards)
 

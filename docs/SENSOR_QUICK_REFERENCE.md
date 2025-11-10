@@ -1,5 +1,12 @@
 # Sensor Quick Reference Card
 
+> **Platform Support:**  
+> - ✅ ESP32-S3 (Akira Console - Primary)  
+> - ✅ ESP32 (Akira Console - Legacy)  
+> - ✅ ESP32-C3 (Akira Modules Only - Remote sensors)  
+> 
+> See [BUILD_PLATFORMS.md](BUILD_PLATFORMS.md) for platform selection guide.
+
 ## NRF24L01+ Wireless Transceiver
 
 **Interface:** SPI + GPIO (CE, CSN)  
@@ -20,7 +27,7 @@ nrf_send "Hello"            # Transmit
 nrf_recv                    # Receive
 ```
 
-### Pin Connections (ESP32-S3)
+### Pin Connections (ESP32-S3 - Akira Console)
 ```
 NRF24L01+    ESP32-S3
 ---------    ---------
