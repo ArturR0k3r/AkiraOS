@@ -1,21 +1,74 @@
 #!/bin/bash
 
 # Build script for MCUboot + AkiraOS application
-# Usage: ./build_both.sh [clean]
+# Usage: ./build_both.sh [platform] [clean]
+# Platforms: esp32s3 (default), esp32, esp32c3
+# Example: ./build_both.sh esp32s3 clean
 
 set -e  # Exit on any error
 
 WORKSPACE_ROOT="/home/artur_ubuntu/Akira"
-BOARD="esp32_devkitc/esp32/procpu"
+PLATFORM="${1:-esp32s3}"
+CLEAN_ARG="$2"
+
+# Map platform to board
+case "$PLATFORM" in
+    esp32s3)
+        BOARD="esp32s3_devkitm/esp32s3/procpu"
+        PLATFORM_NAME="ESP32-S3 (Akira Console)"
+        ;;
+    esp32)
+        BOARD="esp32_devkitc/esp32/procpu"
+        PLATFORM_NAME="ESP32 (Akira Console - Legacy)"
+        ;;
+    esp32c3)
+        BOARD="esp32c3_devkitm"
+        PLATFORM_NAME="ESP32-C3 (Akira Modules Only)"
+        ;;
+    clean)
+        # If first arg is "clean", use default platform
+        PLATFORM="esp32s3"
+        BOARD="esp32s3_devkitm/esp32s3/procpu"
+        PLATFORM_NAME="ESP32-S3 (Akira Console)"
+        CLEAN_ARG="clean"
+        ;;
+    help|--help|-h)
+        echo "Usage: $0 [platform] [clean]"
+        echo ""
+        echo "Platforms:"
+        echo "  esp32s3  - ESP32-S3 (Akira Console - Primary) [default]"
+        echo "  esp32    - ESP32 (Akira Console - Legacy)"
+        echo "  esp32c3  - ESP32-C3 (Akira Modules Only)"
+        echo ""
+        echo "Options:"
+        echo "  clean    - Clean build directories before building"
+        echo ""
+        echo "Examples:"
+        echo "  $0                 # Build ESP32-S3"
+        echo "  $0 esp32s3 clean   # Clean and build ESP32-S3"
+        echo "  $0 esp32c3         # Build ESP32-C3 for Akira Modules"
+        echo ""
+        echo "Note: ESP32-C3 is for Akira Modules only, not Akira Console!"
+        exit 0
+        ;;
+    *)
+        echo "Error: Unknown platform '$PLATFORM'"
+        echo "Valid platforms: esp32s3, esp32, esp32c3"
+        echo "Use '$0 help' for more information"
+        exit 1
+        ;;
+esac
 
 cd "$WORKSPACE_ROOT"
 
 echo "=========================================="
-echo "Building MCUboot and AkiraOS for ESP32"
+echo "Building MCUboot and AkiraOS"
+echo "Platform: $PLATFORM_NAME"
+echo "Board: $BOARD"
 echo "=========================================="
 
 # Clean builds if requested
-if [ "$1" = "clean" ]; then
+if [ "$CLEAN_ARG" = "clean" ]; then
     echo "Cleaning existing builds..."
     rm -rf build-mcuboot
     rm -rf build

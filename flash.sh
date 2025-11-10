@@ -1,8 +1,9 @@
 #!/bin/bash
 
-# flash.sh - Flash MCUboot and AkiraOS to ESP32
+# flash.sh - Flash MCUboot and AkiraOS to ESP32 variants
 # Usage: ./flash.sh [OPTIONS]
 # Options:
+#   --platform PLATFORM  Specify platform: esp32, esp32s3, esp32c3 (default: auto-detect)
 #   --bootloader-only    Flash only MCUboot
 #   --app-only           Flash only AkiraOS application  
 #   --port PORT          Specify serial port (default: auto-detect)
@@ -16,6 +17,7 @@ FLASH_BOOTLOADER=true
 FLASH_APP=true
 PORT=""
 BAUD="921600"
+PLATFORM=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Colors
@@ -34,9 +36,15 @@ show_help() {
     cat << EOF
 Usage: $0 [OPTIONS]
 
-Flash MCUboot bootloader and AkiraOS application to ESP32 DevKit-C
+Flash MCUboot bootloader and AkiraOS application to ESP32 variants
+
+PLATFORMS:
+    esp32    - ESP32 DevKitC (Akira Console - Legacy)
+    esp32s3  - ESP32-S3 DevKitM (Akira Console - Primary)
+    esp32c3  - ESP32-C3 DevKitM (Akira Modules Only)
 
 OPTIONS:
+    --platform PLATFORM  Specify platform (default: auto-detect from chip)
     --bootloader-only    Flash only MCUboot bootloader
     --app-only           Flash only AkiraOS application
     --port PORT          Specify serial port (e.g., /dev/ttyUSB0, COM3)
@@ -47,12 +55,20 @@ FLASH ADDRESSES:
     MCUboot:  0x1000
     AkiraOS:  0x20000
 
+EXAMPLES:
+    $0                              # Auto-detect and flash both
+    $0 --platform esp32s3           # Flash ESP32-S3 
+    $0 --app-only --port /dev/ttyUSB0  # Flash app only to specific port
+
+NOTE: ESP32-C3 is for Akira Modules only, not Akira Console!
+
 EOF
 }
 
 # Parse args
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --platform)        PLATFORM="$2"; shift 2 ;;
         --bootloader-only) FLASH_BOOTLOADER=true; FLASH_APP=false; shift ;;
         --app-only)        FLASH_BOOTLOADER=false; FLASH_APP=true; shift ;;
         --port)            PORT="$2"; shift 2 ;;
@@ -92,6 +108,53 @@ detect_port() {
     fi
 }
 
+# Detect chip type
+detect_chip() {
+    if [[ -z "$PLATFORM" ]]; then
+        print_info "Auto-detecting chip type..."
+        local chip_info=$($ESPTOOL --port "$PORT" --baud "$BAUD" chip_id 2>&1 || true)
+        
+        if echo "$chip_info" | grep -q "ESP32-S3"; then
+            PLATFORM="esp32s3"
+            print_info "Detected: ESP32-S3 (Akira Console)"
+        elif echo "$chip_info" | grep -q "ESP32-C3"; then
+            PLATFORM="esp32c3"
+            print_warning "Detected: ESP32-C3 (Akira Modules Only - Not for Console!)"
+        elif echo "$chip_info" | grep -q "ESP32"; then
+            PLATFORM="esp32"
+            print_info "Detected: ESP32 (Akira Console - Legacy)"
+        else
+            print_error "Could not detect chip type. Use --platform"
+            exit 1
+        fi
+    else
+        # Validate platform
+        case "$PLATFORM" in
+            esp32|esp32s3|esp32c3)
+                print_info "Using specified platform: $PLATFORM"
+                if [[ "$PLATFORM" == "esp32c3" ]]; then
+                    print_warning "ESP32-C3 is for Akira Modules only, not Akira Console!"
+                fi
+                ;;
+            *)
+                print_error "Invalid platform: $PLATFORM"
+                print_error "Valid platforms: esp32, esp32s3, esp32c3"
+                exit 1
+                ;;
+        esac
+    fi
+}
+
+# Set chip parameter for esptool
+get_chip_param() {
+    case "$PLATFORM" in
+        esp32)   echo "esp32" ;;
+        esp32s3) echo "esp32s3" ;;
+        esp32c3) echo "esp32c3" ;;
+        *)       echo "esp32" ;;
+    esac
+}
+
 # Check binaries
 check_binaries() {
     local missing_files=()
@@ -114,21 +177,24 @@ check_binaries() {
 
 flash_bootloader() {
     local bin="$SCRIPT_DIR/../build-mcuboot/zephyr/zephyr.bin"
-    print_info "Flashing MCUboot -> 0x1000"
-    $ESPTOOL --chip esp32 --port "$PORT" --baud "$BAUD" write-flash 0x1000 "$bin"
+    local chip=$(get_chip_param)
+    print_info "Flashing MCUboot -> 0x1000 (chip: $chip)"
+    $ESPTOOL --chip "$chip" --port "$PORT" --baud "$BAUD" write-flash 0x1000 "$bin"
     print_success "MCUboot flashed!"
 }
 
 flash_application() {
     local bin="$SCRIPT_DIR/../build/zephyr/zephyr.signed.bin"
-    print_info "Flashing AkiraOS -> 0x20000"
-    $ESPTOOL --chip esp32 --port "$PORT" --baud "$BAUD" write-flash 0x20000 "$bin"
+    local chip=$(get_chip_param)
+    print_info "Flashing AkiraOS -> 0x20000 (chip: $chip)"
+    $ESPTOOL --chip "$chip" --port "$PORT" --baud "$BAUD" write-flash 0x20000 "$bin"
     print_success "AkiraOS flashed!"
 }
 
 show_device_info() {
-    print_info "Getting ESP32 info..."
-    $ESPTOOL --chip esp32 --port "$PORT" --baud "$BAUD" chip-id || true
+    local chip=$(get_chip_param)
+    print_info "Getting device info..."
+    $ESPTOOL --chip "$chip" --port "$PORT" --baud "$BAUD" chip_id || true
     echo ""
 }
 
@@ -138,10 +204,12 @@ main() {
 
     check_esptool
     detect_port
+    detect_chip
     check_binaries
 
     echo ""
     print_info "Flash Config:"
+    echo "  Platform: $PLATFORM"
     echo "  Port: $PORT"
     echo "  Baud: $BAUD"
     echo "  Bootloader: $FLASH_BOOTLOADER"
@@ -166,7 +234,7 @@ main() {
     echo "  or"
     echo "  screen $PORT 115200"
     echo "  or"
-    echo "  picocom -b 115200 /dev/ttyUSB0"
+    echo "  picocom -b 115200 $PORT"
 }
 
 main "$@"

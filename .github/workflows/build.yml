@@ -1,34 +1,34 @@
-name: Build
+# name: Build
 
-on:
-  pull_request:
-    branches: [ main ]
+# on:
+#   pull_request:
+#     branches: [ main ]
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+# jobs:
+#   build:
+#     runs-on: ubuntu-latest
 
-    container:
-      image: ghcr.io/zephyrproject-rtos/ci:v0.26-branch
-      options: --user root
+#     container:
+#       image: ghcr.io/zephyrproject-rtos/ci:v0.26-branch
+#       options: --user root
     
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          path: application
-          fetch-depth: 0
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v4
+#         with:
+#           path: application
+#           fetch-depth: 0
     
-      - name: Setup Zephyr project
-        uses: zephyrproject-rtos/action-zephyr-setup@v1
-        with:
-          app-path: application
-          sdk-version: 0.16.4
+#       - name: Setup Zephyr project
+#         uses: zephyrproject-rtos/action-zephyr-setup@v1
+#         with:
+#           app-path: application
+#           sdk-version: 0.16.4
 
-      - name: Build Zephyr application
-        run: |
-          west build --pristine -b esp32_devkitc/esp32/procpu ./application -d build -- -DMODULE_EXT_ROOT=$(pwd)/application
+#       - name: Build Zephyr application
+#         run: |
+#           west build --pristine -b esp32_devkitc/esp32/procpu ./application -d build -- -DMODULE_EXT_ROOT=$(pwd)/application
 
-      - name: Build MCUboot bootloader
-        run: |
-          west build --pristine -b esp32_devkitc/esp32/procpu ./bootloader/mcuboot/boot/zephyr -d build-bootloader
+#       - name: Build MCUboot bootloader
+#         run: |
+#           west build --pristine -b esp32_devkitc/esp32/procpu ./bootloader/mcuboot/boot/zephyr -d build-bootloader

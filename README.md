@@ -190,19 +190,40 @@ AkiraOS runs on **multiple platforms** with a unified codebase:
 
 ## 🔨 Building
 
+**📚 For detailed build instructions, see [BUILD_SCRIPTS.md](docs/BUILD_SCRIPTS.md)**
+
 ### Quick Start - Build All Platforms
 
 ```bash
 # Build for all platforms at once
 ./build_all.sh
+
+# Or build specific platform
+./build_all.sh esp32s3    # ESP32-S3 Console (Primary)
+./build_all.sh esp32c3    # ESP32-C3 Modules Only
+./build_all.sh native_sim # Native simulation
 ```
 
 This will build:
 - ✅ native_sim (simulation/testing)
-- ✅ ESP32-S3 (full hardware)
-- ✅ ESP32 (full hardware)
+- ✅ ESP32-S3 (Akira Console - Primary)
+- ✅ ESP32 (Akira Console - Legacy)
+- ✅ ESP32-C3 (Akira Modules Only)
 
-### Platform-Specific Builds
+### Platform-Specific Builds with MCUboot
+
+```bash
+# Build MCUboot + AkiraOS for specific platform
+./build_both.sh esp32s3       # ESP32-S3 Console
+./build_both.sh esp32c3       # ESP32-C3 Modules
+./build_both.sh esp32s3 clean # Clean and build
+
+# Flash to device
+./flash.sh                    # Auto-detect platform
+./flash.sh --platform esp32s3 # Specify platform
+```
+
+### Manual Platform Builds
 
 #### Native Simulation (Testing)
 ```bash
@@ -213,7 +234,7 @@ west build --pristine -b native_sim AkiraOS -d build_native_sim
 ./build_native_sim/zephyr/zephyr.exe
 ```
 
-#### ESP32-S3 DevKitM
+#### ESP32-S3 DevKitM (Akira Console - Primary)
 ```bash
 cd /path/to/Akira
 west build --pristine -b esp32s3_devkitm/esp32s3/procpu AkiraOS -d build_esp32s3
