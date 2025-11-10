@@ -20,6 +20,24 @@ if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/modules/wamr)
     target_compile_definitions(app PRIVATE CONFIG_WAMR_ENABLE=1)
 endif()
 
+# OCRE Integration
+set(OCRE_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/../ocre")
+if(EXISTS "${OCRE_ROOT_DIR}/src")
+    include("${CMAKE_CURRENT_LIST_DIR}/modules/ocre/ocre.cmake")
+    target_sources(app PRIVATE ${ocre_component_sources} ${ocre_lib_sources})
+    target_include_directories(app PRIVATE
+        ${OCRE_ROOT_DIR}/src/
+        ${OCRE_ROOT_DIR}/src/ocre
+        ${OCRE_ROOT_DIR}/src/shared/platform
+    )
+    target_compile_definitions(app PRIVATE CONFIG_OCRE_ENABLE=1)
+endif()
+
+# Akira Module System (Core functionality, not third-party)
+if(CONFIG_AKIRA_MODULE)
+    add_subdirectory(src/akira_modules)
+endif()
+
 # Add source files
 target_sources(app PRIVATE
     src/main.c
@@ -31,6 +49,19 @@ target_sources(app PRIVATE
     src/settings/settings.c
     src/OTA/web_server.c
 )
+
+# Conditional sensor drivers
+if(CONFIG_AKIRA_NRF24L01)
+    target_sources(app PRIVATE src/drivers/nrf24l01.c)
+endif()
+
+if(CONFIG_AKIRA_LSM6DS3)
+    target_sources(app PRIVATE src/drivers/lsm6ds3.c)
+endif()
+
+if(CONFIG_AKIRA_INA219)
+    target_sources(app PRIVATE src/drivers/ina219.c)
+endif()
 
 # Conditional OTA manager based on flash availability
 if(CONFIG_FLASH_MAP AND CONFIG_BOOTLOADER_MCUBOOT)
@@ -51,6 +82,8 @@ target_include_directories(app PRIVATE
     src/settings/
     src/shell/
     src/drivers/
+    ${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime/core/iwasm/include
+    ${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime/core/shared/utils
 )
 
 # SDL2 simulator uses external viewer (tools/akira_viewer)

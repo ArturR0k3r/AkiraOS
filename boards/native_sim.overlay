@@ -1,5 +1,3 @@
-/dts-v1/;
-
 / {
     chosen {
         zephyr,console = &uart0;
@@ -9,23 +7,11 @@
 
     aliases {
         uart0 = &uart0;
+        user-data-partition = &storage_partition;
     };
 };
 
-&flash0 {
-    partitions {
-        compatible = "fixed-partitions";
-        #address-cells = <1>;
-        #size-cells = <1>;
-
-        user_data_partition: partition@de000 {
-            label = "user-data";
-            reg = <0x000de000 0x0001e000>;
-        };
-
-        storage_partition: partition@100000 {
-            label = "storage";
-            reg = <0x00100000 0x00004000>;
-        };
-    };
+// Change storage partition label to user_data_partition for LittleFS
+&storage_partition {
+    label = "user_data_partition";
 };
