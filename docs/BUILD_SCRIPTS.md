@@ -2,6 +2,65 @@
 
 This document explains the build and flash scripts available in AkiraOS and how to use them with different platforms.
 
+## Build and Flash Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        AkiraOS Build Workflow                        │
+└─────────────────────────────────────────────────────────────────────┘
+
+                         Choose Your Path:
+                                 │
+                ┌────────────────┼────────────────┐
+                │                │                │
+                ▼                ▼                ▼
+        ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+        │  ESP32-S3    │ │  ESP32-C3    │ │ Native Sim   │
+        │   Console    │ │   Modules    │ │   Testing    │
+        │  (Primary)   │ │   (Only)     │ │              │
+        └──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+               │                │                │
+               ▼                ▼                ▼
+        ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+        │build_both.sh │ │build_both.sh │ │build_and_run │
+        │   esp32s3    │ │   esp32c3    │ │     .sh      │
+        └──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+               │                │                │
+               ▼                ▼                │
+        ┌──────────────┐ ┌──────────────┐       │
+        │   MCUboot    │ │   MCUboot    │       │
+        │  Bootloader  │ │  Bootloader  │       │
+        └──────┬───────┘ └──────┬───────┘       │
+               │                │                │
+               ▼                ▼                │
+        ┌──────────────┐ ┌──────────────┐       │
+        │   AkiraOS    │ │   AkiraOS    │       │
+        │ Application  │ │ Application  │       │
+        └──────┬───────┘ └──────┬───────┘       │
+               │                │                │
+               ▼                ▼                ▼
+        ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+        │  flash.sh    │ │  flash.sh    │ │  ./zephyr    │
+        │ --platform   │ │ --platform   │ │    .exe      │
+        │   esp32s3    │ │   esp32c3    │ │              │
+        └──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+               │                │                │
+               ▼                ▼                ▼
+        ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+        │   ESP32-S3   │ │   ESP32-C3   │ │   Console    │
+        │    Device    │ │    Device    │ │   Output     │
+        │  (Console)   │ │  (Modules)   │ │              │
+        └──────┬───────┘ └──────┬───────┘ └──────────────┘
+               │                │
+               ▼                ▼
+        ┌──────────────┐ ┌──────────────┐
+        │     west     │ │     west     │
+        │  espmonitor  │ │  espmonitor  │
+        └──────────────┘ └──────────────┘
+```
+
+---
+
 ## Available Scripts
 
 ### 1. build_all.sh - Multi-Platform Build Script
@@ -411,6 +470,443 @@ sudo usermod -a -G dialout $USER
 3. **ESP32 is Legacy Console** - Still supported but ESP32-S3 is recommended
 4. **Always specify platform** - When building for a specific target, use the platform argument
 5. **Check BUILD_PLATFORMS.md** - For detailed platform comparison and selection guide
+
+---
+
+## Step-by-Step Guides
+
+### First-Time Setup
+
+1. **Install Dependencies**
+```bash
+# Install esptool
+pip install esptool
+
+# Install west (if not already installed)
+pip install west
+
+# Verify installation
+esptool version
+west --version
+```
+
+2. **Clone and Initialize Workspace**
+```bash
+cd ~
+mkdir Akira
+cd Akira
+git clone <your-repo-url> AkiraOS
+cd AkiraOS
+
+# Initialize west workspace
+west init -l .
+cd ..
+west update
+```
+
+3. **Build for Your Platform**
+```bash
+cd AkiraOS
+
+# For ESP32-S3 Console (recommended)
+./build_both.sh esp32s3
+
+# For ESP32-C3 Modules
+./build_both.sh esp32c3
+
+# For native testing
+./build_and_run.sh
+```
+
+4. **Connect Device and Flash**
+```bash
+# Auto-detect and flash
+./flash.sh
+
+# Or specify platform
+./flash.sh --platform esp32s3
+```
+
+5. **Monitor Output**
+```bash
+west espmonitor --port /dev/ttyUSB0
+# Press Ctrl+] to exit
+```
+
+---
+
+### Development Workflow
+
+#### Scenario 1: Quick Code Changes (Application Only)
+
+When you modify application code (not bootloader):
+
+```bash
+# 1. Build only the changed platform
+./build_all.sh esp32s3
+
+# 2. Flash only the application (faster!)
+./flash.sh --app-only --platform esp32s3
+
+# 3. Monitor
+west espmonitor
+```
+
+**Time saved:** ~2 minutes vs full build+flash
+
+---
+
+#### Scenario 2: Full Clean Build (Fresh Start)
+
+When you have build issues or changed configurations:
+
+```bash
+# 1. Clean everything
+cd /home/artur_ubuntu/Akira
+rm -rf build build-* AkiraOS/build
+
+# 2. Clean and rebuild
+cd AkiraOS
+./build_both.sh esp32s3 clean
+
+# 3. Flash everything
+./flash.sh --platform esp32s3
+```
+
+---
+
+#### Scenario 3: Multi-Platform Testing
+
+When testing across all platforms:
+
+```bash
+# 1. Build all at once
+./build_all.sh
+
+# 2. Test native first
+cd ../build-native-sim/zephyr
+./zephyr.exe
+
+# 3. Flash to ESP32-S3
+cd ../../AkiraOS
+./flash.sh --platform esp32s3 --port /dev/ttyUSB0
+
+# 4. Flash to ESP32-C3 (different device)
+./flash.sh --platform esp32c3 --port /dev/ttyUSB1
+
+# 5. Compare results
+west espmonitor --port /dev/ttyUSB0
+# (in another terminal)
+west espmonitor --port /dev/ttyUSB1
+```
+
+---
+
+#### Scenario 4: Akira Module Development (ESP32-C3)
+
+When developing sensor modules for ESP32-C3:
+
+```bash
+# 1. Build for ESP32-C3
+./build_both.sh esp32c3
+
+# 2. Flash to module
+./flash.sh --platform esp32c3
+
+# 3. Test sensor commands
+west espmonitor
+# In console:
+akira> nrf24 init
+akira> nrf24 status
+akira> lsm6ds3 init
+akira> lsm6ds3 read
+akira> ina219 init
+akira> ina219 read
+```
+
+**Remember:** ESP32-C3 is for modules only, not Console!
+
+---
+
+#### Scenario 5: OTA Update Testing
+
+When testing Over-The-Air updates:
+
+```bash
+# 1. Build with MCUboot
+./build_both.sh esp32s3
+
+# 2. Flash initial version
+./flash.sh --platform esp32s3
+
+# 3. Modify code, rebuild
+./build_both.sh esp32s3
+
+# 4. Use OTA to update (in AkiraOS shell)
+akira> ota update http://192.168.1.100/zephyr.signed.bin
+
+# 5. Monitor update progress
+west espmonitor
+```
+
+---
+
+### Platform-Specific Guides
+
+#### Building for ESP32-S3 Console (Primary Platform)
+
+**Hardware:** ESP32-S3 DevKitM
+**Use Case:** Full Akira Console with display, UI, sensors
+
+```bash
+# Complete build and flash
+./build_both.sh esp32s3
+./flash.sh --platform esp32s3
+
+# Quick application updates
+./build_all.sh esp32s3
+./flash.sh --app-only --platform esp32s3
+
+# Monitor with baud rate
+west espmonitor --port /dev/ttyUSB0 --baud 115200
+```
+
+**Features Available:**
+- ✅ ILI9341 Display (320x240)
+- ✅ Full UI System
+- ✅ Sensor Modules (NRF24L01, LSM6DS3, INA219)
+- ✅ Wi-Fi/BLE
+- ✅ OTA Updates
+- ✅ WASM Runtime
+- ✅ Shell Commands
+
+---
+
+#### Building for ESP32-C3 Modules (Sensor Platform)
+
+**Hardware:** ESP32-C3 DevKitM
+**Use Case:** Remote sensor modules, wireless peripherals
+
+```bash
+# Build for modules
+./build_both.sh esp32c3
+./flash.sh --platform esp32c3
+
+# Or just build (no MCUboot)
+./build_all.sh esp32c3
+```
+
+**Features Available:**
+- ✅ Sensor Modules (NRF24L01, LSM6DS3, INA219)
+- ✅ Wi-Fi/BLE
+- ✅ Shell Commands
+- ✅ Low Power Mode
+- ❌ No Display Support
+- ❌ No UI System
+- ❌ Limited WASM (memory constraints)
+
+**Important:** ESP32-C3 cannot run Akira Console due to:
+- Single-core (vs dual-core)
+- No PSRAM (no framebuffer)
+- Limited GPIO
+- Lower clock speed
+
+---
+
+#### Building for Native Simulation (Development)
+
+**Platform:** x86_64 Linux
+**Use Case:** Fast testing, debugging, CI/CD
+
+```bash
+# Quick build and run
+./build_and_run.sh
+
+# Or manual
+./build_all.sh native_sim
+cd ../build-native-sim/zephyr
+./zephyr.exe
+```
+
+**Features Available:**
+- ✅ Core logic testing
+- ✅ Shell commands
+- ✅ Module APIs
+- ✅ Fast iteration
+- ❌ No real hardware
+- ❌ No display
+- ❌ No sensors
+
+**Use Cases:**
+- Unit testing
+- Algorithm development
+- Shell command testing
+- CI/CD pipelines
+
+---
+
+### Advanced Topics
+
+#### Custom Build Configurations
+
+**Enable/Disable Sensors:**
+
+Edit `prj.conf` or use board-specific configs:
+
+```bash
+# Enable all sensors
+CONFIG_AKIRA_NRF24L01=y
+CONFIG_AKIRA_LSM6DS3=y
+CONFIG_AKIRA_INA219=y
+
+# Disable a sensor
+CONFIG_AKIRA_NRF24L01=n
+```
+
+**Custom Build:**
+```bash
+# Build with custom config
+./build_all.sh esp32s3
+```
+
+---
+
+#### Using Different Serial Ports
+
+**Linux:**
+```bash
+# List available ports
+ls /dev/ttyUSB* /dev/ttyACM*
+
+# Flash to specific port
+./flash.sh --port /dev/ttyUSB1 --platform esp32s3
+
+# Monitor specific port
+west espmonitor --port /dev/ttyUSB1
+```
+
+**Windows:**
+```bash
+# List COM ports
+mode
+
+# Flash to COM port
+./flash.sh --port COM3 --platform esp32s3
+```
+
+**macOS:**
+```bash
+# List ports
+ls /dev/cu.*
+
+# Flash to port
+./flash.sh --port /dev/cu.usbserial-0001 --platform esp32s3
+```
+
+---
+
+#### Debugging Build Issues
+
+**Problem:** Build fails with "MODULE_EXT_ROOT not found"
+
+**Solution:**
+```bash
+cd /home/artur_ubuntu/Akira
+# Make sure you're in the parent directory
+west build --pristine -b esp32s3_devkitm/esp32s3/procpu AkiraOS -d build-esp32s3 -- -DMODULE_EXT_ROOT=$(pwd)/AkiraOS
+```
+
+---
+
+**Problem:** Flash fails with "Permission denied on /dev/ttyUSB0"
+
+**Solution:**
+```bash
+# Add user to dialout group
+sudo usermod -a -G dialout $USER
+# Log out and log back in
+
+# Or use sudo (not recommended)
+sudo ./flash.sh --platform esp32s3
+```
+
+---
+
+**Problem:** ESP32-C3 crashes or won't flash
+
+**Solution:**
+ESP32-C3 has different memory and features. Check:
+1. Are you trying to use display on ESP32-C3? (Not supported)
+2. Are you using ESP32-C3 for Console? (Not supported)
+3. Build specifically for esp32c3: `./build_both.sh esp32c3`
+
+---
+
+**Problem:** Multiple ESP32 devices connected
+
+**Solution:**
+```bash
+# Identify devices
+ls -la /dev/ttyUSB*
+# or
+esptool --port /dev/ttyUSB0 chip_id
+esptool --port /dev/ttyUSB1 chip_id
+
+# Flash to specific device
+./flash.sh --port /dev/ttyUSB0 --platform esp32s3
+./flash.sh --port /dev/ttyUSB1 --platform esp32c3
+```
+
+---
+
+## CI/CD Integration
+
+### GitHub Actions Example
+
+```yaml
+name: Build AkiraOS
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-all-platforms:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/zephyrproject-rtos/ci:latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: AkiraOS
+      
+      - name: Setup West
+        run: |
+          cd AkiraOS
+          west init -l .
+          cd ..
+          west update
+      
+      - name: Build All Platforms
+        run: |
+          cd AkiraOS
+          ./build_all.sh
+      
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: akiraos-binaries
+          path: |
+            build-native-sim/zephyr/zephyr.exe
+            build-esp32s3/zephyr/zephyr.bin
+            build-esp32s3/zephyr/zephyr.signed.bin
+            build-esp32/zephyr/zephyr.bin
+            build-esp32c3/zephyr/zephyr.bin
+```
 
 ---
 

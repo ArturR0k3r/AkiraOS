@@ -104,6 +104,28 @@ The architecture supports future features (audio, SD card, multiplayer, advanced
 
 ---
 
+## 🚀 Quick Start
+
+**New to AkiraOS?** Check out the **[Quick Start Guide](docs/QUICK_START.md)** to get running in 5 minutes!
+
+```bash
+# Clone, build, and flash ESP32-S3 Console
+cd ~ && mkdir Akira && cd Akira
+git clone <your-repo> AkiraOS && cd AkiraOS
+west init -l . && cd .. && west update
+cd AkiraOS && ./build_both.sh esp32s3
+./flash.sh
+west espmonitor
+```
+
+**📚 Documentation:**
+- **[QUICK_START.md](docs/QUICK_START.md)** - Get started in 5 minutes
+- **[BUILD_SCRIPTS.md](docs/BUILD_SCRIPTS.md)** - Complete build guide
+- **[BUILD_PLATFORMS.md](docs/BUILD_PLATFORMS.md)** - Platform comparison
+- **[SENSOR_INTEGRATION.md](docs/SENSOR_INTEGRATION.md)** - Sensor modules
+
+---
+
 ## 🎮 Overview
 
 AkiraOS is an open-source gaming console that combines the power of modern embedded systems with the nostalgic appeal of retro gaming. Built on the ESP32-S3 microcontroller and running a custom Zephyr RTOS, it supports WebAssembly applications and doubles as a cybersecurity toolkit for ethical hacking and network analysis.
@@ -219,8 +241,100 @@ This will build:
 ./build_both.sh esp32s3 clean # Clean and build
 
 # Flash to device
+
+# Flash to device
 ./flash.sh                    # Auto-detect platform
 ./flash.sh --platform esp32s3 # Specify platform
+```
+
+### Manual Platform Builds
+
+#### Native Simulation (Testing)
+```bash
+cd /path/to/Akira
+west build --pristine -b native_sim AkiraOS -d build_native_sim
+
+# Run simulation
+./build_native_sim/zephyr/zephyr.exe
+```
+
+#### ESP32-S3 DevKitM (Akira Console - Primary)
+```bash
+cd /path/to/Akira
+west build --pristine -b esp32s3_devkitm/esp32s3/procpu AkiraOS -d build_esp32s3
+west flash -d build_esp32s3
+```
+
+#### ESP32 DevKitC (Legacy Console)
+```bash
+cd /path/to/Akira
+west build --pristine -b esp32_devkitc/esp32/procpu AkiraOS -d build_esp32
+west flash -d build_esp32
+```
+
+#### ESP32-C3 DevKitM (Akira Modules Only)
+```bash
+cd /path/to/Akira
+west build --pristine -b esp32c3_devkitm AkiraOS -d build_esp32c3
+west flash -d build_esp32c3
+```
+
+**⚠️ Important:** ESP32-C3 is for Akira Modules only, not for Akira Console! See [BUILD_PLATFORMS.md](docs/BUILD_PLATFORMS.md) for details.
+
+### VS Code Integration
+
+Press `Ctrl+Shift+B` to run the configured build task.
+
+## 📱 Flashing Firmware
+
+**📚 For detailed flashing instructions, see [BUILD_SCRIPTS.md](docs/BUILD_SCRIPTS.md)**
+
+### Quick Flash (Auto-Detection)
+
+```bash
+# Auto-detect chip and flash everything
+./flash.sh
+
+# Flash to specific platform
+./flash.sh --platform esp32s3
+./flash.sh --platform esp32c3
+
+# Flash only application (faster updates)
+./flash.sh --app-only
+
+# Flash to specific port
+./flash.sh --port /dev/ttyUSB0
+```
+
+### Manual Flashing with esptool
+
+```bash
+# ESP32-S3 Console
+esptool --chip esp32s3 write-flash 0x1000 build-mcuboot/zephyr/zephyr.bin
+esptool --chip esp32s3 write-flash 0x20000 build/zephyr/zephyr.signed.bin
+
+# ESP32-C3 Modules
+esptool --chip esp32c3 write-flash 0x1000 build-mcuboot/zephyr/zephyr.bin
+esptool --chip esp32c3 write-flash 0x20000 build/zephyr/zephyr.signed.bin
+
+# ESP32 Legacy Console
+esptool --chip esp32 write-flash 0x1000 build-mcuboot/zephyr/zephyr.bin
+esptool --chip esp32 write-flash 0x20000 build/zephyr/zephyr.signed.bin
+```
+
+### Monitoring Serial Output
+
+```bash
+# Using west espmonitor (recommended)
+west espmonitor --port /dev/ttyUSB0
+
+# Using screen
+screen /dev/ttyUSB0 115200
+
+# Using picocom
+picocom -b 115200 /dev/ttyUSB0
+```
+````
 ```
 
 ### Manual Platform Builds
