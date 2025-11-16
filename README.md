@@ -1,106 +1,3 @@
-# AkiraOS now uses OCRE as its container and WASM runtime
-
-**Zephyr Version:** v4.3.0 (upstream stable)  
-**Build Status:** ✅ Native Simulator | ⚠️ ESP32 (Known Issue)
-
-> **Quick Start:** `./build_and_run.sh` - See [docs/QUICKSTART.md](docs/QUICKSTART.md)  
-> **Build Status:** See [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md) for platform details
-
-AkiraOS integrates [OCRE](https://github.com/project-ocre/ocre-runtime) for secure, lightweight container and WebAssembly app management on Zephyr and ESP32 platforms. All app lifecycle operations (upload, start, stop, list) are handled via OCRE APIs.
-
-## Platform Support
-
-| Platform | Status | Build Command | Notes |
-|----------|--------|---------------|-------|
-| **Native Simulator** | ✅ Working | `./build_and_run.sh` | Recommended for development |
-| **ESP32-S3** | ⚠️ Blocked | N/A | Zephyr 4.3.0 POSIX timer issue |
-| **ESP32** | ⚠️ Blocked | N/A | Zephyr 4.3.0 POSIX timer issue |
-| **ESP32-C3** | ⚠️ Blocked | N/A | Zephyr 4.3.0 POSIX timer issue |
-
-See [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md) for details and workarounds.
-
-## Build Instructions (OCRE Integration)
-
-- OCRE is included as a west module (see `west.yml`).
-- The build system automatically links OCRE sources and headers.
-- No stub logic: all app/container management is delegated to OCRE.
-
-### Example Usage
-
-```c
-// Upload a WASM app or container
-ocre_runtime_load_app("my_app", binary, size);
-// Start the app
-ocre_runtime_start_app("my_app");
-// Stop the app
-ocre_runtime_stop_app("my_app");
-// List all containers/apps
-ocre_runtime_list_apps(app_list, max_count);
-```
-
-## Features
-- Secure container runtime for embedded devices
-- WebAssembly app support
-- Unified API for upload, start, stop, and list operations
-- Zephyr and ESP32-S3/ESP32 support
-
-## For full technical details, see docs/api-reference.md and OCRE documentation.
-
----
-
-## Core Features & Implementation
-
-### Graphics System
-- Pixel-perfect renderer, tile engine, sprite system
-- CRT effects (scanlines, bloom, curvature)
-- UI framework for cyberpunk widgets
-- Double buffering and DMA transfer for display
-
-### Input System
-- Debounced button input, event queue
-- Combo detection, long/short press, rapid-fire
-- Input recording/playback for demos
-
-### Security Toolkit
-- Wi-Fi scanner, deauth detector, packet sniffer, ARP scanner, network mapper
-- BLE tools, password generator, hash calculator, QR code utilities
-- Ethical use notice: for education and authorized testing only
-
-### WASM/OCRE Integration
-- WAMR executes sandboxed WASM modules (games, tools)
-- OCRE provides container isolation and resource limits
-- Host APIs for graphics, input, audio, network, security
-
-See `src/akiraos.c` and `docs/api-reference.md` for integration details.
-# AkiraOS: Comprehensive Architecture & Strategic Positioning
-
-## Executive Summary
-
-AkiraOS is a minimalist retro-cyberpunk gaming console and hacker toolkit powered by ESP32-S3 and WebAssembly. It uniquely positions itself as a dual-purpose embedded platform: a nostalgic gaming device AND a portable cybersecurity toolkit, running on Zephyr RTOS with WASM runtime support.
-
----
-
-## System Logic Overview
-
-AkiraOS is built from modular subsystems:
-- **System Services**: Managed by `service_manager` (graphics, input, network, storage, audio, security, UI)
-- **Event System**: Central event bus for inter-module communication
-- **Process Management**: Launches and tracks native/WASM apps
-- **WASM Runtime (WAMR)**: Executes sandboxed WASM modules
-- **OCRE Runtime**: Container isolation for apps
-- **Drivers**: Display, buttons, storage, audio, etc.
-- **OTA/Bluetooth/Shell/Settings**: Modular, extensible system services
-
-### Main System Logic
-See `src/akiraos.c` for initialization and orchestration of all subsystems.
-
-### Extensibility
-The architecture supports future features (audio, SD card, multiplayer, advanced graphics, security tools, etc.) via modular service registration and event-driven design.
-
----
-
-## For full technical and strategic details, see `docs/api-reference.md` and the architecture section below.
-
 # AkiraOS
 
 ```
@@ -123,23 +20,24 @@ The architecture supports future features (audio, SD card, multiplayer, advanced
 
 ## 🚀 Quick Start
 
-**New to AkiraOS?** Check out the **[Quick Start Guide](docs/QUICK_START.md)** to get running in 5 minutes!
-
 ```bash
-# Clone, build, and flash ESP32-S3 Console
+# Setup workspace
 cd ~ && mkdir Akira && cd Akira
 git clone <your-repo> AkiraOS && cd AkiraOS
-west init -l . && cd .. && west update
-cd AkiraOS && ./build_both.sh esp32s3
+west init -l . && cd .. && west update && cd AkiraOS
+
+# Build and flash ESP32-S3
+./build_both.sh esp32s3
 ./flash.sh
 west espmonitor
+
+# Or run native simulation
+./build_and_run.sh
 ```
 
 **📚 Documentation:**
-- **[QUICK_START.md](docs/QUICK_START.md)** - Get started in 5 minutes
-- **[BUILD_SCRIPTS.md](docs/BUILD_SCRIPTS.md)** - Complete build guide
-- **[BUILD_PLATFORMS.md](docs/BUILD_PLATFORMS.md)** - Platform comparison
-- **[SENSOR_INTEGRATION.md](docs/SENSOR_INTEGRATION.md)** - Sensor modules
+- **[api-reference.md](docs/api-reference.md)** - System architecture and APIs
+- **[AkiraOS.md](docs/AkiraOS.md)** - Detailed architecture
 
 ---
 
@@ -162,18 +60,14 @@ AkiraOS is an open-source gaming console that combines the power of modern embed
 
 ### Supported Platforms
 
-AkiraOS runs on **multiple platforms** with a unified codebase:
-
 | Platform | Status | Use Case |
 |----------|--------|----------|
-| **ESP32-S3** | ✅ Production | **Akira Console** - Full hardware support (display, WiFi, OTA) |
-| **ESP32** | ✅ Production | **Akira Console** (Legacy) - Full hardware support |
-| **ESP32-C3** | ✅ Production | **Akira Modules Only** - Remote sensors/peripherals |
-| **native_sim** | ✅ Development | x86 simulation for testing |
+| **ESP32-S3** | ✅ Primary | Full Akira Console with display, WiFi, sensors |
+| **ESP32** | ✅ Legacy | Akira Console (limited RAM) |
+| **ESP32-C3** | ✅ Modules | Remote sensor nodes only |
+| **native_sim** | ✅ Dev | Testing and simulation |
 
-> **Important:** ESP32-C3 is designed exclusively for **Akira Modules** (remote sensor nodes, wireless peripherals, distributed control). It is **NOT** suitable for the Akira Console handheld device. See [docs/BUILD_PLATFORMS.md](docs/BUILD_PLATFORMS.md) for details.
-
-### Hardware (Production Boards)
+### Hardware
 
 | Component | Specification |
 |-----------|---------------|
@@ -194,60 +88,29 @@ AkiraOS runs on **multiple platforms** with a unified codebase:
 
 ![DSC_0081](https://github.com/user-attachments/assets/8a6ec23f-e7b3-4180-b24c-6537f7b01069)
 
-## 🚀 Quick Start
+## � Building
 
-### Prerequisites
-
-- **Zephyr SDK**: Follow the [official installation guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html)
-- **Python 3.8+**: For build tools
-- **West Tool**: Zephyr's meta-tool for project management
-- **ESP-IDF Tools**: For ESP32 development
-
-> **Note**: Development is recommended on WSL (Windows Subsystem for Linux) or native Linux/macOS.
-
-### Installation
-
-1. **Clone the repository**
-   ```bash
-   mkdir AkiraOS-workspace
-   cd AkiraOS-workspace
-   git clone https://github.com/ArturR0k3r/AkiraOS.git
-   cd AkiraOS/
-   ```
-
-2. **Initialize West workspace**
-   ```bash
-   west init -l .
-   west update
-   west blobs fetch hal_espressif
-   ```
-
-3. **Open development environment**
-   ```bash
-   code AkiraOS.code-workspace
-   ```
-
-## 🔨 Building
-
-**📚 For detailed build instructions, see [BUILD_SCRIPTS.md](docs/BUILD_SCRIPTS.md)**
-
-### Quick Start - Build All Platforms
-
+### Build All Platforms
 ```bash
-# Build for all platforms at once
-./build_all.sh
-
-# Or build specific platform
-./build_all.sh esp32s3    # ESP32-S3 Console (Primary)
-./build_all.sh esp32c3    # ESP32-C3 Modules Only
-./build_all.sh native_sim # Native simulation
+./build_all.sh           # Build all
+./build_all.sh esp32s3   # ESP32-S3 only
+./build_all.sh native_sim # Native only
 ```
 
-This will build:
-- ✅ native_sim (simulation/testing)
-- ✅ ESP32-S3 (Akira Console - Primary)
-- ✅ ESP32 (Akira Console - Legacy)
-- ✅ ESP32-C3 (Akira Modules Only)
+### Build with MCUboot
+```bash
+./build_both.sh esp32s3        # Build bootloader + app
+./build_both.sh esp32s3 clean  # Clean and build
+```
+
+### Flash to Hardware
+```bash
+./flash.sh                     # Auto-detect chip
+./flash.sh --platform esp32s3  # Specific platform
+./flash.sh --app-only          # Flash app only (faster)
+```
+
+---
 
 ### Platform-Specific Builds with MCUboot
 
