@@ -7,7 +7,7 @@
 set -e  # Exit on error
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+WORKSPACE_ROOT="$(dirname "$SCRIPT_DIR")"
 PLATFORM="${1:-all}"
 
 echo "========================================"
@@ -46,9 +46,9 @@ build_platform() {
     echo "Building for $platform ($board)"
     echo "----------------------------------------"
     
-    cd "$PROJECT_ROOT/.."
+    cd "$WORKSPACE_ROOT"
     
-    if west build --pristine -b "$board" AkiraOS -d "$build_dir"; then
+    if west build --pristine -b "$board" AkiraOS -d "$build_dir" -- -DMODULE_EXT_ROOT="$WORKSPACE_ROOT/AkiraOS"; then
         echo "✅ $platform build SUCCESS"
         
         # Show memory usage for ESP32 builds

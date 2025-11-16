@@ -1,6 +1,23 @@
 # AkiraOS now uses OCRE as its container and WASM runtime
 
+**Zephyr Version:** v4.3.0 (upstream stable)  
+**Build Status:** ✅ Native Simulator | ⚠️ ESP32 (Known Issue)
+
+> **Quick Start:** `./build_and_run.sh` - See [docs/QUICKSTART.md](docs/QUICKSTART.md)  
+> **Build Status:** See [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md) for platform details
+
 AkiraOS integrates [OCRE](https://github.com/project-ocre/ocre-runtime) for secure, lightweight container and WebAssembly app management on Zephyr and ESP32 platforms. All app lifecycle operations (upload, start, stop, list) are handled via OCRE APIs.
+
+## Platform Support
+
+| Platform | Status | Build Command | Notes |
+|----------|--------|---------------|-------|
+| **Native Simulator** | ✅ Working | `./build_and_run.sh` | Recommended for development |
+| **ESP32-S3** | ⚠️ Blocked | N/A | Zephyr 4.3.0 POSIX timer issue |
+| **ESP32** | ⚠️ Blocked | N/A | Zephyr 4.3.0 POSIX timer issue |
+| **ESP32-C3** | ⚠️ Blocked | N/A | Zephyr 4.3.0 POSIX timer issue |
+
+See [docs/BUILD_STATUS.md](docs/BUILD_STATUS.md) for details and workarounds.
 
 ## Build Instructions (OCRE Integration)
 

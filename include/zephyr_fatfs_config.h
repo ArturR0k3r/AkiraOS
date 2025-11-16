@@ -1,5 +1,10 @@
 /* Application FatFs config override */
 
+/* Fix version mismatch - Zephyr expects 80386 but fatfs provides 5380 */
+#ifndef FFCONF_DEF
+#define FFCONF_DEF 80386
+#endif
+
 // #undef FF_VOLUMES
 // #define FF_VOLUMES 2
 

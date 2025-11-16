@@ -19,6 +19,7 @@ PORT=""
 BAUD="921600"
 PLATFORM=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Colors
 RED='\033[0;31m'
@@ -159,13 +160,13 @@ get_chip_param() {
 check_binaries() {
     local missing_files=()
     if [[ "$FLASH_BOOTLOADER" == true ]]; then
-        if [[ ! -f "$SCRIPT_DIR/../build-mcuboot/zephyr/zephyr.bin" ]]; then
-            missing_files+=("MCUboot: ../build-mcuboot/zephyr/zephyr.bin")
+        if [[ ! -f "$WORKSPACE_ROOT/build-mcuboot/zephyr/zephyr.bin" ]]; then
+            missing_files+=("MCUboot: $WORKSPACE_ROOT/build-mcuboot/zephyr/zephyr.bin")
         fi
     fi
     if [[ "$FLASH_APP" == true ]]; then
-        if [[ ! -f "$SCRIPT_DIR/../build/zephyr/zephyr.signed.bin" ]]; then
-            missing_files+=("AkiraOS: ../build/zephyr/zephyr.signed.bin")
+        if [[ ! -f "$WORKSPACE_ROOT/build/zephyr/zephyr.signed.bin" ]]; then
+            missing_files+=("AkiraOS: $WORKSPACE_ROOT/build/zephyr/zephyr.signed.bin")
         fi
     fi
     if [[ ${#missing_files[@]} -gt 0 ]]; then
@@ -176,7 +177,7 @@ check_binaries() {
 }
 
 flash_bootloader() {
-    local bin="$SCRIPT_DIR/../build-mcuboot/zephyr/zephyr.bin"
+    local bin="$WORKSPACE_ROOT/build-mcuboot/zephyr/zephyr.bin"
     local chip=$(get_chip_param)
     print_info "Flashing MCUboot -> 0x1000 (chip: $chip)"
     $ESPTOOL --chip "$chip" --port "$PORT" --baud "$BAUD" write-flash 0x1000 "$bin"
@@ -184,7 +185,7 @@ flash_bootloader() {
 }
 
 flash_application() {
-    local bin="$SCRIPT_DIR/../build/zephyr/zephyr.signed.bin"
+    local bin="$WORKSPACE_ROOT/build/zephyr/zephyr.signed.bin"
     local chip=$(get_chip_param)
     print_info "Flashing AkiraOS -> 0x20000 (chip: $chip)"
     $ESPTOOL --chip "$chip" --port "$PORT" --baud "$BAUD" write-flash 0x20000 "$bin"
