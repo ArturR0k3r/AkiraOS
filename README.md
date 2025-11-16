@@ -20,19 +20,73 @@
 
 ## 🚀 Quick Start
 
+> **📖 New to AkiraOS?** See **[QUICKSTART.md](QUICKSTART.md)** for detailed setup instructions!
+
+### First Time Setup
+
 ```bash
-# Setup workspace
-cd ~ && mkdir Akira && cd Akira
-git clone <your-repo> AkiraOS && cd AkiraOS
-west init -l . && cd .. && west update && cd AkiraOS
+# 1. Clone repository
+git clone https://github.com/ArturR0k3r/AkiraOS.git
+cd AkiraOS
+
+# 2. Initialize West workspace
+west init -l .
+cd ..
+west update
+
+# 3. Clone WASM-Micro-Runtime (not tracked in repo)
+cd AkiraOS/modules
+git clone https://github.com/bytecodealliance/wasm-micro-runtime.git
+cd wasm-micro-runtime && git submodule update --init --recursive && cd ../..
+
+# 4. Update OCRE submodules
+cd ../ocre && git submodule update --init --recursive && cd ../AkiraOS
+
+# 5. Fetch ESP32 binary blobs
+cd ..
+west blobs fetch hal_espressif
+
+# 6. Build and flash
+cd AkiraOS
+./build_both.sh esp32s3      # Build with MCUboot
+./flash.sh                   # Flash to ESP32-S3
+west espmonitor              # Monitor output
+```
+
+### Quick Build (After Setup)
+
+```bash
+cd ~/Akira/AkiraOS
 
 # Build and flash ESP32-S3
 ./build_both.sh esp32s3
 ./flash.sh
-west espmonitor
 
-# Or run native simulation
+# Or run native simulation (no hardware needed)
 ./build_and_run.sh
+```
+
+### OCRE & WASM Integration
+
+AkiraOS integrates **OCRE** (Open Container Runtime Environment) and **WASM-Micro-Runtime** as Zephyr modules:
+
+**Automatic Integration:**
+- OCRE runtime is fetched via `west.yml` from [project-ocre/ocre-runtime](https://github.com/project-ocre/ocre-runtime)
+- WASM-Micro-Runtime is included in `modules/wasm-micro-runtime/`
+- Both are automatically integrated through `modules/modules.cmake`
+- OCRE sources are compiled via `modules/ocre/ocre.cmake`
+- Build system automatically includes OCRE and WAMR headers and sources
+
+**Usage in Code:**
+```c
+// OCRE Runtime API (see src/services/ocre_runtime.c)
+ocre_runtime_init();                              // Initialize runtime
+ocre_runtime_load_app("app", binary, size);       // Create container
+ocre_runtime_start_app("app");                    // Run container
+ocre_runtime_stop_app("app");                     // Stop container
+ocre_runtime_destroy_app("app");                  // Cleanup
+
+// WASM is executed through OCRE container runtime
 ```
 
 **📚 Documentation:**
