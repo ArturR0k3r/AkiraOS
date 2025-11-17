@@ -141,7 +141,7 @@ printk("Current volume: %u%%\n", status.current_volume);
 ### For Discrete Piezo Buzzer Prototype
 
 ```
-ESP32-S3 GPIO9 ──[ 100Ω ]──┬──(+) Piezo Buzzer (-)──┐
+ESP32-S3 GPIO19 ──[ 100Ω ]──┬──(+) Piezo Buzzer (-)──┐
                             │                         │
                             └─────────────────────────┴── GND
 ```
@@ -149,7 +149,7 @@ ESP32-S3 GPIO9 ──[ 100Ω ]──┬──(+) Piezo Buzzer (-)──┐
 ### For Custom MEMS Device
 
 Connect the piezo MEMS actuator pads to:
-- Positive terminal: GPIO9 (PWM output)
+- Positive terminal: GPIO19 (PWM output)
 - Negative terminal: GND
 
 For higher output, use an amplifier circuit (see [prototype validation guide](../../docs/piezo-prototype-validation.md)).
@@ -207,7 +207,7 @@ Record the following for prototype validation:
 
 **No sound output:**
 - Check piezo buzzer polarity (try reversing)
-- Verify GPIO9 is free and not used by another peripheral
+- Verify GPIO19 is free and not used by another peripheral
 - Confirm `CONFIG_AKIRA_AUDIO=y` in prj.conf
 - Test with maximum volume: `audio tone 2000 1000 100`
 

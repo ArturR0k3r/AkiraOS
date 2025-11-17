@@ -9,7 +9,7 @@ The simplest way to test the piezo audio functionality:
 ```
      ESP32-S3 DevKit
            │
-       GPIO9 ────[ 100Ω resistor ]────┬───(+) Piezo Buzzer
+       GPIO19 ────[ 100Ω resistor ]────┬───(+) Piezo Buzzer
                                        │
                                     (GND)────(-)────────┘
 ```
@@ -43,7 +43,7 @@ For louder audio output, use a transistor amplifier:
                         │                   │
                         └───────────────────┴─── GND
                                             │
-                                        GPIO9 (PWM)
+                                        GPIO19 (PWM)
                                           ESP32-S3
 ```
 
@@ -62,8 +62,8 @@ For louder audio output, use a transistor amplifier:
 
 1. **Connect USB-C cable** to ESP32-S3 DevKit
 2. **Verify power LED** is illuminated
-3. **Note GPIO9 location** on your specific board
-   - On ESP32-S3-DevKitM-1: GPIO9 is typically labeled on the board
+3. **Note GPIO19 location** on your specific board
+   - On ESP32-S3-DevKitM-1: GPIO19 is typically labeled on the board
    - Check pinout diagram if needed
 
 ### Step 2: Breadboard Assembly (Simple Version)
@@ -82,7 +82,7 @@ For louder audio output, use a transistor amplifier:
    - Connect negative lead to ground rail
 
 4. **Add Current Limiting Resistor**
-   - Connect 100Ω resistor between GPIO9 and piezo positive
+   - Connect 100Ω resistor between GPIO19 and piezo positive
    - This protects the GPIO pin
 
 5. **Final Check**
@@ -99,7 +99,7 @@ For louder audio output, use a transistor amplifier:
    - Insert into breadboard with each pin in separate row
 
 3. **Wire Transistor Base**
-   - GPIO9 → 1kΩ resistor → Transistor Base
+   - GPIO19 → 1kΩ resistor → Transistor Base
    - This is the control signal
 
 4. **Wire Transistor Collector**
@@ -118,12 +118,12 @@ For louder audio output, use a transistor amplifier:
 
 | Signal | GPIO Pin | ESP32-S3 Function | Notes |
 |--------|----------|-------------------|-------|
-| PWM Audio | GPIO9 | LEDC Channel 0 | Configurable in device tree |
+| PWM Audio | GPIO19 | LEDC Channel 0 | Configurable in device tree |
 | GND | GND | Common ground | Multiple GND pins available |
 
 ### Alternative GPIO Options
 
-If GPIO9 conflicts with other peripherals, you can reconfigure in device tree overlay:
+If GPIO19 conflicts with other peripherals, you can reconfigure in device tree overlay:
 
 ```dts
 /* In boards/esp32s3_devkitm.overlay */
@@ -186,7 +186,7 @@ Available GPIO pins on ESP32-S3 for PWM:
 - [ ] Transistor pins correctly identified
 
 ### 2. Multimeter Checks
-- [ ] Measure GPIO9 to GND: Should be high-Z (open) when idle
+- [ ] Measure GPIO19 to GND: Should be high-Z (open) when idle
 - [ ] Measure piezo resistance: ~hundreds of ohms
 - [ ] Check for shorts: GPIO to GND should be open circuit
 
@@ -218,7 +218,7 @@ akira:~$ audio test_tone
 
 **Check:**
 1. Piezo buzzer polarity (try reversing)
-2. GPIO9 is not used by another peripheral
+2. GPIO19 is not used by another peripheral
 3. Resistor connections are secure
 4. USB provides adequate power (try different USB port/cable)
 
@@ -272,7 +272,7 @@ For custom piezoelectric MEMS devices fabricated through MPW:
 ### Electrical Interface
 
 ```
-ESP32-S3 GPIO9 ──[ Series Resistor ]──┬── Top Electrode
+ESP32-S3 GPIO19 ──[ Series Resistor ]──┬── Top Electrode
                                        │
                                     (PCB)── Bottom Electrode (GND)
 ```

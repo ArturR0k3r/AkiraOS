@@ -108,7 +108,7 @@ All design files, software, and documentation released as open-source:
                       ↓
 ┌────────────────────────────────────────────────┐
 │         ESP32-S3 LEDC PWM Peripheral           │
-│            (100 kHz carrier, GPIO9)            │
+│            (100 kHz carrier, GPIO19)            │
 └────────────────────────────────────────────────┘
                       ↓
 ┌────────────────────────────────────────────────┐
@@ -124,7 +124,7 @@ All design files, software, and documentation released as open-source:
 ### Hardware Setup
 - **Platform**: ESP32-S3 DevKit M-1
 - **Prototype Speaker**: Discrete piezo buzzer (Murata 7BB-27-4)
-- **Connection**: GPIO9 → 100Ω → Piezo (+), Piezo (-) → GND
+- **Connection**: GPIO19 → 100Ω → Piezo (+), Piezo (-) → GND
 
 ### Test Results (Discrete Prototype)
 

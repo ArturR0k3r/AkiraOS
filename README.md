@@ -230,7 +230,7 @@ akira:~$ audio status
 For prototype testing with discrete piezo buzzer:
 
 ```
-ESP32-S3 GPIO9 ──[ 100Ω ]──┬──(+) Piezo Buzzer (-)──┐
+ESP32-S3 GPIO19 ──[ 100Ω ]──┬──(+) Piezo Buzzer (-)──┐
                             │                         │
                             └─────────────────────────┴── GND
 ```

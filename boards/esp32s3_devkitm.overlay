@@ -110,7 +110,7 @@ ili9341_bl:
     {
         group2
         {
-            pinmux = <LEDC_CH0_GPIO9>; // Audio output on GPIO9
+            pinmux = <LEDC_CH0_GPIO19>; // Audio output on GPIO19
             output-enable;
         };
     };

@@ -350,7 +350,7 @@ CONFIG_AKIRA_AUDIO_PWM_CHANNEL=0  # PWM channel number
 &pinctrl {
     ledc0_default: ledc0_default {
         group2 {
-            pinmux = <LEDC_CH0_GPIO9>;  /* GPIO9 for audio */
+            pinmux = <LEDC_CH0_GPIO19>;  /* GPIO19 for audio */
             output-enable;
         };
     };
@@ -364,13 +364,13 @@ CONFIG_AKIRA_AUDIO_PWM_CHANNEL=0  # PWM channel number
 ### Simple (Direct)
 
 ```
-ESP32-S3 GPIO9 ──[ 100Ω ]── (+) Piezo Buzzer (─) ── GND
+ESP32-S3 GPIO19 ──[ 100Ω ]── (+) Piezo Buzzer (─) ── GND
 ```
 
 ### Amplified
 
 ```
-GPIO9 ──[ 1kΩ ]── Base (NPN Transistor)
+GPIO19 ──[ 1kΩ ]── Base (NPN Transistor)
                   Collector ── (+) Piezo
                   Emitter ── GND
                   
@@ -417,7 +417,7 @@ GPIO9 ──[ 1kΩ ]── Base (NPN Transistor)
 ---
 
 **Quick Start:**
-1. Connect piezo buzzer to GPIO9 (with 100Ω resistor)
+1. Connect piezo buzzer to GPIO19 (with 100Ω resistor)
 2. Flash AkiraOS: `west flash -d build_esp32s3`
 3. Test audio: `audio test_tone`
 4. Play effects: `audio sfx demo`

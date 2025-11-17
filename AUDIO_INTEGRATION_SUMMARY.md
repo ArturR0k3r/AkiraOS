@@ -118,7 +118,7 @@ audio sfx demo                # Demo all effects
 - **CMakeLists.txt**: Added audio source files
 - **Kconfig**: Audio configuration options
 - **prj.conf**: Enabled PWM peripheral
-- **Device tree overlay**: ESP32-S3 LEDC configuration (GPIO9)
+- **Device tree overlay**: ESP32-S3 LEDC configuration (GPIO19)
 - **README.md**: Audio feature documentation
 
 ---
@@ -183,7 +183,7 @@ AkiraOS/
 ### Hardware Support
 | Platform | Status | GPIO | PWM Peripheral |
 |----------|--------|------|----------------|
-| ESP32-S3 | ✅ Full support | GPIO9 | LEDC Channel 0 |
+| ESP32-S3 | ✅ Full support | GPIO19 | LEDC Channel 0 |
 | ESP32 | ✅ Compatible | Configurable | LEDC |
 | Native sim | ⚠️ Not supported | N/A | N/A |
 
@@ -235,7 +235,7 @@ akira:~$ audio sweep 500 5000 100
 
 ### Minimal Prototype (Direct Connection)
 ```
-ESP32-S3 GPIO9 ──[ 100Ω ]── (+) Piezo Buzzer (─) ── GND
+ESP32-S3 GPIO19 ──[ 100Ω ]── (+) Piezo Buzzer (─) ── GND
 ```
 
 **Components:**
