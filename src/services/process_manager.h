@@ -1,7 +1,3 @@
-/**
- * @file process_manager.h
- * @brief AkiraOS Process Manager API
- */
 
 #ifndef AKIRA_PROCESS_MANAGER_H
 #define AKIRA_PROCESS_MANAGER_H

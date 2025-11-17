@@ -1,8 +1,7 @@
 # west.yml - West workspace manifest
 manifest: 
   projects:
-    # Zephyr RTOS - Using v4.2.1 for ESP32 compatibility
-    # v4.3.0 has POSIX timer issues on ESP32 platforms
+    # Zephyr RTOS
     - name: zephyr
       url: https://github.com/zephyrproject-rtos/zephyr
       revision: v4.2.1

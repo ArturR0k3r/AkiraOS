@@ -1,7 +1,3 @@
-/**
- * @file event_system.h
- * @brief AkiraOS Event System API
- */
 
 #ifndef AKIRA_EVENT_SYSTEM_H
 #define AKIRA_EVENT_SYSTEM_H

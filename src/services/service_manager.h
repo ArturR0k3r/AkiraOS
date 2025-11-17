@@ -1,7 +1,3 @@
-/**
- * @file service_manager.h
- * @brief AkiraOS System Service Manager API
- */
 
 #ifndef AKIRA_SERVICE_MANAGER_H
 #define AKIRA_SERVICE_MANAGER_H
