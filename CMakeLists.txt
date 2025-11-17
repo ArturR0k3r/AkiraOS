@@ -14,14 +14,16 @@ project(akira_os VERSION 1.0.0)
 set(BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR}/boards)
 # set(DTC_OVERLAY_FILE ${CMAKE_CURRENT_LIST_DIR}/akira.overlay)  # Not needed, handled by board overlay
 
-# Include WASM Micro Runtime if available
-if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/modules/wamr)
-    add_subdirectory(modules/wamr/product/zephyr)
-    target_compile_definitions(app PRIVATE CONFIG_WAMR_ENABLE=1)
-endif()
+# REMOVED - Using OCRE's WAMR instead
+# # Include WASM Micro Runtime if available
+# if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/modules/wamr)
+#     add_subdirectory(modules/wamr/product/zephyr)
+#     target_compile_definitions(app PRIVATE CONFIG_WAMR_ENABLE=1)
+# endif()
 
 # OCRE Integration
 set(OCRE_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/../ocre")
+
 if(EXISTS "${OCRE_ROOT_DIR}/src")
     include("${CMAKE_CURRENT_LIST_DIR}/modules/ocre/ocre.cmake")
     target_sources(app PRIVATE ${ocre_component_sources} ${ocre_lib_sources})
@@ -82,8 +84,9 @@ target_include_directories(app PRIVATE
     src/settings/
     src/shell/
     src/drivers/
-    ${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime/core/iwasm/include
-    ${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime/core/shared/utils
+    # REMOVED - OCRE provides WAMR includes
+    # ${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime/core/iwasm/include
+    # ${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime/core/shared/utils
 )
 
 # SDL2 simulator uses external viewer (tools/akira_viewer)

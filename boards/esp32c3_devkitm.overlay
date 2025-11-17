@@ -3,13 +3,14 @@
 #include <zephyr/dt-bindings/i2c/i2c.h>
 
 // SPI2 for future expansion (display, sensors, etc.)
-&spi2 {
+&spi2
+{
     status = "okay";
 };
 
-
 // WiFi configuration
-&wifi {
+&wifi
+{
     status = "okay";
     // WiFi credentbgials will be managed by settings module
 };
@@ -36,5 +37,16 @@
         zephyr,console = &uart0;
         zephyr,shell-uart = &uart0;
     };
+};
 
+// Change storage partition label to user-data-partition for LittleFS
+user_data_partition: &storage_partition {
+    label = "user_data_partition";
+};
+
+// Add alias for user-data-partition
+/ {
+    aliases {
+        user-data-partition = &storage_partition;
+    };
 };

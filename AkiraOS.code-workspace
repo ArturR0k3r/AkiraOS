@@ -69,7 +69,8 @@
 			"chrono": "c",
 			"cstdlib": "c",
 			"cstdint": "c",
-			"*.overlay": "cpp"
+			"*.overlay": "cpp",
+			"cerrno": "c"
 		},
 		"editor.formatOnType": true,
 		"cortex-debug.variableUseNaturalFormat": false,

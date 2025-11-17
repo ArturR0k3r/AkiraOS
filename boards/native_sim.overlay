@@ -12,6 +12,6 @@
 };
 
 // Change storage partition label to user_data_partition for LittleFS
-&storage_partition {
+user_data_partition: &storage_partition {
     label = "user_data_partition";
 };

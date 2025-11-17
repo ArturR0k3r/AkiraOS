@@ -13,13 +13,16 @@
 ### Step 1: Clone Repository
 
 ```bash
-# Create workspace directory
-cd ~ && mkdir Akira && cd Akira
+# Create workspace directory (can be any name you prefer)
+cd ~ && mkdir akira-workspace && cd akira-workspace
 
 # Clone AkiraOS
 git clone --recursive https://github.com/ArturR0k3r/AkiraOS.git
 cd AkiraOS
 ```
+
+**Note:** You can use any workspace directory name. The build system automatically detects 
+the workspace root and expects this structure: `<workspace>/AkiraOS` and `<workspace>/ocre`.
 
 ### Step 2: Initialize West Workspace
 
@@ -60,7 +63,7 @@ cd ../..
 - WAMR is a large external dependency
 - Keeping it separate makes AkiraOS repo cleaner
 - You can easily update WAMR independently
-- OCRE also uses WAMR (as a submodule in `~/Akira/ocre/`)
+- OCRE also uses WAMR (as a submodule in `<workspace>/ocre/`)
 
 ### Step 4: Update OCRE Submodules
 
@@ -103,12 +106,12 @@ west espmonitor
 ### Build All Platforms
 
 ```bash
-./build_all.sh           # Build all platforms
-./build_all.sh esp32s3   # Build ESP32-S3 only
-./build_all.sh esp32     # Build ESP32 only
-./build_all.sh esp32c3   # Build ESP32-C3 only
-./build_all.sh native_sim # Build native simulation
+./build_all.sh           # Build all platforms (native_sim, ESP32-S3, ESP32, ESP32-C3)
 ```
+
+**Individual platform builds:**
+The `build_all.sh` script automatically builds all four targets. To build specific platforms, 
+use west commands directly or modify the script.
 
 ### Build with MCUboot Bootloader
 
@@ -144,31 +147,41 @@ west espmonitor
 ./build_and_run.sh
 
 # Or manually
-./build_all.sh native_sim
+./build_all.sh
 ./build_native_sim/zephyr/zephyr.exe
 ```
+
+**Note:** The build creates a `build_native_sim` directory at the workspace root 
+(`<workspace>/build_native_sim`), not inside the AkiraOS directory.
 
 ---
 
 ## 📁 Workspace Structure After Setup
 
 ```
-~/Akira/
+<workspace>/  (e.g., ~/akira-workspace/)
 ├── AkiraOS/                    # Your application code
 │   ├── src/                    # Application source
+│   ├── boards/                 # Board-specific overlays
 │   ├── modules/                # Local modules
-│   │   ├── ocre/              # OCRE integration
+│   │   ├── ocre/              # OCRE integration (CMake only)
 │   │   └── wasm-micro-runtime/ # WAMR module
 │   ├── build_*.sh              # Build scripts
 │   ├── flash.sh                # Flash script
 │   └── west.yml                # West manifest
+├── build_native_sim/           # Native sim build output
+├── build_esp32s3/              # ESP32-S3 build output
+├── build_esp32/                # ESP32 build output
+├── build_esp32c3/              # ESP32-C3 build output
 ├── zephyr/                     # Zephyr RTOS (fetched by west)
 ├── ocre/                       # OCRE runtime (fetched by west)
-│   └── wasm-micro-runtime/    # WAMR submodule
+│   └── wasm-micro-runtime/    # WAMR submodule (in ocre)
 ├── bootloader/                 # MCUboot (fetched by west)
 ├── modules/                    # Zephyr modules (fetched by west)
 └── tools/                      # Build tools (fetched by west)
 ```
+
+**Important:** Build directories are created at workspace root (`<workspace>/`), not inside AkiraOS.
 
 ---
 
@@ -177,14 +190,14 @@ west espmonitor
 ### Update Zephyr and Modules
 
 ```bash
-cd ~/Akira
+cd <workspace>  # Your workspace directory
 west update
 ```
 
 ### Update OCRE Submodules
 
 ```bash
-cd ~/Akira/ocre
+cd <workspace>/ocre
 git pull origin main
 git submodule update --init --recursive
 ```
@@ -192,7 +205,7 @@ git submodule update --init --recursive
 ### Update WASM-Micro-Runtime
 
 ```bash
-cd ~/Akira/AkiraOS/modules/wasm-micro-runtime
+cd <workspace>/AkiraOS/modules/wasm-micro-runtime
 git pull origin main
 git submodule update --init --recursive
 ```
@@ -228,20 +241,22 @@ pip3 install pyelftools
 
 ```bash
 # Re-initialize all submodules
-cd ~/Akira/ocre
+cd <workspace>/ocre
 git submodule update --init --recursive --force
 
-cd ~/Akira/AkiraOS/modules/wasm-micro-runtime
+cd <workspace>/AkiraOS/modules/wasm-micro-runtime
 git submodule update --init --recursive --force
 ```
 
 ### Clean Everything and Rebuild
 
 ```bash
-cd ~/Akira/AkiraOS
-rm -rf build build_* ../build*
-./build_both.sh esp32s3 clean
+cd <workspace>/AkiraOS
+rm -rf ../build_*
+./build_all.sh
 ```
+
+**Note:** Build directories are at workspace root (`<workspace>/build_*`), so clean from there.
 
 ---
 

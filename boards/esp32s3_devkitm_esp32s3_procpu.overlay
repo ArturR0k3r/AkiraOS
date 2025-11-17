@@ -5,28 +5,11 @@
 // Configure SPI pins - Fixed pin mapping
 &pinctrl
 {
-spim2_default:
-    spim2_default
-    {
-        group1
-        {
+    spim2_default: spim2_default {
+        group1 {
             pinmux = <SPIM2_MISO_GPIO13>, // MISO - GPIO13
-                <SPIM2_MOSI_GPIO11>,      // MOSI - GPIO11
-                <SPIM2_SCLK_GPIO12>;      // SCK  - GPIO12
-        };
-    };
-
-sdmmc0_default:
-    sdmmc0_default
-    {
-        group1
-        {
-            pinmux = <SDMMC_CLK_GPIO14>,  // CLK - GPIO14
-                     <SDMMC_CMD_GPIO15>,  // CMD - GPIO15
-                     <SDMMC_D0_GPIO2>,    // D0 - GPIO2
-                     <SDMMC_D1_GPIO4>,    // D1 - GPIO4
-                     <SDMMC_D2_GPIO5>,    // D2 - GPIO5
-                     <SDMMC_D3_GPIO16>;   // D3 - GPIO16
+                     <SPIM2_MOSI_GPIO11>, // MOSI - GPIO11
+                     <SPIM2_SCLK_GPIO12>; // SCK  - GPIO12
         };
     };
 };
@@ -42,37 +25,30 @@ sdmmc0_default:
 &gpio0
 {
     status = "okay";
-// ILI9341 Display Control Pins
-ili9341_cs:
-    ili9341_cs
-    {
+    
+    // ILI9341 Display Control Pins
+    ili9341_cs: ili9341_cs {
         gpio-hog;
         gpios = <10 GPIO_ACTIVE_LOW>; // CS - GPIO10
-        output-high;                // CS idle high
+        output-high;                   // CS idle high
     };
 
-ili9341_dc:
-    ili9341_dc
-    {
+    ili9341_dc: ili9341_dc {
         gpio-hog;
         gpios = <21 GPIO_ACTIVE_HIGH>; // DC - GPIO21
-        output-low;                  // DC starts low (command mode)
+        output-low;                    // DC starts low (command mode)
     };
 
-ili9341_reset:
-    ili9341_reset
-    {
+    ili9341_reset: ili9341_reset {
         gpio-hog;
         gpios = <18 GPIO_ACTIVE_HIGH>; // RESET - GPIO18
-        output-high;                 // RESET idle high
+        output-high;                   // RESET idle high
     };
 
-ili9341_bl:
-    ili9341_bl
-    {
+    ili9341_bl: ili9341_bl {
         gpio-hog;
-        gpios = <6 GPIO_ACTIVE_HIGH>; // Backlight - GPIO6
-        output-high;                // Backlight on
+        gpios = <6 GPIO_ACTIVE_HIGH>;  // Backlight - GPIO6
+        output-high;                   // Backlight on
     };
 };
 
@@ -102,10 +78,8 @@ ili9341_bl:
 };
 
 // Chosen nodes for Zephyr configuration
-/
-{
-    chosen
-    {
+/ {
+    chosen {
         zephyr,console = &uart0;
         zephyr,shell-uart = &uart0;
     };
@@ -123,7 +97,34 @@ user_data_partition: &storage_partition {
     };
 };
 
-// SD Card support
+// ============================================================================
+// SD Card Support - CURRENTLY DISABLED
+// ============================================================================
+// NOTE: SD card functionality is commented out because the SDMMC pinmux macros
+// (SDMMC_CLK_GPIO*, SDMMC_CMD_GPIO*, etc.) are not yet defined in Zephyr's
+// ESP32-S3 device tree bindings. To enable SD card support:
+// 1. Define the proper pinmux macros in a dt-bindings header, OR
+// 2. Use raw GPIO pin numbers in the pinmux configuration, OR
+// 3. Wait for upstream Zephyr to add ESP32-S3 SDMMC support
+//
+// Uncomment the sections below once the macros are available:
+// ============================================================================
+
+/*
+&pinctrl
+{
+    sdmmc0_default: sdmmc0_default {
+        group1 {
+            pinmux = <SDMMC_CLK_GPIO14>,  // CLK - GPIO14
+                     <SDMMC_CMD_GPIO15>,  // CMD - GPIO15
+                     <SDMMC_D0_GPIO2>,    // D0 - GPIO2
+                     <SDMMC_D1_GPIO4>,    // D1 - GPIO4
+                     <SDMMC_D2_GPIO5>,    // D2 - GPIO5
+                     <SDMMC_D3_GPIO16>;   // D3 - GPIO16
+        };
+    };
+};
+
 sdmmc {
     compatible = "zephyr,sdmmc-disk";
     status = "okay";
@@ -139,3 +140,4 @@ sdmmc {
         status = "okay";
     };
 };
+*/
