@@ -30,6 +30,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <inttypes.h>
 #include "akira/akira.h"
 
 LOG_MODULE_REGISTER(akira_shell, AKIRA_LOG_LEVEL);
@@ -761,7 +762,7 @@ static int cmd_memory_dump(const struct shell *sh, size_t argc, char **argv)
     }
 
     char history_cmd[64];
-    snprintf(history_cmd, sizeof(history_cmd), "debug memdump 0x%lx %zu %c",
+    snprintf(history_cmd, sizeof(history_cmd), "debug memdump 0x%" PRIxPTR " %zu %c",
              address, length, format);
     add_to_history(history_cmd);
 

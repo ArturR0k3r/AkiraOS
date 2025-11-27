@@ -19,36 +19,37 @@ static akira_input_callback_t g_input_callback = NULL;
 
 uint32_t akira_input_read_buttons(void)
 {
-	// TODO: Check CAP_INPUT_READ capability
-	// TODO: Read from akira_buttons driver
-	// TODO: Map hardware buttons to API button masks
-	
+    // TODO: Check CAP_INPUT_READ capability
+    // TODO: Read from akira_buttons driver
+    // TODO: Map hardware buttons to API button masks
+
 #if AKIRA_PLATFORM_NATIVE_SIM
-	return akira_sim_read_buttons();
+    return akira_sim_read_buttons();
 #else
-	// TODO: Read from GPIO
-	return 0;
+    // TODO: Read from GPIO
+    return 0;
 #endif
 }
 
 bool akira_input_button_pressed(uint32_t button)
 {
-	return (akira_input_read_buttons() & button) != 0;
+    return (akira_input_read_buttons() & button) != 0;
 }
 
 void akira_input_set_callback(akira_input_callback_t callback)
 {
-	// TODO: Check CAP_INPUT_READ capability
-	// TODO: Register with button interrupt system
-	// TODO: Store callback per-container
-	g_input_callback = callback;
-	LOG_INF("Input callback registered: %p", callback);
+    // TODO: Check CAP_INPUT_READ capability
+    // TODO: Register with button interrupt system
+    // TODO: Store callback per-container
+    g_input_callback = callback;
+    LOG_INF("Input callback registered: %p", callback);
 }
 
 // TODO: Internal function called by button ISR
 void akira_input_notify(uint32_t buttons)
 {
-	if (g_input_callback) {
-		g_input_callback(buttons);
-	}
+    if (g_input_callback)
+    {
+        g_input_callback(buttons);
+    }
 }

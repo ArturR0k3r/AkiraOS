@@ -468,7 +468,7 @@ int app_list(app_handle_t *handles, int max_count)
 	return count;
 }
 
-int app_verify_signature(app_handle_t handle)
+int akira_app_verify_signature(app_handle_t handle)
 {
 	struct app_cb *app = get_app(handle);
 	if (!app) {

@@ -130,13 +130,15 @@ static int initialize_sd_card(void)
     LOG_INF("Initializing SD card...");
 
     ret = disk_access_init(disk_pdrv);
-    if (ret != 0) {
+    if (ret != 0)
+    {
         LOG_ERR("SD card initialization failed: %d", ret);
         return ret;
     }
 
     ret = fs_mount(&fs);
-    if (ret != 0) {
+    if (ret != 0)
+    {
         LOG_ERR("SD card mount failed: %d", ret);
         return ret;
     }

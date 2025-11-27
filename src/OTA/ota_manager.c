@@ -23,7 +23,7 @@
 #else
 #define OTA_FLASH_AVAILABLE 0
 #endif
- 
+
 LOG_MODULE_REGISTER(ota_manager, AKIRA_LOG_LEVEL);
 
 #if OTA_FLASH_AVAILABLE
