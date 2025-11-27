@@ -229,6 +229,25 @@ if(CONFIG_AKIRA_COAP_CLIENT)
     target_sources(app PRIVATE src/connectivity/client/coap_client.c)
 endif()
 
+# ===== Cloud Connectivity (Unified) =====
+
+if(CONFIG_AKIRA_CLOUD_CLIENT)
+    target_sources(app PRIVATE
+        src/connectivity/cloud/cloud_protocol.c
+        src/connectivity/cloud/cloud_client.c
+    )
+    
+    # App handler (WASM app download/update)
+    if(CONFIG_AKIRA_CLOUD_APP_HANDLER)
+        target_sources(app PRIVATE src/connectivity/cloud/cloud_app_handler.c)
+    endif()
+    
+    # OTA handler (firmware updates)
+    if(CONFIG_AKIRA_CLOUD_OTA_HANDLER)
+        target_sources(app PRIVATE src/connectivity/cloud/cloud_ota_handler.c)
+    endif()
+endif()
+
 # Services (OCRE/WASM runtime wrappers)
 target_sources(app PRIVATE
     src/services/ocre_runtime.c
@@ -244,6 +263,7 @@ target_include_directories(app PRIVATE
     src/connectivity/
     src/connectivity/bluetooth/
     src/connectivity/client/
+    src/connectivity/cloud/
     src/connectivity/hid/
     src/connectivity/http/
     src/connectivity/usb/

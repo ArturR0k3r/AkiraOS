@@ -268,6 +268,84 @@ config AKIRA_COAP_OBSERVE
 
 endmenu
 
+menu "Cloud Connectivity"
+
+config AKIRA_CLOUD_CLIENT
+    bool "Enable unified cloud client"
+    default y
+    help
+      Enable the unified cloud connectivity layer that handles
+      communication from all sources (servers, AkiraApp, web).
+
+config AKIRA_CLOUD_AUTO_CONNECT
+    bool "Auto-connect on boot"
+    default n
+    depends on AKIRA_CLOUD_CLIENT
+    help
+      Automatically connect to cloud server on startup.
+
+config AKIRA_CLOUD_SERVER_URL
+    string "Default cloud server URL"
+    default "wss://akirahub.io/device"
+    depends on AKIRA_CLOUD_CLIENT
+    help
+      Default WebSocket URL for cloud connectivity.
+
+config AKIRA_CLOUD_HEARTBEAT_MS
+    int "Heartbeat interval (ms)"
+    default 30000
+    range 0 300000
+    depends on AKIRA_CLOUD_CLIENT
+    help
+      Interval for sending heartbeat/keep-alive messages.
+      Set to 0 to disable heartbeat.
+
+config AKIRA_CLOUD_BT_ENABLED
+    bool "Enable Bluetooth (AkiraApp) source"
+    default y
+    depends on AKIRA_CLOUD_CLIENT && BT
+    help
+      Accept cloud protocol messages via Bluetooth from AkiraApp.
+
+config AKIRA_CLOUD_WEB_ENABLED
+    bool "Enable Web Server source"
+    default y
+    depends on AKIRA_CLOUD_CLIENT && AKIRA_HTTP_SERVER
+    help
+      Accept cloud protocol messages via local web server WebSocket.
+
+config AKIRA_CLOUD_APP_HANDLER
+    bool "Enable App download handler"
+    default y
+    depends on AKIRA_CLOUD_CLIENT
+    help
+      Handle WASM app download and update messages.
+      Integrates with app_loader and wasm_app_manager.
+
+config AKIRA_CLOUD_OTA_HANDLER
+    bool "Enable OTA handler"
+    default y
+    depends on AKIRA_CLOUD_CLIENT && AKIRA_OTA
+    help
+      Handle firmware update messages from cloud/BT/web.
+      Integrates with OTA manager for flashing.
+
+config AKIRA_CLOUD_AUTO_INSTALL_APPS
+    bool "Auto-install downloaded apps"
+    default y
+    depends on AKIRA_CLOUD_APP_HANDLER
+    help
+      Automatically install apps after successful download.
+
+config AKIRA_CLOUD_AUTO_START_APPS
+    bool "Auto-start installed apps"
+    default n
+    depends on AKIRA_CLOUD_AUTO_INSTALL_APPS
+    help
+      Automatically start apps after installation.
+
+endmenu
+
 menu "OTA Updates"
 
 config AKIRA_OTA
