@@ -46,10 +46,9 @@ target_sources(app PRIVATE
     src/drivers/display_ili9341.c
     src/drivers/fonts.c
     src/drivers/font_data.c
-    src/drivers/akira_hal.c
+    src/drivers/platform_hal.c
     src/shell/akira_shell.c
     src/settings/settings.c
-    src/OTA/web_server.c
 )
 
 # ===== v2.0 Modular Architecture Files =====
@@ -161,16 +160,68 @@ else()
     target_sources(app PRIVATE src/OTA/ota_manager_stub.c)
 endif()
 
+# Legacy web server (used by main.c)
+target_sources(app PRIVATE src/OTA/web_server.c)
+
+# ===== OTA Transport Layer =====
+if(CONFIG_AKIRA_OTA)
+    target_sources(app PRIVATE src/OTA/ota_transport.c)
+    
+    if(CONFIG_AKIRA_OTA_HTTP)
+        target_sources(app PRIVATE src/OTA/transports/ota_http.c)
+    endif()
+    
+    if(CONFIG_AKIRA_OTA_BLE)
+        target_sources(app PRIVATE src/OTA/transports/ota_ble.c)
+    endif()
+    
+    if(CONFIG_AKIRA_OTA_USB)
+        target_sources(app PRIVATE src/OTA/transports/ota_usb.c)
+    endif()
+    
+    if(CONFIG_AKIRA_OTA_CLOUD)
+        target_sources(app PRIVATE src/OTA/transports/ota_cloud.c)
+    endif()
+endif()
+
+# ===== Connectivity Layer =====
+
+# HID Manager (when enabled)
+if(CONFIG_AKIRA_HID)
+    target_sources(app PRIVATE src/connectivity/hid/hid_manager.c)
+    
+    # HID Simulation (native_sim only)
+    if(CONFIG_AKIRA_HID_SIM)
+        target_sources(app PRIVATE src/connectivity/hid/hid_sim.c)
+    endif()
+endif()
+
+# HTTP Server
+if(CONFIG_AKIRA_HTTP_SERVER)
+    target_sources(app PRIVATE src/connectivity/http/http_server.c)
+endif()
+
+# Bluetooth HID (conditional)
+if(CONFIG_AKIRA_BT_HID)
+    target_sources(app PRIVATE
+        src/connectivity/bluetooth/bt_manager.c
+        src/connectivity/bluetooth/bt_hid.c
+    )
+endif()
+
+# USB HID (conditional)
+if(CONFIG_AKIRA_USB_HID)
+    target_sources(app PRIVATE
+        src/connectivity/usb/usb_manager.c
+        src/connectivity/usb/usb_hid.c
+    )
+endif()
+
 # Services (OCRE/WASM runtime wrappers)
 target_sources(app PRIVATE
     src/services/ocre_runtime.c
     src/services/wasm_app_manager.c
 )
-
-# Bluetooth (conditional)
-if(CONFIG_BT)
-    target_sources(app PRIVATE src/bluetooth/bluetooth_manager.c)
-endif()
 
 # Include directories
 target_include_directories(app PRIVATE
@@ -178,7 +229,11 @@ target_include_directories(app PRIVATE
     src/akira/
     src/api/
     src/apps/
-    src/bluetooth/
+    src/connectivity/
+    src/connectivity/bluetooth/
+    src/connectivity/hid/
+    src/connectivity/http/
+    src/connectivity/usb/
     src/drivers/
     src/ipc/
     src/lib/

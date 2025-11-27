@@ -14,7 +14,7 @@
  */
 
 #include "akira_shell.h"
-#include "../drivers/akira_hal.h"
+#include "../drivers/platform_hal.h"
 #if defined(CONFIG_BT)
 #include "../bluetooth/bluetooth_manager.h"
 #endif

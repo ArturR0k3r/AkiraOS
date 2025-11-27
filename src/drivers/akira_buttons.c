@@ -6,7 +6,7 @@
  * Supports all gaming buttons (ON/OFF, SETTINGS, UP, DOWN, LEFT, RIGHT, A, B, X, Y).
  */
 
-#include "akira_hal.h"
+#include "platform_hal.h"
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/kernel.h>

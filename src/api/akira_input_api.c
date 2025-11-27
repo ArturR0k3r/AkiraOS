@@ -5,7 +5,7 @@
 
 #include "akira_api.h"
 #include "../drivers/akira_buttons.h"
-#include "../drivers/akira_hal.h"
+#include "../drivers/platform_hal.h"
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(akira_input_api, LOG_LEVEL_INF);

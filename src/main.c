@@ -14,7 +14,7 @@
 #include <zephyr/drivers/disk.h>
 #include <ff.h>
 #include "drivers/display_ili9341.h"
-#include "drivers/akira_hal.h"
+#include "drivers/platform_hal.h"
 #include "settings/settings.h"
 #include "OTA/ota_manager.h"
 #include "shell/akira_shell.h"

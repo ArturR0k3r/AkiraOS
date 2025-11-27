@@ -139,6 +139,131 @@ config AKIRA_BME280
 
 endmenu
 
+menu "Connectivity"
+
+config AKIRA_HID
+    bool "Enable HID subsystem"
+    default y
+    help
+      Enable unified HID (Human Interface Device) subsystem.
+      Allows AkiraOS to act as a keyboard, gamepad, or other HID device.
+
+config AKIRA_HID_KEYBOARD
+    bool "Enable keyboard HID profile"
+    default y
+    depends on AKIRA_HID
+    help
+      Enable USB/BLE keyboard HID profile.
+
+config AKIRA_HID_GAMEPAD
+    bool "Enable gamepad HID profile"
+    default y
+    depends on AKIRA_HID
+    help
+      Enable USB/BLE gamepad HID profile.
+
+config AKIRA_BT_HID
+    bool "Enable Bluetooth HID"
+    default y
+    depends on AKIRA_HID && BT
+    help
+      Enable HID over Bluetooth Low Energy (BLE).
+      Requires Bluetooth stack to be enabled.
+
+config AKIRA_USB_HID
+    bool "Enable USB HID"
+    default y
+    depends on AKIRA_HID && USB_DEVICE
+    help
+      Enable HID over USB.
+      Requires USB device stack to be enabled.
+
+config AKIRA_HID_SIM
+    bool "Enable HID simulation (for testing)"
+    default y
+    depends on AKIRA_HID && NATIVE_BUILD
+    help
+      Enable HID simulation transport for native_sim testing.
+      Logs HID events instead of sending to real hardware.
+
+config AKIRA_HTTP_SERVER
+    bool "Enable HTTP server"
+    default y
+    help
+      Enable standalone HTTP server for web interface and APIs.
+
+config AKIRA_HTTP_WEBSOCKET
+    bool "Enable WebSocket support"
+    default y
+    depends on AKIRA_HTTP_SERVER
+    help
+      Enable WebSocket protocol support in HTTP server.
+      Allows real-time bidirectional communication.
+
+config AKIRA_HTTP_MAX_CONNECTIONS
+    int "Maximum HTTP connections"
+    default 4
+    range 1 16
+    depends on AKIRA_HTTP_SERVER
+    help
+      Maximum number of concurrent HTTP connections.
+
+config AKIRA_HTTP_PORT
+    int "HTTP server port"
+    default 80
+    depends on AKIRA_HTTP_SERVER
+    help
+      TCP port for HTTP server to listen on.
+
+endmenu
+
+menu "OTA Updates"
+
+config AKIRA_OTA
+    bool "Enable OTA updates"
+    default y
+    help
+      Enable Over-The-Air firmware update support.
+
+config AKIRA_OTA_HTTP
+    bool "Enable HTTP OTA transport"
+    default y
+    depends on AKIRA_OTA && AKIRA_HTTP_SERVER
+    help
+      Enable OTA updates via HTTP web interface.
+
+config AKIRA_OTA_BLE
+    bool "Enable BLE OTA transport"
+    default y
+    depends on AKIRA_OTA && BT
+    help
+      Enable OTA updates via Bluetooth Low Energy.
+
+config AKIRA_OTA_USB
+    bool "Enable USB OTA transport"
+    default y
+    depends on AKIRA_OTA && USB_DEVICE
+    help
+      Enable OTA updates via USB connection.
+
+config AKIRA_OTA_CLOUD
+    bool "Enable Cloud OTA transport (stub)"
+    default n
+    depends on AKIRA_OTA
+    help
+      Enable OTA updates from cloud service.
+      Currently a stub for future implementation.
+
+config AKIRA_OTA_MAX_CHUNK_SIZE
+    int "OTA chunk size (bytes)"
+    default 4096
+    range 512 65536
+    depends on AKIRA_OTA
+    help
+      Maximum size of each OTA data chunk during transfer.
+
+endmenu
+
 menu "Power Management"
 
 config AKIRA_POWER_MANAGER

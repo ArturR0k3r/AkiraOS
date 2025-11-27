@@ -1,9 +1,9 @@
 /**
- * @file akira_hal.c
- * @brief Akira Hardware Abstraction Layer Implementation
+ * @file platform_hal.c
+ * @brief Platform Hardware Abstraction Layer Implementation
  */
 
-#include "akira_hal.h"
+#include "platform_hal.h"
 #include <zephyr/logging/log.h>
 #include <string.h>
 

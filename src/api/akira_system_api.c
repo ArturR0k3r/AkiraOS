@@ -4,7 +4,7 @@
  */
 
 #include "akira_api.h"
-#include "../drivers/akira_hal.h"
+#include "../drivers/platform_hal.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 

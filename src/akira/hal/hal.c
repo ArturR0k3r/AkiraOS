@@ -283,7 +283,7 @@ static void gpio_interrupt_handler(const struct device *port,
 }
 
 int akira_hal_gpio_set_interrupt(akira_hal_gpio_t *gpio, akira_hal_gpio_int_t trigger,
-                             akira_hal_gpio_callback_t callback, void *user_data)
+                                 akira_hal_gpio_callback_t callback, void *user_data)
 {
     if (!gpio)
         return -1;
@@ -385,7 +385,7 @@ void akira_hal_spi_close(akira_spi_t *spi)
 }
 
 int akira_hal_spi_transfer(akira_spi_t *spi, const uint8_t *tx_data,
-                       uint8_t *rx_data, size_t len)
+                           uint8_t *rx_data, size_t len)
 {
     if (!spi)
         return -1;
@@ -410,8 +410,8 @@ int akira_hal_spi_read(akira_spi_t *spi, uint8_t *data, size_t len)
 }
 
 int akira_hal_spi_write_read(akira_spi_t *spi,
-                         const uint8_t *tx_data, size_t tx_len,
-                         uint8_t *rx_data, size_t rx_len)
+                             const uint8_t *tx_data, size_t tx_len,
+                             uint8_t *rx_data, size_t rx_len)
 {
     if (!spi)
         return -1;
@@ -506,8 +506,8 @@ int akira_hal_i2c_read(akira_hal_i2c_t *i2c, uint8_t *data, size_t len)
 }
 
 int akira_hal_i2c_write_read(akira_hal_i2c_t *i2c,
-                         const uint8_t *tx_data, size_t tx_len,
-                         uint8_t *rx_data, size_t rx_len)
+                             const uint8_t *tx_data, size_t tx_len,
+                             uint8_t *rx_data, size_t rx_len)
 {
     if (!i2c)
         return -1;
@@ -516,13 +516,13 @@ int akira_hal_i2c_write_read(akira_hal_i2c_t *i2c,
 }
 
 int akira_hal_i2c_read_reg(akira_hal_i2c_t *i2c, uint8_t reg,
-                       uint8_t *data, size_t len)
+                           uint8_t *data, size_t len)
 {
     return akira_hal_i2c_write_read(i2c, &reg, 1, data, len);
 }
 
 int akira_hal_i2c_write_reg(akira_hal_i2c_t *i2c, uint8_t reg,
-                        const uint8_t *data, size_t len)
+                            const uint8_t *data, size_t len)
 {
     if (!i2c)
         return -1;

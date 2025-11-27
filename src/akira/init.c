@@ -122,8 +122,7 @@ static void publish_init_event(void)
         .timestamp = k_uptime_get_32(),
         .source_id = 0,
         .data = NULL,
-        .data_size = 0
-    };
+        .data_size = 0};
 
     akira_event_publish(&event);
 }

@@ -1,8 +1,8 @@
 /**
- * @file akira_hal.h
- * @brief Akira Hardware Abstraction Layer
+ * @file platform_hal.h
+ * @brief Platform Hardware Abstraction Layer
  *
- * Provides a unified interface for hardware access across multiple platforms:
+ * Provides hardware-specific abstraction for GPIO, SPI, display simulation.
  * - native_sim (simulation/testing with button/display emulation)
  * - ESP32 (original ESP32)
  * - ESP32-S3 (newer ESP32-S3)
@@ -10,8 +10,8 @@
  * This allows the same codebase to compile and run on all platforms.
  */
 
-#ifndef AKIRA_HAL_H
-#define AKIRA_HAL_H
+#ifndef PLATFORM_HAL_H
+#define PLATFORM_HAL_H
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
@@ -162,4 +162,4 @@ void akira_sim_draw_pixel(int x, int y, uint16_t color);
  */
 void akira_sim_show_display(void);
 
-#endif /* AKIRA_HAL_H */
+#endif /* PLATFORM_HAL_H */
