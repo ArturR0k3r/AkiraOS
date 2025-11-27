@@ -142,7 +142,7 @@ OCRE enforces permissions at runtime. Apps cannot call APIs outside granted capa
      │ destroy               │ reload                 ↓
      │                       │                   ┌─────────┐
      └───────────────────────┴─────────────────  │ PAUSED  │
-                                                  └─────────┘
+                                                 └─────────┘
 ```
 
 ### OCRE API

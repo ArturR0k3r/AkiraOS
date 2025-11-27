@@ -17,7 +17,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "../akira.h"
+#include "akira/akira.h"
 
 LOG_MODULE_REGISTER(user_settings, AKIRA_LOG_LEVEL);
 

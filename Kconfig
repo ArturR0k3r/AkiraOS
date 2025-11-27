@@ -11,6 +11,14 @@ config AKIRA_OS
       Enable AkiraOS specific features and drivers.
     select PRINTK
 
+config AKIRA_LOG_LEVEL
+    int "AkiraOS log level"
+    default 3
+    range 0 4
+    help
+      Set the log level for AkiraOS modules.
+      0=OFF, 1=ERR, 2=WRN, 3=INF, 4=DBG
+
 config AKIRA_DISPLAY_ILI9341
     bool "Enable ILI9341 display driver"
     default y
@@ -70,6 +78,157 @@ config AKIRA_INA219
     help
       Enable INA219 current and power monitor driver.
       Measures bus voltage, shunt voltage, current, and power consumption.
+
+# ===== v2.0 Modular Architecture =====
+
+menu "Display Drivers"
+
+config AKIRA_SSD1306
+    bool "Enable SSD1306 OLED display"
+    default n
+    depends on I2C
+    help
+      Enable SSD1306 128x64 OLED display driver.
+      Used on Akira-Micro.
+
+config AKIRA_ST7789
+    bool "Enable ST7789 TFT display"
+    default n
+    depends on SPI && GPIO
+    help
+      Enable ST7789 240x240/240x320 TFT display driver.
+      High-performance SPI display for Akira-Console.
+
+endmenu
+
+menu "RF Drivers"
+
+config AKIRA_RF_FRAMEWORK
+    bool "Enable unified RF framework"
+    default n
+    help
+      Enable the unified RF driver framework that provides
+      a common API for multiple RF chips.
+
+config AKIRA_LR1121
+    bool "Enable LR1121 LoRa driver"
+    default n
+    depends on SPI && GPIO && AKIRA_RF_FRAMEWORK
+    help
+      Enable Semtech LR1121 multi-band LoRa transceiver.
+      Supports LoRa and GFSK modulation, Sub-GHz to 2.4GHz.
+
+config AKIRA_CC1101
+    bool "Enable CC1101 Sub-GHz driver"
+    default n
+    depends on SPI && GPIO && AKIRA_RF_FRAMEWORK
+    help
+      Enable TI CC1101 Sub-GHz transceiver driver.
+      Supports 300-928MHz frequency range.
+
+endmenu
+
+menu "Sensor Drivers"
+
+config AKIRA_BME280
+    bool "Enable BME280 environmental sensor"
+    default n
+    depends on I2C
+    help
+      Enable Bosch BME280 temperature, humidity, and pressure sensor.
+
+endmenu
+
+menu "Power Management"
+
+config AKIRA_POWER_MANAGER
+    bool "Enable power management"
+    default y
+    help
+      Enable system power management with sleep modes
+      and battery monitoring.
+
+config AKIRA_POWER_DEEP_SLEEP
+    bool "Enable deep sleep mode"
+    default n
+    depends on AKIRA_POWER_MANAGER
+    help
+      Enable deep sleep mode for maximum power savings.
+
+endmenu
+
+menu "Security"
+
+config AKIRA_CAPABILITY_SYSTEM
+    bool "Enable capability-based security"
+    default y
+    help
+      Enable capability-based permission system for apps.
+
+config AKIRA_APP_SIGNING
+    bool "Enable app signature verification"
+    default n
+    depends on AKIRA_CAPABILITY_SYSTEM
+    help
+      Require cryptographic signature verification for apps.
+
+endmenu
+
+menu "IPC"
+
+config AKIRA_MESSAGE_BUS
+    bool "Enable message bus IPC"
+    default y
+    help
+      Enable pub/sub message bus for inter-app communication.
+
+config AKIRA_SHARED_MEMORY
+    bool "Enable shared memory IPC"
+    default n
+    help
+      Enable shared memory regions for zero-copy data transfer.
+
+config AKIRA_SHMEM_POOL_SIZE
+    int "Shared memory pool size (KB)"
+    default 64
+    depends on AKIRA_SHARED_MEMORY
+    help
+      Size of the shared memory pool in kilobytes.
+
+endmenu
+
+menu "Resource Management"
+
+config AKIRA_RESOURCE_MANAGER
+    bool "Enable resource manager"
+    default y
+    help
+      Enable resource quota management for apps.
+
+config AKIRA_SCHEDULER
+    bool "Enable WASM app scheduler"
+    default y
+    help
+      Enable cooperative scheduler for WASM apps.
+
+endmenu
+
+menu "UI Framework"
+
+config AKIRA_UI_FRAMEWORK
+    bool "Enable UI framework"
+    default y
+    help
+      Enable lightweight widget-based UI framework.
+
+config AKIRA_UI_MAX_WIDGETS
+    int "Maximum widgets per screen"
+    default 32
+    depends on AKIRA_UI_FRAMEWORK
+    help
+      Maximum number of widgets per UI screen.
+
+endmenu
 
 config FS_FATFS_VOLUME_COUNT
     int "Number of FAT volumes"

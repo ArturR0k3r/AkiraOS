@@ -52,7 +52,7 @@ static void register_webserver_ota_transport(void)
 #include <zephyr/kernel.h>
 #include <string.h>
 #include <stdio.h>
-#include "../akira.h"
+#include "akira/akira.h"
 
 LOG_MODULE_REGISTER(web_server, AKIRA_LOG_LEVEL);
 

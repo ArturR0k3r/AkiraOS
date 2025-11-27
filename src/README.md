@@ -1,135 +1,116 @@
 # AkiraOS Source Directory Structure
 
-This directory contains the **core AkiraOS functionality**. Third-party modules and dependencies are located in the separate `modules/` directory.
+This directory contains the **core AkiraOS v2.0 functionality**.
 
 ## Directory Organization
 
-### Core Components (`src/`)
+### Core Kernel (`src/akira/`)
 
-- **`akira_modules/`** - Akira Module System for external project integration
-  - Module registration and management
-  - Communication interfaces (UART, SPI, I2C, Network)
-  - Hardware control APIs (Display, Buttons, GPIO)
-  - Event broadcasting system
-  - Protocol handlers (JSON, MessagePack)
+The heart of AkiraOS - kernel services and hardware abstraction:
 
-- **`drivers/`** - Hardware drivers
-  - `display_ili9341.c` - ILI9341 TFT display driver
-  - `fonts.c` - Font rendering
-  - `akira_hal.c` - Hardware abstraction layer
-  - `sim/` - Simulation drivers for native_sim
+- **`akira.h`** - Central include file for all AkiraOS APIs
+- **`init.c`** - System initialization sequence
+- **`shell.c`** - Debug shell commands (`akira status`, `akira memory`, etc.)
+- **`kernel/`** - Kernel subsystems:
+  - `types.h` - Core types (handles, results, priorities)
+  - `service.h/c` - Service manager with dependencies
+  - `event.h/c` - Event system with async dispatch
+  - `process.h/c` - Process lifecycle management
+  - `memory.h/c` - Memory pool management
+  - `timer.h/c` - Software timers and time utilities
+- **`hal/`** - Hardware abstraction layer:
+  - `hal.h/c` - GPIO, SPI, I2C abstraction
 
-- **`shell/`** - Interactive shell
-  - `akira_shell.c` - Command-line interface
-  - System diagnostics and control
+### API Layer (`src/api/`)
 
-- **`settings/`** - Configuration management
-  - `settings.c` - Persistent settings storage
-  - WiFi credentials, device ID, preferences
+WASM-exported APIs for applications:
 
-- **`OTA/`** - Over-The-Air updates
-  - `ota_manager.c` - Firmware update management
-  - `web_server.c` - HTTP/WebSocket server for OTA
+- `akira_display_api.c` - Display/graphics functions
+- `akira_input_api.c` - Button/touch input
+- `akira_rf_api.c` - RF communication
+- `akira_sensor_api.c` - Sensor access
+- `akira_storage_api.c` - File/flash storage
+- `akira_network_api.c` - Network operations
+- `akira_system_api.c` - System info/control
 
-- **`apps/`** - Built-in applications
-  - User-facing applications
-  - Example programs
+### Security (`src/security/`)
 
-- **`ui/`** - User interface components
-  - UI framework
-  - Display management
+Trust and capability system:
 
-- **`lib/`** - Utility libraries
-  - Helper functions
-  - Common utilities
+- `trust_levels.h` - Trust level definitions (Kernel/System/Trusted/User)
+- `capability.h/c` - Capability-based permissions
+- `app_signing.h/c` - App signature verification
 
-- **`runtime/`** - Application runtime
-  - Container runtime integration
-  - App lifecycle management
+### Power Management (`src/power/`)
 
-- **`bluetooth/`** - Bluetooth support
-  - BLE communication
-  - Device pairing
+- `power_manager.h/c` - Power modes, sleep, battery monitoring
 
-- **`services/`** - System services
-  - Background services
-  - System daemons
+### IPC (`src/ipc/`)
 
-### Third-Party Modules (`../modules/`)
+Inter-process communication:
 
-The `modules/` directory contains external dependencies:
+- `message_bus.h/c` - Pub/sub message passing
+- `shared_memory.h/c` - Shared memory regions
 
-- **`wasm-micro-runtime/`** - WebAssembly runtime (WAMR)
-- **`ocre/`** - OCRE container runtime
-- Other third-party libraries
+### Resource Management (`src/resource/`)
 
-## Design Philosophy
+- `resource_manager.h/c` - Resource allocation/tracking
+- `scheduler.h/c` - Process scheduling
 
-### Why This Structure?
+### UI Framework (`src/ui/`)
 
-**Core vs Third-Party Separation:**
-- `src/` contains code we write and maintain
-- `modules/` contains upstream third-party code
-- Clear ownership and maintenance boundaries
-- Easy to update third-party dependencies without affecting core code
+- `ui_framework.h/c` - Widget system, event handling
 
-**Benefits:**
-1. **Clear Organization** - Easy to find what you need
-2. **Module Independence** - Each directory is self-contained
-3. **Build System** - CMake naturally handles this structure
-4. **Git Management** - Separate .gitignore rules for third-party code
-5. **Documentation** - README in each major component
+### App Loader (`src/apps/`)
 
-## Adding New Components
+- `app_loader.h/c` - WASM app loading and verification
 
-### Adding Core AkiraOS Functionality
-→ Add to `src/` directory with appropriate subdirectory
+### Drivers (`src/drivers/`)
 
-### Adding Third-Party Library
-→ Add to `modules/` directory and update `modules/modules.cmake`
+Hardware drivers:
 
-## Example: Akira Module System
+- `display_ili9341.c` - ILI9341 TFT display
+- `ssd1306.c` - SSD1306 OLED (optional)
+- `st7789.c` - ST7789 TFT (optional)
+- `rf_framework.c` - Unified RF driver framework
+- `lr1121.c`, `cc1101.c` - RF chip drivers
+- `bme280.c`, `lsm6ds3.c`, `ina219.c` - Sensors
+- `nrf24l01.c` - 2.4GHz transceiver
+- `akira_hal.c` - Legacy HAL (use akira/hal/ instead)
+- `fonts.c`, `font_data.c` - Font rendering
 
-The `akira_modules/` system is **core AkiraOS functionality**, not a third-party module:
+### Services (`src/services/`)
 
-```
-src/akira_modules/          ← Core AkiraOS component
-├── include/
-│   └── akira_module.h      ← Public API
-├── src/
-│   ├── akira_module_core.c
-│   ├── akira_module_manager.c
-│   └── akira_module_registry.c
-└── examples/
-    ├── display_module.c
-    ├── button_module.c
-    └── gpio_module.c
+Runtime services:
 
-modules/                     ← Third-party dependencies
-├── wasm-micro-runtime/     ← External project
-├── ocre/                   ← External project
-└── modules.cmake
+- `ocre_runtime.h/c` - OCRE container runtime wrapper
+- `wasm_app_manager.h/c` - WASM app lifecycle
+
+### Other Components
+
+- **`bluetooth/`** - Bluetooth manager
+- **`shell/`** - Legacy shell commands
+- **`settings/`** - Persistent settings
+- **`OTA/`** - Over-the-air updates, web server
+- **`lib/`** - Utility libraries (POSIX compat)
+- **`akira_modules/`** - External module integration
+
+## Usage
+
+Include the main header to access all AkiraOS APIs:
+
+```c
+#include "akira/akira.h"
+
+int main(void) {
+    akira_init();
+    akira_start();
+    // ...
+}
 ```
 
-## Building
-
-The build system automatically includes all core components:
+## Build
 
 ```bash
-# All src/ components are built automatically
 west build -b esp32s3_devkitm/esp32s3/procpu
-
-# Enable akira_modules in prj.conf:
-CONFIG_AKIRA_MODULE=y
 ```
-
-## Learn More
-
-- **Akira Modules:** See `akira_modules/README.md`
-- **Drivers:** See `drivers/README.md` (if exists)
-- **Shell:** See `shell/README.md` (if exists)
-- **Main Documentation:** See `../docs/`
-
----
-
-**Remember:** `src/` = Our Code | `modules/` = Their Code

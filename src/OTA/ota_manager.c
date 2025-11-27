@@ -13,7 +13,7 @@
 #include <zephyr/kernel.h>
 #include <string.h>
 #include <stdlib.h>
-#include "../akira.h"
+#include "akira/akira.h"
 
 /* Include flash and MCUboot APIs only if available */
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
@@ -23,7 +23,7 @@
 #else
 #define OTA_FLASH_AVAILABLE 0
 #endif
-
+ 
 LOG_MODULE_REGISTER(ota_manager, AKIRA_LOG_LEVEL);
 
 #if OTA_FLASH_AVAILABLE

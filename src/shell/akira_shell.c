@@ -30,7 +30,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "../akira.h"
+#include "akira/akira.h"
 
 LOG_MODULE_REGISTER(akira_shell, AKIRA_LOG_LEVEL);
 

@@ -19,7 +19,7 @@
 #include "OTA/ota_manager.h"
 #include "shell/akira_shell.h"
 #include "OTA/web_server.h"
-#include "../akira.h"
+#include "akira/akira.h"
 
 LOG_MODULE_REGISTER(akira_main, AKIRA_LOG_LEVEL);
 
