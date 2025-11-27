@@ -11,32 +11,33 @@
 #include "../hid/hid_common.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-/**
- * @brief Initialize Bluetooth HID service
- * @return 0 on success
- */
-int bt_hid_init(void);
+    /**
+     * @brief Initialize Bluetooth HID service
+     * @return 0 on success
+     */
+    int bt_hid_init(void);
 
-/**
- * @brief Get BLE HID transport operations
- * @return Transport operations pointer
- */
-const hid_transport_ops_t *bt_hid_get_transport(void);
+    /**
+     * @brief Get BLE HID transport operations
+     * @return Transport operations pointer
+     */
+    const hid_transport_ops_t *bt_hid_get_transport(void);
 
-/**
- * @brief Enable BLE HID service
- * @return 0 on success
- */
-int bt_hid_enable(void);
+    /**
+     * @brief Enable BLE HID service
+     * @return 0 on success
+     */
+    int bt_hid_enable(void);
 
-/**
- * @brief Disable BLE HID service
- * @return 0 on success
- */
-int bt_hid_disable(void);
+    /**
+     * @brief Disable BLE HID service
+     * @return 0 on success
+     */
+    int bt_hid_disable(void);
 
 #ifdef __cplusplus
 }

@@ -16,15 +16,16 @@ LOG_MODULE_REGISTER(hid_sim, CONFIG_AKIRA_LOG_LEVEL);
 /* Internal State                                                            */
 /*===========================================================================*/
 
-static struct {
+static struct
+{
     bool initialized;
     bool connected;
     bool enabled;
     hid_device_type_t device_types;
-    
+
     hid_keyboard_report_t last_keyboard;
     hid_gamepad_report_t last_gamepad;
-    
+
     hid_event_callback_t event_cb;
     void *event_cb_data;
     hid_output_callback_t output_cb;
@@ -58,11 +59,11 @@ static void print_gamepad_report(const hid_gamepad_report_t *report)
 static int sim_init(hid_device_type_t types)
 {
     LOG_INF("HID Simulation initializing (types=0x%02x)", types);
-    
+
     memset(&sim_state, 0, sizeof(sim_state));
     sim_state.device_types = types;
     sim_state.initialized = true;
-    
+
     return 0;
 }
 
@@ -71,23 +72,24 @@ static int sim_deinit(void)
     sim_state.initialized = false;
     sim_state.connected = false;
     sim_state.enabled = false;
-    
+
     LOG_INF("HID Simulation deinitialized");
     return 0;
 }
 
 static int sim_enable(void)
 {
-    if (!sim_state.initialized) {
+    if (!sim_state.initialized)
+    {
         return -EINVAL;
     }
-    
+
     sim_state.enabled = true;
     LOG_INF("HID Simulation enabled - ready for virtual connection");
-    
+
     /* Auto-connect in simulation for easier testing */
     hid_sim_connect();
-    
+
     return 0;
 }
 
@@ -95,34 +97,36 @@ static int sim_disable(void)
 {
     sim_state.enabled = false;
     sim_state.connected = false;
-    
+
     LOG_INF("HID Simulation disabled");
     return 0;
 }
 
 static int sim_send_keyboard(const hid_keyboard_report_t *report)
 {
-    if (!sim_state.connected) {
+    if (!sim_state.connected)
+    {
         LOG_WRN("SIM: Cannot send keyboard - not connected");
         return -ENOTCONN;
     }
-    
+
     memcpy(&sim_state.last_keyboard, report, sizeof(hid_keyboard_report_t));
     print_keyboard_report(report);
-    
+
     return 0;
 }
 
 static int sim_send_gamepad(const hid_gamepad_report_t *report)
 {
-    if (!sim_state.connected) {
+    if (!sim_state.connected)
+    {
         LOG_WRN("SIM: Cannot send gamepad - not connected");
         return -ENOTCONN;
     }
-    
+
     memcpy(&sim_state.last_gamepad, report, sizeof(hid_gamepad_report_t));
     print_gamepad_report(report);
-    
+
     return 0;
 }
 
@@ -159,8 +163,7 @@ static const hid_transport_ops_t sim_transport = {
     .send_gamepad = sim_send_gamepad,
     .register_event_cb = sim_register_event_cb,
     .register_output_cb = sim_register_output_cb,
-    .is_connected = sim_is_connected
-};
+    .is_connected = sim_is_connected};
 
 /*===========================================================================*/
 /* Public API                                                                */
@@ -179,15 +182,17 @@ const hid_transport_ops_t *hid_sim_get_transport(void)
 
 void hid_sim_connect(void)
 {
-    if (!sim_state.enabled) {
+    if (!sim_state.enabled)
+    {
         LOG_WRN("Cannot connect - HID sim not enabled");
         return;
     }
-    
+
     sim_state.connected = true;
     LOG_INF("HID Simulation: Host connected");
-    
-    if (sim_state.event_cb) {
+
+    if (sim_state.event_cb)
+    {
         sim_state.event_cb(HID_EVENT_CONNECTED, NULL, sim_state.event_cb_data);
     }
 }
@@ -196,8 +201,9 @@ void hid_sim_disconnect(void)
 {
     sim_state.connected = false;
     LOG_INF("HID Simulation: Host disconnected");
-    
-    if (sim_state.event_cb) {
+
+    if (sim_state.event_cb)
+    {
         sim_state.event_cb(HID_EVENT_DISCONNECTED, NULL, sim_state.event_cb_data);
     }
 }
@@ -214,7 +220,8 @@ const hid_gamepad_report_t *hid_sim_get_last_gamepad_report(void)
 
 void hid_sim_send_output_report(const uint8_t *data, size_t len)
 {
-    if (sim_state.output_cb) {
+    if (sim_state.output_cb)
+    {
         sim_state.output_cb(data, len, sim_state.output_cb_data);
     }
 }

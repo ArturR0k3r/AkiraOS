@@ -11,32 +11,33 @@
 #include "../hid/hid_common.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-/**
- * @brief Initialize USB HID device
- * @return 0 on success
- */
-int usb_hid_init(void);
+    /**
+     * @brief Initialize USB HID device
+     * @return 0 on success
+     */
+    int usb_hid_init(void);
 
-/**
- * @brief Get USB HID transport operations
- * @return Transport operations pointer
- */
-const hid_transport_ops_t *usb_hid_get_transport(void);
+    /**
+     * @brief Get USB HID transport operations
+     * @return Transport operations pointer
+     */
+    const hid_transport_ops_t *usb_hid_get_transport(void);
 
-/**
- * @brief Enable USB HID
- * @return 0 on success
- */
-int usb_hid_enable(void);
+    /**
+     * @brief Enable USB HID
+     * @return 0 on success
+     */
+    int usb_hid_enable(void);
 
-/**
- * @brief Disable USB HID
- * @return 0 on success
- */
-int usb_hid_disable(void);
+    /**
+     * @brief Disable USB HID
+     * @return 0 on success
+     */
+    int usb_hid_disable(void);
 
 #ifdef __cplusplus
 }

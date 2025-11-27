@@ -217,6 +217,57 @@ config AKIRA_HTTP_PORT
 
 endmenu
 
+menu "Client Connectivity"
+
+config AKIRA_WS_CLIENT
+    bool "Enable WebSocket client"
+    default n
+    depends on NETWORKING && WEBSOCKET_CLIENT
+    help
+      Enable WebSocket client for connecting to remote servers.
+      Supports secure (wss://) and insecure (ws://) connections.
+
+config AKIRA_WS_AUTO_RECONNECT
+    bool "Enable WebSocket auto-reconnect"
+    default y
+    depends on AKIRA_WS_CLIENT
+    help
+      Automatically reconnect when WebSocket connection is lost.
+
+config AKIRA_WS_RECONNECT_DELAY_MS
+    int "WebSocket reconnect delay (ms)"
+    default 1000
+    range 100 60000
+    depends on AKIRA_WS_AUTO_RECONNECT
+    help
+      Initial delay before attempting to reconnect.
+      Delay increases exponentially on repeated failures.
+
+config AKIRA_COAP_CLIENT
+    bool "Enable CoAP client"
+    default n
+    depends on NETWORKING && COAP
+    help
+      Enable CoAP (Constrained Application Protocol) client.
+      Ideal for IoT cloud connectivity and LwM2M.
+
+config AKIRA_COAP_DTLS
+    bool "Enable CoAP DTLS security"
+    default n
+    depends on AKIRA_COAP_CLIENT && NET_SOCKETS_SOCKOPT_TLS
+    help
+      Enable DTLS security for CoAP (coaps://).
+      Requires TLS/DTLS support in networking stack.
+
+config AKIRA_COAP_OBSERVE
+    bool "Enable CoAP observe"
+    default y
+    depends on AKIRA_COAP_CLIENT
+    help
+      Enable CoAP observe (RFC 7641) for push notifications.
+
+endmenu
+
 menu "OTA Updates"
 
 config AKIRA_OTA

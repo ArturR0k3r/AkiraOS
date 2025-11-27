@@ -217,6 +217,18 @@ if(CONFIG_AKIRA_USB_HID)
     )
 endif()
 
+# ===== Client Connectivity =====
+
+# WebSocket Client
+if(CONFIG_AKIRA_WS_CLIENT)
+    target_sources(app PRIVATE src/connectivity/client/ws_client.c)
+endif()
+
+# CoAP Client
+if(CONFIG_AKIRA_COAP_CLIENT)
+    target_sources(app PRIVATE src/connectivity/client/coap_client.c)
+endif()
+
 # Services (OCRE/WASM runtime wrappers)
 target_sources(app PRIVATE
     src/services/ocre_runtime.c
@@ -231,6 +243,7 @@ target_include_directories(app PRIVATE
     src/apps/
     src/connectivity/
     src/connectivity/bluetooth/
+    src/connectivity/client/
     src/connectivity/hid/
     src/connectivity/http/
     src/connectivity/usb/

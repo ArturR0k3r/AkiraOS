@@ -25,19 +25,20 @@ LOG_MODULE_REGISTER(bt_manager, CONFIG_AKIRA_LOG_LEVEL);
 /* Internal State                                                            */
 /*===========================================================================*/
 
-static struct {
+static struct
+{
     bool initialized;
     bt_config_t config;
     bt_state_t state;
     bt_stats_t stats;
-    
+
 #if BT_AVAILABLE
     struct bt_conn *current_conn;
 #endif
-    
+
     bt_event_callback_t event_cb;
     void *event_cb_data;
-    
+
     struct k_mutex mutex;
 } bt_mgr;
 
@@ -47,7 +48,8 @@ static struct {
 
 static void notify_event(bt_event_t event, void *data)
 {
-    if (bt_mgr.event_cb) {
+    if (bt_mgr.event_cb)
+    {
         bt_mgr.event_cb(event, data, bt_mgr.event_cb_data);
     }
 }
@@ -56,20 +58,21 @@ static void notify_event(bt_event_t event, void *data)
 
 static void connected_cb(struct bt_conn *conn, uint8_t err)
 {
-    if (err) {
+    if (err)
+    {
         LOG_ERR("Connection failed (err 0x%02x)", err);
         bt_mgr.state = BT_STATE_READY;
         return;
     }
-    
+
     bt_mgr.current_conn = bt_conn_ref(conn);
     bt_mgr.state = BT_STATE_CONNECTED;
     bt_mgr.stats.connections++;
-    
+
     char addr[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
     LOG_INF("Connected: %s", addr);
-    
+
     notify_event(BT_EVENT_CONNECTED, NULL);
 }
 
@@ -78,37 +81,41 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
     char addr[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
     LOG_INF("Disconnected: %s (reason 0x%02x)", addr, reason);
-    
-    if (bt_mgr.current_conn) {
+
+    if (bt_mgr.current_conn)
+    {
         bt_conn_unref(bt_mgr.current_conn);
         bt_mgr.current_conn = NULL;
     }
-    
+
     bt_mgr.state = BT_STATE_READY;
     bt_mgr.stats.disconnections++;
-    
+
     notify_event(BT_EVENT_DISCONNECTED, NULL);
-    
+
     /* Auto-restart advertising if configured */
-    if (bt_mgr.config.auto_advertise) {
+    if (bt_mgr.config.auto_advertise)
+    {
         bt_manager_start_advertising();
     }
 }
 
 static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
-                                 enum bt_security_err err)
+                                enum bt_security_err err)
 {
     char addr[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-    
-    if (err) {
+
+    if (err)
+    {
         LOG_WRN("Security failed: %s level %d err %d", addr, level, err);
         return;
     }
-    
+
     LOG_INF("Security changed: %s level %d", addr, level);
-    
-    if (level >= BT_SECURITY_L2) {
+
+    if (level >= BT_SECURITY_L2)
+    {
         bt_mgr.stats.bonded = true;
         notify_event(BT_EVENT_PAIRED, NULL);
     }
@@ -136,19 +143,23 @@ static const struct bt_data ad[] = {
 
 int bt_manager_init(const bt_config_t *config)
 {
-    if (bt_mgr.initialized) {
+    if (bt_mgr.initialized)
+    {
         return 0;
     }
-    
+
     LOG_INF("Initializing Bluetooth manager");
-    
+
     k_mutex_init(&bt_mgr.mutex);
     memset(&bt_mgr.stats, 0, sizeof(bt_stats_t));
-    
+
     /* Apply configuration */
-    if (config) {
+    if (config)
+    {
         memcpy(&bt_mgr.config, config, sizeof(bt_config_t));
-    } else {
+    }
+    else
+    {
         bt_mgr.config.device_name = "AkiraOS";
         bt_mgr.config.vendor_id = 0x1234;
         bt_mgr.config.product_id = 0x5678;
@@ -156,35 +167,38 @@ int bt_manager_init(const bt_config_t *config)
         bt_mgr.config.auto_advertise = true;
         bt_mgr.config.pairable = true;
     }
-    
+
     bt_mgr.state = BT_STATE_INITIALIZING;
-    
+
 #if BT_AVAILABLE
     int err = bt_enable(NULL);
-    if (err) {
+    if (err)
+    {
         LOG_ERR("Bluetooth init failed (err %d)", err);
         bt_mgr.state = BT_STATE_ERROR;
         return err;
     }
-    
+
     /* Load stored bonds */
-    if (IS_ENABLED(CONFIG_SETTINGS)) {
+    if (IS_ENABLED(CONFIG_SETTINGS))
+    {
         settings_load();
     }
-    
+
     bt_conn_cb_register(&conn_callbacks);
-    
+
     bt_mgr.state = BT_STATE_READY;
     bt_mgr.initialized = true;
-    
+
     LOG_INF("Bluetooth initialized: %s", bt_mgr.config.device_name);
-    
+
     notify_event(BT_EVENT_READY, NULL);
-    
-    if (bt_mgr.config.auto_advertise) {
+
+    if (bt_mgr.config.auto_advertise)
+    {
         bt_manager_start_advertising();
     }
-    
+
     return 0;
 #else
     LOG_WRN("Bluetooth not available on this platform (simulation mode)");
@@ -196,16 +210,17 @@ int bt_manager_init(const bt_config_t *config)
 
 int bt_manager_deinit(void)
 {
-    if (!bt_mgr.initialized) {
+    if (!bt_mgr.initialized)
+    {
         return 0;
     }
-    
+
     bt_manager_disconnect();
     bt_manager_stop_advertising();
-    
+
     bt_mgr.initialized = false;
     bt_mgr.state = BT_STATE_OFF;
-    
+
     LOG_INF("Bluetooth manager deinitialized");
     return 0;
 }
@@ -213,32 +228,34 @@ int bt_manager_deinit(void)
 int bt_manager_start_advertising(void)
 {
 #if BT_AVAILABLE
-    if (!bt_mgr.initialized) {
+    if (!bt_mgr.initialized)
+    {
         return -EINVAL;
     }
-    
-    if (bt_mgr.state == BT_STATE_CONNECTED) {
+
+    if (bt_mgr.state == BT_STATE_CONNECTED)
+    {
         return -EBUSY;
     }
-    
+
     struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
         BT_LE_ADV_OPT_CONNECTABLE,
         BT_GAP_ADV_FAST_INT_MIN_2,
         BT_GAP_ADV_FAST_INT_MAX_2,
-        NULL
-    );
-    
+        NULL);
+
     struct bt_data sd[] = {
         BT_DATA(BT_DATA_NAME_COMPLETE, bt_mgr.config.device_name,
                 strlen(bt_mgr.config.device_name)),
     };
-    
+
     int err = bt_le_adv_start(&adv_param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
-    if (err) {
+    if (err)
+    {
         LOG_ERR("Advertising start failed (err %d)", err);
         return err;
     }
-    
+
     bt_mgr.state = BT_STATE_ADVERTISING;
     LOG_INF("Bluetooth advertising started");
     return 0;
@@ -252,7 +269,8 @@ int bt_manager_start_advertising(void)
 int bt_manager_stop_advertising(void)
 {
 #if BT_AVAILABLE
-    if (bt_mgr.state == BT_STATE_ADVERTISING) {
+    if (bt_mgr.state == BT_STATE_ADVERTISING)
+    {
         bt_le_adv_stop();
         bt_mgr.state = BT_STATE_READY;
         LOG_INF("Bluetooth advertising stopped");
@@ -267,7 +285,8 @@ int bt_manager_stop_advertising(void)
 int bt_manager_disconnect(void)
 {
 #if BT_AVAILABLE
-    if (bt_mgr.current_conn) {
+    if (bt_mgr.current_conn)
+    {
         bt_conn_disconnect(bt_mgr.current_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
     }
     return 0;
@@ -285,15 +304,16 @@ bt_state_t bt_manager_get_state(void)
 
 int bt_manager_get_stats(bt_stats_t *stats)
 {
-    if (!stats) {
+    if (!stats)
+    {
         return -EINVAL;
     }
-    
+
     k_mutex_lock(&bt_mgr.mutex, K_FOREVER);
     memcpy(stats, &bt_mgr.stats, sizeof(bt_stats_t));
     stats->state = bt_mgr.state;
     k_mutex_unlock(&bt_mgr.mutex);
-    
+
     return 0;
 }
 
@@ -313,7 +333,8 @@ int bt_manager_unpair_all(void)
 {
 #if BT_AVAILABLE
     int err = bt_unpair(BT_ID_DEFAULT, NULL);
-    if (err) {
+    if (err)
+    {
         LOG_ERR("Failed to unpair (err %d)", err);
         return err;
     }
@@ -326,10 +347,11 @@ int bt_manager_unpair_all(void)
 
 int bt_manager_get_address(char *buffer, size_t len)
 {
-    if (!buffer || len < 18) {
+    if (!buffer || len < 18)
+    {
         return -EINVAL;
     }
-    
+
 #if BT_AVAILABLE
     bt_addr_le_t addr;
     size_t count = 1;

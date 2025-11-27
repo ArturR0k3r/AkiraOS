@@ -25,7 +25,8 @@ LOG_MODULE_REGISTER(ota_usb, CONFIG_AKIRA_LOG_LEVEL);
 /* Internal State                                                            */
 /*===========================================================================*/
 
-static struct {
+static struct
+{
     bool initialized;
     bool enabled;
     ota_transport_state_t state;
@@ -53,15 +54,16 @@ static struct {
 
 static int usb_init(void)
 {
-    if (usb_ota.initialized) {
+    if (usb_ota.initialized)
+    {
         return 0;
     }
-    
+
     LOG_INF("Initializing USB OTA transport");
-    
+
     memset(&usb_ota, 0, sizeof(usb_ota));
     usb_ota.state = OTA_TRANSPORT_IDLE;
-    
+
     usb_ota.initialized = true;
     return 0;
 }
@@ -75,13 +77,14 @@ static int usb_deinit(void)
 
 static int usb_enable(void)
 {
-    if (!usb_ota.initialized) {
+    if (!usb_ota.initialized)
+    {
         return -EINVAL;
     }
-    
+
     usb_ota.enabled = true;
     usb_ota.state = OTA_TRANSPORT_READY;
-    
+
     LOG_INF("USB OTA transport enabled");
     return 0;
 }
@@ -90,7 +93,7 @@ static int usb_disable(void)
 {
     usb_ota.enabled = false;
     usb_ota.state = OTA_TRANSPORT_IDLE;
-    
+
     LOG_INF("USB OTA transport disabled");
     return 0;
 }
@@ -111,7 +114,8 @@ static bool usb_is_active(void)
 
 static int usb_abort(void)
 {
-    if (usb_ota.state == OTA_TRANSPORT_RECEIVING) {
+    if (usb_ota.state == OTA_TRANSPORT_RECEIVING)
+    {
         ota_abort_update();
         usb_ota.state = OTA_TRANSPORT_READY;
     }
@@ -137,8 +141,7 @@ static const ota_transport_ops_t usb_transport = {
     .is_available = usb_is_available,
     .is_active = usb_is_active,
     .abort = usb_abort,
-    .get_state = usb_get_state
-};
+    .get_state = usb_get_state};
 
 int ota_usb_init(void)
 {

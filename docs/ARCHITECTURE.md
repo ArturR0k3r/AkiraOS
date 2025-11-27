@@ -31,10 +31,20 @@ AkiraOS is a modular, security-focused embedded OS designed for resource-constra
 │        (Isolation, quotas, signing, inter-app communication)    │
 ├────────────────┬────────────────────────┬───────────────────────┤
 │  RF Manager    │    OTA Manager         │  Power Manager        │
-│ (Multi-radio)  │ (Secure updates)       │ (Battery, sleep)      │
+│ (Multi-radio)  │ (Multi-transport)      │ (Battery, sleep)      │
 ├────────────────┴────────────────────────┴───────────────────────┤
-│              AkiraAbstractionLayer (akira_hal)                  │
-│        (Unified interface for ESP32, nRF, STM32 platforms)      │
+│                    Connectivity Layer                           │
+│  ┌──────────────┬──────────────┬──────────────┬──────────────┐ │
+│  │ HID Manager  │ HTTP Server  │ BT Manager   │ USB Manager  │ │
+│  │ (Keyboard/   │ (WebSocket)  │ (BLE HID)    │ (USB HID)    │ │
+│  │  Gamepad)    │              │              │              │ │
+│  └──────────────┴──────────────┴──────────────┴──────────────┘ │
+├─────────────────────────────────────────────────────────────────┤
+│              Platform HAL (platform_hal)                        │
+│        (Hardware GPIO, SPI, Display simulation)                 │
+├─────────────────────────────────────────────────────────────────┤
+│              Akira System HAL (akira/hal)                       │
+│        (System version, uptime, reboot, device info)            │
 ├─────────────────────────────────────────────────────────────────┤
 │                      Driver Framework                           │
 │  ┌──────────────┬──────────────┬──────────────┬──────────────┐ │
@@ -338,7 +348,144 @@ int akira_mqtt_subscribe(const char *topic, void (*callback)(const void *data, s
 
 ---
 
-## AkiraAbstractionLayer (HAL)
+## Connectivity Layer
+
+The connectivity layer provides unified interfaces for HID (Human Interface Device), HTTP server, Bluetooth, and USB functionality.
+
+### HID Manager
+
+AkiraOS can act as a HID device (keyboard, gamepad) over multiple transports:
+
+```c
+// Initialize HID with keyboard and gamepad profiles
+hid_manager_init(HID_DEVICE_KEYBOARD | HID_DEVICE_GAMEPAD);
+
+// Set transport (BLE, USB, or simulated for testing)
+hid_manager_set_transport(HID_TRANSPORT_BLE);
+
+// Send keyboard input
+hid_keyboard_key_press(HID_KEY_A);
+hid_keyboard_key_release(HID_KEY_A);
+
+// Send gamepad input
+hid_gamepad_button_press(HID_GAMEPAD_BUTTON_A);
+hid_gamepad_axis_move(HID_GAMEPAD_AXIS_LEFT_X, 127);
+```
+
+### HID Configuration (Kconfig)
+
+```kconfig
+CONFIG_AKIRA_HID=y           # Enable HID subsystem
+CONFIG_AKIRA_HID_KEYBOARD=y  # Keyboard profile
+CONFIG_AKIRA_HID_GAMEPAD=y   # Gamepad profile
+CONFIG_AKIRA_BT_HID=y        # HID over Bluetooth
+CONFIG_AKIRA_USB_HID=y       # HID over USB
+CONFIG_AKIRA_HID_SIM=y       # Simulation (native_sim)
+```
+
+### Bluetooth Manager
+
+```c
+// Initialize Bluetooth stack
+akira_bt_init();
+
+// Start advertising as HID device
+akira_bt_advertise_start(AKIRA_BT_ADV_HID);
+
+// Connection callbacks
+akira_bt_register_connect_cb(on_connect);
+akira_bt_register_disconnect_cb(on_disconnect);
+```
+
+### USB Manager
+
+```c
+// Initialize USB device stack
+akira_usb_init();
+
+// Enable HID class
+akira_usb_enable_class(AKIRA_USB_CLASS_HID);
+```
+
+### HTTP Server
+
+Independent HTTP server with WebSocket support:
+
+```c
+// Initialize and start server
+akira_http_server_init();
+akira_http_server_start();
+
+// Register route handler
+http_route_t route = {
+    .method = HTTP_GET,
+    .path = "/api/status",
+    .handler = handle_status
+};
+akira_http_register_route(&route);
+
+// Enable WebSocket
+akira_http_enable_websocket();
+akira_http_ws_register_message_cb(on_ws_message, NULL);
+
+// Broadcast to all WebSocket clients
+akira_http_ws_send_text(-1, "{\"event\":\"update\"}");
+```
+
+### HTTP Configuration (Kconfig)
+
+```kconfig
+CONFIG_AKIRA_HTTP_SERVER=y     # Enable HTTP server
+CONFIG_AKIRA_HTTP_WEBSOCKET=y  # WebSocket support
+CONFIG_AKIRA_HTTP_PORT=80      # Server port
+CONFIG_AKIRA_HTTP_MAX_CONNECTIONS=4
+```
+
+---
+
+## Hardware Abstraction Layers
+
+AkiraOS uses a two-layer HAL architecture:
+
+### 1. Platform HAL (`src/drivers/platform_hal.h`)
+
+Hardware-specific abstraction for GPIO, SPI, displays, and simulation:
+
+```c
+// GPIO operations
+int platform_hal_gpio_init(void);
+int platform_hal_gpio_set(uint32_t pin, int value);
+int platform_hal_gpio_get(uint32_t pin);
+
+// SPI operations
+int platform_hal_spi_init(void);
+int platform_hal_spi_transfer(const uint8_t *tx, uint8_t *rx, size_t len);
+
+// Display simulation (native_sim)
+void platform_hal_display_sim_pixel(int x, int y, uint16_t color);
+void platform_hal_display_sim_flush(void);
+
+// Button simulation
+uint32_t platform_hal_get_buttons(void);
+```
+
+### 2. System HAL (`src/akira/hal/hal.h`)
+
+System-level abstraction for version, uptime, and device info:
+
+```c
+// System information
+const char *akira_hal_get_version(void);
+uint32_t akira_hal_get_uptime_ms(void);
+const char *akira_hal_get_platform_name(void);
+
+// System control
+void akira_hal_reboot(void);
+void akira_hal_shutdown(void);
+
+// Device identification
+const char *akira_hal_get_device_id(void);
+```
 
 ### Supported Platforms
 
@@ -472,6 +619,45 @@ int len = akira_rf_receive(buffer, sizeof(buffer), 5000);
 ---
 
 ## OTA Manager
+
+### Multi-Transport Architecture
+
+OTA updates can be delivered through multiple transport sources:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                       OTA Manager                               │
+│            (Firmware validation, flashing, rollback)            │
+├─────────────────────────────────────────────────────────────────┤
+│                    OTA Transport Interface                      │
+│  ┌──────────────┬──────────────┬──────────────┬──────────────┐ │
+│  │ HTTP         │ BLE          │ USB          │ Cloud        │ │
+│  │ Transport    │ Transport    │ Transport    │ Transport    │ │
+│  │ (Web upload) │ (GATT OTA)   │ (CDC ACM)    │ (AkiraHub)   │ │
+│  └──────────────┴──────────────┴──────────────┴──────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Transport Selection
+
+```c
+// Enable/disable OTA sources at runtime
+ota_transport_set_enabled_sources(OTA_SOURCE_HTTP | OTA_SOURCE_BLE);
+
+// Register callbacks for progress and completion
+ota_transport_set_data_cb(on_ota_data);
+ota_transport_set_complete_cb(on_ota_complete);
+```
+
+### OTA Source Configuration (Kconfig)
+
+```kconfig
+CONFIG_AKIRA_OTA=y
+CONFIG_AKIRA_OTA_HTTP=y      # Via web server upload
+CONFIG_AKIRA_OTA_BLE=y       # Via Bluetooth
+CONFIG_AKIRA_OTA_USB=y       # Via USB connection
+CONFIG_AKIRA_OTA_CLOUD=n     # Cloud (future AkiraHub)
+```
 
 ### Secure Update Process
 
