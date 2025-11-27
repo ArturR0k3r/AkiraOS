@@ -106,6 +106,8 @@ AkiraOS is an open-source gaming console that combines the power of modern embed
 - 🎯 **Retro Gaming**: Run classic-style games compiled to WebAssembly
 - 🔧 **Hacker Toolkit**: Built-in cybersecurity tools and CLI access
 - 🌐 **Network Capable**: Wi-Fi and Bluetooth connectivity
+- ☁️ **Cloud Connected**: Unified messaging from cloud, mobile app, and web
+- 📦 **OTA Updates**: Firmware and app updates from any source
 - 🔋 **Portable**: Battery-powered with USB-C charging
 - 🎨 **Customizable**: Cyberpunk-themed UI with multiple skins
 - 📱 **Modern Architecture**: WebAssembly runtime on embedded hardware

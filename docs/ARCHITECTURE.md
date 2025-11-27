@@ -33,6 +33,9 @@ AkiraOS is a modular, security-focused embedded OS designed for resource-constra
 │  RF Manager    │    OTA Manager         │  Power Manager        │
 │ (Multi-radio)  │ (Multi-transport)      │ (Battery, sleep)      │
 ├────────────────┴────────────────────────┴───────────────────────┤
+│                       Cloud Client                              │
+│        (Unified messaging: Cloud, BT App, Web, USB)             │
+├─────────────────────────────────────────────────────────────────┤
 │                    Connectivity Layer                           │
 │  ┌──────────────┬──────────────┬──────────────┬──────────────┐ │
 │  │ HID Manager  │ HTTP Server  │ BT Manager   │ USB Manager  │ │
@@ -439,6 +442,71 @@ CONFIG_AKIRA_HTTP_SERVER=y     # Enable HTTP server
 CONFIG_AKIRA_HTTP_WEBSOCKET=y  # WebSocket support
 CONFIG_AKIRA_HTTP_PORT=80      # Server port
 CONFIG_AKIRA_HTTP_MAX_CONNECTIONS=4
+```
+
+### Cloud Client (Unified Messaging)
+
+The Cloud Client provides unified message routing from **ALL external sources** to appropriate handlers:
+
+**Message Sources:**
+- **Cloud Server** — Remote WebSocket/CoAP/MQTT servers
+- **AkiraApp (Bluetooth)** — Mobile companion app via BLE
+- **Web Server** — Local HTTP/WebSocket interface
+- **USB Host** — Connected computer via CDC ACM
+
+**Message Handlers:**
+- **OTA Handler** — Firmware updates from any source
+- **App Handler** — WASM app downloads and updates
+- **Data Handler** — Sensor data, telemetry, configuration
+- **Custom Handlers** — User-defined message processors
+
+```c
+#include "cloud_client.h"
+#include "cloud_app_handler.h"
+#include "cloud_ota_handler.h"
+
+// Initialize cloud connectivity
+cloud_client_config_t config = {
+    .server_url = "wss://cloud.akira.io/devices",
+    .device_id = "akira-001",
+    .heartbeat_interval_s = 30,
+    .auto_reconnect = true
+};
+cloud_client_init(&config);
+cloud_app_handler_init();
+cloud_ota_handler_init();
+
+// Connect to cloud
+cloud_client_connect();
+
+// Register custom handler
+int my_handler(const cloud_msg_t *msg, void *user) {
+    LOG_INF("Received: category=%d type=%d from=%d",
+            msg->category, msg->type, msg->source);
+    return 0;
+}
+cloud_register_handler(MSG_CAT_DATA, my_handler, NULL);
+
+// Send message
+cloud_msg_t msg = {
+    .category = MSG_CAT_DATA,
+    .type = MSG_TYPE_TELEMETRY,
+    .payload = json_data,
+    .payload_len = strlen(json_data)
+};
+cloud_client_send(&msg);
+```
+
+### Cloud Configuration (Kconfig)
+
+```kconfig
+CONFIG_AKIRA_CLOUD_CLIENT=y           # Enable cloud client
+CONFIG_AKIRA_CLOUD_APP_HANDLER=y      # WASM app download handler
+CONFIG_AKIRA_CLOUD_OTA_HANDLER=y      # Firmware update handler
+CONFIG_AKIRA_CLOUD_SERVER_URL=""      # Default server URL
+CONFIG_AKIRA_CLOUD_HEARTBEAT_SEC=30   # Heartbeat interval
+CONFIG_AKIRA_CLOUD_AUTO_RECONNECT=y   # Auto-reconnect on disconnect
+CONFIG_AKIRA_CLOUD_MSG_QUEUE_SIZE=16  # Message queue size
 ```
 
 ---

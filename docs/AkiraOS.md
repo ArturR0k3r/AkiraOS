@@ -10,6 +10,8 @@
 ├─────────────────────────────┤
 │      Akira Shell            │ ← Command-line, Debug Console, Scripting
 ├─────────────────────────────┤
+│      Cloud Client           │ ← Unified messaging: Cloud, BT App, Web, USB
+├─────────────────────────────┤
 │      OTA Manager            │ ← Multi-transport: HTTP, BLE, USB, Cloud
 ├─────────────────────────────┤
 │      Settings Module        │ ← Persistent User/Device Settings
@@ -36,6 +38,13 @@
 
 AkiraOS provides a unified connectivity layer for:
 
+### Cloud Client (Unified Messaging)
+- **Multi-Source Routing**: Cloud, Bluetooth app (AkiraApp), Web server, USB
+- **Message Categories**: System, OTA, App, Data, Control, Notify
+- **App Handler**: Download and install WASM apps from any source
+- **OTA Handler**: Firmware updates triggered from any source
+- **Custom Handlers**: Register handlers for specific message types
+
 ### HID (Human Interface Device)
 - **Keyboard Profile**: Send keystrokes over BLE/USB
 - **Gamepad Profile**: Controller inputs (buttons, axes, D-pad)
@@ -47,9 +56,14 @@ AkiraOS provides a unified connectivity layer for:
 - **WebSocket**: Real-time bidirectional communication
 - **OTA Upload**: Firmware updates via web interface
 
+### Client Connectivity
+- **WebSocket Client**: Connect to cloud servers (WSS)
+- **CoAP Client**: IoT protocols with DTLS support
+- **Auto-Reconnect**: Configurable retry with exponential backoff
+
 ### OTA Multi-Transport
 - **HTTP**: Web server file upload
 - **BLE**: Bluetooth OTA service
 - **USB**: USB CDC ACM transfer
-- **Cloud**: Future AkiraHub integration (stub)
+- **Cloud**: Via Cloud Client Future AkiraHub (stub)
 

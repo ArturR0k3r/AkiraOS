@@ -11,6 +11,8 @@ The connectivity layer provides unified interfaces for:
 - **Bluetooth Manager** - BLE stack management and HID service
 - **USB Manager** - USB device stack and HID class
 - **OTA Transports** - Multi-source firmware updates
+- **Cloud Client** - Unified messaging from cloud, mobile app, web server, and USB
+- **Client Connectivity** - WebSocket and CoAP clients for outbound connections
 
 ## Directory Structure
 
@@ -35,11 +37,20 @@ src/connectivity/
 ├── http/
 │   ├── http_server.h     # HTTP server with WebSocket
 │   └── http_server.c     # Route handling, WebSocket management
-└── client/
-    ├── ws_client.h       # WebSocket client API
-    ├── ws_client.c       # WebSocket client implementation
-    ├── coap_client.h     # CoAP client API
-    └── coap_client.c     # CoAP client implementation
+├── client/
+│   ├── ws_client.h       # WebSocket client API
+│   ├── ws_client.c       # WebSocket client implementation
+│   ├── coap_client.h     # CoAP client API
+│   └── coap_client.c     # CoAP client implementation
+└── cloud/
+    ├── cloud_protocol.h      # Cloud message protocol definitions
+    ├── cloud_protocol.c      # Message serialization/parsing
+    ├── cloud_client.h        # Unified cloud client API
+    ├── cloud_client.c        # Multi-source message routing
+    ├── cloud_app_handler.h   # WASM app download handler
+    ├── cloud_app_handler.c   # App installation logic
+    ├── cloud_ota_handler.h   # Firmware update handler
+    └── cloud_ota_handler.c   # OTA flash write logic
 ```
 
 ## HID Subsystem
@@ -352,6 +363,244 @@ CONFIG_AKIRA_WS_RECONNECT_DELAY_MS=1000  # Initial delay
 CONFIG_AKIRA_COAP_CLIENT=y        # Enable CoAP client
 CONFIG_AKIRA_COAP_DTLS=y          # DTLS security (coaps://)
 CONFIG_AKIRA_COAP_OBSERVE=y       # Observe support
+```
+
+## Cloud Client (Unified Messaging)
+
+The Cloud Client provides **unified messaging from ALL sources** - cloud servers, mobile app (AkiraApp via Bluetooth), local web server, and USB. It routes messages to appropriate handlers (OTA, App Loader, custom) based on message category.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                        External Sources                              │
+├────────────────┬────────────────┬────────────────┬──────────────────┤
+│ Cloud Server   │ AkiraApp (BT)  │ Web Server     │ USB Host         │
+│ (WS/CoAP/MQTT) │ (BLE SPP)      │ (HTTP/WS)      │ (CDC ACM)        │
+└────────┬───────┴────────┬───────┴────────┬───────┴──────────┬───────┘
+         │                │                │                  │
+         ▼                ▼                ▼                  ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                       Cloud Client (Router)                          │
+│  ┌─────────────────────────────────────────────────────────────────┐ │
+│  │                    Message Queue (Thread-Safe)                  │ │
+│  └─────────────────────────────────────────────────────────────────┘ │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │                    Handler Registry                             │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐       │  │
+│  │  │ OTA      │  │ App      │  │ Data     │  │ Custom   │       │  │
+│  │  │ Handler  │  │ Handler  │  │ Handler  │  │ Handler  │       │  │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘       │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────┘
+         │                │                │                  │
+         ▼                ▼                ▼                  ▼
+┌────────────────┬────────────────┬────────────────┬──────────────────┐
+│ OTA Manager    │ WASM App Mgr   │ User Data      │ Custom Logic     │
+│ (Flash Write)  │ (App Install)  │ (Sensor/Config)│ (User Handler)   │
+└────────────────┴────────────────┴────────────────┴──────────────────┘
+```
+
+### Message Protocol
+
+Messages use a JSON-based protocol with optional binary payloads:
+
+```c
+// Message categories
+typedef enum {
+    MSG_CAT_SYSTEM,     // System commands (ping, status)
+    MSG_CAT_OTA,        // Firmware updates
+    MSG_CAT_APP,        // WASM app management
+    MSG_CAT_DATA,       // Sensor data, telemetry
+    MSG_CAT_CONTROL,    // Device control commands
+    MSG_CAT_NOTIFY      // Notifications/events
+} msg_category_t;
+
+// Message sources
+typedef enum {
+    MSG_SOURCE_CLOUD,       // Remote cloud server
+    MSG_SOURCE_BT_APP,      // Mobile app via Bluetooth
+    MSG_SOURCE_WEB_SERVER,  // Local web interface
+    MSG_SOURCE_USB          // USB host connection
+} msg_source_t;
+```
+
+### Message Types
+
+| Category | Type | Description |
+|----------|------|-------------|
+| System | `MSG_TYPE_PING` | Keep-alive ping |
+| System | `MSG_TYPE_STATUS_REQ` | Request device status |
+| System | `MSG_TYPE_CONFIG` | Configuration update |
+| OTA | `MSG_TYPE_FW_AVAILABLE` | New firmware available |
+| OTA | `MSG_TYPE_FW_CHUNK` | Firmware data chunk |
+| OTA | `MSG_TYPE_FW_COMPLETE` | Firmware transfer complete |
+| App | `MSG_TYPE_APP_LIST` | List installed apps |
+| App | `MSG_TYPE_APP_INSTALL` | Install new app |
+| App | `MSG_TYPE_APP_UPDATE` | Update existing app |
+| App | `MSG_TYPE_APP_REMOVE` | Remove an app |
+| App | `MSG_TYPE_APP_CHUNK` | App data chunk |
+| Data | `MSG_TYPE_SENSOR_DATA` | Sensor readings |
+| Data | `MSG_TYPE_TELEMETRY` | Telemetry upload |
+| Control | `MSG_TYPE_CMD` | Execute command |
+| Control | `MSG_TYPE_REBOOT` | Reboot device |
+| Notify | `MSG_TYPE_EVENT` | Event notification |
+| Notify | `MSG_TYPE_ALERT` | Alert/alarm |
+
+### Usage
+
+#### Initialize Cloud Client
+
+```c
+#include "cloud_client.h"
+#include "cloud_app_handler.h"
+#include "cloud_ota_handler.h"
+
+// Configure cloud connection
+cloud_client_config_t config = {
+    .server_url = "wss://cloud.akira.io/devices",
+    .device_id = "akira-001",
+    .auth_token = device_token,
+    .heartbeat_interval_s = 30,
+    .auto_reconnect = true
+};
+
+// Initialize
+cloud_client_init(&config);
+
+// Initialize built-in handlers
+cloud_app_handler_init();
+cloud_ota_handler_init();
+
+// Connect to cloud
+cloud_client_connect();
+```
+
+#### Register Custom Handler
+
+```c
+// Custom handler for data messages
+int my_data_handler(const cloud_msg_t *msg, void *user) {
+    LOG_INF("Data from %s: %.*s", 
+            msg_source_name(msg->source),
+            msg->payload_len, msg->payload);
+    
+    // Process sensor data, telemetry, etc.
+    return 0;
+}
+
+// Register for DATA category
+cloud_register_handler(MSG_CAT_DATA, my_data_handler, NULL);
+```
+
+#### Receive from Multiple Sources
+
+The Cloud Client can receive messages from ANY source:
+
+```c
+// These are called by transport layers (internal)
+// Bluetooth transport calls this when data arrives:
+cloud_client_bt_receive(data, len);
+
+// Web server calls this for incoming messages:
+cloud_client_web_receive(data, len);
+
+// USB transport calls this:
+cloud_client_usb_receive(data, len);
+
+// All messages go through the same handler registry!
+```
+
+#### Send Messages to Cloud
+
+```c
+// Send telemetry
+cloud_msg_t msg = {
+    .category = MSG_CAT_DATA,
+    .type = MSG_TYPE_TELEMETRY,
+    .payload = json_data,
+    .payload_len = strlen(json_data)
+};
+cloud_client_send(&msg);
+
+// Request app list
+cloud_client_send_simple(MSG_CAT_APP, MSG_TYPE_APP_LIST);
+```
+
+#### App Handler - Download WASM Apps
+
+```c
+#include "cloud_app_handler.h"
+
+// Progress callback
+void on_progress(const char *app_id, size_t received, size_t total, void *user) {
+    int pct = (received * 100) / total;
+    LOG_INF("Downloading %s: %d%%", app_id, pct);
+}
+
+// Completion callback
+void on_complete(const char *app_id, int result, void *user) {
+    if (result == 0) {
+        LOG_INF("App %s installed!", app_id);
+    }
+}
+
+// Request app download
+cloud_app_callbacks_t cbs = {
+    .on_progress = on_progress,
+    .on_complete = on_complete
+};
+cloud_app_download("my-wasm-app", &cbs, NULL);
+
+// Check for app updates
+cloud_app_check_updates();
+```
+
+#### OTA Handler - Firmware Updates
+
+```c
+#include "cloud_ota_handler.h"
+
+// Progress callback
+void on_ota_progress(size_t received, size_t total, void *user) {
+    LOG_INF("OTA: %zu / %zu bytes", received, total);
+}
+
+// Complete callback
+void on_ota_done(int result, void *user) {
+    if (result == 0) {
+        LOG_INF("OTA complete, rebooting...");
+        sys_reboot(SYS_REBOOT_COLD);
+    }
+}
+
+// Check for firmware updates
+cloud_ota_check("1.0.0");
+
+// Manual download
+cloud_ota_callbacks_t cbs = {
+    .on_progress = on_ota_progress,
+    .on_complete = on_ota_done
+};
+cloud_ota_download("2.0.0", &cbs, NULL);
+```
+
+### Kconfig Options
+
+```kconfig
+# Cloud Client
+CONFIG_AKIRA_CLOUD_CLIENT=y           # Enable cloud client
+CONFIG_AKIRA_CLOUD_SERVER_URL=""      # Default server URL
+CONFIG_AKIRA_CLOUD_HEARTBEAT_SEC=30   # Heartbeat interval
+CONFIG_AKIRA_CLOUD_AUTO_RECONNECT=y   # Auto-reconnect
+
+# Cloud Handlers
+CONFIG_AKIRA_CLOUD_APP_HANDLER=y      # WASM app handler
+CONFIG_AKIRA_CLOUD_OTA_HANDLER=y      # Firmware update handler
+
+# Message Queue
+CONFIG_AKIRA_CLOUD_MSG_QUEUE_SIZE=16  # Queue size
+CONFIG_AKIRA_CLOUD_MAX_HANDLERS=8     # Max registered handlers
 ```
 
 ## Bluetooth Manager
