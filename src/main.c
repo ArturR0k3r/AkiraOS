@@ -603,7 +603,7 @@ int main(void)
     while (1)
     {
         LOG_INF("... AkiraOS main loop running ...");
-        k_sleep(K_SECONDS(30));
+        k_sleep(K_SECONDS(60));
     }
 
     return 0;

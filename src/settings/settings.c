@@ -166,7 +166,7 @@ static void save_work_handler(struct k_work *work)
 {
     enum settings_result result = SETTINGS_OK;
 
-    if (!atomic_test_and_clear_bit(&settings_dirty, 0))
+    if (!atomic_test_bit(&settings_dirty, 0))
     {
         return; /* Nothing to save */
     }
@@ -194,6 +194,8 @@ static void save_work_handler(struct k_work *work)
 
     if (result == SETTINGS_OK)
     {
+        /* Only clear dirty flag on successful save */
+        atomic_clear_bit(&settings_dirty, 0);
         LOG_INF("Settings saved successfully");
     }
     else
