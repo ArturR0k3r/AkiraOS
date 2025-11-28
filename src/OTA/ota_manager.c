@@ -36,7 +36,7 @@ LOG_MODULE_REGISTER(ota_manager, AKIRA_LOG_LEVEL);
 #define OTA_PROGRESS_REPORT_INTERVAL 8192 // Report every 8KB instead of calculating modulo
 
 /* Thread stack - reduced from default */
-static K_THREAD_STACK_DEFINE(ota_thread_stack, 4096); // Reduced from larger default
+static K_THREAD_STACK_DEFINE(ota_thread_stack, 3072); // Reduced to save memory
 static struct k_thread ota_thread_data;
 static k_tid_t ota_thread_id;
 

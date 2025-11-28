@@ -253,12 +253,22 @@ static void wifi_event_handler(struct net_mgmt_event_callback *cb,
     switch (mgmt_event)
     {
     case NET_EVENT_WIFI_CONNECT_RESULT:
-        LOG_INF("WiFi connected successfully");
-        wifi_connected = true;
-
-        // Get IP address when connected
-        k_work_schedule(&ip_work, K_SECONDS(2));
+    {
+        const struct wifi_status *status = (const struct wifi_status *)cb->info;
+        if (status->status == 0)
+        {
+            LOG_INF("WiFi connected successfully");
+            wifi_connected = true;
+            // Get IP address when connected
+            k_work_schedule(&ip_work, K_SECONDS(2));
+        }
+        else
+        {
+            LOG_ERR("WiFi connection failed: %d", status->status);
+            wifi_connected = false;
+        }
         break;
+    }
 
     case NET_EVENT_WIFI_DISCONNECT_RESULT:
         LOG_INF("WiFi disconnected");
@@ -514,8 +524,8 @@ int main(void)
             else
             {
                 LOG_INF("✅ ILI9341 display initialized");
-                LOG_INF("=== AkiraOS v1.0.0 Test ===");
-                ili9341_draw_text(10, 30, "=== AkiraOS v1.0.0 ===", BLACK_COLOR, FONT_7X10);
+                LOG_INF("=== AkiraOS v1.1.0 Test ===");
+                ili9341_draw_text(10, 30, "=== AkiraOS v1.1.0 ===", BLACK_COLOR, FONT_7X10);
                 LOG_INF("Hardware platform: %s", akira_get_platform_name());
                 char platform_text[64];
                 snprintf(platform_text, sizeof(platform_text), "Platform: %s", akira_get_platform_name());

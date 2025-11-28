@@ -46,7 +46,7 @@ static K_MUTEX_DEFINE(callback_mutex);
 
 /* Work queue for asynchronous operations */
 static struct k_work_q settings_workq;
-static K_THREAD_STACK_DEFINE(settings_workq_stack, 4096);
+static K_THREAD_STACK_DEFINE(settings_workq_stack, 2048);
 
 /* Work items for different operations */
 static struct k_work save_work;
