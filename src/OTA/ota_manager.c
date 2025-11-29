@@ -254,33 +254,52 @@ static enum ota_result flush_write_buffer(void)
     return OTA_OK;
 }
 
+/* Forward declaration */
+static enum ota_result do_abort_update(void);
+
 /* OTA Operations */
 static enum ota_result do_start_update(uint32_t expected_size)
 {
     LOG_INF("Starting OTA, size: %u", expected_size);
 
+    /* If already in progress, abort the previous one first */
     if (ota_status.state != OTA_STATE_IDLE)
     {
-        return OTA_ERROR_ALREADY_IN_PROGRESS;
+        LOG_WRN("OTA already in state %d, aborting previous...", ota_status.state);
+        do_abort_update();
     }
 
-    /* Open and erase secondary flash */
+    /* Ensure we start fresh */
+    if (secondary_fa != NULL)
+    {
+        flash_area_close(secondary_fa);
+        secondary_fa = NULL;
+    }
+    buffer_pos = 0;
+
+    /* Open secondary flash */
     int ret = flash_area_open(FLASH_AREA_IMAGE_SECONDARY, &secondary_fa);
     if (ret)
     {
         LOG_ERR("Flash open failed: %d", ret);
+        update_progress(OTA_STATE_ERROR, "Flash open failed");
         return OTA_ERROR_FLASH_OPEN_FAILED;
     }
 
     update_progress(OTA_STATE_RECEIVING, "Erasing flash...");
+    LOG_INF("OTA: Erasing flash... (0%%)");
+
     ret = flash_area_erase(secondary_fa, 0, secondary_fa->fa_size);
     if (ret)
     {
         LOG_ERR("Flash erase failed: %d", ret);
         flash_area_close(secondary_fa);
         secondary_fa = NULL;
+        update_progress(OTA_STATE_ERROR, "Flash erase failed");
         return OTA_ERROR_FLASH_ERASE_FAILED;
     }
+
+    LOG_INF("OTA: Ready (0%%)");
 
     /* Initialize state */
     k_mutex_lock(&ota_mutex, K_FOREVER);
@@ -290,8 +309,6 @@ static enum ota_result do_start_update(uint32_t expected_size)
     ota_status.last_error = OTA_OK;
     ota_status.last_progress_report = 0;
     k_mutex_unlock(&ota_mutex);
-
-    buffer_pos = 0;
 
     update_progress(OTA_STATE_RECEIVING, "Ready");
     LOG_INF("OTA started, slot prepared");

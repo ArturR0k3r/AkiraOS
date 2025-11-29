@@ -1011,40 +1011,46 @@ static int cmd_wifi_status(const struct shell *sh, size_t argc, char **argv)
     ARG_UNUSED(argv);
 
     struct net_if *iface = net_if_get_default();
-    if (!iface) {
+    if (!iface)
+    {
         shell_print(sh, "No network interface available");
         return -ENODEV;
     }
 
     struct wifi_iface_status status = {0};
     int ret = net_mgmt(NET_REQUEST_WIFI_IFACE_STATUS, iface, &status, sizeof(status));
-    
-    if (ret) {
+
+    if (ret)
+    {
         shell_print(sh, "Failed to get WiFi status: %d", ret);
         return ret;
     }
 
     shell_print(sh, "\n=== WiFi Status ===");
-    shell_print(sh, "State: %s", 
+    shell_print(sh, "State: %s",
                 status.state >= WIFI_STATE_ASSOCIATED ? "Connected" : "Disconnected");
-    
-    if (status.state >= WIFI_STATE_ASSOCIATED) {
+
+    if (status.state >= WIFI_STATE_ASSOCIATED)
+    {
         shell_print(sh, "SSID: %.*s", status.ssid_len, status.ssid);
         shell_print(sh, "Channel: %d", status.channel);
         shell_print(sh, "RSSI: %d dBm", status.rssi);
         shell_print(sh, "Security: %s",
-                    status.security == WIFI_SECURITY_TYPE_NONE ? "Open" :
-                    status.security == WIFI_SECURITY_TYPE_WPA_PSK ? "WPA-PSK" :
-                    status.security == WIFI_SECURITY_TYPE_PSK ? "WPA2-PSK" :
-                    status.security == WIFI_SECURITY_TYPE_SAE ? "WPA3-SAE" : "Unknown");
-        
+                    status.security == WIFI_SECURITY_TYPE_NONE ? "Open" : status.security == WIFI_SECURITY_TYPE_WPA_PSK ? "WPA-PSK"
+                                                                      : status.security == WIFI_SECURITY_TYPE_PSK       ? "WPA2-PSK"
+                                                                      : status.security == WIFI_SECURITY_TYPE_SAE       ? "WPA3-SAE"
+                                                                                                                        : "Unknown");
+
         /* Get IP address */
         char addr_str[NET_IPV4_ADDR_LEN];
         struct in_addr *addr = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
-        if (addr) {
+        if (addr)
+        {
             net_addr_ntop(AF_INET, addr, addr_str, sizeof(addr_str));
             shell_print(sh, "IP Address: %s", addr_str);
-        } else {
+        }
+        else
+        {
             shell_print(sh, "IP Address: (waiting for DHCP)");
         }
     }
@@ -1059,7 +1065,8 @@ static int cmd_wifi_connect(const struct shell *sh, size_t argc, char **argv)
     ARG_UNUSED(argv);
 
     struct net_if *iface = net_if_get_default();
-    if (!iface) {
+    if (!iface)
+    {
         shell_print(sh, "No network interface available");
         return -ENODEV;
     }
@@ -1068,12 +1075,14 @@ static int cmd_wifi_connect(const struct shell *sh, size_t argc, char **argv)
     extern const struct user_settings *user_settings_get(void);
     const struct user_settings *settings = user_settings_get();
 
-    if (!settings->wifi_enabled) {
+    if (!settings->wifi_enabled)
+    {
         shell_print(sh, "WiFi is disabled. Enable with: settings wifi_enable 1");
         return -EINVAL;
     }
 
-    if (strlen(settings->wifi_ssid) == 0) {
+    if (strlen(settings->wifi_ssid) == 0)
+    {
         shell_print(sh, "No WiFi SSID configured. Set with: settings set_wifi <ssid> <password>");
         return -EINVAL;
     }
@@ -1091,7 +1100,8 @@ static int cmd_wifi_connect(const struct shell *sh, size_t argc, char **argv)
     };
 
     int ret = net_mgmt(NET_REQUEST_WIFI_CONNECT, iface, &wifi_params, sizeof(wifi_params));
-    if (ret) {
+    if (ret)
+    {
         shell_print(sh, "WiFi connection request failed: %d", ret);
         return ret;
     }
@@ -1107,7 +1117,8 @@ static int cmd_wifi_scan(const struct shell *sh, size_t argc, char **argv)
     ARG_UNUSED(argv);
 
     struct net_if *iface = net_if_get_default();
-    if (!iface) {
+    if (!iface)
+    {
         shell_print(sh, "No network interface available");
         return -ENODEV;
     }
@@ -1115,7 +1126,8 @@ static int cmd_wifi_scan(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "Starting WiFi scan...");
 
     int ret = net_mgmt(NET_REQUEST_WIFI_SCAN, iface, NULL, 0);
-    if (ret) {
+    if (ret)
+    {
         shell_print(sh, "WiFi scan failed: %d", ret);
         return ret;
     }
@@ -1132,8 +1144,9 @@ static int cmd_web_status(const struct shell *sh, size_t argc, char **argv)
 
     enum web_server_state state = web_server_get_state();
     const char *state_str;
-    
-    switch (state) {
+
+    switch (state)
+    {
     case WEB_SERVER_STOPPED:
         state_str = "Stopped";
         break;
@@ -1155,10 +1168,12 @@ static int cmd_web_status(const struct shell *sh, size_t argc, char **argv)
 
     /* Get IP address to show URL */
     struct net_if *iface = net_if_get_default();
-    if (iface) {
+    if (iface)
+    {
         char addr_str[NET_IPV4_ADDR_LEN];
         struct in_addr *addr = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
-        if (addr) {
+        if (addr)
+        {
             net_addr_ntop(AF_INET, addr, addr_str, sizeof(addr_str));
             shell_print(sh, "URL: http://%s:%d/", addr_str, HTTP_PORT);
         }
@@ -1173,23 +1188,25 @@ static int cmd_web_start(const struct shell *sh, size_t argc, char **argv)
     ARG_UNUSED(argv);
 
     struct net_if *iface = net_if_get_default();
-    if (!iface) {
+    if (!iface)
+    {
         shell_print(sh, "No network interface");
         return -ENODEV;
     }
 
     char addr_str[NET_IPV4_ADDR_LEN];
     struct in_addr *addr = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
-    if (!addr) {
+    if (!addr)
+    {
         shell_print(sh, "No IP address - connect to WiFi first");
         return -ENOTCONN;
     }
 
     net_addr_ntop(AF_INET, addr, addr_str, sizeof(addr_str));
     shell_print(sh, "Starting web server at http://%s:80/", addr_str);
-    
+
     web_server_notify_network_status(true, addr_str);
-    
+
     return 0;
 }
 

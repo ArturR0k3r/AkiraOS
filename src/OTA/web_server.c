@@ -4,6 +4,9 @@
  *
  */
 
+#define _GNU_SOURCE  /* For memmem */
+#include <string.h>
+
 #include "web_server.h"
 #include "ota_manager.h"
 
@@ -126,7 +129,8 @@ void web_server_add_log(const char *log_line)
 {
     k_mutex_lock(&log_mutex, K_FOREVER);
     size_t len = strlen(log_line);
-    if (log_buffer_pos + len + 2 >= LOG_BUFFER_SIZE) {
+    if (log_buffer_pos + len + 2 >= LOG_BUFFER_SIZE)
+    {
         /* Shift buffer - remove first half */
         size_t half = LOG_BUFFER_SIZE / 2;
         memmove(log_buffer, log_buffer + half, log_buffer_pos - half);
@@ -141,81 +145,87 @@ void web_server_add_log(const char *log_line)
 
 /* Modern HTML with terminal interface */
 static const char html_page[] =
-"<!DOCTYPE html><html><head><title>AkiraOS V1.1</title>"
-"<meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-"<style>"
-"*{box-sizing:border-box;margin:0;padding:0}"
-"body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;min-height:100vh}"
-".header{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);padding:20px;text-align:center;border-bottom:2px solid #0f3460}"
-".header h1{color:#00d4ff;font-size:28px;text-shadow:0 0 10px #00d4ff40}"
-".header .version{color:#888;font-size:14px;margin-top:5px}"
-".container{max-width:1200px;margin:0 auto;padding:20px}"
-".grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}"
-"@media(max-width:768px){.grid{grid-template-columns:1fr}}"
-".panel{background:#1a1a2e;border-radius:10px;padding:20px;border:1px solid #0f3460}"
-".panel h3{color:#00d4ff;margin-bottom:15px;font-size:16px;border-bottom:1px solid #0f3460;padding-bottom:10px}"
-".terminal{background:#0d1117;border-radius:8px;font-family:'Consolas','Monaco',monospace;height:400px;overflow:hidden;display:flex;flex-direction:column}"
-".terminal-header{background:#161b22;padding:10px 15px;border-bottom:1px solid #30363d;display:flex;align-items:center;gap:8px}"
-".terminal-header .dot{width:12px;height:12px;border-radius:50%}"
-".terminal-header .dot.red{background:#ff5f56}"
-".terminal-header .dot.yellow{background:#ffbd2e}"
-".terminal-header .dot.green{background:#27c93f}"
-".terminal-header span{color:#8b949e;margin-left:10px;font-size:13px}"
-".terminal-body{flex:1;overflow-y:auto;padding:15px;font-size:13px;line-height:1.6}"
-".terminal-body pre{white-space:pre-wrap;word-wrap:break-word;color:#c9d1d9}"
-".log-inf{color:#58a6ff}"
-".log-wrn{color:#d29922}"
-".log-err{color:#f85149}"
-".cmd-input{display:flex;background:#161b22;border-top:1px solid #30363d;padding:10px}"
-".cmd-input span{color:#27c93f;padding:0 10px}"
-".cmd-input input{flex:1;background:transparent;border:none;color:#c9d1d9;font-family:inherit;font-size:13px;outline:none}"
-".status-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}"
-".status-item{background:#0d1117;padding:12px;border-radius:6px;border-left:3px solid #00d4ff}"
-".status-item label{color:#8b949e;font-size:12px;display:block}"
-".status-item value{color:#e0e0e0;font-size:16px;font-weight:500}"
-".btn{background:#238636;color:white;padding:10px 20px;border:none;border-radius:6px;cursor:pointer;font-size:14px;transition:all 0.2s}"
-".btn:hover{background:#2ea043}"
-".btn-danger{background:#da3633}"
-".btn-danger:hover{background:#f85149}"
-".btn-blue{background:#1f6feb}"
-".btn-blue:hover{background:#388bfd}"
-".actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:15px}"
-"</style></head><body>"
-"<div class='header'><h1>🎮 AkiraOS V1.1 Webserver</h1><div class='version'>ESP32-S3 Gaming Console</div></div>"
-"<div class='container'>"
-"<div class='grid'>"
-"<div class='panel'><h3>📊 System Status</h3><div class='status-grid'>"
-"<div class='status-item'><label>Device</label><value id='dev'>Online</value></div>"
-"<div class='status-item'><label>IP Address</label><value id='ip'>Loading...</value></div>"
-"<div class='status-item'><label>Uptime</label><value id='uptime'>--:--:--</value></div>"
-"<div class='status-item'><label>Memory</label><value id='mem'>--</value></div>"
-"</div>"
-"<div class='actions'>"
-"<button class='btn btn-blue' onclick='refresh()'>🔄 Refresh</button>"
-"<button class='btn btn-danger' onclick='reboot()'>⚡ Reboot</button>"
-"</div></div>"
-"<div class='panel'><h3>📦 OTA Update</h3>"
-"<form id='otaForm' enctype='multipart/form-data'>"
-"<input type='file' id='firmware' accept='.bin' style='margin-bottom:10px'><br>"
-"<button type='submit' class='btn'>📤 Upload Firmware</button>"
-"</form>"
-"<div id='progress' style='margin-top:10px'></div>"
-"</div></div>"
-"<div class='panel'><h3>🖥️ Terminal</h3>"
-"<div class='terminal'>"
-"<div class='terminal-header'><div class='dot red'></div><div class='dot yellow'></div><div class='dot green'></div><span>akira@esp32s3 ~ </span></div>"
-"<div class='terminal-body' id='logs'><pre id='logContent'>Loading logs...</pre></div>"
-"<div class='cmd-input'><span>$</span><input type='text' id='cmd' placeholder='Enter command...' onkeypress='if(event.key==\"Enter\")sendCmd()'></div>"
-"</div></div></div>"
-"<script>"
-"function fetchStatus(){fetch('/api/status').then(r=>r.json()).then(d=>{document.getElementById('ip').textContent=d.ip;document.getElementById('uptime').textContent=d.uptime;document.getElementById('mem').textContent=d.mem}).catch(()=>{})}"
-"function fetchLogs(){fetch('/api/logs').then(r=>r.text()).then(d=>{document.getElementById('logContent').innerHTML=d;var el=document.getElementById('logs');el.scrollTop=el.scrollHeight})}"
-"function sendCmd(){var c=document.getElementById('cmd').value;if(c){fetch('/api/cmd?c='+encodeURIComponent(c)).then(r=>r.text()).then(d=>{document.getElementById('cmd').value='';fetchLogs()})}"
-"}"
-"function reboot(){if(confirm('Reboot device?')){fetch('/api/reboot',{method:'POST'}).then(()=>alert('Rebooting...'))}}"
-"function refresh(){location.reload()}"
-"setInterval(fetchLogs,2000);setInterval(fetchStatus,5000);fetchLogs();fetchStatus();"
-"</script></body></html>";
+    "<!DOCTYPE html><html><head><title>AkiraOS V1.1</title>"
+    "<meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<style>"
+    "*{box-sizing:border-box;margin:0;padding:0}"
+    "body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;min-height:100vh}"
+    ".header{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);padding:20px;text-align:center;border-bottom:2px solid #0f3460}"
+    ".header h1{color:#00d4ff;font-size:28px;text-shadow:0 0 10px #00d4ff40}"
+    ".header .version{color:#888;font-size:14px;margin-top:5px}"
+    ".container{max-width:1200px;margin:0 auto;padding:20px}"
+    ".grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}"
+    "@media(max-width:768px){.grid{grid-template-columns:1fr}}"
+    ".panel{background:#1a1a2e;border-radius:10px;padding:20px;border:1px solid #0f3460}"
+    ".panel h3{color:#00d4ff;margin-bottom:15px;font-size:16px;border-bottom:1px solid #0f3460;padding-bottom:10px}"
+    ".terminal{background:#0d1117;border-radius:8px;font-family:'Consolas','Monaco',monospace;height:400px;overflow:hidden;display:flex;flex-direction:column}"
+    ".terminal-header{background:#161b22;padding:10px 15px;border-bottom:1px solid #30363d;display:flex;align-items:center;gap:8px}"
+    ".terminal-header .dot{width:12px;height:12px;border-radius:50%}"
+    ".terminal-header .dot.red{background:#ff5f56}"
+    ".terminal-header .dot.yellow{background:#ffbd2e}"
+    ".terminal-header .dot.green{background:#27c93f}"
+    ".terminal-header span{color:#8b949e;margin-left:10px;font-size:13px}"
+    ".terminal-body{flex:1;overflow-y:auto;padding:15px;font-size:13px;line-height:1.6}"
+    ".terminal-body pre{white-space:pre-wrap;word-wrap:break-word;color:#c9d1d9}"
+    ".log-inf{color:#58a6ff}"
+    ".log-wrn{color:#d29922}"
+    ".log-err{color:#f85149}"
+    ".cmd-input{display:flex;background:#161b22;border-top:1px solid #30363d;padding:10px}"
+    ".cmd-input span{color:#27c93f;padding:0 10px}"
+    ".cmd-input input{flex:1;background:transparent;border:none;color:#c9d1d9;font-family:inherit;font-size:13px;outline:none}"
+    ".status-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}"
+    ".status-item{background:#0d1117;padding:12px;border-radius:6px;border-left:3px solid #00d4ff}"
+    ".status-item label{color:#8b949e;font-size:12px;display:block}"
+    ".status-item value{color:#e0e0e0;font-size:16px;font-weight:500}"
+    ".btn{background:#238636;color:white;padding:10px 20px;border:none;border-radius:6px;cursor:pointer;font-size:14px;transition:all 0.2s}"
+    ".btn:hover{background:#2ea043}"
+    ".btn-danger{background:#da3633}"
+    ".btn-danger:hover{background:#f85149}"
+    ".btn-blue{background:#1f6feb}"
+    ".btn-blue:hover{background:#388bfd}"
+    ".actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:15px}"
+    "</style></head><body>"
+    "<div class='header'><h1>🎮 AkiraOS V1.2-OTA Webserver</h1><div class='version'>ESP32-S3 Gaming Console</div></div>"
+    "<div class='container'>"
+    "<div class='grid'>"
+    "<div class='panel'><h3>📊 System Status</h3><div class='status-grid'>"
+    "<div class='status-item'><label>Device</label><value id='dev'>Online</value></div>"
+    "<div class='status-item'><label>IP Address</label><value id='ip'>Loading...</value></div>"
+    "<div class='status-item'><label>Uptime</label><value id='uptime'>--:--:--</value></div>"
+    "<div class='status-item'><label>Memory</label><value id='mem'>--</value></div>"
+    "</div>"
+    "<div class='actions'>"
+    "<button class='btn btn-blue' onclick='refresh()'>🔄 Refresh</button>"
+    "<button class='btn btn-danger' onclick='reboot()'>⚡ Reboot</button>"
+    "</div></div>"
+    "<div class='panel'><h3>📦 OTA Update</h3>"
+    "<form id='otaForm' enctype='multipart/form-data'>"
+    "<input type='file' id='firmware' accept='.bin' style='margin-bottom:10px'><br>"
+    "<button type='submit' class='btn'>📤 Upload Firmware</button>"
+    "</form>"
+    "<div id='progress' style='margin-top:10px'></div>"
+    "</div></div>"
+    "<div class='panel'><h3>🖥️ Terminal-</h3>"
+    "<div class='terminal'>"
+    "<div class='terminal-header'><div class='dot red'></div><div class='dot yellow'></div><div class='dot green'></div><span>akira@esp32s3 ~ </span></div>"
+    "<div class='terminal-body' id='logs'><pre id='logContent'>Loading logs...</pre></div>"
+    "<div class='cmd-input'><span>$</span><input type='text' id='cmd' placeholder='Enter command...' onkeypress='if(event.key==\"Enter\")sendCmd()'></div>"
+    "</div></div></div>"
+    "<script>"
+    "function fetchStatus(){fetch('/api/status').then(r=>r.json()).then(d=>{document.getElementById('ip').textContent=d.ip;document.getElementById('uptime').textContent=d.uptime;document.getElementById('mem').textContent=d.mem}).catch(()=>{})}"
+    "function fetchLogs(){fetch('/api/logs').then(r=>r.text()).then(d=>{document.getElementById('logContent').innerHTML=d;var el=document.getElementById('logs');el.scrollTop=el.scrollHeight})}"
+    "function sendCmd(){var c=document.getElementById('cmd').value;if(c){fetch('/api/cmd?c='+encodeURIComponent(c)).then(r=>r.text()).then(d=>{document.getElementById('cmd').value='';fetchLogs()})}"
+    "}"
+    "function reboot(){if(confirm('Reboot device?')){fetch('/api/reboot',{method:'POST'}).then(()=>alert('Rebooting...'))}}"
+    "function refresh(){location.reload()}"
+    "document.getElementById('otaForm').onsubmit=function(e){e.preventDefault();var f=document.getElementById('firmware').files[0];if(!f){alert('Select firmware file');return}"
+    "var p=document.getElementById('progress');p.innerHTML='<div style=\"background:#444;border-radius:4px;overflow:hidden\"><div id=\"pbar\" style=\"width:0%;height:20px;background:linear-gradient(90deg,#4fc3f7,#00bcd4);transition:0.3s\"></div></div><div id=\"ptext\">Uploading...</div>';"
+    "var fd=new FormData();fd.append('firmware',f);"
+    "var xhr=new XMLHttpRequest();xhr.open('POST','/upload',true);xhr.upload.onprogress=function(e){if(e.lengthComputable){var pct=Math.round(e.loaded/e.total*100);document.getElementById('pbar').style.width=pct+'%';document.getElementById('ptext').innerHTML='Uploading: '+pct+'%'}};"
+    "xhr.onload=function(){if(xhr.status==200||xhr.status==302){document.getElementById('ptext').innerHTML='<span style=\"color:#4caf50\">Upload complete! Rebooting...</span>';setTimeout(function(){location.reload()},5000)}else{document.getElementById('ptext').innerHTML='<span style=\"color:#f44336\">Error: '+xhr.responseText+'</span>'}};"
+    "xhr.onerror=function(){document.getElementById('ptext').innerHTML='<span style=\"color:#f44336\">Upload failed</span>'};xhr.send(fd)};"
+    "setInterval(fetchLogs,2000);setInterval(fetchStatus,5000);fetchLogs();fetchStatus();"
+    "</script></body></html>";
 
 static size_t parse_content_length(const char *request_data)
 {
@@ -338,12 +348,12 @@ static int send_http_response(int client_fd, int status_code, const char *conten
     {
         const char *ptr = body;
         size_t remaining = body_len;
-        const size_t chunk_size = 256;  /* Smaller chunks for ESP32 */
-        
+        const size_t chunk_size = 256; /* Smaller chunks for ESP32 */
+
         while (remaining > 0)
         {
             size_t to_send = (remaining > chunk_size) ? chunk_size : remaining;
-            
+
             sent = send(client_fd, ptr, to_send, 0);
             if (sent > 0)
             {
@@ -407,8 +417,12 @@ static int parse_http_request(const char *buffer, char *method, char *path, size
     return 0;
 }
 
-/* Handle firmware upload */
-static int handle_firmware_upload(int client_fd, const char *request_headers, size_t content_length)
+/* Handle firmware upload 
+ * initial_body: body data already read during HTTP header parsing
+ * initial_body_len: length of initial_body data
+ */
+static int handle_firmware_upload(int client_fd, const char *request_headers, size_t content_length,
+                                   const char *initial_body, size_t initial_body_len)
 {
     if (content_length == 0 || content_length > (2 * 1024 * 1024))
     {
@@ -416,7 +430,11 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
         return -1;
     }
 
-    /* Find multipart boundary */
+    /* Set longer receive timeout for upload */
+    struct timeval upload_timeout = {.tv_sec = 60, .tv_usec = 0};
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &upload_timeout, sizeof(upload_timeout));
+
+    /* Find multipart boundary from HTTP headers */
     char boundary[128];
     if (find_multipart_boundary(request_headers, boundary, sizeof(boundary)) != 0)
     {
@@ -425,87 +443,197 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
     }
 
     LOG_INF("Using multipart boundary: %s", boundary);
+    LOG_INF("Starting firmware upload, content-length: %u bytes, initial body: %u bytes", 
+            content_length, initial_body_len);
 
-    /* Start OTA update */
-    enum ota_result result = ota_start_update(content_length);
+    /* Buffer to accumulate data until we find the multipart header end.
+     * The initial_body contains the start of the multipart data. */
+    static char header_buffer[2048];
+    size_t header_buffered = 0;
+    
+    /* Copy initial body data to our header buffer */
+    if (initial_body_len > 0)
+    {
+        size_t copy_len = MIN(initial_body_len, sizeof(header_buffer) - 1);
+        memcpy(header_buffer, initial_body, copy_len);
+        header_buffered = copy_len;
+        header_buffer[header_buffered] = '\0';
+    }
+    
+    /* Check if we already have the multipart header end */
+    char *data_start = strstr(header_buffer, "\r\n\r\n");
+    
+    /* If not found, keep receiving until we find it */
+    while (!data_start && header_buffered < sizeof(header_buffer) - 1)
+    {
+        ssize_t received = recv(client_fd, header_buffer + header_buffered, 
+                                sizeof(header_buffer) - 1 - header_buffered, 0);
+        if (received <= 0)
+        {
+            LOG_ERR("Failed to receive multipart header (got %u bytes)", header_buffered);
+            send_http_response(client_fd, 400, "text/plain", "Failed to receive header", 0);
+            return -1;
+        }
+        header_buffered += received;
+        header_buffer[header_buffered] = '\0';
+        
+        data_start = strstr(header_buffer, "\r\n\r\n");
+        if (!data_start)
+        {
+            LOG_DBG("Header incomplete, received %u bytes total", header_buffered);
+        }
+    }
+
+    if (!data_start)
+    {
+        LOG_ERR("Could not find end of multipart headers after %u bytes", header_buffered);
+        LOG_HEXDUMP_ERR(header_buffer, MIN(200, header_buffered), "Header start:");
+        send_http_response(client_fd, 400, "text/plain", "Invalid multipart format", 0);
+        return -1;
+    }
+    data_start += 4;  /* Skip \r\n\r\n */
+
+    /* Calculate how much of the buffer is actual file data */
+    size_t header_size = data_start - header_buffer;
+    size_t first_data_len = header_buffered - header_size;
+    
+    /* Use content_length as the max expected size - actual firmware will be slightly less
+     * due to multipart boundaries, but we detect the closing boundary during upload.
+     * This prevents "write would exceed expected size" errors. */
+    size_t expected_size = content_length;
+    LOG_INF("Header size: %u, first data chunk: %u, max expected: %u", 
+            header_size, first_data_len, expected_size);
+
+    /* Start OTA update with expected size */
+    enum ota_result result = ota_start_update(expected_size);
     if (result != OTA_OK)
     {
         send_http_response(client_fd, 500, "text/plain", ota_result_to_string(result), 0);
         return -1;
     }
 
-    /* Receive multipart data */
-    char upload_buffer[UPLOAD_CHUNK_SIZE];
-    size_t total_received = 0;
-    bool found_file_data = false;
+    /* Write the first chunk of file data */
+    size_t total_written = 0;
+    if (first_data_len > 0)
+    {
+        result = ota_write_chunk((uint8_t *)data_start, first_data_len);
+        if (result != OTA_OK)
+        {
+            LOG_ERR("OTA write failed: %s", ota_result_to_string(result));
+            ota_abort_update();
+            send_http_response(client_fd, 500, "text/plain", ota_result_to_string(result), 0);
+            return -1;
+        }
+        total_written = first_data_len;
+    }
+
+    /* Now receive and write the rest of the file */
+    static char upload_buffer[1024];
+    /* total_received tracks how many body bytes we've received so far:
+     * - initial_body_len was received during HTTP header parsing
+     * - any extra we received while finding the multipart header end */
+    size_t total_received = initial_body_len + (header_buffered - MIN(initial_body_len, header_buffered));
+    /* Simpler: header_buffered contains everything we have from the body so far */
+    total_received = header_buffered;
     size_t boundary_len = strlen(boundary);
+    int retry_count = 0;
+    uint8_t last_progress = 0;
 
     while (total_received < content_length)
     {
-        size_t chunk_size = MIN(UPLOAD_CHUNK_SIZE, content_length - total_received);
+        size_t chunk_size = MIN(1024, content_length - total_received);
         ssize_t received = recv(client_fd, upload_buffer, chunk_size, 0);
 
-        if (received <= 0)
+        if (received < 0)
         {
-            LOG_ERR("Receive failed during upload: %d", errno);
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
+            {
+                retry_count++;
+                if (retry_count > 300)  /* 300 * 100ms = 30 seconds timeout */
+                {
+                    LOG_ERR("Upload timeout after %u bytes written", total_written);
+                    ota_abort_update();
+                    send_http_response(client_fd, 408, "text/plain", "Upload timeout", 0);
+                    return -1;
+                }
+                k_msleep(100);
+                continue;
+            }
+            LOG_ERR("Receive failed: %d (written %u bytes)", errno, total_written);
             ota_abort_update();
+            send_http_response(client_fd, 500, "text/plain", "Upload failed", 0);
             return -1;
         }
-
-        /* Look for file data start if not found yet */
-        if (!found_file_data)
+        else if (received == 0)
         {
-            /* Look for double CRLF indicating end of headers */
-            char *data_start = strstr(upload_buffer, "\r\n\r\n");
-            if (data_start)
-            {
-                data_start += 4; // Skip \r\n\r\n
-                found_file_data = true;
-
-                /* Write only the file data part */
-                size_t file_data_len = received - (data_start - upload_buffer);
-                if (file_data_len > 0)
-                {
-                    result = ota_write_chunk((uint8_t *)data_start, file_data_len);
-                    if (result != OTA_OK)
-                    {
-                        ota_abort_update();
-                        send_http_response(client_fd, 500, "text/plain",
-                                           ota_result_to_string(result), 0);
-                        return -1;
-                    }
-                }
-            }
-        }
-        else
-        {
-            /* Check for boundary indicating end of file data */
-            if (memmem(upload_buffer, received, boundary, boundary_len))
-            {
-                /* Found boundary - stop processing file data */
-                break;
-            }
-
-            /* Write chunk to OTA */
-            result = ota_write_chunk((uint8_t *)upload_buffer, received);
-            if (result != OTA_OK)
-            {
-                ota_abort_update();
-                send_http_response(client_fd, 500, "text/plain",
-                                   ota_result_to_string(result), 0);
-                return -1;
-            }
+            LOG_WRN("Connection closed at %u/%u bytes", total_received, content_length);
+            break;
         }
 
+        retry_count = 0;
         total_received += received;
+
+        /* Check for closing boundary - it will be at the end */
+        char *end_boundary = memmem(upload_buffer, received, boundary, boundary_len);
+        if (end_boundary)
+        {
+            /* Only write data before the boundary */
+            size_t data_len = end_boundary - upload_buffer;
+            /* Also remove the preceding \r\n */
+            if (data_len >= 2)
+            {
+                data_len -= 2;
+            }
+            if (data_len > 0)
+            {
+                result = ota_write_chunk((uint8_t *)upload_buffer, data_len);
+                if (result != OTA_OK)
+                {
+                    LOG_ERR("Final write failed: %s", ota_result_to_string(result));
+                    ota_abort_update();
+                    send_http_response(client_fd, 500, "text/plain", ota_result_to_string(result), 0);
+                    return -1;
+                }
+                total_written += data_len;
+            }
+            LOG_INF("Found closing boundary, upload complete");
+            break;
+        }
+
+        /* Write chunk to OTA */
+        result = ota_write_chunk((uint8_t *)upload_buffer, received);
+        if (result != OTA_OK)
+        {
+            LOG_ERR("OTA write failed at %u bytes: %s", total_written, ota_result_to_string(result));
+            ota_abort_update();
+            send_http_response(client_fd, 500, "text/plain", ota_result_to_string(result), 0);
+            return -1;
+        }
+        total_written += received;
+
+        /* Log progress every 10% */
+        uint8_t progress = (total_written * 100) / expected_size;
+        if (progress >= last_progress + 10)
+        {
+            LOG_INF("OTA write: %u%% (%u bytes)", progress, total_written);
+            last_progress = progress;
+        }
+
+        /* Yield to allow other tasks */
+        k_yield();
     }
 
-    if (!found_file_data)
+    LOG_INF("Upload finished: wrote %u bytes to flash", total_written);
+
+    if (total_written == 0)
     {
+        LOG_ERR("No valid firmware data received");
         ota_abort_update();
         send_http_response(client_fd, 400, "text/plain", "No file data found", 0);
         return -1;
     }
+
+    LOG_INF("Finalizing OTA update...");
 
     /* Finalize update */
     result = ota_finalize_update();
@@ -562,47 +690,71 @@ static int handle_api_request(int client_fd, const char *path)
     {
         /* Return logs with HTML formatting for colors */
         k_mutex_lock(&log_mutex, K_FOREVER);
-        
+
         /* Format logs with color coding */
         static char formatted_logs[LOG_BUFFER_SIZE + 512];
         char *src = log_buffer;
         char *dst = formatted_logs;
         char *dst_end = formatted_logs + sizeof(formatted_logs) - 100;
-        
-        while (*src && dst < dst_end) {
+
+        while (*src && dst < dst_end)
+        {
             /* Find line end */
             char *line_end = strchr(src, '\n');
-            if (!line_end) line_end = src + strlen(src);
-            
+            if (!line_end)
+                line_end = src + strlen(src);
+
             /* Determine log level color */
             const char *color_class = "";
-            if (strstr(src, "<inf>")) color_class = "log-inf";
-            else if (strstr(src, "<wrn>")) color_class = "log-wrn";
-            else if (strstr(src, "<err>")) color_class = "log-err";
-            
-            if (color_class[0]) {
+            if (strstr(src, "<inf>"))
+                color_class = "log-inf";
+            else if (strstr(src, "<wrn>"))
+                color_class = "log-wrn";
+            else if (strstr(src, "<err>"))
+                color_class = "log-err";
+
+            if (color_class[0])
+            {
                 dst += snprintf(dst, dst_end - dst, "<span class='%s'>", color_class);
             }
-            
+
             /* Copy line, escaping HTML */
-            while (src < line_end && dst < dst_end) {
-                if (*src == '<') { *dst++ = '&'; *dst++ = 'l'; *dst++ = 't'; *dst++ = ';'; }
-                else if (*src == '>') { *dst++ = '&'; *dst++ = 'g'; *dst++ = 't'; *dst++ = ';'; }
-                else { *dst++ = *src; }
+            while (src < line_end && dst < dst_end)
+            {
+                if (*src == '<')
+                {
+                    *dst++ = '&';
+                    *dst++ = 'l';
+                    *dst++ = 't';
+                    *dst++ = ';';
+                }
+                else if (*src == '>')
+                {
+                    *dst++ = '&';
+                    *dst++ = 'g';
+                    *dst++ = 't';
+                    *dst++ = ';';
+                }
+                else
+                {
+                    *dst++ = *src;
+                }
                 src++;
             }
-            
-            if (color_class[0]) {
+
+            if (color_class[0])
+            {
                 dst += snprintf(dst, dst_end - dst, "</span>");
             }
-            
-            if (*src == '\n') {
+
+            if (*src == '\n')
+            {
                 *dst++ = '\n';
                 src++;
             }
         }
         *dst = '\0';
-        
+
         k_mutex_unlock(&log_mutex);
         return send_http_response(client_fd, 200, "text/html", formatted_logs, 0);
     }
@@ -614,7 +766,7 @@ static int handle_api_request(int client_fd, const char *path)
         uint32_t hours = uptime_ms / 3600000;
         uint32_t mins = (uptime_ms % 3600000) / 60000;
         uint32_t secs = (uptime_ms % 60000) / 1000;
-        
+
         snprintf(response, sizeof(response),
                  "{\"ip\":\"%s\",\"uptime\":\"%02u:%02u:%02u\",\"mem\":\"99%% used\"}",
                  server_state.server_ip[0] ? server_state.server_ip : "0.0.0.0",
@@ -626,32 +778,40 @@ static int handle_api_request(int client_fd, const char *path)
     {
         /* Execute shell command */
         const char *cmd_start = strstr(path, "c=");
-        if (cmd_start) {
+        if (cmd_start)
+        {
             cmd_start += 2;
             /* URL decode and execute command */
             char cmd[128];
             size_t i = 0, j = 0;
-            while (cmd_start[i] && j < sizeof(cmd) - 1) {
-                if (cmd_start[i] == '%' && cmd_start[i+1] && cmd_start[i+2]) {
-                    char hex[3] = {cmd_start[i+1], cmd_start[i+2], 0};
+            while (cmd_start[i] && j < sizeof(cmd) - 1)
+            {
+                if (cmd_start[i] == '%' && cmd_start[i + 1] && cmd_start[i + 2])
+                {
+                    char hex[3] = {cmd_start[i + 1], cmd_start[i + 2], 0};
                     cmd[j++] = (char)strtol(hex, NULL, 16);
                     i += 3;
-                } else if (cmd_start[i] == '+') {
+                }
+                else if (cmd_start[i] == '+')
+                {
                     cmd[j++] = ' ';
                     i++;
-                } else {
+                }
+                else
+                {
                     cmd[j++] = cmd_start[i++];
                 }
             }
             cmd[j] = '\0';
-            
+
             /* Log the command */
             char log_entry[256];
             snprintf(log_entry, sizeof(log_entry), "akira:~$ %s", cmd);
             web_server_add_log(log_entry);
-            
+
             /* Execute via callback if available */
-            if (callbacks.execute_shell_command) {
+            if (callbacks.execute_shell_command)
+            {
                 char result[512];
                 callbacks.execute_shell_command(cmd, result, sizeof(result));
                 web_server_add_log(result);
@@ -682,7 +842,7 @@ static int handle_http_request(int client_fd)
     struct timeval timeout = {.tv_sec = 10, .tv_usec = 0};
     setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-    
+
     /* Disable Nagle for faster small packet sends */
     int flag = 1;
     setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
@@ -735,7 +895,21 @@ static int handle_http_request(int client_fd)
                                           "Missing or invalid Content-Length", 0);
             }
 
-            return handle_firmware_upload(client_fd, buffer, content_length);
+            /* Find end of HTTP headers - body data may already be in buffer */
+            char *body_start = strstr(buffer, "\r\n\r\n");
+            if (!body_start)
+            {
+                return send_http_response(client_fd, 400, "text/plain",
+                                          "Invalid HTTP request", 0);
+            }
+            body_start += 4; /* Skip \r\n\r\n */
+            
+            /* Calculate how much body data was already received */
+            size_t headers_len = body_start - buffer;
+            size_t body_already_read = received - headers_len;
+            
+            return handle_firmware_upload(client_fd, buffer, content_length, 
+                                          body_start, body_already_read);
         }
 
         if (strncmp(path, "/api/", 5) == 0)
@@ -763,7 +937,7 @@ static int run_web_server(void)
 
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    
+
     /* Set accept timeout so we can check state periodically */
     struct timeval timeout = {.tv_sec = 5, .tv_usec = 0};
     setsockopt(server_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
@@ -838,10 +1012,10 @@ static void do_start_server(void)
 
     server_state.state = WEB_SERVER_RUNNING;
     LOG_INF("Web server started");
-    
+
     /* This is a blocking call - runs until server is stopped */
     run_web_server();
-    
+
     /* Server has stopped */
     server_state.state = WEB_SERVER_STOPPED;
     LOG_INF("Web server stopped");
@@ -862,7 +1036,7 @@ static void do_network_status_changed(bool connected, const char *ip_address)
         strncpy(server_state.server_ip, ip_address, sizeof(server_state.server_ip) - 1);
         server_state.server_ip[sizeof(server_state.server_ip) - 1] = '\0';
         LOG_INF("Network connected: http://%s:%d", server_state.server_ip, HTTP_PORT);
-        
+
         char log_msg[128];
         snprintf(log_msg, sizeof(log_msg), "<inf> wifi: Connected to network");
         web_server_add_log(log_msg);
@@ -931,7 +1105,7 @@ int web_server_start(const struct web_server_callbacks *cb)
     memset(&server_state, 0, sizeof(server_state));
     server_state.state = WEB_SERVER_STOPPED;
     strcpy(server_state.server_ip, "0.0.0.0");
-    
+
     /* Add initial boot messages to log buffer */
     web_server_add_log("*** Booting Zephyr OS build v4.2.1 ***");
     web_server_add_log("=== AkiraOS V1.1 ===");

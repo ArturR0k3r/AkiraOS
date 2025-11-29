@@ -25,9 +25,9 @@
 #elif defined(CONFIG_SOC_SERIES_ESP32)
 // ESP32 DevKitC Pin Configuration
 // SPI Pins (handled by pinctrl)
-#define ILI9341_MOSI_PIN 23 // GPIO23 → ILI9341 MOSI (SDI)
-#define ILI9341_MISO_PIN 25 // GPIO25 → ILI9341 MISO (SDO) - optional
-#define ILI9341_SCK_PIN 19  // GPIO19 → ILI9341 SCK
+#define ILI9341_MOSI_PIN 23  // GPIO23 → ILI9341 MOSI (SDI)
+#define ILI9341_MISO_PIN 25  // GPIO25 → ILI9341 MISO (SDO) - optional
+#define ILI9341_SCK_PIN 19   // GPIO19 → ILI9341 SCK
 
 // Manual Control Pins
 #define ILI9341_CS_PIN 22    // GPIO22 → ILI9341 CS
