@@ -3,11 +3,11 @@
  * @brief AkiraOS Software Timer Implementation
  */
 
-#include "timer.h"
-#include "memory.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
+#include "timer.h"
+#include "memory.h"
 
 LOG_MODULE_REGISTER(akira_timer, CONFIG_AKIRA_LOG_LEVEL);
 

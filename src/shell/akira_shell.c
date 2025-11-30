@@ -18,7 +18,7 @@
 #include "../settings/settings.h"
 #include "../OTA/web_server.h"
 #if defined(CONFIG_BT)
-#include "../bluetooth/bluetooth_manager.h"
+#include "../connectivity/bluetooth/bt_manager.h"
 #endif
 #include <zephyr/logging/log.h>
 #include <zephyr/shell/shell.h>
@@ -979,8 +979,9 @@ static int cmd_benchmark(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
-#if defined(CONFIG_BT)
-/* Example: Add shell command handler for Bluetooth */
+#if defined(CONFIG_BT) && defined(CONFIG_AKIRA_BT_HID)
+/* Bluetooth shell command handler - requires AKIRA_BT_HID */
+
 static int cmd_ble_shell(const struct shell *shell, size_t argc, char **argv)
 {
     if (argc < 2)
@@ -996,7 +997,7 @@ static int cmd_ble_shell(const struct shell *shell, size_t argc, char **argv)
         if (i < argc - 1)
             strcat(cmd_buf, " ");
     }
-    bluetooth_manager_receive_shell_command(cmd_buf);
+    bluetooth_manager_receive_shell_command(cmd_buf);  /* Defined in bt_manager.c */
     shell_print(shell, "Sent shell command to phone via BLE: %s", cmd_buf);
     return 0;
 }

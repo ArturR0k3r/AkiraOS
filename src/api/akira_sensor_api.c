@@ -92,7 +92,7 @@ int akira_sensor_read_imu(akira_imu_data_t *data)
     data->gyro_z = 0.0f;
 
     LOG_DBG("IMU read: ax=%.2f ay=%.2f az=%.2f",
-            data->accel_x, data->accel_y, data->accel_z);
+            (double)data->accel_x, (double)data->accel_y, (double)data->accel_z);
 
     return 0;
 }
@@ -114,7 +114,7 @@ int akira_sensor_read_env(akira_env_data_t *data)
     data->pressure = 1013.25f; // hPa
 
     LOG_DBG("ENV read: T=%.1f H=%.1f P=%.1f",
-            data->temperature, data->humidity, data->pressure);
+            (double)data->temperature, (double)data->humidity, (double)data->pressure);
 
     return 0;
 }
@@ -136,7 +136,7 @@ int akira_sensor_read_power(akira_power_data_t *data)
     data->power = 0.555f;  // W
 
     LOG_DBG("Power read: V=%.2f I=%.3f P=%.3f",
-            data->voltage, data->current, data->power);
+            (double)data->voltage, (double)data->current, (double)data->power);
 
     return 0;
 }

@@ -282,7 +282,7 @@ static int execute_shell_command_callback(const char *command, char *response, s
     else if (strcmp(command, "reboot") == 0)
     {
         snprintf(response, response_size, "Rebooting in 2 seconds...");
-        k_msleep(100);  /* Let response be sent */
+        k_msleep(100); /* Let response be sent */
         sys_reboot(SYS_REBOOT_COLD);
         return 0;
     }
@@ -296,7 +296,7 @@ static int execute_shell_command_callback(const char *command, char *response, s
     }
     else if (command[0] == '\0')
     {
-        return 0;  /* Empty command */
+        return 0; /* Empty command */
     }
 
     return snprintf(response, response_size,
@@ -462,7 +462,7 @@ static void on_ota_progress(const struct ota_progress *progress, void *user_data
     if (progress->percentage != last_percentage)
     {
         LOG_INF("OTA: %s (%d%%)", progress->status_message, progress->percentage);
-        
+
         /* Log every 10% to web terminal */
         if (progress->percentage % 10 == 0 || progress->percentage > 95)
         {
@@ -597,8 +597,8 @@ int main(void)
             else
             {
                 LOG_INF("✅ ILI9341 display initialized");
-                LOG_INF("=== AkiraOS v1.1.0 Test ===");
-                ili9341_draw_text(10, 30, "=== AkiraOS v1.1.0 ===", BLACK_COLOR, FONT_7X10);
+                LOG_INF("=== AkiraOS v1.2.0 Test ===");
+                ili9341_draw_text(10, 30, "=== AkiraOS v1.2.0 ===", BLACK_COLOR, FONT_7X10);
                 LOG_INF("Hardware platform: %s", akira_get_platform_name());
                 char platform_text[64];
                 snprintf(platform_text, sizeof(platform_text), "Platform: %s", akira_get_platform_name());
@@ -684,7 +684,7 @@ int main(void)
     }
 
     /* Add startup logs to web terminal */
-    web_server_add_log("<inf> AkiraOS v1.1.0 started");
+    web_server_add_log("<inf> AkiraOS v1.2.0 started");
     web_server_add_log("<inf> Build: " __DATE__ " " __TIME__);
     web_server_add_log("<inf> Type 'help' for available commands");
 
@@ -692,17 +692,18 @@ int main(void)
     while (1)
     {
         loop_count++;
-        
+
         /* Periodic status log every 60 seconds */
-        if (loop_count % 6 == 0) {
+        if (loop_count % 6 == 0)
+        {
             char status_msg[128];
             uint64_t uptime = k_uptime_get() / 1000;
-            snprintf(status_msg, sizeof(status_msg), 
-                     "<inf> Heartbeat: uptime=%llus, loops=%u", 
+            snprintf(status_msg, sizeof(status_msg),
+                     "<inf> Heartbeat: uptime=%llus, loops=%u",
                      uptime, loop_count);
             web_server_add_log(status_msg);
         }
-        
+
         LOG_INF("... AkiraOS main loop running ...");
         k_sleep(K_SECONDS(10));
     }

@@ -3,10 +3,10 @@
  * @brief AkiraOS Process Manager Implementation
  */
 
-#include "process.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
+#include "process.h"
 
 LOG_MODULE_REGISTER(akira_process, CONFIG_AKIRA_LOG_LEVEL);
 

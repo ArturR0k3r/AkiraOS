@@ -1,52 +1,83 @@
-// Include required headers
+/*
+ * ESP32-C3 DevKitM Device Tree Overlay for AkiraOS
+ * RISC-V single-core @ 160MHz
+ * 
+ * Features:
+ * - WiFi 802.11b/g/n
+ * - Bluetooth LE 5.0
+ * - 22 programmable GPIOs
+ * - 2x 12-bit ADC (6 channels)
+ * - 3x SPI, 2x UART, 1x I2C, 1x I2S
+ * - Temperature sensor
+ * - LED PWM (LEDC)
+ */
+
 #include <zephyr/dt-bindings/gpio/gpio.h>
-#include <zephyr/dt-bindings/i2c/i2c.h>
 
-// SPI2 for future expansion (display, sensors, etc.)
-&spi2
-{
+/* WiFi configuration */
+&wifi {
     status = "okay";
 };
 
-// WiFi configuration
-&wifi
-{
-    status = "okay";
-    // WiFi credentbgials will be managed by settings module
-};
-
-// UART configuration for shell and logging
+/* UART0 for shell and logging */
 &uart0 {
     status = "okay";
     current-speed = <115200>;
 };
 
-// I2C configuration (for future expansion)
+/* I2C for sensors (already configured in base board) */
 &i2c0 {
     status = "okay";
-    clock-frequency = <I2C_BITRATE_STANDARD>;
-    // Reserved for future peripherals:
-    // - IMU/Accelerometer
-    // - Audio codec
-    // - Battery management IC
 };
 
-// Chosen nodes for Zephyr configuration
+/* SPI2 for display or other peripherals (already configured in base board) */
+&spi2 {
+    status = "okay";
+};
+
+/* GPIO controller */
+&gpio0 {
+    status = "okay";
+};
+
+/* Watchdog */
+&wdt0 {
+    status = "okay";
+};
+
+/* Flash partitions for OTA */
+&flash0 {
+    status = "okay";
+};
+
+/* Aliases for application use */
 / {
+    aliases {
+        led0 = &led0;
+        sw0 = &button0;
+    };
+    
+    /* On-board RGB LED (directly driven via LEDC/GPIO) */
+    leds {
+        compatible = "gpio-leds";
+        led0: led_0 {
+            gpios = <&gpio0 8 GPIO_ACTIVE_LOW>;
+            label = "LED";
+        };
+    };
+    
+    /* Boot button */
+    buttons {
+        compatible = "gpio-keys";
+        button0: button_0 {
+            gpios = <&gpio0 9 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Boot Button";
+            zephyr,code = <0>;
+        };
+    };
+    
     chosen {
         zephyr,console = &uart0;
         zephyr,shell-uart = &uart0;
-    };
-};
-
-// Change storage partition label to user-data-partition for LittleFS
-user_data_partition: &storage_partition {
-    label = "user_data_partition";
-};
-
-// Add alias for user-data-partition
-/ {
-    aliases {
-        user-data-partition = &storage_partition;
     };
 };

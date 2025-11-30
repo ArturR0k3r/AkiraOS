@@ -3,10 +3,10 @@
  * @brief AkiraOS Memory Management Implementation
  */
 
-#include "memory.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
+#include "memory.h"
 
 LOG_MODULE_REGISTER(akira_memory, CONFIG_AKIRA_LOG_LEVEL);
 

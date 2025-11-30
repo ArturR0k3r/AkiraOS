@@ -3,10 +3,10 @@
  * @brief AkiraOS Service Manager Implementation
  */
 
-#include "service.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
+#include "service.h"
 
 LOG_MODULE_REGISTER(akira_service, CONFIG_AKIRA_LOG_LEVEL);
 

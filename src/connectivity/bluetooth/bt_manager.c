@@ -100,6 +100,7 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
     }
 }
 
+#if defined(CONFIG_BT_SMP) || defined(CONFIG_BT_CLASSIC)
 static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
                                 enum bt_security_err err)
 {
@@ -120,11 +121,14 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
         notify_event(BT_EVENT_PAIRED, NULL);
     }
 }
+#endif /* CONFIG_BT_SMP || CONFIG_BT_CLASSIC */
 
 static struct bt_conn_cb conn_callbacks = {
     .connected = connected_cb,
     .disconnected = disconnected_cb,
+#if defined(CONFIG_BT_SMP) || defined(CONFIG_BT_CLASSIC)
     .security_changed = security_changed_cb,
+#endif
 };
 
 /* Advertising data */
@@ -362,4 +366,16 @@ int bt_manager_get_address(char *buffer, size_t len)
     snprintf(buffer, len, "00:00:00:00:00:00");
     return 0;
 #endif
+}
+
+/*===========================================================================*/
+/* Shell Integration                                                         */
+/*===========================================================================*/
+
+void bluetooth_manager_receive_shell_command(const char *cmd)
+{
+    /* Stub for shell command reception via BLE
+     * TODO: Implement BLE shell command passthrough
+     */
+    LOG_DBG("BLE shell command received: %s", cmd);
 }

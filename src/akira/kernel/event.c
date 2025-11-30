@@ -3,10 +3,10 @@
  * @brief AkiraOS Event System Implementation
  */
 
-#include "event.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
+#include "event.h"
 
 LOG_MODULE_REGISTER(akira_event, CONFIG_AKIRA_LOG_LEVEL);
 

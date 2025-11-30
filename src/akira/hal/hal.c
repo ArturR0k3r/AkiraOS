@@ -3,7 +3,6 @@
  * @brief AkiraOS Hardware Abstraction Layer Implementation
  */
 
-#include "hal.h"
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
@@ -12,6 +11,7 @@
 #include <zephyr/sys/reboot.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
+#include "hal.h"
 
 LOG_MODULE_REGISTER(akira_core_hal, CONFIG_AKIRA_LOG_LEVEL);
 

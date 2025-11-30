@@ -21,7 +21,7 @@
 #   native_sim                    Native simulator (default)
 #   esp32s3_devkitm_esp32s3_procpu  ESP32-S3 DevKitM (Akira Console)
 #   esp32_devkitc_procpu          ESP32 DevKitC (Akira Console Legacy)
-#   xiao_nrf54l15_nrf54l15_cpuapp nRF54L15 (Nordic)
+#   nrf54l15dk_nrf54l15_cpuapp    nRF54L15 DK (Nordic)
 #   steval_stwinbx1               STM32 STWIN.box
 #
 # Examples:
@@ -65,24 +65,27 @@ NC='\033[0m'
 declare -A BOARD_MAP=(
     ["native_sim"]="native_sim"
     ["esp32s3_devkitm_esp32s3_procpu"]="esp32s3_devkitm/esp32s3/procpu"
+    ["esp32c3_devkitm"]="esp32c3_devkitm"
     ["esp32_devkitc_procpu"]="esp32_devkitc/esp32/procpu"
-    ["xiao_nrf54l15_nrf54l15_cpuapp"]="xiao_nrf54l15/nrf54l15/cpuapp"
+    ["nrf54l15dk_nrf54l15_cpuapp"]="nrf54l15dk/nrf54l15/cpuapp"
     ["steval_stwinbx1"]="steval_stwinbx1"
 )
 
 declare -A BOARD_CHIP=(
     ["native_sim"]="native"
     ["esp32s3_devkitm_esp32s3_procpu"]="esp32s3"
+    ["esp32c3_devkitm"]="esp32c3"
     ["esp32_devkitc_procpu"]="esp32"
-    ["xiao_nrf54l15_nrf54l15_cpuapp"]="nrf54l15"
+    ["nrf54l15dk_nrf54l15_cpuapp"]="nrf54l15"
     ["steval_stwinbx1"]="stm32"
 )
 
 declare -A BOARD_DESC=(
     ["native_sim"]="Native Simulator"
     ["esp32s3_devkitm_esp32s3_procpu"]="ESP32-S3 DevKitM (Akira Console)"
+    ["esp32c3_devkitm"]="ESP32-C3 DevKitM (RISC-V)"
     ["esp32_devkitc_procpu"]="ESP32 DevKitC (Akira Console Legacy)"
-    ["xiao_nrf54l15_nrf54l15_cpuapp"]="Seeed XIAO nRF54L15"
+    ["nrf54l15dk_nrf54l15_cpuapp"]="Nordic nRF54L15 DK"
     ["steval_stwinbx1"]="ST STEVAL-STWINBX1"
 )
 
@@ -133,8 +136,9 @@ ${BOLD}OPTIONS:${NC}
 ${BOLD}BOARDS:${NC}
     native_sim                       Native simulator (default)
     esp32s3_devkitm_esp32s3_procpu   ESP32-S3 DevKitM (Akira Console)
+    esp32c3_devkitm                  ESP32-C3 DevKitM (RISC-V)
     esp32_devkitc_procpu             ESP32 DevKitC (Legacy)
-    xiao_nrf54l15_nrf54l15_cpuapp    Seeed XIAO nRF54L15
+    nrf54l15dk_nrf54l15_cpuapp       Nordic nRF54L15 DK
     steval_stwinbx1                  ST STEVAL-STWINBX1
 
 ${BOLD}EXAMPLES:${NC}

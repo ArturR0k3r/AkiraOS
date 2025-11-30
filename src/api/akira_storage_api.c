@@ -7,6 +7,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/fs/fs.h>
 #include <string.h>
+#include <stdio.h>
 
 LOG_MODULE_REGISTER(akira_storage_api, LOG_LEVEL_INF);
 

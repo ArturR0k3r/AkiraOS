@@ -4,7 +4,7 @@
  *
  */
 
-#define _GNU_SOURCE  /* For memmem */
+#define _GNU_SOURCE /* For memmem */
 #include <string.h>
 
 #include "web_server.h"
@@ -69,6 +69,7 @@ LOG_MODULE_REGISTER(web_server, AKIRA_LOG_LEVEL);
 /* Optimized constants */
 #define HTTP_BUFFER_SIZE 1024
 #define HTTP_RESPONSE_BUFFER_SIZE 2048
+#undef UPLOAD_CHUNK_SIZE
 #define UPLOAD_CHUNK_SIZE 512
 #define MAX_CONNECTIONS 2
 
@@ -417,12 +418,12 @@ static int parse_http_request(const char *buffer, char *method, char *path, size
     return 0;
 }
 
-/* Handle firmware upload 
+/* Handle firmware upload
  * initial_body: body data already read during HTTP header parsing
  * initial_body_len: length of initial_body data
  */
 static int handle_firmware_upload(int client_fd, const char *request_headers, size_t content_length,
-                                   const char *initial_body, size_t initial_body_len)
+                                  const char *initial_body, size_t initial_body_len)
 {
     if (content_length == 0 || content_length > (2 * 1024 * 1024))
     {
@@ -443,14 +444,14 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
     }
 
     LOG_INF("Using multipart boundary: %s", boundary);
-    LOG_INF("Starting firmware upload, content-length: %u bytes, initial body: %u bytes", 
+    LOG_INF("Starting firmware upload, content-length: %u bytes, initial body: %u bytes",
             content_length, initial_body_len);
 
     /* Buffer to accumulate data until we find the multipart header end.
      * The initial_body contains the start of the multipart data. */
     static char header_buffer[2048];
     size_t header_buffered = 0;
-    
+
     /* Copy initial body data to our header buffer */
     if (initial_body_len > 0)
     {
@@ -459,14 +460,14 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
         header_buffered = copy_len;
         header_buffer[header_buffered] = '\0';
     }
-    
+
     /* Check if we already have the multipart header end */
     char *data_start = strstr(header_buffer, "\r\n\r\n");
-    
+
     /* If not found, keep receiving until we find it */
     while (!data_start && header_buffered < sizeof(header_buffer) - 1)
     {
-        ssize_t received = recv(client_fd, header_buffer + header_buffered, 
+        ssize_t received = recv(client_fd, header_buffer + header_buffered,
                                 sizeof(header_buffer) - 1 - header_buffered, 0);
         if (received <= 0)
         {
@@ -476,7 +477,7 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
         }
         header_buffered += received;
         header_buffer[header_buffered] = '\0';
-        
+
         data_start = strstr(header_buffer, "\r\n\r\n");
         if (!data_start)
         {
@@ -491,17 +492,17 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
         send_http_response(client_fd, 400, "text/plain", "Invalid multipart format", 0);
         return -1;
     }
-    data_start += 4;  /* Skip \r\n\r\n */
+    data_start += 4; /* Skip \r\n\r\n */
 
     /* Calculate how much of the buffer is actual file data */
     size_t header_size = data_start - header_buffer;
     size_t first_data_len = header_buffered - header_size;
-    
+
     /* Use content_length as the max expected size - actual firmware will be slightly less
      * due to multipart boundaries, but we detect the closing boundary during upload.
      * This prevents "write would exceed expected size" errors. */
     size_t expected_size = content_length;
-    LOG_INF("Header size: %u, first data chunk: %u, max expected: %u", 
+    LOG_INF("Header size: %u, first data chunk: %u, max expected: %u",
             header_size, first_data_len, expected_size);
 
     /* Start OTA update with expected size */
@@ -549,7 +550,7 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
             if (errno == EAGAIN || errno == EWOULDBLOCK)
             {
                 retry_count++;
-                if (retry_count > 300)  /* 300 * 100ms = 30 seconds timeout */
+                if (retry_count > 300) /* 300 * 100ms = 30 seconds timeout */
                 {
                     LOG_ERR("Upload timeout after %u bytes written", total_written);
                     ota_abort_update();
@@ -903,12 +904,12 @@ static int handle_http_request(int client_fd)
                                           "Invalid HTTP request", 0);
             }
             body_start += 4; /* Skip \r\n\r\n */
-            
+
             /* Calculate how much body data was already received */
             size_t headers_len = body_start - buffer;
             size_t body_already_read = received - headers_len;
-            
-            return handle_firmware_upload(client_fd, buffer, content_length, 
+
+            return handle_firmware_upload(client_fd, buffer, content_length,
                                           body_start, body_already_read);
         }
 
