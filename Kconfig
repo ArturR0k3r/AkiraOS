@@ -346,6 +346,126 @@ config AKIRA_CLOUD_AUTO_START_APPS
 
 endmenu
 
+menu "App Manager"
+
+config AKIRA_APP_MANAGER
+    bool "Enable App Manager"
+    default y
+    help
+      Enable the App Manager for WASM application lifecycle management.
+      Provides installation, startup, shutdown, and crash recovery.
+
+config AKIRA_APP_MAX_INSTALLED
+    int "Maximum installed apps"
+    default 8
+    range 4 16
+    depends on AKIRA_APP_MANAGER
+    help
+      Maximum number of WASM apps that can be installed.
+      Limited by available flash storage.
+
+config AKIRA_APP_MAX_RUNNING
+    int "Maximum concurrent running apps"
+    default 2
+    range 1 4
+    depends on AKIRA_APP_MANAGER
+    help
+      Maximum number of apps that can run simultaneously.
+      Limited by available RAM.
+
+config AKIRA_APP_MAX_SIZE_KB
+    int "Maximum app size (KB)"
+    default 64
+    range 16 256
+    depends on AKIRA_APP_MANAGER
+    help
+      Maximum size of a single WASM app binary in kilobytes.
+
+config AKIRA_APP_DEFAULT_HEAP_KB
+    int "Default app heap size (KB)"
+    default 16
+    range 4 64
+    depends on AKIRA_APP_MANAGER
+    help
+      Default heap size for apps without manifest.
+
+config AKIRA_APP_DEFAULT_STACK_KB
+    int "Default app stack size (KB)"
+    default 4
+    range 2 16
+    depends on AKIRA_APP_MANAGER
+    help
+      Default stack size for apps without manifest.
+
+menu "App Sources"
+
+config AKIRA_APP_SOURCE_HTTP
+    bool "Enable HTTP app upload"
+    default y
+    depends on AKIRA_APP_MANAGER && AKIRA_HTTP_SERVER
+    help
+      Allow app installation via HTTP POST to /api/apps/install.
+
+config AKIRA_APP_SOURCE_BLE
+    bool "Enable BLE app transfer"
+    default y
+    depends on AKIRA_APP_MANAGER && BT
+    help
+      Allow app installation via Bluetooth GATT transfer.
+
+config AKIRA_APP_SOURCE_USB
+    bool "Enable USB storage app install"
+    default y
+    depends on AKIRA_APP_MANAGER && USB_DEVICE
+    help
+      Allow app installation from USB mass storage.
+
+config AKIRA_APP_SOURCE_SD
+    bool "Enable SD card app install"
+    default y
+    depends on AKIRA_APP_MANAGER && DISK_ACCESS
+    help
+      Allow app installation from SD card.
+
+config AKIRA_APP_SOURCE_FIRMWARE
+    bool "Enable firmware-embedded apps"
+    default y
+    depends on AKIRA_APP_MANAGER
+    help
+      Support apps embedded in firmware at compile time.
+
+endmenu
+
+menu "Auto-Restart"
+
+config AKIRA_APP_AUTO_RESTART
+    bool "Enable auto-restart on crash"
+    default n
+    depends on AKIRA_APP_MANAGER
+    help
+      Automatically restart apps that crash.
+      Can be overridden per-app via manifest.
+
+config AKIRA_APP_MAX_RETRIES
+    int "Maximum restart attempts"
+    default 3
+    range 1 10
+    depends on AKIRA_APP_AUTO_RESTART
+    help
+      Maximum restart attempts before marking app as FAILED.
+
+config AKIRA_APP_RESTART_DELAY_MS
+    int "Restart delay (ms)"
+    default 1000
+    range 100 10000
+    depends on AKIRA_APP_AUTO_RESTART
+    help
+      Delay in milliseconds before attempting restart.
+
+endmenu
+
+endmenu
+
 menu "OTA Updates"
 
 config AKIRA_OTA

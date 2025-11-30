@@ -1,13 +1,15 @@
 /*
  * Nordic nRF54L15 DK Device Tree Overlay for AkiraOS
  * Board: nrf54l15dk/nrf54l15/cpuapp
- * 
+ *
  * Note: The base board already has console, GPIO, radio, etc. configured.
  * This overlay just adds AkiraOS-specific settings.
  */
 
-/ {
-    aliases {
+/
+{
+    aliases
+    {
         /* Use the existing board LEDs and buttons */
         led0 = &led0;
         led1 = &led1;
@@ -25,11 +27,13 @@
  */
 
 /* Enable ADC */
-&adc {
+&adc
+{
     status = "okay";
 };
 
 /* Enable watchdog */
-&wdt30 {
+&wdt30
+{
     status = "okay";
 };

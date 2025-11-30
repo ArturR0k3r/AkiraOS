@@ -37,8 +37,141 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #include "akira/akira.h"
+#include "../services/app_manager.h"
+#include "../connectivity/storage/sd_manager.h"
+#include "../connectivity/storage/usb_storage.h"
 
 LOG_MODULE_REGISTER(akira_shell, AKIRA_LOG_LEVEL);
+/* App Manager Shell Commands */
+static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
+{
+    app_info_t apps[CONFIG_AKIRA_APP_MAX_INSTALLED];
+    int count = app_manager_list(apps, CONFIG_AKIRA_APP_MAX_INSTALLED);
+    if (count < 0) {
+        shell_error(sh, "Failed to list apps");
+        return count;
+    }
+    shell_print(sh, "\n=== Installed Apps ===");
+    for (int i = 0; i < count; i++) {
+        shell_print(sh, "%2d: %-16s %-8s %s %u bytes%s", apps[i].id, apps[i].name, apps[i].version,
+            app_state_to_str(apps[i].state), apps[i].size,
+            apps[i].auto_restart ? " [auto-restart]" : "");
+    }
+    shell_print(sh, "Total: %d", count);
+    return 0;
+}
+
+static int cmd_app_info(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: app info <name>");
+        return -EINVAL;
+    }
+    app_info_t info;
+    int ret = app_manager_get_info(argv[1], &info);
+    if (ret < 0) {
+        shell_error(sh, "App not found: %s", argv[1]);
+        return ret;
+    }
+    shell_print(sh, "\n=== App Info ===");
+    shell_print(sh, "Name: %s", info.name);
+    shell_print(sh, "Version: %s", info.version);
+    shell_print(sh, "State: %s", app_state_to_str(info.state));
+    shell_print(sh, "Size: %u bytes", info.size);
+    shell_print(sh, "Heap: %u KB", info.heap_kb);
+    shell_print(sh, "Stack: %u KB", info.stack_kb);
+    shell_print(sh, "Crash count: %u", info.crash_count);
+    shell_print(sh, "Auto-restart: %s", info.auto_restart ? "Yes" : "No");
+    return 0;
+}
+
+static int cmd_app_start(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: app start <name>");
+        return -EINVAL;
+    }
+    int ret = app_manager_start(argv[1]);
+    if (ret < 0) {
+        shell_error(sh, "Failed to start app: %s", argv[1]);
+        return ret;
+    }
+    shell_print(sh, "App started: %s", argv[1]);
+    return 0;
+}
+
+static int cmd_app_stop(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: app stop <name>");
+        return -EINVAL;
+    }
+    int ret = app_manager_stop(argv[1]);
+    if (ret < 0) {
+        shell_error(sh, "Failed to stop app: %s", argv[1]);
+        return ret;
+    }
+    shell_print(sh, "App stopped: %s", argv[1]);
+    return 0;
+}
+
+static int cmd_app_restart(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: app restart <name>");
+        return -EINVAL;
+    }
+    int ret = app_manager_restart(argv[1]);
+    if (ret < 0) {
+        shell_error(sh, "Failed to restart app: %s", argv[1]);
+        return ret;
+    }
+    shell_print(sh, "App restarted: %s", argv[1]);
+    return 0;
+}
+
+static int cmd_app_uninstall(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: app uninstall <name>");
+        return -EINVAL;
+    }
+    int ret = app_manager_uninstall(argv[1]);
+    if (ret < 0) {
+        shell_error(sh, "Failed to uninstall app: %s", argv[1]);
+        return ret;
+    }
+    shell_print(sh, "App uninstalled: %s", argv[1]);
+    return 0;
+}
+
+static int cmd_app_scan(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: app scan <sd|usb>");
+        return -EINVAL;
+    }
+    char names[8][APP_NAME_MAX_LEN];
+    int count = 0;
+    if (strcmp(argv[1], "sd") == 0) {
+        count = sd_manager_scan_apps(names, 8);
+    } else if (strcmp(argv[1], "usb") == 0) {
+        count = usb_storage_scan_apps(names, 8);
+    } else {
+        shell_error(sh, "Unknown source: %s", argv[1]);
+        return -EINVAL;
+    }
+    if (count < 0) {
+        shell_error(sh, "Scan failed for %s", argv[1]);
+        return count;
+    }
+    shell_print(sh, "\n=== %s Apps Found ===", argv[1]);
+    for (int i = 0; i < count; i++) {
+        shell_print(sh, "%d: %s", i + 1, names[i]);
+    }
+    shell_print(sh, "Total: %d", count);
+    return 0;
+}
 
 /* Optimized data structures */
 struct __packed display_state
@@ -997,7 +1130,7 @@ static int cmd_ble_shell(const struct shell *shell, size_t argc, char **argv)
         if (i < argc - 1)
             strcat(cmd_buf, " ");
     }
-    bluetooth_manager_receive_shell_command(cmd_buf);  /* Defined in bt_manager.c */
+    bluetooth_manager_receive_shell_command(cmd_buf); /* Defined in bt_manager.c */
     shell_print(shell, "Sent shell command to phone via BLE: %s", cmd_buf);
     return 0;
 }
@@ -1219,6 +1352,15 @@ SHELL_CMD_REGISTER(web_start, NULL, "Start web server", cmd_web_start);
 
 /* Shell command registration - organized by category */
 SHELL_STATIC_SUBCMD_SET_CREATE(system_cmds,
+                            SHELL_STATIC_SUBCMD_SET_CREATE(app_cmds,
+                                SHELL_CMD(list, NULL, "List installed apps", cmd_app_list),
+                                SHELL_CMD(info, NULL, "Show app info <name>", cmd_app_info),
+                                SHELL_CMD(start, NULL, "Start app <name>", cmd_app_start),
+                                SHELL_CMD(stop, NULL, "Stop app <name>", cmd_app_stop),
+                                SHELL_CMD(restart, NULL, "Restart app <name>", cmd_app_restart),
+                                SHELL_CMD(uninstall, NULL, "Uninstall app <name>", cmd_app_uninstall),
+                                SHELL_CMD(scan, NULL, "Scan for apps in SD/USB", cmd_app_scan),
+                                SHELL_SUBCMD_SET_END);
                                SHELL_CMD(info, NULL, "Show comprehensive system information", cmd_system_info),
                                SHELL_CMD(stress, NULL, "Run CPU stress test [duration] [cpu_load%]", cmd_stress_test),
                                SHELL_CMD(threads, NULL, "Show thread information", cmd_threads_info),
@@ -1242,3 +1384,4 @@ SHELL_STATIC_SUBCMD_SET_CREATE(debug_cmds,
 SHELL_CMD_REGISTER(sys, &system_cmds, "System management commands", NULL);
 SHELL_CMD_REGISTER(game, &gaming_cmds, "Gaming-specific commands", NULL);
 SHELL_CMD_REGISTER(debug, &debug_cmds, "Debug and diagnostic commands", NULL);
+SHELL_CMD_REGISTER(app, &app_cmds, "App management commands", NULL);

@@ -11,6 +11,7 @@ The connectivity layer provides unified interfaces for:
 - **Bluetooth Manager** - BLE stack management and HID service
 - **USB Manager** - USB device stack and HID class
 - **OTA Transports** - Multi-source firmware updates
+- **App Transports** - Multi-source WASM app installation (HTTP, BLE, USB, SD Card)
 - **Cloud Client** - Unified messaging from cloud, mobile app, web server, and USB
 - **Client Connectivity** - WebSocket and CoAP clients for outbound connections
 
@@ -28,7 +29,9 @@ src/connectivity/
 │   ├── bt_manager.h      # Bluetooth stack management
 │   ├── bt_manager.c      # Advertising, connections, pairing
 │   ├── bt_hid.h          # BLE HID service API
-│   └── bt_hid.c          # BLE HID implementation
+│   ├── bt_hid.c          # BLE HID implementation
+│   ├── bt_app_transfer.h # BLE WASM app transfer service
+│   └── bt_app_transfer.c # GATT chunked transfer for apps
 ├── usb/
 │   ├── usb_manager.h     # USB device stack management
 │   ├── usb_manager.c     # Device enumeration, class control
@@ -37,6 +40,11 @@ src/connectivity/
 ├── http/
 │   ├── http_server.h     # HTTP server with WebSocket
 │   └── http_server.c     # Route handling, WebSocket management
+├── storage/
+│   ├── sd_manager.h      # SD card mount and scan
+│   ├── sd_manager.c      # SD card app discovery
+│   ├── usb_storage.h     # USB mass storage mount
+│   └── usb_storage.c     # USB app discovery
 ├── client/
 │   ├── ws_client.h       # WebSocket client API
 │   ├── ws_client.c       # WebSocket client implementation
@@ -151,6 +159,111 @@ CONFIG_AKIRA_HTTP_WEBSOCKET=y    # Enable WebSocket support
 CONFIG_AKIRA_HTTP_PORT=80        # Server port
 CONFIG_AKIRA_HTTP_MAX_CONNECTIONS=4  # Max concurrent connections
 ```
+
+## App Transport System
+
+WASM applications can be installed from multiple sources:
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              EXTERNAL INTERFACES                             │
+├─────────────┬─────────────┬─────────────┬─────────────┬─────────────────────┤
+│   WiFi      │    BLE      │    USB      │  SD Card    │   Firmware Flash    │
+│  (HTTP)     │  (GATT)     │   (MSC)     │   (SPI)     │     (Built-in)      │
+└──────┬──────┴──────┬──────┴──────┬──────┴──────┬──────┴──────────┬──────────┘
+       │             │             │             │                 │
+       ▼             ▼             ▼             ▼                 ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           CONNECTIVITY LAYER                                 │
+├─────────────────────┬───────────────────────┬───────────────────────────────┤
+│   HTTP Server       │   BLE App Service     │   Storage Drivers             │
+│   POST /api/apps    │   GATT 0xAK01         │   SD/USB Mount & Scan         │
+│   Chunked Upload    │   512B Chunks         │   FAT32 File Scanner          │
+└─────────┬───────────┴───────────┬───────────┴───────────┬───────────────────┘
+          └───────────────────────┼───────────────────────┘
+                                  ▼
+                         ┌─────────────────┐
+                         │  App Manager    │
+                         │  Install/Run    │
+                         └─────────────────┘
+```
+
+| Source | Interface | Endpoint/Trigger | Notes |
+|--------|-----------|------------------|-------|
+| HTTP OTA | WiFi | `POST /api/apps/install` | Chunked upload, progress CB |
+| BLE Transfer | Bluetooth | GATT service 0xAK01 | 512B chunks, CRC32 |
+| USB Storage | USB MSC | `app scan /usb` | FAT32, manual confirm |
+| SD Card | SPI/SDIO | `app scan /sd` or boot | FAT32, auto/manual |
+| Firmware | Flash | Boot | Read-only, permanent |
+
+### BLE App Transfer Protocol
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    BLE App Transfer Service                       │
+│                    UUID: 0xAK01 (custom)                          │
+├──────────────────────────────────────────────────────────────────┤
+│  Characteristics:                                                 │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ TX_CTRL (Write)     - Control commands                     │  │
+│  │   0x01: Start transfer (+ total_size + name)               │  │
+│  │   0x02: Chunk data (+ offset + data)                       │  │
+│  │   0x03: End transfer (+ CRC32)                             │  │
+│  │   0x04: Abort                                              │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │ RX_STATUS (Notify)  - Status responses                     │  │
+│  │   0x00: Ready                                              │  │
+│  │   0x01: Chunk ACK (+ next_offset)                          │  │
+│  │   0x02: Complete                                           │  │
+│  │   0xFF: Error (+ error_code)                               │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                   │
+│  Transfer Flow:                                                   │
+│  Phone ──[START]──► Device                                        │
+│  Phone ◄──[READY]── Device                                        │
+│  Phone ──[CHUNK]──► Device (512B chunks)                          │
+│  Phone ◄──[ACK]──── Device                                        │
+│  Phone ──[END]────► Device (CRC32)                                │
+│  Phone ◄──[OK]───── Device                                        │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### SD Card / USB Storage
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Storage Mount & Scan Flow                     │
+├─────────────────────────────────────────────────────────────────┤
+│   ┌─────────┐     ┌─────────────┐     ┌─────────────────────┐   │
+│   │ SD/USB  │     │   Mount     │     │    App Scanner      │   │
+│   │ Insert  │────►│  Handler    │────►│  1. List *.wasm     │   │
+│   └─────────┘     └─────────────┘     │  2. Check manifest  │   │
+│                                       │  3. Validate size   │   │
+│   Shell Commands:                     │  4. Queue install   │   │
+│   akira> app scan /sd                 └──────────┬──────────┘   │
+│   akira> app scan /usb                           │              │
+│                                                  ▼              │
+│                                       ┌─────────────────────┐   │
+│                                       │  Install Manager    │   │
+│                                       │  Copy to /lfs/apps/ │   │
+│                                       └─────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Kconfig Options (App Transport)
+
+```kconfig
+CONFIG_AKIRA_APP_SOURCE_HTTP=y      # HTTP upload
+CONFIG_AKIRA_APP_SOURCE_BLE=y       # BLE GATT transfer
+CONFIG_AKIRA_APP_SOURCE_USB=y       # USB mass storage
+CONFIG_AKIRA_APP_SOURCE_SD=y        # SD card
+CONFIG_AKIRA_APP_SOURCE_FIRMWARE=y  # Preloaded in firmware
+```
+
+---
 
 ## OTA Transport System
 

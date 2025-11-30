@@ -1,7 +1,7 @@
 /*
  * ST STEVAL-STWINBX1 Device Tree Overlay for AkiraOS
  * Board: steval_stwinbx1
- * 
+ *
  * This board has many built-in sensors:
  * - IIS2DLPC: 3-axis accelerometer (SPI)
  * - ISM330DHCX: 6-axis IMU with ML Core (SPI)
@@ -11,13 +11,16 @@
  * - ILPS22QS: Pressure sensor (I2C)
  */
 
-/ {
-    chosen {
-        zephyr,console = &usart2;
-        zephyr,shell-uart = &usart2;
+/
+{
+    chosen
+    {
+        zephyr, console = &usart2;
+        zephyr, shell - uart = &usart2;
     };
 
-    aliases {
+    aliases
+    {
         led0 = &green_led;
         led1 = &orange_led;
         sw0 = &user_button;
@@ -25,31 +28,36 @@
 };
 
 /* Console via USART2 (available on SWD connector) */
-&usart2 {
+&usart2
+{
     status = "okay";
-    current-speed = <115200>;
+    current - speed = <115200>;
 };
 
 /* I2C2 for sensors (per board's actual configuration) */
-&i2c2 {
+&i2c2
+{
     status = "okay";
-    clock-frequency = <I2C_BITRATE_FAST>;
+    clock - frequency = <I2C_BITRATE_FAST>;
 
     /* STTS22H Temperature Sensor */
-    stts22h@3f {
+    stts22h @3f
+    {
         compatible = "st,stts22h";
         reg = <0x3f>;
     };
 
     /* IIS2MDC Magnetometer */
-    iis2mdc@1e {
+    iis2mdc @1e
+    {
         compatible = "st,iis2mdc";
         reg = <0x1e>;
-        drdy-gpios = <&gpioe 6 GPIO_ACTIVE_HIGH>;
+        drdy - gpios = <&gpioe 6 GPIO_ACTIVE_HIGH>;
     };
 
     /* ILPS22QS Pressure Sensor */
-    ilps22qs@5d {
+    ilps22qs @5d
+    {
         compatible = "st,ilps22qs";
         reg = <0x5d>;
     };
@@ -61,30 +69,35 @@
  * - ism330dhcx@1: 6-axis IMU with ML Core
  * - iis2iclx@2: 2-axis inclinometer with ML Core
  */
-&spi2 {
+&spi2
+{
     status = "okay";
 };
 
 /* Enable ADC for analog sensors */
-&adc1 {
+&adc1
+{
     status = "okay";
 };
 
 /* Enable USB for CDC ACM console */
-&usbotg_fs {
+&usbotg_fs
+{
     status = "okay";
 };
 
 /* SD Card via SDMMC is already configured in base board DTS */
 /* Just ensure it's enabled */
-&sdmmc1 {
+&sdmmc1
+{
     status = "okay";
 };
 
 /* Note: FDCAN not configured - would need pinctrl setup */
 
 /* Enable watchdog */
-&iwdg {
+&iwdg
+{
     status = "okay";
 };
 

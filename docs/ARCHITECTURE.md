@@ -89,30 +89,144 @@ Trust Chain:
 OCRE verifies full chain before execution.
 ```
 
-### Capability-Based Permissions
+### App Manifest
 
-Apps declare required capabilities in manifest:
+**Optional but recommended.** Apps without manifest use defaults.
 
 ```json
 {
   "name": "weather_station",
   "version": "1.0.0",
-  "trust_level": 3,
-  "capabilities": [
-    "display.write",
-    "sensor.bme280.read",
-    "network.http.get",
-    "storage.read"
-  ],
-  "resources": {
-    "max_memory_kb": 128,
-    "max_cpu_percent": 20,
-    "max_storage_kb": 256
-  }
+  "entry": "_start",
+  "memory": {
+    "heap_kb": 16,
+    "stack_kb": 4
+  },
+  "restart": {
+    "enabled": true,
+    "max_retries": 3,
+    "delay_ms": 1000
+  },
+  "permissions": ["display", "sensor", "network"]
 }
 ```
 
+| Field | Default |
+|-------|---------|----------------------|
+| name | filename |
+| version | "0.0.0" |
+| entry | "_start" |
+| heap_kb | 16 |
+| stack_kb | 4 |
+| restart.enabled | false |
+| permissions | none |
+
 OCRE enforces permissions at runtime. Apps cannot call APIs outside granted capabilities.
+
+---
+
+## App Manager
+
+The App Manager handles WASM application installation, lifecycle, and resource management on top of OCRE.
+
+### App Sources
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              EXTERNAL INTERFACES                             │
+├─────────────┬─────────────┬─────────────┬─────────────┬─────────────────────┤
+│   WiFi      │    BLE      │    USB      │  SD Card    │   Firmware Flash    │
+│  (HTTP)     │  (GATT)     │   (MSC)     │   (SPI)     │     (Built-in)      │
+└──────┬──────┴──────┬──────┴──────┬──────┴──────┬──────┴──────────┬──────────┘
+       │             │             │             │                 │
+       ▼             ▼             ▼             ▼                 ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           CONNECTIVITY LAYER                                 │
+├─────────────────────┬───────────────────────┬───────────────────────────────┤
+│   HTTP Server       │   BLE App Service     │   Storage Drivers             │
+│   POST /api/apps    │   GATT Chunked TX     │   SD/USB Mount & Scan         │
+└─────────┬───────────┴───────────┬───────────┴───────────┬───────────────────┘
+          └───────────────────────┼───────────────────────┘
+                                  ▼
+                         ┌─────────────────┐
+                         │  Install Manager │
+                         │  WASM Validate   │
+                         │  Manifest Parse  │
+                         └────────┬────────┘
+                                  ▼
+                         ┌─────────────────┐
+                         │  Core Registry  │
+                         │  App Metadata   │
+                         │  State Tracking │
+                         └────────┬────────┘
+                                  ▼
+                         ┌─────────────────┐
+                         │ Lifecycle Mgr   │
+                         │ Start/Stop      │
+                         │ Crash Recovery  │
+                         └────────┬────────┘
+                                  ▼
+                            OCRE Runtime
+```
+
+| Source | Interface | Trigger | Notes |
+|--------|-----------|---------|-------|
+| HTTP OTA | WiFi | `POST /api/apps/install` | Chunked upload, progress callback |
+| BLE Transfer | Bluetooth | GATT service 0xAK01 | 512B chunks, CRC32 validation |
+| USB Storage | USB MSC | Mount event or `app scan /usb` | FAT32, manual confirmation |
+| SD Card | SPI/SDIO | Boot scan or `app scan /sd` | FAT32, auto or manual install |
+| Firmware | Flash | Boot | Read-only, cannot uninstall |
+
+### Constraints
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Max installed apps | 8-16 | Based on flash size |
+| Concurrent running | 1-2 | RAM constraints |
+| Max app size | 64KB | Configurable per platform |
+| Heap per app | 16KB | Default, adjustable in manifest |
+| Stack per app | 4KB | Default, adjustable in manifest |
+
+### App Lifecycle
+
+```
+    ┌──────────────────────────────────────┐
+    │                                      │
+    ▼                                      │
+┌────────┐   install   ┌───────────┐       │
+│  NEW   │ ──────────► │ INSTALLED │       │
+└────────┘             └─────┬─────┘       │
+                             │ start       │
+                             ▼             │
+                       ┌───────────┐       │
+              ┌─────── │  RUNNING  │ ◄─────┤ restart (if enabled)
+              │        └─────┬─────┘       │
+              │ stop         │ crash       │
+              ▼              ▼             │
+        ┌───────────┐  ┌───────────┐       │
+        │  STOPPED  │  │   ERROR   │ ──────┘
+        └───────────┘  └─────┬─────┘
+                             │ max retries exceeded
+                             ▼
+                       ┌───────────┐
+                       │  FAILED   │
+                       └───────────┘
+```
+
+| State | Description |
+|-------|-------------|
+| NEW | Being installed |
+| INSTALLED | Ready to run |
+| RUNNING | Currently executing |
+| STOPPED | Manually stopped |
+| ERROR | Crashed, pending restart |
+| FAILED | Exceeded max restart retries |
+
+### Crash Handling
+
+- On crash: Log error, set state to ERROR, increment crash counter
+- Auto-restart (if enabled): Wait delay, retry up to 3 times
+- After max retries: State = FAILED, manual restart always allowed
 
 ---
 
@@ -120,28 +234,24 @@ OCRE enforces permissions at runtime. Apps cannot call APIs outside granted capa
 
 ### Core Responsibilities
 
-1. **Lifecycle Management**
-   - Load WASM binaries from storage
+1. **WASM Execution**
+   - Load and validate WASM binaries
    - Initialize isolated execution context
-   - Start/stop/pause/resume apps
-   - Hot reload and live migration
+   - AOT or interpreter mode (platform-dependent)
 
 2. **Security Enforcement**
-   - Validate app signatures
-   - Enforce capability permissions
    - Memory isolation (WASM linear memory)
+   - Capability-based permissions
    - Syscall filtering and validation
 
-3. **Resource Scheduling**
-   - CPU time slicing (fair scheduling)
-   - Memory quota enforcement
+3. **Resource Management**
+   - Memory quota enforcement (heap/stack limits)
+   - CPU time slicing
    - Storage quota management
-   - Network rate limiting
 
 4. **Inter-Process Communication**
    - Message bus for async communication
    - Shared memory regions (with ACLs)
-   - RPC proxy for sync calls
    - Event broadcasting
 
 ### Container Lifecycle
@@ -839,10 +949,29 @@ west build -b native_sim AkiraOS
 ### Kconfig Options
 
 ```kconfig
+# App Manager
+CONFIG_AKIRA_APP_MANAGER=y
+CONFIG_AKIRA_APP_MAX_INSTALLED=8
+CONFIG_AKIRA_APP_MAX_RUNNING=2
+CONFIG_AKIRA_APP_MAX_SIZE_KB=64
+CONFIG_AKIRA_APP_DEFAULT_HEAP_KB=16
+CONFIG_AKIRA_APP_DEFAULT_STACK_KB=4
+
+# App Sources
+CONFIG_AKIRA_APP_SOURCE_HTTP=y
+CONFIG_AKIRA_APP_SOURCE_BLE=y
+CONFIG_AKIRA_APP_SOURCE_USB=y
+CONFIG_AKIRA_APP_SOURCE_SD=y
+CONFIG_AKIRA_APP_SOURCE_FIRMWARE=y
+
+# Auto-restart
+CONFIG_AKIRA_APP_AUTO_RESTART=n
+CONFIG_AKIRA_APP_MAX_RETRIES=3
+CONFIG_AKIRA_APP_RESTART_DELAY_MS=1000
+
+# OCRE Runtime
 CONFIG_AKIRA_OCRE_RUNTIME=y
-CONFIG_AKIRA_MAX_CONTAINERS=8
-CONFIG_AKIRA_CONTAINER_DEFAULT_MEM_KB=128
-CONFIG_AKIRA_SECURITY_SIGNING=y
+CONFIG_AKIRA_SECURITY_SIGNING=n
 CONFIG_AKIRA_RF_FRAMEWORK=y
 CONFIG_AKIRA_POWER_MANAGEMENT=y
 ```
@@ -904,7 +1033,21 @@ sys reboot        # Reboot device
 sys sleep <ms>    # Enter sleep mode
 ```
 
-### Containers
+### App Manager
+
+```bash
+app list                     # List all apps with state
+app install /sd/myapp.wasm   # Install from path
+app start <name>             # Start app
+app stop <name>              # Stop app
+app restart <name>           # Restart (resets crash counter)
+app info <name>              # App details
+app uninstall <name>         # Remove app
+app scan /sd                 # Scan SD card for apps
+app scan /usb                # Scan USB for apps
+```
+
+### Containers (OCRE)
 
 ```bash
 ocre list                    # List all containers

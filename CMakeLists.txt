@@ -254,6 +254,25 @@ target_sources(app PRIVATE
     src/services/wasm_app_manager.c
 )
 
+# App Manager
+if(CONFIG_AKIRA_APP_MANAGER)
+    target_sources(app PRIVATE src/services/app_manager.c)
+endif()
+
+# Storage drivers for app sources
+if(CONFIG_AKIRA_APP_SOURCE_SD)
+    target_sources(app PRIVATE src/connectivity/storage/sd_manager.c)
+endif()
+
+if(CONFIG_AKIRA_APP_SOURCE_USB)
+    target_sources(app PRIVATE src/connectivity/storage/usb_storage.c)
+endif()
+
+# BLE app transfer
+if(CONFIG_AKIRA_APP_SOURCE_BLE)
+    target_sources(app PRIVATE src/connectivity/bluetooth/bt_app_transfer.c)
+endif()
+
 # Include directories
 target_include_directories(app PRIVATE
     src/
