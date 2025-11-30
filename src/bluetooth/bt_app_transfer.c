@@ -19,28 +19,29 @@ LOG_MODULE_REGISTER(bt_app_xfer, CONFIG_AKIRA_LOG_LEVEL);
 /* Custom UUIDs for App Transfer Service */
 #define BT_UUID_APP_XFER_VAL \
     BT_UUID_128_ENCODE(0x414B4952, 0x0001, 0x0001, 0x0001, 0x000000000001)
-#define BT_UUID_APP_XFER  BT_UUID_DECLARE_128(BT_UUID_APP_XFER_VAL)
+#define BT_UUID_APP_XFER BT_UUID_DECLARE_128(BT_UUID_APP_XFER_VAL)
 
 #define BT_UUID_APP_RX_DATA_VAL \
     BT_UUID_128_ENCODE(0x414B4952, 0x0001, 0x0001, 0x0001, 0x000000000002)
-#define BT_UUID_APP_RX_DATA  BT_UUID_DECLARE_128(BT_UUID_APP_RX_DATA_VAL)
+#define BT_UUID_APP_RX_DATA BT_UUID_DECLARE_128(BT_UUID_APP_RX_DATA_VAL)
 
 #define BT_UUID_APP_TX_STATUS_VAL \
     BT_UUID_128_ENCODE(0x414B4952, 0x0001, 0x0001, 0x0001, 0x000000000003)
-#define BT_UUID_APP_TX_STATUS  BT_UUID_DECLARE_128(BT_UUID_APP_TX_STATUS_VAL)
+#define BT_UUID_APP_TX_STATUS BT_UUID_DECLARE_128(BT_UUID_APP_TX_STATUS_VAL)
 
 #define BT_UUID_APP_CONTROL_VAL \
     BT_UUID_128_ENCODE(0x414B4952, 0x0001, 0x0001, 0x0001, 0x000000000004)
-#define BT_UUID_APP_CONTROL  BT_UUID_DECLARE_128(BT_UUID_APP_CONTROL_VAL)
+#define BT_UUID_APP_CONTROL BT_UUID_DECLARE_128(BT_UUID_APP_CONTROL_VAL)
 
 /* Maximum app size for BLE transfer */
-#define MAX_APP_SIZE  CONFIG_AKIRA_APP_MAX_SIZE
+#define MAX_APP_SIZE CONFIG_AKIRA_APP_MAX_SIZE
 
 /* Temp file for receiving app */
 #define TEMP_APP_PATH "/lfs/apps/.tmp_xfer.wasm"
 
 /* Transfer context */
-static struct {
+static struct
+{
     bt_app_xfer_state_t state;
     char app_name[32];
     uint32_t total_size;
@@ -52,8 +53,7 @@ static struct {
     bt_app_xfer_complete_cb_t callback;
 } g_xfer = {
     .state = BT_APP_XFER_IDLE,
-    .file_open = false
-};
+    .file_open = false};
 
 static K_MUTEX_DEFINE(xfer_mutex);
 
@@ -74,28 +74,27 @@ static bool notify_enabled = false;
 
 /* GATT Service Definition */
 BT_GATT_SERVICE_DEFINE(app_xfer_svc,
-    BT_GATT_PRIMARY_SERVICE(BT_UUID_APP_XFER),
+                       BT_GATT_PRIMARY_SERVICE(BT_UUID_APP_XFER),
 
-    /* RX_DATA: Write without response for app chunks */
-    BT_GATT_CHARACTERISTIC(BT_UUID_APP_RX_DATA,
-                           BT_GATT_CHRC_WRITE_WITHOUT_RESP,
-                           BT_GATT_PERM_WRITE,
-                           NULL, rx_data_write, NULL),
+                       /* RX_DATA: Write without response for app chunks */
+                       BT_GATT_CHARACTERISTIC(BT_UUID_APP_RX_DATA,
+                                              BT_GATT_CHRC_WRITE_WITHOUT_RESP,
+                                              BT_GATT_PERM_WRITE,
+                                              NULL, rx_data_write, NULL),
 
-    /* TX_STATUS: Notify for status updates */
-    BT_GATT_CHARACTERISTIC(BT_UUID_APP_TX_STATUS,
-                           BT_GATT_CHRC_NOTIFY,
-                           BT_GATT_PERM_NONE,
-                           NULL, NULL, status_value),
-    BT_GATT_CCC(status_ccc_changed,
-                BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+                       /* TX_STATUS: Notify for status updates */
+                       BT_GATT_CHARACTERISTIC(BT_UUID_APP_TX_STATUS,
+                                              BT_GATT_CHRC_NOTIFY,
+                                              BT_GATT_PERM_NONE,
+                                              NULL, NULL, status_value),
+                       BT_GATT_CCC(status_ccc_changed,
+                                   BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
-    /* CONTROL: Write for transfer control commands */
-    BT_GATT_CHARACTERISTIC(BT_UUID_APP_CONTROL,
-                           BT_GATT_CHRC_WRITE,
-                           BT_GATT_PERM_WRITE,
-                           NULL, control_write, NULL),
-);
+                       /* CONTROL: Write for transfer control commands */
+                       BT_GATT_CHARACTERISTIC(BT_UUID_APP_CONTROL,
+                                              BT_GATT_CHRC_WRITE,
+                                              BT_GATT_PERM_WRITE,
+                                              NULL, control_write, NULL), );
 
 static void status_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
@@ -105,7 +104,8 @@ static void status_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 
 static void send_status(bt_app_status_t status, uint8_t progress)
 {
-    if (!notify_enabled) {
+    if (!notify_enabled)
+    {
         return;
     }
 
@@ -119,7 +119,8 @@ static void send_status(bt_app_status_t status, uint8_t progress)
 
 static void cleanup_transfer(void)
 {
-    if (g_xfer.file_open) {
+    if (g_xfer.file_open)
+    {
         fs_close(&g_xfer.file);
         g_xfer.file_open = false;
     }
@@ -133,12 +134,14 @@ static void cleanup_transfer(void)
 
 static int start_transfer(const struct bt_app_xfer_header *header)
 {
-    if (g_xfer.state != BT_APP_XFER_IDLE) {
+    if (g_xfer.state != BT_APP_XFER_IDLE)
+    {
         LOG_WRN("Transfer already in progress");
         return -EBUSY;
     }
 
-    if (header->total_size > MAX_APP_SIZE) {
+    if (header->total_size > MAX_APP_SIZE)
+    {
         LOG_ERR("App too large: %u > %u", header->total_size, MAX_APP_SIZE);
         return -ENOMEM;
     }
@@ -153,7 +156,8 @@ static int start_transfer(const struct bt_app_xfer_header *header)
     /* Open temp file */
     fs_file_t_init(&g_xfer.file);
     int ret = fs_open(&g_xfer.file, TEMP_APP_PATH, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Failed to create temp file: %d", ret);
         return ret;
     }
@@ -168,20 +172,23 @@ static int start_transfer(const struct bt_app_xfer_header *header)
 
 static int finalize_transfer(void)
 {
-    if (g_xfer.state != BT_APP_XFER_RECEIVING) {
+    if (g_xfer.state != BT_APP_XFER_RECEIVING)
+    {
         return -EINVAL;
     }
 
     g_xfer.state = BT_APP_XFER_VALIDATING;
 
     /* Close file */
-    if (g_xfer.file_open) {
+    if (g_xfer.file_open)
+    {
         fs_close(&g_xfer.file);
         g_xfer.file_open = false;
     }
 
     /* Verify size */
-    if (g_xfer.received_bytes != g_xfer.total_size) {
+    if (g_xfer.received_bytes != g_xfer.total_size)
+    {
         LOG_ERR("Size mismatch: %u != %u", g_xfer.received_bytes, g_xfer.total_size);
         g_xfer.state = BT_APP_XFER_ERROR;
         send_status(BT_APP_STATUS_SIZE_ERROR, 100);
@@ -190,7 +197,8 @@ static int finalize_transfer(void)
     }
 
     /* Verify CRC */
-    if (g_xfer.running_crc != g_xfer.expected_crc) {
+    if (g_xfer.running_crc != g_xfer.expected_crc)
+    {
         LOG_ERR("CRC mismatch: 0x%08X != 0x%08X", g_xfer.running_crc, g_xfer.expected_crc);
         g_xfer.state = BT_APP_XFER_ERROR;
         send_status(BT_APP_STATUS_CRC_FAIL, 100);
@@ -203,11 +211,13 @@ static int finalize_transfer(void)
     LOG_INF("Installing app: %s", g_xfer.app_name);
 
     int ret = app_manager_install_from_path(TEMP_APP_PATH);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Install failed: %d", ret);
         g_xfer.state = BT_APP_XFER_ERROR;
         send_status(BT_APP_STATUS_INSTALL_FAIL, 100);
-        if (g_xfer.callback) {
+        if (g_xfer.callback)
+        {
             g_xfer.callback(false, g_xfer.app_name, ret);
         }
         cleanup_transfer();
@@ -219,7 +229,8 @@ static int finalize_transfer(void)
     LOG_INF("App installed successfully: %s", g_xfer.app_name);
     send_status(BT_APP_STATUS_OK, 100);
 
-    if (g_xfer.callback) {
+    if (g_xfer.callback)
+    {
         g_xfer.callback(true, g_xfer.app_name, 0);
     }
 
@@ -243,7 +254,8 @@ static ssize_t rx_data_write(struct bt_conn *conn,
     ARG_UNUSED(offset);
     ARG_UNUSED(flags);
 
-    if (g_xfer.state != BT_APP_XFER_RECEIVING) {
+    if (g_xfer.state != BT_APP_XFER_RECEIVING)
+    {
         LOG_WRN("Not in receiving state");
         return BT_GATT_ERR(BT_ATT_ERR_WRITE_NOT_PERMITTED);
     }
@@ -251,7 +263,8 @@ static ssize_t rx_data_write(struct bt_conn *conn,
     k_mutex_lock(&xfer_mutex, K_FOREVER);
 
     /* Check for overflow */
-    if (g_xfer.received_bytes + len > g_xfer.total_size) {
+    if (g_xfer.received_bytes + len > g_xfer.total_size)
+    {
         LOG_ERR("Received more data than expected");
         k_mutex_unlock(&xfer_mutex);
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
@@ -259,7 +272,8 @@ static ssize_t rx_data_write(struct bt_conn *conn,
 
     /* Write to file */
     ssize_t written = fs_write(&g_xfer.file, buf, len);
-    if (written != len) {
+    if (written != len)
+    {
         LOG_ERR("Write failed: %d", (int)written);
         k_mutex_unlock(&xfer_mutex);
         g_xfer.state = BT_APP_XFER_ERROR;
@@ -289,7 +303,8 @@ static ssize_t control_write(struct bt_conn *conn,
     ARG_UNUSED(offset);
     ARG_UNUSED(flags);
 
-    if (len < 1) {
+    if (len < 1)
+    {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
     }
 
@@ -298,9 +313,11 @@ static ssize_t control_write(struct bt_conn *conn,
 
     k_mutex_lock(&xfer_mutex, K_FOREVER);
 
-    switch (cmd) {
+    switch (cmd)
+    {
     case BT_APP_CMD_START:
-        if (len < 1 + sizeof(struct bt_app_xfer_header)) {
+        if (len < 1 + sizeof(struct bt_app_xfer_header))
+        {
             k_mutex_unlock(&xfer_mutex);
             return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
         }
@@ -319,14 +336,15 @@ static ssize_t control_write(struct bt_conn *conn,
         break;
 
     case BT_APP_CMD_STATUS:
+    {
+        uint8_t progress = 0;
+        if (g_xfer.total_size > 0)
         {
-            uint8_t progress = 0;
-            if (g_xfer.total_size > 0) {
-                progress = (g_xfer.received_bytes * 100) / g_xfer.total_size;
-            }
-            send_status(BT_APP_STATUS_OK, progress);
+            progress = (g_xfer.received_bytes * 100) / g_xfer.total_size;
         }
-        break;
+        send_status(BT_APP_STATUS_OK, progress);
+    }
+    break;
 
     default:
         LOG_WRN("Unknown command: 0x%02X", cmd);
@@ -353,7 +371,8 @@ bt_app_xfer_state_t bt_app_transfer_get_state(void)
 
 int bt_app_transfer_get_progress(struct bt_app_xfer_progress *progress)
 {
-    if (!progress) {
+    if (!progress)
+    {
         return -EINVAL;
     }
 
@@ -362,9 +381,12 @@ int bt_app_transfer_get_progress(struct bt_app_xfer_progress *progress)
     strncpy(progress->app_name, g_xfer.app_name, sizeof(progress->app_name) - 1);
     progress->total_size = g_xfer.total_size;
     progress->received_bytes = g_xfer.received_bytes;
-    if (g_xfer.total_size > 0) {
+    if (g_xfer.total_size > 0)
+    {
         progress->percent_complete = (g_xfer.received_bytes * 100) / g_xfer.total_size;
-    } else {
+    }
+    else
+    {
         progress->percent_complete = 0;
     }
     k_mutex_unlock(&xfer_mutex);
@@ -375,7 +397,8 @@ int bt_app_transfer_get_progress(struct bt_app_xfer_progress *progress)
 void bt_app_transfer_abort(void)
 {
     k_mutex_lock(&xfer_mutex, K_FOREVER);
-    if (g_xfer.state == BT_APP_XFER_RECEIVING) {
+    if (g_xfer.state == BT_APP_XFER_RECEIVING)
+    {
         cleanup_transfer();
         g_xfer.state = BT_APP_XFER_IDLE;
         LOG_INF("Transfer aborted");

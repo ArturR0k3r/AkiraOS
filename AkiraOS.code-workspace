@@ -70,7 +70,8 @@
 			"cstdlib": "c",
 			"cstdint": "c",
 			"*.overlay": "cpp",
-			"cerrno": "c"
+			"cerrno": "c",
+			"regex": "cpp"
 		},
 		"editor.formatOnType": true,
 		"cortex-debug.variableUseNaturalFormat": false,

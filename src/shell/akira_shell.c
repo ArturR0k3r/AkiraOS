@@ -47,15 +47,17 @@ static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
 {
     app_info_t apps[CONFIG_AKIRA_APP_MAX_INSTALLED];
     int count = app_manager_list(apps, CONFIG_AKIRA_APP_MAX_INSTALLED);
-    if (count < 0) {
+    if (count < 0)
+    {
         shell_error(sh, "Failed to list apps");
         return count;
     }
     shell_print(sh, "\n=== Installed Apps ===");
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < count; i++)
+    {
         shell_print(sh, "%2d: %-16s %-8s %s %u bytes%s", apps[i].id, apps[i].name, apps[i].version,
-            app_state_to_str(apps[i].state), apps[i].size,
-            apps[i].auto_restart ? " [auto-restart]" : "");
+                    app_state_to_str(apps[i].state), apps[i].size,
+                    apps[i].auto_restart ? " [auto-restart]" : "");
     }
     shell_print(sh, "Total: %d", count);
     return 0;
@@ -63,13 +65,15 @@ static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_app_info(const struct shell *sh, size_t argc, char **argv)
 {
-    if (argc < 2) {
+    if (argc < 2)
+    {
         shell_error(sh, "Usage: app info <name>");
         return -EINVAL;
     }
     app_info_t info;
     int ret = app_manager_get_info(argv[1], &info);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         shell_error(sh, "App not found: %s", argv[1]);
         return ret;
     }
@@ -87,12 +91,14 @@ static int cmd_app_info(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_app_start(const struct shell *sh, size_t argc, char **argv)
 {
-    if (argc < 2) {
+    if (argc < 2)
+    {
         shell_error(sh, "Usage: app start <name>");
         return -EINVAL;
     }
     int ret = app_manager_start(argv[1]);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         shell_error(sh, "Failed to start app: %s", argv[1]);
         return ret;
     }
@@ -102,12 +108,14 @@ static int cmd_app_start(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_app_stop(const struct shell *sh, size_t argc, char **argv)
 {
-    if (argc < 2) {
+    if (argc < 2)
+    {
         shell_error(sh, "Usage: app stop <name>");
         return -EINVAL;
     }
     int ret = app_manager_stop(argv[1]);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         shell_error(sh, "Failed to stop app: %s", argv[1]);
         return ret;
     }
@@ -117,12 +125,14 @@ static int cmd_app_stop(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_app_restart(const struct shell *sh, size_t argc, char **argv)
 {
-    if (argc < 2) {
+    if (argc < 2)
+    {
         shell_error(sh, "Usage: app restart <name>");
         return -EINVAL;
     }
     int ret = app_manager_restart(argv[1]);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         shell_error(sh, "Failed to restart app: %s", argv[1]);
         return ret;
     }
@@ -132,12 +142,14 @@ static int cmd_app_restart(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_app_uninstall(const struct shell *sh, size_t argc, char **argv)
 {
-    if (argc < 2) {
+    if (argc < 2)
+    {
         shell_error(sh, "Usage: app uninstall <name>");
         return -EINVAL;
     }
     int ret = app_manager_uninstall(argv[1]);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         shell_error(sh, "Failed to uninstall app: %s", argv[1]);
         return ret;
     }
@@ -147,26 +159,34 @@ static int cmd_app_uninstall(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_app_scan(const struct shell *sh, size_t argc, char **argv)
 {
-    if (argc < 2) {
+    if (argc < 2)
+    {
         shell_error(sh, "Usage: app scan <sd|usb>");
         return -EINVAL;
     }
     char names[8][APP_NAME_MAX_LEN];
     int count = 0;
-    if (strcmp(argv[1], "sd") == 0) {
+    if (strcmp(argv[1], "sd") == 0)
+    {
         count = sd_manager_scan_apps(names, 8);
-    } else if (strcmp(argv[1], "usb") == 0) {
+    }
+    else if (strcmp(argv[1], "usb") == 0)
+    {
         count = usb_storage_scan_apps(names, 8);
-    } else {
+    }
+    else
+    {
         shell_error(sh, "Unknown source: %s", argv[1]);
         return -EINVAL;
     }
-    if (count < 0) {
+    if (count < 0)
+    {
         shell_error(sh, "Scan failed for %s", argv[1]);
         return count;
     }
     shell_print(sh, "\n=== %s Apps Found ===", argv[1]);
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < count; i++)
+    {
         shell_print(sh, "%d: %s", i + 1, names[i]);
     }
     shell_print(sh, "Total: %d", count);
@@ -1352,15 +1372,15 @@ SHELL_CMD_REGISTER(web_start, NULL, "Start web server", cmd_web_start);
 
 /* Shell command registration - organized by category */
 SHELL_STATIC_SUBCMD_SET_CREATE(system_cmds,
-                            SHELL_STATIC_SUBCMD_SET_CREATE(app_cmds,
-                                SHELL_CMD(list, NULL, "List installed apps", cmd_app_list),
-                                SHELL_CMD(info, NULL, "Show app info <name>", cmd_app_info),
-                                SHELL_CMD(start, NULL, "Start app <name>", cmd_app_start),
-                                SHELL_CMD(stop, NULL, "Stop app <name>", cmd_app_stop),
-                                SHELL_CMD(restart, NULL, "Restart app <name>", cmd_app_restart),
-                                SHELL_CMD(uninstall, NULL, "Uninstall app <name>", cmd_app_uninstall),
-                                SHELL_CMD(scan, NULL, "Scan for apps in SD/USB", cmd_app_scan),
-                                SHELL_SUBCMD_SET_END);
+                               SHELL_STATIC_SUBCMD_SET_CREATE(app_cmds,
+                                                              SHELL_CMD(list, NULL, "List installed apps", cmd_app_list),
+                                                              SHELL_CMD(info, NULL, "Show app info <name>", cmd_app_info),
+                                                              SHELL_CMD(start, NULL, "Start app <name>", cmd_app_start),
+                                                              SHELL_CMD(stop, NULL, "Stop app <name>", cmd_app_stop),
+                                                              SHELL_CMD(restart, NULL, "Restart app <name>", cmd_app_restart),
+                                                              SHELL_CMD(uninstall, NULL, "Uninstall app <name>", cmd_app_uninstall),
+                                                              SHELL_CMD(scan, NULL, "Scan for apps in SD/USB", cmd_app_scan),
+                                                              SHELL_SUBCMD_SET_END);
                                SHELL_CMD(info, NULL, "Show comprehensive system information", cmd_system_info),
                                SHELL_CMD(stress, NULL, "Run CPU stress test [duration] [cpu_load%]", cmd_stress_test),
                                SHELL_CMD(threads, NULL, "Show thread information", cmd_threads_info),

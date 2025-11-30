@@ -13,8 +13,8 @@
 
 LOG_MODULE_REGISTER(sd_manager, CONFIG_AKIRA_LOG_LEVEL);
 
-#define SD_DISK_NAME     "SD"
-#define APP_NAME_MAX     32
+#define SD_DISK_NAME "SD"
+#define APP_NAME_MAX 32
 
 static sd_state_t g_state = SD_STATE_UNMOUNTED;
 static sd_event_cb_t g_event_cb = NULL;
@@ -31,9 +31,11 @@ static struct fs_mount_t g_mount = {
 
 static void notify_state_change(sd_state_t new_state)
 {
-    if (g_state != new_state) {
+    if (g_state != new_state)
+    {
         g_state = new_state;
-        if (g_event_cb) {
+        if (g_event_cb)
+        {
             g_event_cb(new_state, g_event_user);
         }
     }
@@ -49,14 +51,16 @@ int sd_manager_mount(void)
 {
     k_mutex_lock(&g_sd_mutex, K_FOREVER);
 
-    if (g_state == SD_STATE_MOUNTED) {
+    if (g_state == SD_STATE_MOUNTED)
+    {
         k_mutex_unlock(&g_sd_mutex);
         return 0;
     }
 
     /* Check if disk is available */
     int ret = disk_access_init(SD_DISK_NAME);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("SD card not detected: %d", ret);
         notify_state_change(SD_STATE_ERROR);
         k_mutex_unlock(&g_sd_mutex);
@@ -66,7 +70,8 @@ int sd_manager_mount(void)
     /* Get disk status */
     uint32_t status;
     ret = disk_access_status(SD_DISK_NAME);
-    if (ret != DISK_STATUS_OK) {
+    if (ret != DISK_STATUS_OK)
+    {
         LOG_ERR("SD card status error: %d", ret);
         notify_state_change(SD_STATE_ERROR);
         k_mutex_unlock(&g_sd_mutex);
@@ -75,7 +80,8 @@ int sd_manager_mount(void)
 
     /* Mount filesystem */
     ret = fs_mount(&g_mount);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Failed to mount SD card: %d", ret);
         notify_state_change(SD_STATE_ERROR);
         k_mutex_unlock(&g_sd_mutex);
@@ -93,13 +99,15 @@ int sd_manager_unmount(void)
 {
     k_mutex_lock(&g_sd_mutex, K_FOREVER);
 
-    if (g_state != SD_STATE_MOUNTED) {
+    if (g_state != SD_STATE_MOUNTED)
+    {
         k_mutex_unlock(&g_sd_mutex);
         return 0;
     }
 
     int ret = fs_unmount(&g_mount);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Failed to unmount SD card: %d", ret);
         k_mutex_unlock(&g_sd_mutex);
         return ret;
@@ -124,11 +132,13 @@ sd_state_t sd_manager_get_state(void)
 
 int sd_manager_scan_apps(char names[][32], int max_count)
 {
-    if (!names || max_count <= 0) {
+    if (!names || max_count <= 0)
+    {
         return -EINVAL;
     }
 
-    if (g_state != SD_STATE_MOUNTED) {
+    if (g_state != SD_STATE_MOUNTED)
+    {
         LOG_WRN("SD card not mounted");
         return -ENODEV;
     }
@@ -137,16 +147,19 @@ int sd_manager_scan_apps(char names[][32], int max_count)
     fs_dir_t_init(&dir);
 
     int ret = fs_opendir(&dir, SD_APPS_DIR);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         /* Try to create apps directory */
         ret = fs_mkdir(SD_APPS_DIR);
-        if (ret < 0 && ret != -EEXIST) {
+        if (ret < 0 && ret != -EEXIST)
+        {
             LOG_ERR("Failed to access %s: %d", SD_APPS_DIR, ret);
             return ret;
         }
         /* Try again */
         ret = fs_opendir(&dir, SD_APPS_DIR);
-        if (ret < 0) {
+        if (ret < 0)
+        {
             return ret;
         }
     }
@@ -154,17 +167,21 @@ int sd_manager_scan_apps(char names[][32], int max_count)
     int count = 0;
     struct fs_dirent entry;
 
-    while (count < max_count && fs_readdir(&dir, &entry) == 0) {
-        if (entry.name[0] == '\0') {
+    while (count < max_count && fs_readdir(&dir, &entry) == 0)
+    {
+        if (entry.name[0] == '\0')
+        {
             break;
         }
 
         /* Check for .wasm extension */
         size_t len = strlen(entry.name);
-        if (len > 5 && strcmp(&entry.name[len - 5], ".wasm") == 0) {
+        if (len > 5 && strcmp(&entry.name[len - 5], ".wasm") == 0)
+        {
             /* Extract name without extension */
             size_t name_len = len - 5;
-            if (name_len >= APP_NAME_MAX) {
+            if (name_len >= APP_NAME_MAX)
+            {
                 name_len = APP_NAME_MAX - 1;
             }
             strncpy(names[count], entry.name, name_len);
@@ -182,11 +199,13 @@ int sd_manager_scan_apps(char names[][32], int max_count)
 
 int sd_manager_install_app(const char *name)
 {
-    if (!name) {
+    if (!name)
+    {
         return -EINVAL;
     }
 
-    if (g_state != SD_STATE_MOUNTED) {
+    if (g_state != SD_STATE_MOUNTED)
+    {
         return -ENODEV;
     }
 
@@ -201,17 +220,22 @@ int sd_manager_install_all_apps(void)
     char names[8][32];
     int count = sd_manager_scan_apps(names, 8);
 
-    if (count <= 0) {
+    if (count <= 0)
+    {
         return count;
     }
 
     int installed = 0;
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < count; i++)
+    {
         int ret = sd_manager_install_app(names[i]);
-        if (ret >= 0) {
+        if (ret >= 0)
+        {
             installed++;
             LOG_INF("Installed app from SD: %s", names[i]);
-        } else {
+        }
+        else
+        {
             LOG_WRN("Failed to install %s: %d", names[i], ret);
         }
     }

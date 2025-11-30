@@ -15,7 +15,7 @@
 
 LOG_MODULE_REGISTER(usb_storage, CONFIG_AKIRA_LOG_LEVEL);
 
-#define APP_NAME_MAX     32
+#define APP_NAME_MAX 32
 
 static usb_storage_state_t g_state = USB_STORAGE_DISCONNECTED;
 static usb_storage_event_cb_t g_event_cb = NULL;
@@ -40,11 +40,13 @@ usb_storage_state_t usb_storage_get_state(void)
 
 int usb_storage_scan_apps(char names[][32], int max_count)
 {
-    if (!names || max_count <= 0) {
+    if (!names || max_count <= 0)
+    {
         return -EINVAL;
     }
 
-    if (g_state != USB_STORAGE_MOUNTED) {
+    if (g_state != USB_STORAGE_MOUNTED)
+    {
         LOG_WRN("USB storage not mounted");
         return -ENODEV;
     }
@@ -53,7 +55,8 @@ int usb_storage_scan_apps(char names[][32], int max_count)
     fs_dir_t_init(&dir);
 
     int ret = fs_opendir(&dir, USB_APPS_DIR);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Failed to open %s: %d", USB_APPS_DIR, ret);
         return ret;
     }
@@ -61,16 +64,20 @@ int usb_storage_scan_apps(char names[][32], int max_count)
     int count = 0;
     struct fs_dirent entry;
 
-    while (count < max_count && fs_readdir(&dir, &entry) == 0) {
-        if (entry.name[0] == '\0') {
+    while (count < max_count && fs_readdir(&dir, &entry) == 0)
+    {
+        if (entry.name[0] == '\0')
+        {
             break;
         }
 
         /* Check for .wasm extension */
         size_t len = strlen(entry.name);
-        if (len > 5 && strcmp(&entry.name[len - 5], ".wasm") == 0) {
+        if (len > 5 && strcmp(&entry.name[len - 5], ".wasm") == 0)
+        {
             size_t name_len = len - 5;
-            if (name_len >= APP_NAME_MAX) {
+            if (name_len >= APP_NAME_MAX)
+            {
                 name_len = APP_NAME_MAX - 1;
             }
             strncpy(names[count], entry.name, name_len);
@@ -86,11 +93,13 @@ int usb_storage_scan_apps(char names[][32], int max_count)
 
 int usb_storage_install_app(const char *name)
 {
-    if (!name) {
+    if (!name)
+    {
         return -EINVAL;
     }
 
-    if (g_state != USB_STORAGE_MOUNTED) {
+    if (g_state != USB_STORAGE_MOUNTED)
+    {
         return -ENODEV;
     }
 

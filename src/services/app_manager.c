@@ -18,19 +18,20 @@ LOG_MODULE_REGISTER(app_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 /* ===== Configuration ===== */
 
-#define REGISTRY_PATH      "/lfs/apps/registry.bin"
-#define APPS_DIR           "/lfs/apps"
-#define APP_DATA_DIR       "/lfs/app_data"
-#define REGISTRY_MAGIC     0x414B4150  /* "AKAP" */
-#define REGISTRY_VERSION   1
-#define MAX_WASM_MAGIC     8
+#define REGISTRY_PATH "/lfs/apps/registry.bin"
+#define APPS_DIR "/lfs/apps"
+#define APP_DATA_DIR "/lfs/app_data"
+#define REGISTRY_MAGIC 0x414B4150 /* "AKAP" */
+#define REGISTRY_VERSION 1
+#define MAX_WASM_MAGIC 8
 
 /* WASM magic bytes: \0asm */
 static const uint8_t WASM_MAGIC[] = {0x00, 0x61, 0x73, 0x6D};
 
 /* ===== Internal Types ===== */
 
-typedef struct {
+typedef struct
+{
     uint32_t magic;
     uint8_t version;
     uint8_t app_count;
@@ -38,7 +39,8 @@ typedef struct {
     uint32_t crc;
 } registry_header_t;
 
-typedef struct {
+typedef struct
+{
     char name[APP_NAME_MAX_LEN];
     size_t total_size;
     size_t received;
@@ -83,7 +85,8 @@ static int ensure_dirs_exist(void);
 
 int app_manager_init(void)
 {
-    if (g_initialized) {
+    if (g_initialized)
+    {
         LOG_WRN("App Manager already initialized");
         return 0;
     }
@@ -92,14 +95,16 @@ int app_manager_init(void)
 
     /* Initialize OCRE runtime first */
     int ret = ocre_runtime_init();
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Failed to initialize OCRE runtime: %d", ret);
         return ret;
     }
 
     /* Ensure directories exist */
     ret = ensure_dirs_exist();
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_WRN("Failed to create app directories: %d", ret);
         /* Continue anyway - might be read-only */
     }
@@ -111,9 +116,12 @@ int app_manager_init(void)
 
     /* Load registry from flash */
     ret = registry_load();
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_WRN("No registry found or load failed, starting fresh");
-    } else {
+    }
+    else
+    {
         LOG_INF("Loaded %d apps from registry", g_app_count);
     }
 
@@ -129,7 +137,8 @@ int app_manager_init(void)
 
 void app_manager_shutdown(void)
 {
-    if (!g_initialized) {
+    if (!g_initialized)
+    {
         return;
     }
 
@@ -138,8 +147,10 @@ void app_manager_shutdown(void)
     /* Stop all running apps */
     k_mutex_lock(&g_registry_mutex, K_FOREVER);
 
-    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++) {
-        if (g_registry[i].state == APP_STATE_RUNNING) {
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++)
+    {
+        if (g_registry[i].state == APP_STATE_RUNNING)
+        {
             LOG_INF("Stopping app: %s", g_registry[i].name);
             ocre_runtime_stop_app(g_registry[i].name);
             g_registry[i].state = APP_STATE_STOPPED;
@@ -160,23 +171,27 @@ void app_manager_shutdown(void)
 int app_manager_install(const char *name, const void *binary, size_t size,
                         const app_manifest_t *manifest, app_source_t source)
 {
-    if (!g_initialized) {
+    if (!g_initialized)
+    {
         return -ENODEV;
     }
 
-    if (!binary || size == 0) {
+    if (!binary || size == 0)
+    {
         return -EINVAL;
     }
 
     /* Validate WASM binary */
     int ret = validate_wasm(binary, size);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Invalid WASM binary");
         return ret;
     }
 
     /* Check size limit */
-    if (size > CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024) {
+    if (size > CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024)
+    {
         LOG_ERR("App too large: %zu > %dKB", size, CONFIG_AKIRA_APP_MAX_SIZE_KB);
         return -EFBIG;
     }
@@ -185,37 +200,48 @@ int app_manager_install(const char *name, const void *binary, size_t size,
 
     /* Determine app name */
     char app_name[APP_NAME_MAX_LEN];
-    if (name && name[0]) {
+    if (name && name[0])
+    {
         strncpy(app_name, name, APP_NAME_MAX_LEN - 1);
         app_name[APP_NAME_MAX_LEN - 1] = '\0';
-    } else if (manifest && manifest->name[0]) {
+    }
+    else if (manifest && manifest->name[0])
+    {
         strncpy(app_name, manifest->name, APP_NAME_MAX_LEN - 1);
         app_name[APP_NAME_MAX_LEN - 1] = '\0';
-    } else {
+    }
+    else
+    {
         snprintf(app_name, APP_NAME_MAX_LEN, "app_%08x",
                  crc32_ieee((const uint8_t *)binary, size > 256 ? 256 : size));
     }
 
     /* Check if already exists */
     app_entry_t *existing = find_app_by_name(app_name);
-    if (existing) {
+    if (existing)
+    {
         /* Update existing app */
         LOG_INF("Updating existing app: %s", app_name);
 
         /* Stop if running */
-        if (existing->state == APP_STATE_RUNNING) {
+        if (existing->state == APP_STATE_RUNNING)
+        {
             ocre_runtime_stop_app(app_name);
         }
 
         /* Destroy old container */
-        if (existing->container_id >= 0) {
+        if (existing->container_id >= 0)
+        {
             ocre_runtime_destroy_app(app_name);
             existing->container_id = -1;
         }
-    } else {
+    }
+    else
+    {
         /* Find free slot */
         existing = find_free_slot();
-        if (!existing) {
+        if (!existing)
+        {
             LOG_ERR("No free slots, max %d apps", CONFIG_AKIRA_APP_MAX_INSTALLED);
             k_mutex_unlock(&g_registry_mutex);
             return -ENOMEM;
@@ -228,9 +254,11 @@ int app_manager_install(const char *name, const void *binary, size_t size,
 
     /* Save binary to flash */
     ret = save_app_binary(app_name, binary, size);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Failed to save app binary: %d", ret);
-        if (existing->name[0] == '\0') {
+        if (existing->name[0] == '\0')
+        {
             g_app_count--;
         }
         k_mutex_unlock(&g_registry_mutex);
@@ -247,13 +275,16 @@ int app_manager_install(const char *name, const void *binary, size_t size,
     existing->is_preloaded = (source == APP_SOURCE_FIRMWARE);
 
     /* Apply manifest or defaults */
-    if (manifest) {
+    if (manifest)
+    {
         strncpy(existing->version, manifest->version, APP_VERSION_MAX_LEN);
         existing->heap_kb = manifest->heap_kb;
         existing->stack_kb = manifest->stack_kb;
         existing->permissions = manifest->permissions;
         existing->restart = manifest->restart;
-    } else {
+    }
+    else
+    {
         strncpy(existing->version, "0.0.0", APP_VERSION_MAX_LEN);
         existing->heap_kb = CONFIG_AKIRA_APP_DEFAULT_HEAP_KB;
         existing->stack_kb = CONFIG_AKIRA_APP_DEFAULT_STACK_KB;
@@ -276,7 +307,8 @@ int app_manager_install(const char *name, const void *binary, size_t size,
 
 int app_manager_install_from_path(const char *path)
 {
-    if (!path) {
+    if (!path)
+    {
         return -EINVAL;
     }
 
@@ -284,7 +316,8 @@ int app_manager_install_from_path(const char *path)
     fs_file_t_init(&file);
 
     int ret = fs_open(&file, path, FS_O_READ);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Failed to open %s: %d", path, ret);
         return ret;
     }
@@ -292,13 +325,15 @@ int app_manager_install_from_path(const char *path)
     /* Get file size */
     struct fs_dirent entry;
     ret = fs_stat(path, &entry);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         fs_close(&file);
         return ret;
     }
 
     size_t size = entry.size;
-    if (size > CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024) {
+    if (size > CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024)
+    {
         LOG_ERR("App too large: %zu bytes", size);
         fs_close(&file);
         return -EFBIG;
@@ -306,7 +341,8 @@ int app_manager_install_from_path(const char *path)
 
     /* Allocate buffer */
     uint8_t *buffer = k_malloc(size);
-    if (!buffer) {
+    if (!buffer)
+    {
         LOG_ERR("Failed to allocate %zu bytes", size);
         fs_close(&file);
         return -ENOMEM;
@@ -316,7 +352,8 @@ int app_manager_install_from_path(const char *path)
     ssize_t bytes_read = fs_read(&file, buffer, size);
     fs_close(&file);
 
-    if (bytes_read != size) {
+    if (bytes_read != size)
+    {
         LOG_ERR("Read failed: %zd != %zu", bytes_read, size);
         k_free(buffer);
         return -EIO;
@@ -332,15 +369,19 @@ int app_manager_install_from_path(const char *path)
 
     /* Remove .wasm extension */
     char *ext = strstr(name, ".wasm");
-    if (ext) {
+    if (ext)
+    {
         *ext = '\0';
     }
 
     /* Determine source from path */
     app_source_t source = APP_SOURCE_UNKNOWN;
-    if (strstr(path, "/sd/")) {
+    if (strstr(path, "/sd/"))
+    {
         source = APP_SOURCE_SD;
-    } else if (strstr(path, "/usb/")) {
+    }
+    else if (strstr(path, "/usb/"))
+    {
         source = APP_SOURCE_USB;
     }
 
@@ -352,13 +393,16 @@ int app_manager_install_from_path(const char *path)
 
     struct fs_file_t mf;
     fs_file_t_init(&mf);
-    if (fs_open(&mf, manifest_path, FS_O_READ) == 0) {
+    if (fs_open(&mf, manifest_path, FS_O_READ) == 0)
+    {
         char json[512];
         ssize_t mf_size = fs_read(&mf, json, sizeof(json) - 1);
         fs_close(&mf);
-        if (mf_size > 0) {
+        if (mf_size > 0)
+        {
             json[mf_size] = '\0';
-            if (app_manifest_parse(json, mf_size, &manifest) == 0) {
+            if (app_manifest_parse(json, mf_size, &manifest) == 0)
+            {
                 ret = app_manager_install(name, buffer, size, &manifest, source);
                 k_free(buffer);
                 return ret;
@@ -374,32 +418,37 @@ int app_manager_install_from_path(const char *path)
 
 int app_manager_uninstall(const char *name)
 {
-    if (!g_initialized || !name) {
+    if (!g_initialized || !name)
+    {
         return -EINVAL;
     }
 
     k_mutex_lock(&g_registry_mutex, K_FOREVER);
 
     app_entry_t *app = find_app_by_name(name);
-    if (!app) {
+    if (!app)
+    {
         k_mutex_unlock(&g_registry_mutex);
         LOG_WRN("App not found: %s", name);
         return -ENOENT;
     }
 
-    if (app->is_preloaded) {
+    if (app->is_preloaded)
+    {
         k_mutex_unlock(&g_registry_mutex);
         LOG_ERR("Cannot uninstall preloaded app: %s", name);
         return -EPERM;
     }
 
     /* Stop if running */
-    if (app->state == APP_STATE_RUNNING) {
+    if (app->state == APP_STATE_RUNNING)
+    {
         ocre_runtime_stop_app(name);
     }
 
     /* Destroy container */
-    if (app->container_id >= 0) {
+    if (app->container_id >= 0)
+    {
         ocre_runtime_destroy_app(name);
     }
 
@@ -423,38 +472,44 @@ int app_manager_uninstall(const char *name)
 
 int app_manager_start(const char *name)
 {
-    if (!g_initialized || !name) {
+    if (!g_initialized || !name)
+    {
         return -EINVAL;
     }
 
     k_mutex_lock(&g_registry_mutex, K_FOREVER);
 
     app_entry_t *app = find_app_by_name(name);
-    if (!app) {
+    if (!app)
+    {
         k_mutex_unlock(&g_registry_mutex);
         return -ENOENT;
     }
 
-    if (app->state == APP_STATE_RUNNING) {
+    if (app->state == APP_STATE_RUNNING)
+    {
         k_mutex_unlock(&g_registry_mutex);
         return 0; /* Already running */
     }
 
-    if (app->state == APP_STATE_FAILED) {
+    if (app->state == APP_STATE_FAILED)
+    {
         /* Reset crash counter on explicit start */
         app->crash_count = 0;
     }
 
     /* Check concurrent limit */
     int running = app_manager_get_running_count();
-    if (running >= CONFIG_AKIRA_APP_MAX_RUNNING) {
+    if (running >= CONFIG_AKIRA_APP_MAX_RUNNING)
+    {
         k_mutex_unlock(&g_registry_mutex);
         LOG_ERR("Max concurrent apps reached (%d)", CONFIG_AKIRA_APP_MAX_RUNNING);
         return -EBUSY;
     }
 
     /* Load app binary if not loaded */
-    if (app->container_id < 0) {
+    if (app->container_id < 0)
+    {
         /* Read binary from flash */
         char path[APP_PATH_MAX_LEN];
         snprintf(path, sizeof(path), "%s/%03d_%s.wasm",
@@ -463,14 +518,16 @@ int app_manager_start(const char *name)
         struct fs_file_t file;
         fs_file_t_init(&file);
         int ret = fs_open(&file, path, FS_O_READ);
-        if (ret < 0) {
+        if (ret < 0)
+        {
             k_mutex_unlock(&g_registry_mutex);
             LOG_ERR("Failed to open app binary: %s", path);
             return ret;
         }
 
         uint8_t *buffer = k_malloc(app->size);
-        if (!buffer) {
+        if (!buffer)
+        {
             fs_close(&file);
             k_mutex_unlock(&g_registry_mutex);
             return -ENOMEM;
@@ -479,7 +536,8 @@ int app_manager_start(const char *name)
         ssize_t bytes_read = fs_read(&file, buffer, app->size);
         fs_close(&file);
 
-        if (bytes_read != app->size) {
+        if (bytes_read != app->size)
+        {
             k_free(buffer);
             k_mutex_unlock(&g_registry_mutex);
             return -EIO;
@@ -489,7 +547,8 @@ int app_manager_start(const char *name)
         ret = ocre_runtime_load_app(name, buffer, app->size);
         k_free(buffer);
 
-        if (ret < 0) {
+        if (ret < 0)
+        {
             k_mutex_unlock(&g_registry_mutex);
             LOG_ERR("Failed to load app into OCRE: %d", ret);
             return ret;
@@ -500,7 +559,8 @@ int app_manager_start(const char *name)
 
     /* Start the app */
     int ret = ocre_runtime_start_app(name);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         k_mutex_unlock(&g_registry_mutex);
         LOG_ERR("Failed to start app: %d", ret);
         set_app_state(app, APP_STATE_ERROR);
@@ -519,25 +579,29 @@ int app_manager_start(const char *name)
 
 int app_manager_stop(const char *name)
 {
-    if (!g_initialized || !name) {
+    if (!g_initialized || !name)
+    {
         return -EINVAL;
     }
 
     k_mutex_lock(&g_registry_mutex, K_FOREVER);
 
     app_entry_t *app = find_app_by_name(name);
-    if (!app) {
+    if (!app)
+    {
         k_mutex_unlock(&g_registry_mutex);
         return -ENOENT;
     }
 
-    if (app->state != APP_STATE_RUNNING) {
+    if (app->state != APP_STATE_RUNNING)
+    {
         k_mutex_unlock(&g_registry_mutex);
         return 0; /* Not running */
     }
 
     int ret = ocre_runtime_stop_app(name);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         k_mutex_unlock(&g_registry_mutex);
         LOG_ERR("Failed to stop app: %d", ret);
         return ret;
@@ -554,14 +618,16 @@ int app_manager_stop(const char *name)
 
 int app_manager_restart(const char *name)
 {
-    if (!g_initialized || !name) {
+    if (!g_initialized || !name)
+    {
         return -EINVAL;
     }
 
     k_mutex_lock(&g_registry_mutex, K_FOREVER);
 
     app_entry_t *app = find_app_by_name(name);
-    if (!app) {
+    if (!app)
+    {
         k_mutex_unlock(&g_registry_mutex);
         return -ENOENT;
     }
@@ -570,7 +636,8 @@ int app_manager_restart(const char *name)
     app->crash_count = 0;
 
     /* Stop if running */
-    if (app->state == APP_STATE_RUNNING) {
+    if (app->state == APP_STATE_RUNNING)
+    {
         ocre_runtime_stop_app(name);
         set_app_state(app, APP_STATE_STOPPED);
     }
@@ -585,15 +652,18 @@ int app_manager_restart(const char *name)
 
 int app_manager_list(app_info_t *out_list, int max_count)
 {
-    if (!g_initialized || !out_list || max_count <= 0) {
+    if (!g_initialized || !out_list || max_count <= 0)
+    {
         return -EINVAL;
     }
 
     k_mutex_lock(&g_registry_mutex, K_FOREVER);
 
     int count = 0;
-    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED && count < max_count; i++) {
-        if (g_registry[i].name[0] != '\0') {
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED && count < max_count; i++)
+    {
+        if (g_registry[i].name[0] != '\0')
+        {
             out_list[count].id = g_registry[i].id;
             strncpy(out_list[count].name, g_registry[i].name, APP_NAME_MAX_LEN);
             strncpy(out_list[count].version, g_registry[i].version, APP_VERSION_MAX_LEN);
@@ -613,14 +683,16 @@ int app_manager_list(app_info_t *out_list, int max_count)
 
 int app_manager_get_info(const char *name, app_info_t *out_info)
 {
-    if (!g_initialized || !name || !out_info) {
+    if (!g_initialized || !name || !out_info)
+    {
         return -EINVAL;
     }
 
     k_mutex_lock(&g_registry_mutex, K_FOREVER);
 
     app_entry_t *app = find_app_by_name(name);
-    if (!app) {
+    if (!app)
+    {
         k_mutex_unlock(&g_registry_mutex);
         return -ENOENT;
     }
@@ -641,7 +713,8 @@ int app_manager_get_info(const char *name, app_info_t *out_info)
 
 app_state_t app_manager_get_state(const char *name)
 {
-    if (!g_initialized || !name) {
+    if (!g_initialized || !name)
+    {
         return APP_STATE_NEW;
     }
 
@@ -660,13 +733,16 @@ int app_manager_get_count(void)
 
 int app_manager_get_running_count(void)
 {
-    if (!g_initialized) {
+    if (!g_initialized)
+    {
         return 0;
     }
 
     int count = 0;
-    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++) {
-        if (g_registry[i].state == APP_STATE_RUNNING) {
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++)
+    {
+        if (g_registry[i].state == APP_STATE_RUNNING)
+        {
             count++;
         }
     }
@@ -677,7 +753,8 @@ int app_manager_get_running_count(void)
 
 int app_manager_scan_dir(const char *path, char names[][APP_NAME_MAX_LEN], int max_count)
 {
-    if (!path || !names || max_count <= 0) {
+    if (!path || !names || max_count <= 0)
+    {
         return -EINVAL;
     }
 
@@ -685,7 +762,8 @@ int app_manager_scan_dir(const char *path, char names[][APP_NAME_MAX_LEN], int m
     fs_dir_t_init(&dir);
 
     int ret = fs_opendir(&dir, path);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Failed to open directory: %s (%d)", path, ret);
         return ret;
     }
@@ -693,17 +771,21 @@ int app_manager_scan_dir(const char *path, char names[][APP_NAME_MAX_LEN], int m
     int count = 0;
     struct fs_dirent entry;
 
-    while (count < max_count && fs_readdir(&dir, &entry) == 0) {
-        if (entry.name[0] == '\0') {
+    while (count < max_count && fs_readdir(&dir, &entry) == 0)
+    {
+        if (entry.name[0] == '\0')
+        {
             break; /* End of directory */
         }
 
         /* Check for .wasm extension */
         size_t len = strlen(entry.name);
-        if (len > 5 && strcmp(&entry.name[len - 5], ".wasm") == 0) {
+        if (len > 5 && strcmp(&entry.name[len - 5], ".wasm") == 0)
+        {
             /* Extract name without extension */
             size_t name_len = len - 5;
-            if (name_len >= APP_NAME_MAX_LEN) {
+            if (name_len >= APP_NAME_MAX_LEN)
+            {
                 name_len = APP_NAME_MAX_LEN - 1;
             }
             strncpy(names[count], entry.name, name_len);
@@ -729,31 +811,37 @@ void app_manager_register_state_cb(app_state_change_cb_t callback, void *user_da
 
 int app_manager_install_begin(const char *name, size_t total_size, app_source_t source)
 {
-    if (!g_initialized || !name || total_size == 0) {
+    if (!g_initialized || !name || total_size == 0)
+    {
         return -EINVAL;
     }
 
-    if (total_size > CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024) {
+    if (total_size > CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024)
+    {
         return -EFBIG;
     }
 
     /* Find free session */
     int session = -1;
-    for (int i = 0; i < MAX_INSTALL_SESSIONS; i++) {
-        if (!g_sessions[i].active) {
+    for (int i = 0; i < MAX_INSTALL_SESSIONS; i++)
+    {
+        if (!g_sessions[i].active)
+        {
             session = i;
             break;
         }
     }
 
-    if (session < 0) {
+    if (session < 0)
+    {
         LOG_ERR("No free install sessions");
         return -EBUSY;
     }
 
     /* Allocate buffer */
     g_sessions[session].buffer = k_malloc(total_size);
-    if (!g_sessions[session].buffer) {
+    if (!g_sessions[session].buffer)
+    {
         LOG_ERR("Failed to allocate install buffer: %zu", total_size);
         return -ENOMEM;
     }
@@ -770,15 +858,18 @@ int app_manager_install_begin(const char *name, size_t total_size, app_source_t 
 
 int app_manager_install_chunk(int session, const void *data, size_t len)
 {
-    if (session < 0 || session >= MAX_INSTALL_SESSIONS) {
+    if (session < 0 || session >= MAX_INSTALL_SESSIONS)
+    {
         return -EINVAL;
     }
 
-    if (!g_sessions[session].active || !data || len == 0) {
+    if (!g_sessions[session].active || !data || len == 0)
+    {
         return -EINVAL;
     }
 
-    if (g_sessions[session].received + len > g_sessions[session].total_size) {
+    if (g_sessions[session].received + len > g_sessions[session].total_size)
+    {
         LOG_ERR("Chunk overflow: %zu + %zu > %zu",
                 g_sessions[session].received, len, g_sessions[session].total_size);
         return -ENOSPC;
@@ -792,15 +883,18 @@ int app_manager_install_chunk(int session, const void *data, size_t len)
 
 int app_manager_install_end(int session, const app_manifest_t *manifest)
 {
-    if (session < 0 || session >= MAX_INSTALL_SESSIONS) {
+    if (session < 0 || session >= MAX_INSTALL_SESSIONS)
+    {
         return -EINVAL;
     }
 
-    if (!g_sessions[session].active) {
+    if (!g_sessions[session].active)
+    {
         return -EINVAL;
     }
 
-    if (g_sessions[session].received != g_sessions[session].total_size) {
+    if (g_sessions[session].received != g_sessions[session].total_size)
+    {
         LOG_ERR("Incomplete transfer: %zu != %zu",
                 g_sessions[session].received, g_sessions[session].total_size);
         app_manager_install_abort(session);
@@ -825,11 +919,13 @@ int app_manager_install_end(int session, const app_manifest_t *manifest)
 
 void app_manager_install_abort(int session)
 {
-    if (session < 0 || session >= MAX_INSTALL_SESSIONS) {
+    if (session < 0 || session >= MAX_INSTALL_SESSIONS)
+    {
         return;
     }
 
-    if (g_sessions[session].buffer) {
+    if (g_sessions[session].buffer)
+    {
         k_free(g_sessions[session].buffer);
         g_sessions[session].buffer = NULL;
     }
@@ -842,13 +938,15 @@ void app_manager_install_abort(int session)
 
 void app_manifest_init_defaults(app_manifest_t *manifest, const char *name)
 {
-    if (!manifest) {
+    if (!manifest)
+    {
         return;
     }
 
     memset(manifest, 0, sizeof(app_manifest_t));
 
-    if (name) {
+    if (name)
+    {
         strncpy(manifest->name, name, APP_NAME_MAX_LEN - 1);
     }
     strncpy(manifest->version, "0.0.0", APP_VERSION_MAX_LEN);
@@ -863,7 +961,8 @@ void app_manifest_init_defaults(app_manifest_t *manifest, const char *name)
 
 int app_manifest_parse(const char *json, size_t json_len, app_manifest_t *out_manifest)
 {
-    if (!json || !out_manifest) {
+    if (!json || !out_manifest)
+    {
         return -EINVAL;
     }
 
@@ -875,14 +974,18 @@ int app_manifest_parse(const char *json, size_t json_len, app_manifest_t *out_ma
 
     /* Extract "name" */
     const char *name_start = strstr(json, "\"name\"");
-    if (name_start) {
+    if (name_start)
+    {
         name_start = strchr(name_start, ':');
-        if (name_start) {
+        if (name_start)
+        {
             name_start = strchr(name_start, '"');
-            if (name_start) {
+            if (name_start)
+            {
                 name_start++;
                 const char *name_end = strchr(name_start, '"');
-                if (name_end && name_end - name_start < APP_NAME_MAX_LEN) {
+                if (name_end && name_end - name_start < APP_NAME_MAX_LEN)
+                {
                     strncpy(out_manifest->name, name_start, name_end - name_start);
                     out_manifest->name[name_end - name_start] = '\0';
                 }
@@ -892,14 +995,18 @@ int app_manifest_parse(const char *json, size_t json_len, app_manifest_t *out_ma
 
     /* Extract "version" */
     const char *ver_start = strstr(json, "\"version\"");
-    if (ver_start) {
+    if (ver_start)
+    {
         ver_start = strchr(ver_start, ':');
-        if (ver_start) {
+        if (ver_start)
+        {
             ver_start = strchr(ver_start, '"');
-            if (ver_start) {
+            if (ver_start)
+            {
                 ver_start++;
                 const char *ver_end = strchr(ver_start, '"');
-                if (ver_end && ver_end - ver_start < APP_VERSION_MAX_LEN) {
+                if (ver_end && ver_end - ver_start < APP_VERSION_MAX_LEN)
+                {
                     strncpy(out_manifest->version, ver_start, ver_end - ver_start);
                     out_manifest->version[ver_end - ver_start] = '\0';
                 }
@@ -909,18 +1016,22 @@ int app_manifest_parse(const char *json, size_t json_len, app_manifest_t *out_ma
 
     /* Extract "heap_kb" */
     const char *heap_start = strstr(json, "\"heap_kb\"");
-    if (heap_start) {
+    if (heap_start)
+    {
         heap_start = strchr(heap_start, ':');
-        if (heap_start) {
+        if (heap_start)
+        {
             out_manifest->heap_kb = (uint16_t)atoi(heap_start + 1);
         }
     }
 
     /* Extract "stack_kb" */
     const char *stack_start = strstr(json, "\"stack_kb\"");
-    if (stack_start) {
+    if (stack_start)
+    {
         stack_start = strchr(stack_start, ':');
-        if (stack_start) {
+        if (stack_start)
+        {
             out_manifest->stack_kb = (uint16_t)atoi(stack_start + 1);
         }
     }
@@ -936,26 +1047,41 @@ int app_manifest_parse(const char *json, size_t json_len, app_manifest_t *out_ma
 
 const char *app_state_to_str(app_state_t state)
 {
-    switch (state) {
-    case APP_STATE_NEW:       return "NEW";
-    case APP_STATE_INSTALLED: return "INSTALLED";
-    case APP_STATE_RUNNING:   return "RUNNING";
-    case APP_STATE_STOPPED:   return "STOPPED";
-    case APP_STATE_ERROR:     return "ERROR";
-    case APP_STATE_FAILED:    return "FAILED";
-    default:                  return "UNKNOWN";
+    switch (state)
+    {
+    case APP_STATE_NEW:
+        return "NEW";
+    case APP_STATE_INSTALLED:
+        return "INSTALLED";
+    case APP_STATE_RUNNING:
+        return "RUNNING";
+    case APP_STATE_STOPPED:
+        return "STOPPED";
+    case APP_STATE_ERROR:
+        return "ERROR";
+    case APP_STATE_FAILED:
+        return "FAILED";
+    default:
+        return "UNKNOWN";
     }
 }
 
 const char *app_source_to_str(app_source_t source)
 {
-    switch (source) {
-    case APP_SOURCE_HTTP:     return "HTTP";
-    case APP_SOURCE_BLE:      return "BLE";
-    case APP_SOURCE_USB:      return "USB";
-    case APP_SOURCE_SD:       return "SD";
-    case APP_SOURCE_FIRMWARE: return "FIRMWARE";
-    default:                  return "UNKNOWN";
+    switch (source)
+    {
+    case APP_SOURCE_HTTP:
+        return "HTTP";
+    case APP_SOURCE_BLE:
+        return "BLE";
+    case APP_SOURCE_USB:
+        return "USB";
+    case APP_SOURCE_SD:
+        return "SD";
+    case APP_SOURCE_FIRMWARE:
+        return "FIRMWARE";
+    default:
+        return "UNKNOWN";
     }
 }
 
@@ -965,17 +1091,21 @@ static int ensure_dirs_exist(void)
 {
     struct fs_dirent entry;
 
-    if (fs_stat(APPS_DIR, &entry) < 0) {
+    if (fs_stat(APPS_DIR, &entry) < 0)
+    {
         int ret = fs_mkdir(APPS_DIR);
-        if (ret < 0 && ret != -EEXIST) {
+        if (ret < 0 && ret != -EEXIST)
+        {
             LOG_ERR("Failed to create %s: %d", APPS_DIR, ret);
             return ret;
         }
     }
 
-    if (fs_stat(APP_DATA_DIR, &entry) < 0) {
+    if (fs_stat(APP_DATA_DIR, &entry) < 0)
+    {
         int ret = fs_mkdir(APP_DATA_DIR);
-        if (ret < 0 && ret != -EEXIST) {
+        if (ret < 0 && ret != -EEXIST)
+        {
             LOG_ERR("Failed to create %s: %d", APP_DATA_DIR, ret);
             return ret;
         }
@@ -990,20 +1120,23 @@ static int registry_load(void)
     fs_file_t_init(&file);
 
     int ret = fs_open(&file, REGISTRY_PATH, FS_O_READ);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         return ret;
     }
 
     /* Read header */
     registry_header_t header;
     ret = fs_read(&file, &header, sizeof(header));
-    if (ret != sizeof(header)) {
+    if (ret != sizeof(header))
+    {
         fs_close(&file);
         return -EIO;
     }
 
     /* Validate header */
-    if (header.magic != REGISTRY_MAGIC || header.version != REGISTRY_VERSION) {
+    if (header.magic != REGISTRY_MAGIC || header.version != REGISTRY_VERSION)
+    {
         fs_close(&file);
         LOG_WRN("Invalid registry header");
         return -EINVAL;
@@ -1011,23 +1144,27 @@ static int registry_load(void)
 
     /* Read entries */
     int count = header.app_count;
-    if (count > CONFIG_AKIRA_APP_MAX_INSTALLED) {
+    if (count > CONFIG_AKIRA_APP_MAX_INSTALLED)
+    {
         count = CONFIG_AKIRA_APP_MAX_INSTALLED;
     }
 
     ret = fs_read(&file, g_registry, count * sizeof(app_entry_t));
     fs_close(&file);
 
-    if (ret != count * sizeof(app_entry_t)) {
+    if (ret != count * sizeof(app_entry_t))
+    {
         return -EIO;
     }
 
     g_app_count = count;
 
     /* Reset runtime state */
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < count; i++)
+    {
         g_registry[i].container_id = -1;
-        if (g_registry[i].state == APP_STATE_RUNNING) {
+        if (g_registry[i].state == APP_STATE_RUNNING)
+        {
             g_registry[i].state = APP_STATE_INSTALLED;
         }
     }
@@ -1041,7 +1178,8 @@ static int registry_save(void)
     fs_file_t_init(&file);
 
     int ret = fs_open(&file, REGISTRY_PATH, FS_O_CREATE | FS_O_WRITE);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Failed to create registry: %d", ret);
         return ret;
     }
@@ -1056,16 +1194,20 @@ static int registry_save(void)
     };
 
     ret = fs_write(&file, &header, sizeof(header));
-    if (ret != sizeof(header)) {
+    if (ret != sizeof(header))
+    {
         fs_close(&file);
         return -EIO;
     }
 
     /* Write entries (only valid ones) */
-    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++) {
-        if (g_registry[i].name[0] != '\0') {
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++)
+    {
+        if (g_registry[i].name[0] != '\0')
+        {
             ret = fs_write(&file, &g_registry[i], sizeof(app_entry_t));
-            if (ret != sizeof(app_entry_t)) {
+            if (ret != sizeof(app_entry_t))
+            {
                 fs_close(&file);
                 return -EIO;
             }
@@ -1078,9 +1220,11 @@ static int registry_save(void)
 
 static app_entry_t *find_app_by_name(const char *name)
 {
-    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++) {
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++)
+    {
         if (g_registry[i].name[0] != '\0' &&
-            strcmp(g_registry[i].name, name) == 0) {
+            strcmp(g_registry[i].name, name) == 0)
+        {
             return &g_registry[i];
         }
     }
@@ -1089,8 +1233,10 @@ static app_entry_t *find_app_by_name(const char *name)
 
 static app_entry_t *find_free_slot(void)
 {
-    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++) {
-        if (g_registry[i].name[0] == '\0') {
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++)
+    {
+        if (g_registry[i].name[0] == '\0')
+        {
             return &g_registry[i];
         }
     }
@@ -1099,11 +1245,13 @@ static app_entry_t *find_free_slot(void)
 
 static int validate_wasm(const void *binary, size_t size)
 {
-    if (size < sizeof(WASM_MAGIC)) {
+    if (size < sizeof(WASM_MAGIC))
+    {
         return -EINVAL;
     }
 
-    if (memcmp(binary, WASM_MAGIC, sizeof(WASM_MAGIC)) != 0) {
+    if (memcmp(binary, WASM_MAGIC, sizeof(WASM_MAGIC)) != 0)
+    {
         LOG_ERR("Invalid WASM magic");
         return -EINVAL;
     }
@@ -1124,7 +1272,8 @@ static int save_app_binary(const char *name, const void *binary, size_t size)
     fs_file_t_init(&file);
 
     int ret = fs_open(&file, path, FS_O_CREATE | FS_O_WRITE);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Failed to create %s: %d", path, ret);
         return ret;
     }
@@ -1132,7 +1281,8 @@ static int save_app_binary(const char *name, const void *binary, size_t size)
     ret = fs_write(&file, binary, size);
     fs_close(&file);
 
-    if (ret != size) {
+    if (ret != size)
+    {
         LOG_ERR("Failed to write app binary: %d", ret);
         return -EIO;
     }
@@ -1144,7 +1294,8 @@ static int save_app_binary(const char *name, const void *binary, size_t size)
 static int delete_app_binary(const char *name)
 {
     app_entry_t *app = find_app_by_name(name);
-    if (!app) {
+    if (!app)
+    {
         return -ENOENT;
     }
 
@@ -1152,7 +1303,8 @@ static int delete_app_binary(const char *name)
     snprintf(path, sizeof(path), "%s/%03d_%s.wasm", APPS_DIR, app->id, name);
 
     int ret = fs_unlink(path);
-    if (ret < 0 && ret != -ENOENT) {
+    if (ret < 0 && ret != -ENOENT)
+    {
         LOG_ERR("Failed to delete %s: %d", path, ret);
         return ret;
     }
@@ -1166,7 +1318,8 @@ static int delete_app_binary(const char *name)
 
 static void set_app_state(app_entry_t *app, app_state_t new_state)
 {
-    if (!app || app->state == new_state) {
+    if (!app || app->state == new_state)
+    {
         return;
     }
 
@@ -1177,21 +1330,26 @@ static void set_app_state(app_entry_t *app, app_state_t new_state)
             app_state_to_str(old_state), app_state_to_str(new_state));
 
     /* Notify callback */
-    if (g_state_cb) {
+    if (g_state_cb)
+    {
         g_state_cb(app->id, old_state, new_state, g_state_cb_user);
     }
 
     /* Handle crash -> auto-restart */
-    if (new_state == APP_STATE_ERROR && app->restart.enabled) {
+    if (new_state == APP_STATE_ERROR && app->restart.enabled)
+    {
         app->crash_count++;
 
-        if (app->crash_count < app->restart.max_retries) {
+        if (app->crash_count < app->restart.max_retries)
+        {
             LOG_INF("Scheduling auto-restart for %s (attempt %d/%d)",
                     app->name, app->crash_count, app->restart.max_retries);
 
             strncpy(g_restart_app_name, app->name, APP_NAME_MAX_LEN);
             k_work_schedule(&g_restart_work, K_MSEC(app->restart.delay_ms));
-        } else {
+        }
+        else
+        {
             LOG_ERR("App %s exceeded max restarts (%d), marking as FAILED",
                     app->name, app->restart.max_retries);
             app->state = APP_STATE_FAILED;
@@ -1203,7 +1361,8 @@ static void restart_work_handler(struct k_work *work)
 {
     ARG_UNUSED(work);
 
-    if (g_restart_app_name[0] == '\0') {
+    if (g_restart_app_name[0] == '\0')
+    {
         return;
     }
 
