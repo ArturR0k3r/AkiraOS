@@ -58,7 +58,9 @@ static void register_webserver_ota_transport(void)
 #include <stdio.h>
 #include <errno.h>
 #include "akira/akira.h"
+#ifdef CONFIG_AKIRA_APP_MANAGER
 #include "../services/app_manager.h"
+#endif
 
 LOG_MODULE_REGISTER(web_server, AKIRA_LOG_LEVEL);
 
@@ -830,6 +832,7 @@ static int handle_api_request(int client_fd, const char *path)
         return send_http_response(client_fd, 200, "application/json", response, 0);
     }
 
+#ifdef CONFIG_AKIRA_APP_MANAGER
     /* App Manager API */
     if (strcmp(path, "/api/apps/list") == 0)
     {
@@ -913,6 +916,7 @@ static int handle_api_request(int client_fd, const char *path)
         snprintf(response, sizeof(response), "{\"status\":\"uninstalled\",\"name\":\"%s\"}", app_name);
         return send_http_response(client_fd, 200, "application/json", response, 0);
     }
+#endif /* CONFIG_AKIRA_APP_MANAGER */
 
     return send_http_response(client_fd, 404, "text/plain", "API not found", 0);
 }
@@ -998,6 +1002,7 @@ static int handle_http_request(int client_fd)
                                           body_start, body_already_read);
         }
 
+#ifdef CONFIG_AKIRA_APP_MANAGER
         /* App upload endpoint - POST /api/apps/install */
         if (strcmp(path, "/api/apps/install") == 0)
         {
@@ -1088,6 +1093,7 @@ static int handle_http_request(int client_fd)
             snprintf(resp, sizeof(resp), "{\"status\":\"installed\",\"name\":\"%s\",\"id\":%d}", app_name, app_id);
             return send_http_response(client_fd, 200, "application/json", resp, 0);
         }
+#endif /* CONFIG_AKIRA_APP_MANAGER */
 
         if (strncmp(path, "/api/", 5) == 0)
         {

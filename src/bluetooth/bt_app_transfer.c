@@ -4,7 +4,7 @@
  */
 
 #include "bt_app_transfer.h"
-#include "../../services/app_manager.h"
+#include "../services/app_manager.h"
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/gatt.h>
@@ -33,7 +33,7 @@ LOG_MODULE_REGISTER(bt_app_xfer, CONFIG_AKIRA_LOG_LEVEL);
     BT_UUID_128_ENCODE(0x414B4952, 0x0001, 0x0001, 0x0001, 0x000000000004)
 #define BT_UUID_APP_CONTROL BT_UUID_DECLARE_128(BT_UUID_APP_CONTROL_VAL)
 
-/* Maximum app size for BLE transfer (in bytes) */
+/* Maximum app size for BLE transfer */
 #ifndef CONFIG_AKIRA_APP_MAX_SIZE_KB
 #define CONFIG_AKIRA_APP_MAX_SIZE_KB 64
 #endif

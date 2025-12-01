@@ -9,6 +9,7 @@
 #include <zephyr/shell/shell.h>
 #include <zephyr/kernel.h>
 #include "akira.h"
+#include "kernel/psram.h"
 
 /*===========================================================================*/
 /* Shell Command Handlers                                                    */
@@ -75,6 +76,41 @@ static int cmd_akira_memory(const struct shell *sh, size_t argc, char **argv)
     ARG_UNUSED(argv);
 
     akira_memory_dump();
+    return 0;
+}
+
+static int cmd_akira_psram(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    if (!akira_psram_available()) {
+        shell_print(sh, "PSRAM: Not available on this platform");
+        return 0;
+    }
+
+    akira_psram_stats_t stats;
+    if (akira_psram_get_stats(&stats) < 0) {
+        shell_error(sh, "Failed to get PSRAM stats");
+        return -EIO;
+    }
+
+    shell_print(sh, "=== PSRAM Status (ESP32-S3 N16R8) ===");
+    shell_print(sh, "Total:   %zu bytes (%.2f MB)", 
+                stats.total_bytes, 
+                (float)stats.total_bytes / (1024 * 1024));
+    shell_print(sh, "Used:    %zu bytes (%.1f%%)", 
+                stats.used_bytes,
+                stats.total_bytes > 0 ? 
+                    (float)stats.used_bytes * 100 / stats.total_bytes : 0);
+    shell_print(sh, "Free:    %zu bytes (%.2f MB)", 
+                stats.free_bytes,
+                (float)stats.free_bytes / (1024 * 1024));
+    shell_print(sh, "Peak:    %zu bytes", stats.peak_usage);
+    shell_print(sh, "Allocs:  %u", stats.alloc_count);
+    shell_print(sh, "Frees:   %u", stats.free_count);
+    shell_print(sh, "Failures: %u", stats.alloc_failures);
+
     return 0;
 }
 
@@ -191,6 +227,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_akira,
                                SHELL_CMD(banner, NULL, "Show AkiraOS banner", cmd_akira_banner),
                                SHELL_CMD(uptime, NULL, "Show system uptime", cmd_akira_uptime),
                                SHELL_CMD(memory, NULL, "Show memory status", cmd_akira_memory),
+                               SHELL_CMD(psram, NULL, "Show PSRAM status", cmd_akira_psram),
                                SHELL_CMD(services, NULL, "Show services", cmd_akira_services),
                                SHELL_CMD(processes, NULL, "Show processes", cmd_akira_processes),
                                SHELL_CMD(timers, NULL, "Show timers", cmd_akira_timers),

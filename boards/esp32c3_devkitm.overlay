@@ -56,10 +56,10 @@
     };
 };
 
-/* Temperature sensor */
-&temp0 {
+/* Temperature sensor - ESP32-C3 uses coretemp not temp0 */
+/* &coretemp {
     status = "okay";
-};
+}; */
 
 /* Watchdog */
 &wdt0 {

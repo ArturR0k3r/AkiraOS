@@ -2,6 +2,16 @@
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/spi/spi.h>
 
+// ============================================================================
+// PSRAM Configuration - ESP32-S3 N16R8 (8MB OPI PSRAM)
+// ============================================================================
+// The ESP32-S3 N16R8 module has 8MB external OPI PSRAM
+// This enables the psram0 node with the correct size for memory allocation
+&psram0 {
+    size = <DT_SIZE_M(8)>;
+    status = "okay";
+};
+
 // Configure SPI pins - Fixed pin mapping
 &pinctrl
 {

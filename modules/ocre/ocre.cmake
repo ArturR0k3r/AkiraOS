@@ -15,6 +15,7 @@ set(ocre_component_sources
 set(ocre_lib_sources
     # Libraries
     ${OCRE_ROOT_DIR}/src/ocre/sm/sm.c
+    ${OCRE_ROOT_DIR}/src/ocre/utils/c-smf/smf/smf.c
     ${OCRE_ROOT_DIR}/src/shared/platform/zephyr/core_fs.c
     ${OCRE_ROOT_DIR}/src/shared/platform/zephyr/core_thread.c
     ${OCRE_ROOT_DIR}/src/shared/platform/zephyr/core_mutex.c
@@ -51,6 +52,7 @@ endif()
 zephyr_include_directories(
     ${OCRE_ROOT_DIR}/src/
     ${OCRE_ROOT_DIR}/src/ocre
+    ${OCRE_ROOT_DIR}/src/ocre/utils/c-smf/smf
     ${OCRE_ROOT_DIR}/src/shared/platform
 )
 
@@ -83,8 +85,32 @@ set(WAMR_BUILD_FAST_INTERP 0)
 set(WAMR_BUILD_AOT 0)
 set(WAMR_BUILD_JIT 0)
 
+# Memory-optimized configuration for constrained devices
+# Use MINI_LOADER to reduce code size
+if(CONFIG_AKIRA_WAMR_MINI_LOADER)
+    set(WAMR_BUILD_MINI_LOADER 1)
+    message("WAMR: Using MINI_LOADER for reduced footprint")
+else()
+    set(WAMR_BUILD_MINI_LOADER 0)
+endif()
+
+# Disable features to save memory if configured
+if(CONFIG_AKIRA_WAMR_MINIMAL)
+    set(WAMR_BUILD_BULK_MEMORY 0)
+    set(WAMR_BUILD_REF_TYPES 0)
+    set(WAMR_BUILD_MULTI_MODULE 0)
+    set(WAMR_BUILD_TAIL_CALL 0)
+    set(WAMR_BUILD_SIMD 0)
+    set(WASM_ENABLE_LOG 0)
+    message("WAMR: Minimal build - disabled bulk_memory, ref_types, multi_module, tail_call, simd, logging")
+else()
+    set(WAMR_BUILD_REF_TYPES 1)
+    set(WASM_ENABLE_LOG 1)
+endif()
+
 # LIBC configuration - Use builtin for Xtensa/ESP32 and RISC-V/ESP32-C3 (no sys/random.h)
-if(TARGET_ISA STREQUAL "XTENSA" OR TARGET_ISA STREQUAL "RISCV32")
+# Also use builtin for minimal builds to reduce dependencies
+if(TARGET_ISA STREQUAL "XTENSA" OR TARGET_ISA STREQUAL "RISCV32" OR CONFIG_AKIRA_WAMR_MINIMAL)
     set(WAMR_BUILD_LIBC_BUILTIN 1)
     set(WAMR_BUILD_LIBC_WASI 0)
     set(WAMR_BUILD_LIB_PTHREAD 0)
@@ -93,9 +119,6 @@ else()
     set(WAMR_BUILD_LIBC_WASI 1)
     set(WAMR_BUILD_LIB_PTHREAD 1)
 endif()
-
-set(WAMR_BUILD_REF_TYPES 1)
-set(WASM_ENABLE_LOG 1)
 
 if(NOT DEFINED WAMR_BUILD_GLOBAL_HEAP_POOL)
     set(WAMR_BUILD_GLOBAL_HEAP_POOL 1)

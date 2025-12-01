@@ -1,0 +1,15 @@
+{
+    "name": "sensor_demo",
+    "version": "1.0.0",
+    "description": "Sensor reading demonstration for AkiraOS",
+    "author": "AkiraOS Team",
+    "entry": "_start",
+    "heap_kb": 16,
+    "stack_kb": 4,
+    "permissions": ["sensor"],
+    "restart": {
+        "enabled": true,
+        "max_retries": 5,
+        "delay_ms": 2000
+    }
+}

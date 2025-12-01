@@ -37,7 +37,9 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #include "akira/akira.h"
+#ifdef CONFIG_AKIRA_APP_MANAGER
 #include "../services/app_manager.h"
+#endif
 #if defined(CONFIG_AKIRA_APP_SOURCE_SD)
 #include "../connectivity/storage/sd_manager.h"
 #endif
@@ -46,6 +48,8 @@
 #endif
 
 LOG_MODULE_REGISTER(akira_shell, AKIRA_LOG_LEVEL);
+
+#ifdef CONFIG_AKIRA_APP_MANAGER
 /* App Manager Shell Commands */
 static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
 {
@@ -206,6 +210,7 @@ static int cmd_app_scan(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "Total: %d", count);
     return 0;
 }
+#endif /* CONFIG_AKIRA_APP_MANAGER */
 
 /* Optimized data structures */
 struct __packed display_state
@@ -1384,6 +1389,7 @@ SHELL_CMD_REGISTER(wifi_scan, NULL, "Scan for WiFi networks", cmd_wifi_scan);
 SHELL_CMD_REGISTER(web_status, NULL, "Show web server status", cmd_web_status);
 SHELL_CMD_REGISTER(web_start, NULL, "Start web server", cmd_web_start);
 
+#ifdef CONFIG_AKIRA_APP_MANAGER
 /* Shell command registration - organized by category */
 SHELL_STATIC_SUBCMD_SET_CREATE(app_cmds,
                                SHELL_CMD(list, NULL, "List installed apps", cmd_app_list),
@@ -1394,6 +1400,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(app_cmds,
                                SHELL_CMD(uninstall, NULL, "Uninstall app <name>", cmd_app_uninstall),
                                SHELL_CMD(scan, NULL, "Scan for apps in SD/USB", cmd_app_scan),
                                SHELL_SUBCMD_SET_END);
+#endif /* CONFIG_AKIRA_APP_MANAGER */
 
 SHELL_STATIC_SUBCMD_SET_CREATE(system_cmds,
                                SHELL_CMD(info, NULL, "Show comprehensive system information", cmd_system_info),
@@ -1419,4 +1426,6 @@ SHELL_STATIC_SUBCMD_SET_CREATE(debug_cmds,
 SHELL_CMD_REGISTER(sys, &system_cmds, "System management commands", NULL);
 SHELL_CMD_REGISTER(game, &gaming_cmds, "Gaming-specific commands", NULL);
 SHELL_CMD_REGISTER(debug, &debug_cmds, "Debug and diagnostic commands", NULL);
+#ifdef CONFIG_AKIRA_APP_MANAGER
 SHELL_CMD_REGISTER(app, &app_cmds, "App management commands", NULL);
+#endif

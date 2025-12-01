@@ -20,6 +20,9 @@
 #include "OTA/ota_manager.h"
 #include "shell/akira_shell.h"
 #include "OTA/web_server.h"
+#ifdef CONFIG_AKIRA_APP_MANAGER
+#include "services/app_manager.h"
+#endif
 #include "akira/akira.h"
 
 LOG_MODULE_REGISTER(akira_main, AKIRA_LOG_LEVEL);
@@ -647,6 +650,19 @@ int main(void)
 
     // Register OTA progress callback
     ota_register_progress_callback(on_ota_progress, NULL);
+
+    // Initialize App Manager
+#ifdef CONFIG_AKIRA_APP_MANAGER
+    ret = app_manager_init();
+    if (ret)
+    {
+        LOG_ERR("App manager initialization failed: %d", ret);
+    }
+    else
+    {
+        LOG_INF("✅ App manager initialized");
+    }
+#endif
 
     // Initialize Akira shell
     ret = akira_shell_init();

@@ -400,14 +400,60 @@ CONFIG_AKIRA_APP_MAX_RETRIES=3
 CONFIG_AKIRA_APP_RESTART_DELAY_MS=1000
 ```
 
-## Platform Considerations
+## Platform Support & Memory Configurations
 
-| Platform | Max Apps | Concurrent | Notes |
-|----------|----------|------------|-------|
-| ESP32-S3 | 16 | 2 | Full features |
-| ESP32-C3 | 8 | 1 | Limited RAM, no BT |
-| nRF54L15 | 12 | 2 | BLE optimized |
-| native_sim | 16 | 2 | Testing only |
+The App Manager supports multiple platforms with optimized WAMR configurations:
+
+### Full WAMR Mode (Default)
+For platforms with sufficient memory (>512KB RAM or external PSRAM):
+
+| Platform | Flash | RAM | WAMR Mode | Max Containers | Status |
+|----------|-------|-----|-----------|----------------|--------|
+| **ESP32-S3** (8MB PSRAM) | 11% | 85% DRAM + 59% PSRAM | Full | 4 | ✅ Recommended |
+| **native_sim** | N/A | N/A | Full | 4 | ✅ Testing |
+
+### Minimal WAMR Mode
+For memory-constrained platforms (<512KB RAM), use the minimal WAMR build:
+
+```kconfig
+# Enable minimal WAMR for constrained devices
+CONFIG_AKIRA_WAMR_MINI_LOADER=y
+CONFIG_AKIRA_WAMR_MINIMAL=y
+
+# Reduced memory settings
+CONFIG_OCRE_WAMR_HEAP_BUFFER_SIZE=8192
+CONFIG_OCRE_CONTAINER_DEFAULT_STACK_SIZE=2048
+CONFIG_OCRE_CONTAINER_DEFAULT_HEAP_SIZE=8192
+CONFIG_MAX_CONTAINERS=2
+```
+
+| Platform | Flash | RAM | WAMR Mode | Max Containers | Status |
+|----------|-------|-----|-----------|----------------|--------|
+| **STEVAL-STWINBX1** (STM32U585AI) | 92% | 32% | Minimal | 2 | ✅ Works |
+| **nRF54L15 DK** | 62% | 75% | Minimal | 2 | ✅ Works |
+| **ESP32-C3** | 21% | 74% | Minimal | 2 | ✅ Works |
+
+### Minimal WAMR Features
+
+When `CONFIG_AKIRA_WAMR_MINIMAL=y` is enabled, the following features are disabled to save memory:
+- `bulk_memory` - Bulk memory operations
+- `ref_types` - Reference types
+- `multi_module` - Multiple WASM modules
+- `tail_call` - Tail call optimization
+- `simd` - SIMD instructions
+- WASM logging
+
+**Note:** Most simple WASM apps work fine with minimal mode. Only complex apps using advanced WASM features may need full mode.
+
+### Platform-Specific Recommendations
+
+| Platform | Max Apps | Concurrent | Recommended Use |
+|----------|----------|------------|-----------------|
+| ESP32-S3 | 16 | 4 | Full featured apps, sensor fusion |
+| ESP32-C3 | 4 | 2 | Simple apps, WiFi gateway |
+| nRF54L15 | 4 | 2 | BLE apps, low-power sensors |
+| STM32U585 | 4 | 2 | Sensor apps, USB connectivity |
+| native_sim | 16 | 4 | Development and testing |
 
 ## Future Enhancements
 

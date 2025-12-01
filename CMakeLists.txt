@@ -105,6 +105,7 @@ target_sources(app PRIVATE
     src/akira/kernel/process.c
     src/akira/kernel/memory.c
     src/akira/kernel/timer.c
+    src/akira/kernel/psram.c
     src/akira/hal/hal.c
 )
 

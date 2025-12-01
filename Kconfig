@@ -635,6 +635,23 @@ config OCRE_CONTAINER_DEFAULT_HEAP_SIZE
     help
       Default heap size for OCRE containers.
 
+config AKIRA_WAMR_MINI_LOADER
+    bool "Use WAMR mini loader"
+    default n
+    depends on AKIRA_APP_MANAGER
+    help
+      Use the WAMR mini loader to reduce code size.
+      This reduces flash usage but may limit some WASM features.
+
+config AKIRA_WAMR_MINIMAL
+    bool "Minimal WAMR build"
+    default n
+    depends on AKIRA_APP_MANAGER
+    help
+      Build WAMR with minimal features to save memory.
+      Disables: bulk_memory, ref_types, multi_module, tail_call, simd, logging.
+      Use this for memory-constrained devices like nRF54L15 or STM32.
+
 # Akira Module System (Core AkiraOS functionality)
 rsource "src/akira_modules/Kconfig"
 
