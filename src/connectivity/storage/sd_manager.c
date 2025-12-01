@@ -9,6 +9,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/fs/fs.h>
 #include <zephyr/storage/disk_access.h>
+#include <ff.h>
 #include <string.h>
 
 LOG_MODULE_REGISTER(sd_manager, CONFIG_AKIRA_LOG_LEVEL);

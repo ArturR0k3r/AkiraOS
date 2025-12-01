@@ -58,6 +58,7 @@ static void register_webserver_ota_transport(void)
 #include <stdio.h>
 #include <errno.h>
 #include "akira/akira.h"
+#include "../services/app_manager.h"
 
 LOG_MODULE_REGISTER(web_server, AKIRA_LOG_LEVEL);
 
@@ -67,14 +68,14 @@ LOG_MODULE_REGISTER(web_server, AKIRA_LOG_LEVEL);
 #endif
 
 /* Optimized constants */
-#define HTTP_BUFFER_SIZE 1024
-#define HTTP_RESPONSE_BUFFER_SIZE 2048
+#define HTTP_BUFFER_SIZE 768
+#define HTTP_RESPONSE_BUFFER_SIZE 1536
 #undef UPLOAD_CHUNK_SIZE
 #define UPLOAD_CHUNK_SIZE 512
 #define MAX_CONNECTIONS 2
 
-/* Thread stack - increased for HTTP handling */
-static K_THREAD_STACK_DEFINE(web_server_stack, 6144);
+/* Thread stack - reduced for memory optimization */
+static K_THREAD_STACK_DEFINE(web_server_stack, 4096);
 static struct k_thread web_server_thread_data;
 static k_tid_t web_server_thread_id;
 
@@ -829,6 +830,90 @@ static int handle_api_request(int client_fd, const char *path)
         return send_http_response(client_fd, 200, "application/json", response, 0);
     }
 
+    /* App Manager API */
+    if (strcmp(path, "/api/apps/list") == 0)
+    {
+        app_info_t apps[CONFIG_AKIRA_APP_MAX_INSTALLED];
+        int count = app_manager_list(apps, CONFIG_AKIRA_APP_MAX_INSTALLED);
+        if (count < 0) {
+            return send_http_response(client_fd, 500, "text/plain", "Failed to list apps", 0);
+        }
+        /* Build JSON array */
+        char *p = response;
+        char *end = response + sizeof(response) - 2;
+        p += snprintf(p, end - p, "[");
+        for (int i = 0; i < count && p < end; i++) {
+            p += snprintf(p, end - p, "%s{\"id\":%d,\"name\":\"%s\",\"version\":\"%s\",\"state\":\"%s\",\"size\":%u}",
+                          i > 0 ? "," : "", apps[i].id, apps[i].name, apps[i].version,
+                          app_state_to_str(apps[i].state), apps[i].size);
+        }
+        snprintf(p, end - p, "]");
+        return send_http_response(client_fd, 200, "application/json", response, 0);
+    }
+
+    if (strncmp(path, "/api/apps/start?", 16) == 0)
+    {
+        const char *name = strstr(path, "name=");
+        if (!name) {
+            return send_http_response(client_fd, 400, "text/plain", "Missing name parameter", 0);
+        }
+        name += 5;
+        char app_name[32];
+        strncpy(app_name, name, sizeof(app_name) - 1);
+        app_name[sizeof(app_name) - 1] = '\0';
+        char *amp = strchr(app_name, '&');
+        if (amp) *amp = '\0';
+        int ret = app_manager_start(app_name);
+        if (ret < 0) {
+            snprintf(response, sizeof(response), "{\"error\":\"Failed to start app: %d\"}", ret);
+            return send_http_response(client_fd, 500, "application/json", response, 0);
+        }
+        snprintf(response, sizeof(response), "{\"status\":\"started\",\"name\":\"%s\"}", app_name);
+        return send_http_response(client_fd, 200, "application/json", response, 0);
+    }
+
+    if (strncmp(path, "/api/apps/stop?", 15) == 0)
+    {
+        const char *name = strstr(path, "name=");
+        if (!name) {
+            return send_http_response(client_fd, 400, "text/plain", "Missing name parameter", 0);
+        }
+        name += 5;
+        char app_name[32];
+        strncpy(app_name, name, sizeof(app_name) - 1);
+        app_name[sizeof(app_name) - 1] = '\0';
+        char *amp = strchr(app_name, '&');
+        if (amp) *amp = '\0';
+        int ret = app_manager_stop(app_name);
+        if (ret < 0) {
+            snprintf(response, sizeof(response), "{\"error\":\"Failed to stop app: %d\"}", ret);
+            return send_http_response(client_fd, 500, "application/json", response, 0);
+        }
+        snprintf(response, sizeof(response), "{\"status\":\"stopped\",\"name\":\"%s\"}", app_name);
+        return send_http_response(client_fd, 200, "application/json", response, 0);
+    }
+
+    if (strncmp(path, "/api/apps/uninstall?", 20) == 0)
+    {
+        const char *name = strstr(path, "name=");
+        if (!name) {
+            return send_http_response(client_fd, 400, "text/plain", "Missing name parameter", 0);
+        }
+        name += 5;
+        char app_name[32];
+        strncpy(app_name, name, sizeof(app_name) - 1);
+        app_name[sizeof(app_name) - 1] = '\0';
+        char *amp = strchr(app_name, '&');
+        if (amp) *amp = '\0';
+        int ret = app_manager_uninstall(app_name);
+        if (ret < 0) {
+            snprintf(response, sizeof(response), "{\"error\":\"Failed to uninstall app: %d\"}", ret);
+            return send_http_response(client_fd, 500, "application/json", response, 0);
+        }
+        snprintf(response, sizeof(response), "{\"status\":\"uninstalled\",\"name\":\"%s\"}", app_name);
+        return send_http_response(client_fd, 200, "application/json", response, 0);
+    }
+
     return send_http_response(client_fd, 404, "text/plain", "API not found", 0);
 }
 
@@ -911,6 +996,97 @@ static int handle_http_request(int client_fd)
 
             return handle_firmware_upload(client_fd, buffer, content_length,
                                           body_start, body_already_read);
+        }
+
+        /* App upload endpoint - POST /api/apps/install */
+        if (strcmp(path, "/api/apps/install") == 0)
+        {
+            size_t content_length = parse_content_length(buffer);
+            if (content_length == 0 || content_length > CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024)
+            {
+                return send_http_response(client_fd, 400, "text/plain",
+                                          "Invalid Content-Length", 0);
+            }
+
+            char *body_start = strstr(buffer, "\r\n\r\n");
+            if (!body_start)
+            {
+                return send_http_response(client_fd, 400, "text/plain",
+                                          "Invalid HTTP request", 0);
+            }
+            body_start += 4;
+
+            /* Get app name from query parameter */
+            char app_name[32] = "uploaded_app";
+            const char *name_param = strstr(buffer, "?name=");
+            if (name_param)
+            {
+                name_param += 6;
+                const char *end = strpbrk(name_param, " &\r\n");
+                size_t len = end ? (size_t)(end - name_param) : strlen(name_param);
+                if (len > 0 && len < sizeof(app_name))
+                {
+                    strncpy(app_name, name_param, len);
+                    app_name[len] = '\0';
+                }
+            }
+
+            /* Begin chunked install */
+            int session = app_manager_install_begin(app_name, content_length, APP_SOURCE_HTTP);
+            if (session < 0)
+            {
+                char resp[64];
+                snprintf(resp, sizeof(resp), "{\"error\":\"Install begin failed: %d\"}", session);
+                return send_http_response(client_fd, 500, "application/json", resp, 0);
+            }
+
+            /* Write first chunk */
+            size_t headers_len = body_start - buffer;
+            size_t body_already_read = received - headers_len;
+            if (body_already_read > 0)
+            {
+                int ret = app_manager_install_chunk(session, body_start, body_already_read);
+                if (ret < 0)
+                {
+                    app_manager_install_abort(session);
+                    return send_http_response(client_fd, 500, "text/plain", "Chunk write failed", 0);
+                }
+            }
+
+            /* Receive remaining data */
+            size_t total_received = body_already_read;
+            static char app_upload_buf[512];
+            while (total_received < content_length)
+            {
+                size_t chunk_size = MIN(sizeof(app_upload_buf), content_length - total_received);
+                ssize_t recvd = recv(client_fd, app_upload_buf, chunk_size, 0);
+                if (recvd <= 0)
+                {
+                    app_manager_install_abort(session);
+                    return send_http_response(client_fd, 500, "text/plain", "Upload failed", 0);
+                }
+                int ret = app_manager_install_chunk(session, app_upload_buf, recvd);
+                if (ret < 0)
+                {
+                    app_manager_install_abort(session);
+                    return send_http_response(client_fd, 500, "text/plain", "Chunk write failed", 0);
+                }
+                total_received += recvd;
+                k_yield();
+            }
+
+            /* Finalize install */
+            int app_id = app_manager_install_end(session, NULL);
+            if (app_id < 0)
+            {
+                char resp[64];
+                snprintf(resp, sizeof(resp), "{\"error\":\"Install failed: %d\"}", app_id);
+                return send_http_response(client_fd, 500, "application/json", resp, 0);
+            }
+
+            char resp[128];
+            snprintf(resp, sizeof(resp), "{\"status\":\"installed\",\"name\":\"%s\",\"id\":%d}", app_name, app_id);
+            return send_http_response(client_fd, 200, "application/json", resp, 0);
         }
 
         if (strncmp(path, "/api/", 5) == 0)

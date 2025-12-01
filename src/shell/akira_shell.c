@@ -38,8 +38,12 @@
 #include <inttypes.h>
 #include "akira/akira.h"
 #include "../services/app_manager.h"
+#if defined(CONFIG_AKIRA_APP_SOURCE_SD)
 #include "../connectivity/storage/sd_manager.h"
+#endif
+#if defined(CONFIG_AKIRA_APP_SOURCE_USB)
 #include "../connectivity/storage/usb_storage.h"
+#endif
 
 LOG_MODULE_REGISTER(akira_shell, AKIRA_LOG_LEVEL);
 /* App Manager Shell Commands */
@@ -168,11 +172,21 @@ static int cmd_app_scan(const struct shell *sh, size_t argc, char **argv)
     int count = 0;
     if (strcmp(argv[1], "sd") == 0)
     {
+#if defined(CONFIG_AKIRA_APP_SOURCE_SD)
         count = sd_manager_scan_apps(names, 8);
+#else
+        shell_error(sh, "SD card support not enabled");
+        return -ENOTSUP;
+#endif
     }
     else if (strcmp(argv[1], "usb") == 0)
     {
+#if defined(CONFIG_AKIRA_APP_SOURCE_USB)
         count = usb_storage_scan_apps(names, 8);
+#else
+        shell_error(sh, "USB storage support not enabled");
+        return -ENOTSUP;
+#endif
     }
     else
     {
@@ -253,7 +267,7 @@ static const char *const button_names[] = {
 
 /* Work queue for periodic tasks */
 static struct k_work_q shell_workq;
-static K_THREAD_STACK_DEFINE(shell_workq_stack, 2048); /* Reduced to save memory */
+static K_THREAD_STACK_DEFINE(shell_workq_stack, 1024); /* Reduced to save memory */
 static struct k_work_delayable stats_update_work;
 
 /* Helper functions */
@@ -1371,16 +1385,17 @@ SHELL_CMD_REGISTER(web_status, NULL, "Show web server status", cmd_web_status);
 SHELL_CMD_REGISTER(web_start, NULL, "Start web server", cmd_web_start);
 
 /* Shell command registration - organized by category */
+SHELL_STATIC_SUBCMD_SET_CREATE(app_cmds,
+                               SHELL_CMD(list, NULL, "List installed apps", cmd_app_list),
+                               SHELL_CMD(info, NULL, "Show app info <name>", cmd_app_info),
+                               SHELL_CMD(start, NULL, "Start app <name>", cmd_app_start),
+                               SHELL_CMD(stop, NULL, "Stop app <name>", cmd_app_stop),
+                               SHELL_CMD(restart, NULL, "Restart app <name>", cmd_app_restart),
+                               SHELL_CMD(uninstall, NULL, "Uninstall app <name>", cmd_app_uninstall),
+                               SHELL_CMD(scan, NULL, "Scan for apps in SD/USB", cmd_app_scan),
+                               SHELL_SUBCMD_SET_END);
+
 SHELL_STATIC_SUBCMD_SET_CREATE(system_cmds,
-                               SHELL_STATIC_SUBCMD_SET_CREATE(app_cmds,
-                                                              SHELL_CMD(list, NULL, "List installed apps", cmd_app_list),
-                                                              SHELL_CMD(info, NULL, "Show app info <name>", cmd_app_info),
-                                                              SHELL_CMD(start, NULL, "Start app <name>", cmd_app_start),
-                                                              SHELL_CMD(stop, NULL, "Stop app <name>", cmd_app_stop),
-                                                              SHELL_CMD(restart, NULL, "Restart app <name>", cmd_app_restart),
-                                                              SHELL_CMD(uninstall, NULL, "Uninstall app <name>", cmd_app_uninstall),
-                                                              SHELL_CMD(scan, NULL, "Scan for apps in SD/USB", cmd_app_scan),
-                                                              SHELL_SUBCMD_SET_END);
                                SHELL_CMD(info, NULL, "Show comprehensive system information", cmd_system_info),
                                SHELL_CMD(stress, NULL, "Run CPU stress test [duration] [cpu_load%]", cmd_stress_test),
                                SHELL_CMD(threads, NULL, "Show thread information", cmd_threads_info),
