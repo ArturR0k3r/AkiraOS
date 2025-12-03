@@ -1,12 +1,16 @@
 message("ocre.cmake")
 
+# Get AkiraOS source directory (two levels up from modules/ocre)
+get_filename_component(AKIRAOS_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+
 set(ocre_component_sources
   # Component support
   ${OCRE_ROOT_DIR}/src/ocre/component/component.c
 
   # Components
   ${OCRE_ROOT_DIR}/src/ocre/ocre_container_runtime/ocre_container_runtime.c
-  ${OCRE_ROOT_DIR}/src/ocre/components/container_supervisor/cs_main.c
+  # Use AkiraOS patched version of cs_main.c with configurable stack size
+  ${AKIRAOS_ROOT_DIR}/src/runtime/cs_main_patched.c
   ${OCRE_ROOT_DIR}/src/ocre/components/container_supervisor/cs_sm.c
   ${OCRE_ROOT_DIR}/src/ocre/components/container_supervisor/cs_sm_impl.c
 )
@@ -54,7 +58,28 @@ zephyr_include_directories(
     ${OCRE_ROOT_DIR}/src/ocre
     ${OCRE_ROOT_DIR}/src/ocre/utils/c-smf/smf
     ${OCRE_ROOT_DIR}/src/shared/platform
+    # Include path for our patched cs_main to find OCRE headers
+    ${OCRE_ROOT_DIR}/src/ocre/components/container_supervisor
 )
+
+# CRITICAL: Define SMF ancestor support and initial transition
+# OCRE's state machines use these features and the struct smf_state has
+# 5 fields (entry, run, exit, parent, initial) when these are enabled.
+# Without these defines, Zephyr's <zephyr/smf.h> creates a 3-field struct
+# causing memory corruption when OCRE tries to use 5-field initialization.
+zephyr_compile_definitions(
+    CONFIG_SMF_ANCESTOR_SUPPORT=1
+    CONFIG_SMF_INITIAL_TRANSITION=1
+)
+
+# Override OCRE Container Supervisor thread stack size if configured
+# We use a patched cs_main.c that handles this via #undef/#define
+if(CONFIG_AKIRA_OCRE_CS_THREAD_STACK_SIZE)
+    zephyr_compile_definitions(
+        CONFIG_AKIRA_OCRE_CS_THREAD_STACK_SIZE=${CONFIG_AKIRA_OCRE_CS_THREAD_STACK_SIZE}
+    )
+    message("OCRE CS Thread Stack Size Override: ${CONFIG_AKIRA_OCRE_CS_THREAD_STACK_SIZE}")
+endif()
 
 # OCRE CMake integration file
 

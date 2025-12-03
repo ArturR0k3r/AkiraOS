@@ -97,3 +97,12 @@ Thumbs.db
 
 build_esp32s3/
 .build_esp32s3/
+build_esp32c3/
+.build_esp32c3/
+build_nrf52/
+.build_nrf52/
+build_nrf53/
+.build_nrf53/
+
+# WebAssembly apps 
+*.wasm

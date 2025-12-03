@@ -4,6 +4,108 @@
 
 The App Manager is a lightweight WebAssembly application management system built on top of OCRE (Open Container Runtime for Embedded). It provides installation, lifecycle management, and resource control for WASM applications on resource-constrained devices.
 
+## Toolchain Setup
+
+### WASI-SDK Installation
+
+To build WASM applications for AkiraOS, install the WASI-SDK (WebAssembly System Interface SDK):
+
+```bash
+# Download WASI-SDK v29 (Linux x86_64)
+cd /tmp
+wget https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-29/wasi-sdk-29.0-x86_64-linux.tar.gz
+
+# Extract to /opt
+sudo tar -xzf wasi-sdk-29.0-x86_64-linux.tar.gz -C /opt
+
+# Create symlink for easy access
+sudo ln -sf /opt/wasi-sdk-29.0-x86_64-linux /opt/wasi-sdk
+
+# Verify installation
+/opt/wasi-sdk/bin/clang --version
+# Expected: clang version 21.1.4
+```
+
+For other platforms:
+- **macOS (arm64)**: `wasi-sdk-29.0-arm64-macos.tar.gz`
+- **macOS (x86_64)**: `wasi-sdk-29.0-x86_64-macos.tar.gz`
+- **Windows**: `wasi-sdk-29.0-x86_64-windows.tar.gz`
+
+### Building Sample Apps
+
+AkiraOS includes sample WASM applications in `samples/wasm_app/`:
+
+```bash
+cd samples/wasm_app
+make
+
+# Output:
+# Built: hello_world.wasm (172 bytes)
+# Built: sensor_demo.wasm (571 bytes)
+# Built: blink_led.wasm (245 bytes)
+```
+
+To build individual apps:
+
+```bash
+# Build hello_world
+make hello_world.wasm
+
+# Build sensor_demo
+make sensor_demo.wasm
+
+# Build blink_led
+make blink_led.wasm
+
+# Clean all builds
+make clean
+```
+
+### Writing Your Own Apps
+
+Create a new WASM app using the WASI-SDK:
+
+```c
+// my_app.c
+#include <stdio.h>
+
+int main() {
+    printf("Hello from my WASM app!\n");
+    return 0;
+}
+```
+
+Compile with:
+
+```bash
+/opt/wasi-sdk/bin/clang \
+    --target=wasm32-wasi \
+    -O3 \
+    -z stack-size=2048 \
+    -Wl,--initial-memory=65536 \
+    -Wl,--max-memory=65536 \
+    -Wl,--strip-all \
+    -Wl,--export=main \
+    -Wl,--export=__main_argc_argv \
+    -nostartfiles \
+    -o my_app.wasm my_app.c
+```
+
+### WASM App Size Guidelines
+
+| App Complexity | Typical Size | Heap Needed | Platforms |
+|---------------|--------------|-------------|-----------|
+| Minimal (no stdio) | 100-500B | 4KB | All |
+| Simple (printf) | 1-5KB | 8KB | All |
+| Moderate | 5-20KB | 16KB | ESP32-S3, native_sim |
+| Complex | 20-64KB | 32KB+ | ESP32-S3 with PSRAM |
+
+**Tips for small binaries:**
+- Use `-O3` or `-Oz` for size optimization
+- Use `-Wl,--strip-all` to remove debug info
+- Avoid stdio functions when possible (adds ~1KB)
+- Set `--initial-memory` to minimum needed
+
 ## System Architecture
 
 ```

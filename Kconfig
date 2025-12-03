@@ -652,6 +652,17 @@ config AKIRA_WAMR_MINIMAL
       Disables: bulk_memory, ref_types, multi_module, tail_call, simd, logging.
       Use this for memory-constrained devices like nRF54L15 or STM32.
 
+config AKIRA_OCRE_CS_THREAD_STACK_SIZE
+    int "OCRE Container Supervisor thread stack size"
+    default 16384 if SOC_SERIES_ESP32S3 || SOC_SERIES_ESP32
+    default 4096
+    depends on AKIRA_APP_MANAGER
+    help
+      Stack size for the OCRE Container Supervisor thread.
+      ESP32-S3 and ESP32 require larger stacks (16384) due to their architecture
+      and WAMR initialization overhead.
+      Other platforms can use the default (4096).
+
 # Akira Module System (Core AkiraOS functionality)
 rsource "src/akira_modules/Kconfig"
 
