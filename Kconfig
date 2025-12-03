@@ -46,6 +46,22 @@ config AKIRA_CYBERPUNK_THEME
     help
       Enable cyberpunk-style user interface theme.
 
+config AKIRA_AUDIO
+    bool "Enable Piezo MEMS audio output"
+    default y
+    depends on PWM
+    help
+      Enable piezoelectric MEMS micro-speaker audio output.
+      Provides tone generation, sound effects, and WASM audio API.
+      Designed for ST Piezo MEMS Design Challenge submission.
+
+config AKIRA_AUDIO_PWM_CHANNEL
+    int "PWM channel for audio output"
+    default 0
+    depends on AKIRA_AUDIO
+    help
+      PWM channel number used for audio output (ESP32 LEDC).
+
 config FS_FATFS_VOLUME_COUNT
     int "Number of FAT volumes"
     default 1
