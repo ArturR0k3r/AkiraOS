@@ -1,3 +1,6 @@
+[![AkiraOS Logo](![photo_2025-12-03_20-25-21](https://github.com/user-attachments/assets/6ef81a42-a4ed-457f-8d3e-4d75288204f8)
+)](#)  
+**AkiraOS v1.2.2 - ONI**
 
 # AkiraOS
 
