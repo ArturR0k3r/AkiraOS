@@ -1,7 +1,7 @@
 {
 	"folders": [
 		{
-			"path": "."
+			"path": "./"
 		}
 	],
 	"settings": {
@@ -69,7 +69,9 @@
 			"chrono": "c",
 			"cstdlib": "c",
 			"cstdint": "c",
-			"*.overlay": "cpp"
+			"*.overlay": "cpp",
+			"cerrno": "c",
+			"regex": "cpp"
 		},
 		"editor.formatOnType": true,
 		"cortex-debug.variableUseNaturalFormat": false,

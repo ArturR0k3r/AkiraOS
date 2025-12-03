@@ -8,17 +8,43 @@
 #define ILI9341_DISPLAY_WIDTH 320
 #define ILI9341_DISPLAY_HEIGHT 240
 
-// ===== ESP32 to ILI9341 Pin Mapping =====
+// ===== Platform-specific ILI9341 Pin Mapping =====
+#if defined(CONFIG_SOC_SERIES_ESP32S3)
+// ESP32-S3 DevKitM Pin Configuration (matches overlay)
 // SPI Pins (handled by pinctrl)
-#define ILI9341_MOSI_PIN 23 // GPIO23 → ILI9341 MOSI (SDI)
-#define ILI9341_MISO_PIN 25 // GPIO25 → ILI9341 MISO (SDO) - optional
-#define ILI9341_SCK_PIN 19  // GPIO19 → ILI9341 SCK (FIXED from 18)
+#define ILI9341_MOSI_PIN 11 // GPIO11 → ILI9341 MOSI (SDI)
+#define ILI9341_MISO_PIN 13 // GPIO13 → ILI9341 MISO (SDO)
+#define ILI9341_SCK_PIN 12  // GPIO12 → ILI9341 SCK
+
+// Manual Control Pins
+#define ILI9341_CS_PIN 10    // GPIO10 → ILI9341 CS
+#define ILI9341_DC_PIN 21    // GPIO21 → ILI9341 DC (Data/Command)
+#define ILI9341_RESET_PIN 18 // GPIO18 → ILI9341 RESET
+#define ILI9341_BL_PIN 6     // GPIO6 → ILI9341 LED (Backlight)
+
+#elif defined(CONFIG_SOC_SERIES_ESP32)
+// ESP32 DevKitC Pin Configuration
+// SPI Pins (handled by pinctrl)
+#define ILI9341_MOSI_PIN 23  // GPIO23 → ILI9341 MOSI (SDI)
+#define ILI9341_MISO_PIN 25  // GPIO25 → ILI9341 MISO (SDO) - optional
+#define ILI9341_SCK_PIN 19   // GPIO19 → ILI9341 SCK
 
 // Manual Control Pins
 #define ILI9341_CS_PIN 22    // GPIO22 → ILI9341 CS
 #define ILI9341_DC_PIN 21    // GPIO21 → ILI9341 DC (Data/Command)
 #define ILI9341_RESET_PIN 18 // GPIO18 → ILI9341 RESET
 #define ILI9341_BL_PIN 27    // GPIO27 → ILI9341 LED (Backlight)
+
+#else
+// Default/Simulation - pins won't be used
+#define ILI9341_MOSI_PIN 0
+#define ILI9341_MISO_PIN 0
+#define ILI9341_SCK_PIN 0
+#define ILI9341_CS_PIN 0
+#define ILI9341_DC_PIN 0
+#define ILI9341_RESET_PIN 0
+#define ILI9341_BL_PIN 0
+#endif
 
 // GPIO pin definitions for display (backwards compatibility)
 #define DC_GPIO_PIN ILI9341_DC_PIN

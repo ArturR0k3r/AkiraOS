@@ -109,6 +109,13 @@ enum web_server_state web_server_get_state(void);
 void web_server_notify_network_status(bool connected, const char *ip_address);
 
 /**
+ * @brief Add a log entry to the web terminal buffer
+ *
+ * @param log_line Log message to add
+ */
+void web_server_add_log(const char *log_line);
+
+/**
  * @brief Send log message to connected WebSocket clients
  *
  * @param message Log message to broadcast
