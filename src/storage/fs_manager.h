@@ -194,6 +194,28 @@ const char *fs_manager_get_status(void);
  */
 bool fs_manager_has_persistent_storage(void);
 
+/**
+ * RAM file info for listing
+ */
+typedef struct {
+    const char *path;
+    size_t size;
+} ram_file_info_t;
+
+/**
+ * List files in RAM storage
+ * @param info - Array to store file info
+ * @param max_count - Maximum number of entries
+ * @return Number of files found
+ */
+int fs_manager_list_ram_files(ram_file_info_t *info, size_t max_count);
+
+/**
+ * Get count of files in RAM storage
+ * @return Number of files in RAM storage
+ */
+int fs_manager_get_ram_file_count(void);
+
 #ifdef __cplusplus
 }
 #endif

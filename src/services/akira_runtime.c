@@ -210,11 +210,20 @@ int akira_runtime_start(int container_id)
     }
 
     LOG_INF("Starting container %d...", container_id);
+    printk(">>> Sending EVENT_RUN_CONTAINER for container %d\n", container_id);
     
     ocre_container_status_t status = ocre_container_runtime_run_container(container_id, NULL);
 
+    printk(">>> ocre_container_runtime_run_container returned: %d\n", status);
+
     if (status == CONTAINER_STATUS_RUNNING) {
-        LOG_INF("Container %d started", container_id);
+        LOG_INF("Container %d start event sent (async)", container_id);
+        /* Give the container thread time to start and print output */
+        k_sleep(K_MSEC(500));
+        
+        /* Check actual container status */
+        ocre_container_status_t actual = ocre_container_runtime_get_container_status(&g_ctx, container_id);
+        printk(">>> Container %d actual status after delay: %d\n", container_id, actual);
         return 0;
     }
 

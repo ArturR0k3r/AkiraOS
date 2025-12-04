@@ -716,3 +716,43 @@ const char *fs_manager_get_status(void) {
 bool fs_manager_has_persistent_storage(void) {
     return fs_state.sd_available || fs_state.internal_available;
 }
+
+/**
+ * List files in RAM storage
+ */
+int fs_manager_list_ram_files(ram_file_info_t *info, size_t max_count) {
+    if (!info || max_count == 0) {
+        return -EINVAL;
+    }
+
+    k_mutex_lock(&ram_mutex, K_FOREVER);
+    
+    int count = 0;
+    for (int i = 0; i < RAM_FILE_MAX_COUNT && count < max_count; i++) {
+        if (ram_files[i].in_use) {
+            info[count].path = ram_files[i].name;
+            info[count].size = ram_files[i].size;
+            count++;
+        }
+    }
+    
+    k_mutex_unlock(&ram_mutex);
+    return count;
+}
+
+/**
+ * Get count of files in RAM storage
+ */
+int fs_manager_get_ram_file_count(void) {
+    k_mutex_lock(&ram_mutex, K_FOREVER);
+    
+    int count = 0;
+    for (int i = 0; i < RAM_FILE_MAX_COUNT; i++) {
+        if (ram_files[i].in_use) {
+            count++;
+        }
+    }
+    
+    k_mutex_unlock(&ram_mutex);
+    return count;
+}

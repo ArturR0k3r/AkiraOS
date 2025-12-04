@@ -37,6 +37,7 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #include "akira/akira.h"
+#include "../storage/fs_manager.h"
 #ifdef CONFIG_AKIRA_APP_MANAGER
 #include "../services/app_manager.h"
 #endif
@@ -1382,6 +1383,75 @@ static int cmd_web_start(const struct shell *sh, size_t argc, char **argv)
 
     return 0;
 }
+
+/* RAM Storage Shell Commands */
+static int cmd_ram_ls(const struct shell *sh, size_t argc, char **argv)
+{
+    ram_file_info_t files[16];
+    int count = fs_manager_list_ram_files(files, 16);
+    
+    if (count < 0) {
+        shell_error(sh, "Failed to list RAM files: %d", count);
+        return count;
+    }
+    
+    if (count == 0) {
+        shell_print(sh, "No files in RAM storage");
+        return 0;
+    }
+    
+    shell_print(sh, "\n=== RAM Storage ===");
+    shell_print(sh, "%-40s %10s", "Path", "Size");
+    shell_print(sh, "---------------------------------------- ----------");
+    
+    size_t total = 0;
+    for (int i = 0; i < count; i++) {
+        shell_print(sh, "%-40s %10zu", files[i].path, files[i].size);
+        total += files[i].size;
+    }
+    
+    shell_print(sh, "---------------------------------------- ----------");
+    shell_print(sh, "Total: %d files, %zu bytes", count, total);
+    return 0;
+}
+
+static int cmd_ram_cat(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: ram cat <path>");
+        return -EINVAL;
+    }
+    
+    uint8_t buffer[256];
+    ssize_t size = fs_manager_read_file(argv[1], buffer, sizeof(buffer) - 1);
+    
+    if (size < 0) {
+        shell_error(sh, "Failed to read file: %zd", size);
+        return size;
+    }
+    
+    /* Print as hex dump for binary files */
+    shell_print(sh, "File: %s (%zd bytes)", argv[1], size);
+    for (int i = 0; i < size; i += 16) {
+        char hex[50] = {0};
+        char ascii[18] = {0};
+        int len = 0;
+        
+        for (int j = 0; j < 16 && (i + j) < size; j++) {
+            len += snprintf(hex + len, sizeof(hex) - len, "%02x ", buffer[i + j]);
+            ascii[j] = (buffer[i + j] >= 32 && buffer[i + j] < 127) ? buffer[i + j] : '.';
+        }
+        shell_print(sh, "%04x: %-48s |%s|", i, hex, ascii);
+    }
+    return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(ram_cmds,
+                               SHELL_CMD(ls, NULL, "List files in RAM storage", cmd_ram_ls),
+                               SHELL_CMD(cat, NULL, "Show file contents <path>", cmd_ram_cat),
+                               SHELL_SUBCMD_SET_END);
+
+SHELL_CMD_REGISTER(ram, &ram_cmds, "RAM storage commands", NULL);
 
 SHELL_CMD_REGISTER(wifi_status, NULL, "Show WiFi connection status", cmd_wifi_status);
 SHELL_CMD_REGISTER(wifi_connect, NULL, "Connect to configured WiFi network", cmd_wifi_connect);
