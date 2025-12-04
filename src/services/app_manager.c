@@ -6,7 +6,8 @@
  */
 
 #include "app_manager.h"
-#include "ocre_runtime.h"
+#include "akira_runtime.h"
+#include "../storage/fs_manager.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/fs/fs.h>
@@ -18,9 +19,9 @@ LOG_MODULE_REGISTER(app_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 /* ===== Configuration ===== */
 
-#define REGISTRY_PATH "/lfs/apps/registry.bin"
-#define APPS_DIR "/lfs/apps"
-#define APP_DATA_DIR "/lfs/app_data"
+#define REGISTRY_PATH "/data/apps/registry.bin"
+#define APPS_DIR "/data/apps"
+#define APP_DATA_DIR "/data/app_data"
 #define REGISTRY_MAGIC 0x414B4150 /* "AKAP" */
 #define REGISTRY_VERSION 1
 #define MAX_WASM_MAGIC 8
@@ -93,11 +94,11 @@ int app_manager_init(void)
 
     LOG_INF("Initializing App Manager");
 
-    /* Initialize OCRE runtime first */
-    int ret = ocre_runtime_init();
+    /* Initialize Akira runtime (OCRE + storage) */
+    int ret = akira_runtime_init();
     if (ret < 0)
     {
-        LOG_ERR("Failed to initialize OCRE runtime: %d", ret);
+        LOG_ERR("Failed to initialize Akira runtime: %d", ret);
         return ret;
     }
 
@@ -149,10 +150,10 @@ void app_manager_shutdown(void)
 
     for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++)
     {
-        if (g_registry[i].state == APP_STATE_RUNNING)
+        if (g_registry[i].state == APP_STATE_RUNNING && g_registry[i].container_id >= 0)
         {
-            LOG_INF("Stopping app: %s", g_registry[i].name);
-            ocre_runtime_stop_app(g_registry[i].name);
+            LOG_INF("Stopping app: %s (container %d)", g_registry[i].name, g_registry[i].container_id);
+            akira_runtime_stop(g_registry[i].container_id);
             g_registry[i].state = APP_STATE_STOPPED;
         }
     }
@@ -224,15 +225,15 @@ int app_manager_install(const char *name, const void *binary, size_t size,
         LOG_INF("Updating existing app: %s", app_name);
 
         /* Stop if running */
-        if (existing->state == APP_STATE_RUNNING)
+        if (existing->state == APP_STATE_RUNNING && existing->container_id >= 0)
         {
-            ocre_runtime_stop_app(app_name);
+            akira_runtime_stop(existing->container_id);
         }
 
         /* Destroy old container */
         if (existing->container_id >= 0)
         {
-            ocre_runtime_destroy_app(app_name);
+            akira_runtime_destroy(existing->container_id);
             existing->container_id = -1;
         }
     }
@@ -252,6 +253,9 @@ int app_manager_install(const char *name, const void *binary, size_t size,
         g_app_count++;
     }
 
+    /* Populate name BEFORE saving binary (so save_app_binary can find the entry) */
+    strncpy(existing->name, app_name, APP_NAME_MAX_LEN);
+
     /* Save binary to flash */
     ret = save_app_binary(app_name, binary, size);
     if (ret < 0)
@@ -261,12 +265,12 @@ int app_manager_install(const char *name, const void *binary, size_t size,
         {
             g_app_count--;
         }
+        existing->name[0] = '\0';  /* Clear name on failure */
         k_mutex_unlock(&g_registry_mutex);
         return ret;
     }
 
-    /* Populate entry */
-    strncpy(existing->name, app_name, APP_NAME_MAX_LEN);
+    /* Populate rest of entry */
     existing->source = source;
     existing->size = size;
     existing->container_id = -1;
@@ -312,30 +316,17 @@ int app_manager_install_from_path(const char *path)
         return -EINVAL;
     }
 
-    struct fs_file_t file;
-    fs_file_t_init(&file);
-
-    int ret = fs_open(&file, path, FS_O_READ);
-    if (ret < 0)
+    /* Get file size using fs_manager */
+    ssize_t size = fs_manager_get_size(path);
+    if (size < 0)
     {
-        LOG_ERR("Failed to open %s: %d", path, ret);
-        return ret;
+        LOG_ERR("Failed to get size of %s: %zd", path, size);
+        return (int)size;
     }
 
-    /* Get file size */
-    struct fs_dirent entry;
-    ret = fs_stat(path, &entry);
-    if (ret < 0)
-    {
-        fs_close(&file);
-        return ret;
-    }
-
-    size_t size = entry.size;
     if (size > CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024)
     {
-        LOG_ERR("App too large: %zu bytes", size);
-        fs_close(&file);
+        LOG_ERR("App too large: %zd bytes", size);
         return -EFBIG;
     }
 
@@ -343,18 +334,15 @@ int app_manager_install_from_path(const char *path)
     uint8_t *buffer = k_malloc(size);
     if (!buffer)
     {
-        LOG_ERR("Failed to allocate %zu bytes", size);
-        fs_close(&file);
+        LOG_ERR("Failed to allocate %zd bytes", size);
         return -ENOMEM;
     }
 
-    /* Read file */
-    ssize_t bytes_read = fs_read(&file, buffer, size);
-    fs_close(&file);
-
+    /* Read file using fs_manager */
+    ssize_t bytes_read = fs_manager_read_file(path, buffer, size);
     if (bytes_read != size)
     {
-        LOG_ERR("Read failed: %zd != %zu", bytes_read, size);
+        LOG_ERR("Read failed: %zd != %zd", bytes_read, size);
         k_free(buffer);
         return -EIO;
     }
@@ -391,27 +379,21 @@ int app_manager_install_from_path(const char *path)
     snprintf(manifest_path, sizeof(manifest_path), "%.*s.json",
              (int)(ext ? ext - name : strlen(name)), path);
 
-    struct fs_file_t mf;
-    fs_file_t_init(&mf);
-    if (fs_open(&mf, manifest_path, FS_O_READ) == 0)
+    char json[512];
+    ssize_t mf_size = fs_manager_read_file(manifest_path, json, sizeof(json) - 1);
+    if (mf_size > 0)
     {
-        char json[512];
-        ssize_t mf_size = fs_read(&mf, json, sizeof(json) - 1);
-        fs_close(&mf);
-        if (mf_size > 0)
+        json[mf_size] = '\0';
+        if (app_manifest_parse(json, mf_size, &manifest) == 0)
         {
-            json[mf_size] = '\0';
-            if (app_manifest_parse(json, mf_size, &manifest) == 0)
-            {
-                ret = app_manager_install(name, buffer, size, &manifest, source);
-                k_free(buffer);
-                return ret;
-            }
+            int ret = app_manager_install(name, buffer, size, &manifest, source);
+            k_free(buffer);
+            return ret;
         }
     }
 
     /* Install without manifest */
-    ret = app_manager_install(name, buffer, size, NULL, source);
+    int ret = app_manager_install(name, buffer, size, NULL, source);
     k_free(buffer);
     return ret;
 }
@@ -441,19 +423,13 @@ int app_manager_uninstall(const char *name)
     }
 
     /* Stop if running */
-    if (app->state == APP_STATE_RUNNING)
+    if (app->state == APP_STATE_RUNNING && app->container_id >= 0)
     {
-        ocre_runtime_stop_app(name);
+        akira_runtime_stop(app->container_id);
     }
 
-    /* Destroy container */
-    if (app->container_id >= 0)
-    {
-        ocre_runtime_destroy_app(name);
-    }
-
-    /* Delete binary */
-    delete_app_binary(name);
+    /* Destroy container and delete binary */
+    akira_runtime_uninstall(app->name, app->container_id);
 
     /* Clear entry */
     memset(app, 0, sizeof(app_entry_t));
@@ -510,55 +486,51 @@ int app_manager_start(const char *name)
     /* Load app binary if not loaded */
     if (app->container_id < 0)
     {
-        /* Read binary from flash */
+        /* Read binary from storage (flash or RAM fallback) */
         char path[APP_PATH_MAX_LEN];
         snprintf(path, sizeof(path), "%s/%03d_%s.wasm",
                  APPS_DIR, app->id, app->name);
 
-        struct fs_file_t file;
-        fs_file_t_init(&file);
-        int ret = fs_open(&file, path, FS_O_READ);
-        if (ret < 0)
-        {
-            k_mutex_unlock(&g_registry_mutex);
-            LOG_ERR("Failed to open app binary: %s", path);
-            return ret;
-        }
-
         uint8_t *buffer = k_malloc(app->size);
         if (!buffer)
         {
-            fs_close(&file);
             k_mutex_unlock(&g_registry_mutex);
             return -ENOMEM;
         }
 
-        ssize_t bytes_read = fs_read(&file, buffer, app->size);
-        fs_close(&file);
+        ssize_t bytes_read = fs_manager_read_file(path, buffer, app->size);
+        if (bytes_read < 0)
+        {
+            k_free(buffer);
+            k_mutex_unlock(&g_registry_mutex);
+            LOG_ERR("Failed to read app binary: %s (err %zd)", path, bytes_read);
+            return (int)bytes_read;
+        }
 
         if (bytes_read != app->size)
         {
             k_free(buffer);
             k_mutex_unlock(&g_registry_mutex);
+            LOG_ERR("App binary size mismatch: expected %zu, got %zd", app->size, bytes_read);
             return -EIO;
         }
 
-        /* Load into OCRE */
-        ret = ocre_runtime_load_app(name, buffer, app->size);
+        /* Install into Akira runtime (saves binary + creates container) */
+        int load_ret = akira_runtime_install(name, buffer, app->size);
         k_free(buffer);
 
-        if (ret < 0)
+        if (load_ret < 0)
         {
             k_mutex_unlock(&g_registry_mutex);
-            LOG_ERR("Failed to load app into OCRE: %d", ret);
-            return ret;
+            LOG_ERR("Failed to install app into Akira runtime: %d", load_ret);
+            return load_ret;
         }
 
-        app->container_id = ret;
+        app->container_id = load_ret;
     }
 
-    /* Start the app */
-    int ret = ocre_runtime_start_app(name);
+    /* Start the app by container ID */
+    int ret = akira_runtime_start(app->container_id);
     if (ret < 0)
     {
         k_mutex_unlock(&g_registry_mutex);
@@ -599,7 +571,14 @@ int app_manager_stop(const char *name)
         return 0; /* Not running */
     }
 
-    int ret = ocre_runtime_stop_app(name);
+    if (app->container_id < 0)
+    {
+        k_mutex_unlock(&g_registry_mutex);
+        LOG_ERR("App has no container ID");
+        return -EINVAL;
+    }
+
+    int ret = akira_runtime_stop(app->container_id);
     if (ret < 0)
     {
         k_mutex_unlock(&g_registry_mutex);
@@ -636,9 +615,9 @@ int app_manager_restart(const char *name)
     app->crash_count = 0;
 
     /* Stop if running */
-    if (app->state == APP_STATE_RUNNING)
+    if (app->state == APP_STATE_RUNNING && app->container_id >= 0)
     {
-        ocre_runtime_stop_app(name);
+        akira_runtime_stop(app->container_id);
         set_app_state(app, APP_STATE_STOPPED);
     }
 
@@ -1089,26 +1068,18 @@ const char *app_source_to_str(app_source_t source)
 
 static int ensure_dirs_exist(void)
 {
-    struct fs_dirent entry;
-
-    if (fs_stat(APPS_DIR, &entry) < 0)
+    /* Use fs_manager to create directories - it handles RAM fallback */
+    int ret = fs_manager_mkdir(APPS_DIR);
+    if (ret < 0 && ret != -EEXIST)
     {
-        int ret = fs_mkdir(APPS_DIR);
-        if (ret < 0 && ret != -EEXIST)
-        {
-            LOG_ERR("Failed to create %s: %d", APPS_DIR, ret);
-            return ret;
-        }
+        LOG_WRN("Failed to create %s: %d (using RAM fallback)", APPS_DIR, ret);
+        /* Continue anyway - fs_manager will use RAM if no persistent storage */
     }
 
-    if (fs_stat(APP_DATA_DIR, &entry) < 0)
+    ret = fs_manager_mkdir(APP_DATA_DIR);
+    if (ret < 0 && ret != -EEXIST)
     {
-        int ret = fs_mkdir(APP_DATA_DIR);
-        if (ret < 0 && ret != -EEXIST)
-        {
-            LOG_ERR("Failed to create %s: %d", APP_DATA_DIR, ret);
-            return ret;
-        }
+        LOG_WRN("Failed to create %s: %d (using RAM fallback)", APP_DATA_DIR, ret);
     }
 
     return 0;
@@ -1116,47 +1087,41 @@ static int ensure_dirs_exist(void)
 
 static int registry_load(void)
 {
-    struct fs_file_t file;
-    fs_file_t_init(&file);
-
-    int ret = fs_open(&file, REGISTRY_PATH, FS_O_READ);
-    if (ret < 0)
+    /* Try to read registry using fs_manager (handles RAM fallback) */
+    uint8_t buffer[sizeof(registry_header_t) + CONFIG_AKIRA_APP_MAX_INSTALLED * sizeof(app_entry_t)];
+    
+    ssize_t read = fs_manager_read_file(REGISTRY_PATH, buffer, sizeof(buffer));
+    if (read < (ssize_t)sizeof(registry_header_t))
     {
-        return ret;
+        LOG_DBG("No registry found or too small: %zd", read);
+        return -ENOENT;
     }
 
-    /* Read header */
-    registry_header_t header;
-    ret = fs_read(&file, &header, sizeof(header));
-    if (ret != sizeof(header))
-    {
-        fs_close(&file);
-        return -EIO;
-    }
+    /* Parse header */
+    registry_header_t *header = (registry_header_t *)buffer;
 
     /* Validate header */
-    if (header.magic != REGISTRY_MAGIC || header.version != REGISTRY_VERSION)
+    if (header->magic != REGISTRY_MAGIC || header->version != REGISTRY_VERSION)
     {
-        fs_close(&file);
         LOG_WRN("Invalid registry header");
         return -EINVAL;
     }
 
     /* Read entries */
-    int count = header.app_count;
+    int count = header->app_count;
     if (count > CONFIG_AKIRA_APP_MAX_INSTALLED)
     {
         count = CONFIG_AKIRA_APP_MAX_INSTALLED;
     }
 
-    ret = fs_read(&file, g_registry, count * sizeof(app_entry_t));
-    fs_close(&file);
-
-    if (ret != count * sizeof(app_entry_t))
+    size_t expected_size = sizeof(registry_header_t) + count * sizeof(app_entry_t);
+    if (read < (ssize_t)expected_size)
     {
+        LOG_WRN("Registry file truncated");
         return -EIO;
     }
 
+    memcpy(g_registry, buffer + sizeof(registry_header_t), count * sizeof(app_entry_t));
     g_app_count = count;
 
     /* Reset runtime state */
@@ -1169,20 +1134,15 @@ static int registry_load(void)
         }
     }
 
+    LOG_INF("Loaded %d apps from registry", count);
     return 0;
 }
 
 static int registry_save(void)
 {
-    struct fs_file_t file;
-    fs_file_t_init(&file);
-
-    int ret = fs_open(&file, REGISTRY_PATH, FS_O_CREATE | FS_O_WRITE);
-    if (ret < 0)
-    {
-        LOG_ERR("Failed to create registry: %d", ret);
-        return ret;
-    }
+    /* Build registry buffer */
+    uint8_t buffer[sizeof(registry_header_t) + CONFIG_AKIRA_APP_MAX_INSTALLED * sizeof(app_entry_t)];
+    size_t offset = 0;
 
     /* Write header */
     registry_header_t header = {
@@ -1193,28 +1153,28 @@ static int registry_save(void)
         .crc = 0, /* TODO: Calculate CRC */
     };
 
-    ret = fs_write(&file, &header, sizeof(header));
-    if (ret != sizeof(header))
-    {
-        fs_close(&file);
-        return -EIO;
-    }
+    memcpy(buffer, &header, sizeof(header));
+    offset += sizeof(header);
 
     /* Write entries (only valid ones) */
     for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++)
     {
         if (g_registry[i].name[0] != '\0')
         {
-            ret = fs_write(&file, &g_registry[i], sizeof(app_entry_t));
-            if (ret != sizeof(app_entry_t))
-            {
-                fs_close(&file);
-                return -EIO;
-            }
+            memcpy(buffer + offset, &g_registry[i], sizeof(app_entry_t));
+            offset += sizeof(app_entry_t);
         }
     }
 
-    fs_close(&file);
+    /* Save using fs_manager (handles RAM fallback) */
+    ssize_t written = fs_manager_write_file(REGISTRY_PATH, buffer, offset);
+    if (written < 0)
+    {
+        LOG_ERR("Failed to save registry: %zd", written);
+        return written;
+    }
+
+    LOG_DBG("Saved registry (%zu bytes)", offset);
     return 0;
 }
 
@@ -1268,26 +1228,21 @@ static int save_app_binary(const char *name, const void *binary, size_t size)
     char path[APP_PATH_MAX_LEN];
     snprintf(path, sizeof(path), "%s/%03d_%s.wasm", APPS_DIR, id, name);
 
-    struct fs_file_t file;
-    fs_file_t_init(&file);
-
-    int ret = fs_open(&file, path, FS_O_CREATE | FS_O_WRITE);
-    if (ret < 0)
+    /* Use fs_manager to save (handles RAM fallback) */
+    ssize_t written = fs_manager_write_file(path, binary, size);
+    if (written < 0)
     {
-        LOG_ERR("Failed to create %s: %d", path, ret);
-        return ret;
+        LOG_ERR("Failed to save %s: %zd", path, written);
+        return written;
     }
 
-    ret = fs_write(&file, binary, size);
-    fs_close(&file);
-
-    if (ret != size)
+    if ((size_t)written != size)
     {
-        LOG_ERR("Failed to write app binary: %d", ret);
+        LOG_ERR("Failed to write app binary: wrote %zd of %zu", written, size);
         return -EIO;
     }
 
-    LOG_DBG("Saved app binary: %s (%zu bytes)", path, size);
+    LOG_INF("Saved app binary: %s (%zu bytes)", path, size);
     return 0;
 }
 
@@ -1302,7 +1257,8 @@ static int delete_app_binary(const char *name)
     char path[APP_PATH_MAX_LEN];
     snprintf(path, sizeof(path), "%s/%03d_%s.wasm", APPS_DIR, app->id, name);
 
-    int ret = fs_unlink(path);
+    /* Use fs_manager to delete (handles RAM storage too) */
+    int ret = fs_manager_delete_file(path);
     if (ret < 0 && ret != -ENOENT)
     {
         LOG_ERR("Failed to delete %s: %d", path, ret);
@@ -1311,7 +1267,7 @@ static int delete_app_binary(const char *name)
 
     /* Also delete app data directory */
     snprintf(path, sizeof(path), "%s/%s", APP_DATA_DIR, name);
-    fs_unlink(path); /* Ignore error */
+    fs_manager_delete_file(path); /* Ignore error */
 
     return 0;
 }

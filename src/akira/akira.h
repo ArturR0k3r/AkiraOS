@@ -27,11 +27,11 @@ extern "C"
     /* Version Information                                                       */
     /*===========================================================================*/
 
-#define AKIRA_VERSION_MAJOR 2
-#define AKIRA_VERSION_MINOR 0
-#define AKIRA_VERSION_PATCH 0
-#define AKIRA_VERSION_STRING "2.0.0"
-#define AKIRA_CODENAME "Neon"
+#define AKIRA_VERSION_MAJOR 1
+#define AKIRA_VERSION_MINOR 2
+#define AKIRA_VERSION_PATCH 1
+#define AKIRA_VERSION_STRING "1.2.1"
+#define AKIRA_CODENAME "ONI"
 
     /*===========================================================================*/
     /* Logging Configuration                                                     */

@@ -19,11 +19,12 @@ set(ocre_component_sources
 set(ocre_lib_sources
     # Libraries
     ${OCRE_ROOT_DIR}/src/ocre/sm/sm.c
-    ${OCRE_ROOT_DIR}/src/ocre/utils/c-smf/smf/smf.c
+    # Note: Don't include c-smf/smf.c - use Zephyr's SMF instead
     ${OCRE_ROOT_DIR}/src/shared/platform/zephyr/core_fs.c
     ${OCRE_ROOT_DIR}/src/shared/platform/zephyr/core_thread.c
     ${OCRE_ROOT_DIR}/src/shared/platform/zephyr/core_mutex.c
     ${OCRE_ROOT_DIR}/src/shared/platform/zephyr/core_mq.c
+    ${OCRE_ROOT_DIR}/src/shared/platform/zephyr/core_eventq.c
     ${OCRE_ROOT_DIR}/src/shared/platform/zephyr/core_misc.c
     ${OCRE_ROOT_DIR}/src/shared/platform/zephyr/core_memory.c
     ${OCRE_ROOT_DIR}/src/shared/platform/zephyr/core_timer.c

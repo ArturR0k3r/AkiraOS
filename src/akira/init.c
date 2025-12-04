@@ -277,7 +277,7 @@ void akira_print_banner(void)
     printk(" / ___ \\|   <| | | | (_| | |_| |___) |\n");
     printk("/_/   \\_\\_|\\_\\_|_|  \\__,_|\\___/|____/ \n");
     printk("\n");
-    printk("  Version: %s\n", AKIRA_VERSION_STRING);
+    printk("  Version: %s, %s\n", AKIRA_VERSION_STRING, AKIRA_CODENAME);
     printk("  Platform: %s\n", akira_hal_platform());
     printk("\n");
 }
@@ -285,7 +285,7 @@ void akira_print_banner(void)
 void akira_print_status(void)
 {
     LOG_INF("=== AkiraOS Status ===");
-    LOG_INF("Version: %s", AKIRA_VERSION_STRING);
+    LOG_INF("  Version: %s, %s", AKIRA_VERSION_STRING, AKIRA_CODENAME);
     LOG_INF("Platform: %s", akira_hal_platform());
     LOG_INF("Initialized: %s", akira_state.initialized ? "yes" : "no");
     LOG_INF("Running: %s", akira_state.running ? "yes" : "no");

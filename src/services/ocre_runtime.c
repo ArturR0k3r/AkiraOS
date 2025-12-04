@@ -38,17 +38,28 @@ static int find_container_by_name(const char *name)
 		return -1;
 	}
 
+	LOG_INF("Looking for container: '%s'", name);
 	for (int i = 0; i < CONFIG_MAX_CONTAINERS; i++)
 	{
-		if (g_ocre_ctx.containers[i].container_runtime_status != CONTAINER_STATUS_UNKNOWN &&
-			g_ocre_ctx.containers[i].container_runtime_status != CONTAINER_STATUS_DESTROYED)
+		/* Check if container has this name (regardless of status) */
+		/* The name is set during create, but status updates asynchronously */
+		const char *cname = g_ocre_ctx.containers[i].ocre_container_data.name;
+		if (cname[0] != '\0') {
+			LOG_INF("  Slot %d: name='%s', status=%d", i, cname, 
+				g_ocre_ctx.containers[i].container_runtime_status);
+		}
+		if (cname[0] != '\0' && strcmp(cname, name) == 0)
 		{
-			if (strcmp(g_ocre_ctx.containers[i].ocre_container_data.name, name) == 0)
-			{
-				return i;
+			/* Skip if explicitly destroyed */
+			if (g_ocre_ctx.containers[i].container_runtime_status == CONTAINER_STATUS_DESTROYED) {
+				LOG_INF("  Found but DESTROYED, skipping");
+				continue;
 			}
+			LOG_INF("  Found container at slot %d", i);
+			return i;
 		}
 	}
+	LOG_WRN("  Container '%s' not found in any slot!", name);
 	return -1;
 }
 
@@ -96,7 +107,7 @@ int ocre_runtime_start_app(const char *name)
 		return -1;
 	}
 
-	
+	LOG_INF("Requesting OCRE to run container %d (%s)...", container_id, name);
 	ocre_container_status_t status = ocre_container_runtime_run_container(container_id, NULL);
 
 	if (status == CONTAINER_STATUS_RUNNING)

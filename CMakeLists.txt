@@ -251,9 +251,12 @@ endif()
 
 # Services (OCRE/WASM runtime wrappers)
 target_sources(app PRIVATE
-    src/services/ocre_runtime.c
+    src/services/akira_runtime.c
     src/services/wasm_app_manager.c
 )
+
+# Filesystem Manager (MUST be before App Manager)
+target_sources(app PRIVATE src/storage/fs_manager.c)
 
 # App Manager
 if(CONFIG_AKIRA_APP_MANAGER)
@@ -297,6 +300,7 @@ target_include_directories(app PRIVATE
     src/services/
     src/settings/
     src/shell/
+    src/storage/
     src/ui/
     # REMOVED - OCRE provides WAMR includes
     # ${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime/core/iwasm/include
@@ -311,7 +315,7 @@ target_include_directories(app PRIVATE
 
 # Compile definitions
 target_compile_definitions(app PRIVATE
-    AKIRA_VERSION_MAJOR=2
-    AKIRA_VERSION_MINOR=0
-    AKIRA_VERSION_PATCH=0
+    AKIRA_VERSION_MAJOR=1
+    AKIRA_VERSION_MINOR=2
+    AKIRA_VERSION_PATCH=1
 )

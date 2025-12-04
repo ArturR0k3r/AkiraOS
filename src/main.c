@@ -13,6 +13,7 @@
 #include <zephyr/fs/fs.h>
 #include <zephyr/storage/disk_access.h>
 #include <zephyr/drivers/disk.h>
+#include <zephyr/fs/littlefs.h>
 #include <ff.h>
 #include "drivers/display_ili9341.h"
 #include "drivers/platform_hal.h"
@@ -20,6 +21,7 @@
 #include "OTA/ota_manager.h"
 #include "shell/akira_shell.h"
 #include "OTA/web_server.h"
+#include "storage/fs_manager.h"
 #ifdef CONFIG_AKIRA_APP_MANAGER
 #include "services/app_manager.h"
 #endif
@@ -35,6 +37,8 @@ static struct fs_mount_t fs = {
     .fs_data = &fatfs,
     .mnt_point = "/SD:",
 };
+
+
 
 static void wifi_event_handler(struct net_mgmt_event_callback *cb,
                                uint64_t mgmt_event, struct net_if *iface);
@@ -292,7 +296,7 @@ static int execute_shell_command_callback(const char *command, char *response, s
     else if (strcmp(command, "version") == 0)
     {
         return snprintf(response, response_size,
-                        "AkiraOS v1.2.0-OTA\n"
+                        "AkiraOS v1.2.2-OTA\n"
                         "Build: %s %s\n"
                         "Board: ESP32-S3 DevKitM",
                         __DATE__, __TIME__);
@@ -640,6 +644,14 @@ int main(void)
     // Register settings change callback
     user_settings_register_callback(on_settings_changed, NULL);
 
+    // Initialize Filesystem Manager (MUST be before App Manager)
+    ret = fs_manager_init();
+    if (ret)
+    {
+        LOG_ERR("Filesystem manager initialization failed: %d", ret);
+    }
+    LOG_INF("✅ Filesystem manager initialized");
+
     // Initialize OTA manager
     ret = ota_manager_init();
     if (ret)
@@ -720,7 +732,7 @@ int main(void)
             web_server_add_log(status_msg);
         }
 
-        LOG_INF("... AkiraOS main loop running ...");
+        LOG_DBG("... AkiraOS main loop running ...");
         k_sleep(K_SECONDS(10));
     }
 
