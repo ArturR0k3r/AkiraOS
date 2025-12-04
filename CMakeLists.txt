@@ -33,6 +33,8 @@ if(EXISTS "${OCRE_ROOT_DIR}/src")
         ${OCRE_ROOT_DIR}/src/shared/platform
     )
     target_compile_definitions(app PRIVATE CONFIG_OCRE_ENABLE=1)
+    # Enable OCRE logging (force INFO level since OCRE Kconfig isn't sourced)
+    target_compile_definitions(app PRIVATE CONFIG_OCRE_LOG_INF=1)
 endif()
 
 # Akira Module System (Core functionality, not third-party)

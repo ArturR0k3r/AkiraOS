@@ -619,9 +619,11 @@ config MAX_CONTAINERS
 
 config OCRE_WAMR_HEAP_BUFFER_SIZE
     int "WAMR heap buffer size"
-    default 65536
+    default 262144
     help
       Size of the heap buffer for WAMR runtime.
+      Must be large enough to hold WASM linear memory.
+      Default 256KB, OCRE recommends 512KB for production.
 
 config OCRE_CONTAINER_DEFAULT_STACK_SIZE
     int "Default container stack size"
@@ -631,9 +633,10 @@ config OCRE_CONTAINER_DEFAULT_STACK_SIZE
 
 config OCRE_CONTAINER_DEFAULT_HEAP_SIZE
     int "Default container heap size"
-    default 32768
+    default 65536
     help
       Default heap size for OCRE containers.
+      This is the WASM linear memory size.
 
 config AKIRA_WAMR_MINI_LOADER
     bool "Use WAMR mini loader"

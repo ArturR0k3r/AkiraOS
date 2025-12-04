@@ -210,25 +210,45 @@ int akira_runtime_start(int container_id)
     }
 
     LOG_INF("Starting container %d...", container_id);
-    printk(">>> Sending EVENT_RUN_CONTAINER for container %d\n", container_id);
     
     ocre_container_status_t status = ocre_container_runtime_run_container(container_id, NULL);
 
-    printk(">>> ocre_container_runtime_run_container returned: %d\n", status);
-
-    if (status == CONTAINER_STATUS_RUNNING) {
-        LOG_INF("Container %d start event sent (async)", container_id);
-        /* Give the container thread time to start and print output */
-        k_sleep(K_MSEC(500));
-        
-        /* Check actual container status */
-        ocre_container_status_t actual = ocre_container_runtime_get_container_status(&g_ctx, container_id);
-        printk(">>> Container %d actual status after delay: %d\n", container_id, actual);
-        return 0;
+    if (status != CONTAINER_STATUS_RUNNING) {
+        LOG_ERR("Failed to start container %d: status=%d", container_id, status);
+        return -EIO;
     }
 
-    LOG_ERR("Failed to start container %d: status=%d", container_id, status);
-    return -EIO;
+    LOG_INF("Container %d start event sent", container_id);
+    
+    /* Wait briefly for container to start, checking status periodically */
+    for (int i = 0; i < 10; i++) {
+        k_sleep(K_MSEC(50));
+        
+        ocre_container_status_t actual = ocre_container_runtime_get_container_status(&g_ctx, container_id);
+        
+        if (actual == CONTAINER_STATUS_RUNNING) {
+            LOG_INF("Container %d is running", container_id);
+            return 0;
+        } else if (actual == CONTAINER_STATUS_STOPPED) {
+            /* Container ran and finished successfully */
+            LOG_INF("Container %d completed execution", container_id);
+            return 0;
+        } else if (actual == CONTAINER_STATUS_ERROR) {
+            LOG_ERR("Container %d failed with error", container_id);
+            return -EIO;
+        }
+        /* Still CREATED - keep waiting */
+    }
+    
+    /* Timeout - check final state */
+    ocre_container_status_t final = ocre_container_runtime_get_container_status(&g_ctx, container_id);
+    if (final == CONTAINER_STATUS_CREATED) {
+        LOG_ERR("Container %d failed to start (instantiation error)", container_id);
+        return -ENOMEM;
+    }
+    
+    LOG_WRN("Container %d in state %d after timeout", container_id, final);
+    return (final == CONTAINER_STATUS_RUNNING || final == CONTAINER_STATUS_STOPPED) ? 0 : -EIO;
 }
 
 int akira_runtime_stop(int container_id)
