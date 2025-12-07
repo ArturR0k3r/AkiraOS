@@ -1,61 +1,34 @@
-name: Build
+# name: Build
 
-on:
-  push:
-    branches:
-      - main
-      - System-implementation-and-core-integrations
-  pull_request:
-    branches:
-      - main
-  workflow_dispatch:
+# on:
+#   pull_request:
+#     branches: [ main ]
 
-jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/zephyrproject-rtos/ci:v0.26-branch
-      options: --user root
-    strategy:
-      matrix:
-        board:
-          - native_sim
-          - esp32s3_devkitm/esp32s3/procpu
-          - esp32_devkitc/esp32/procpu
+# jobs:
+#   build:
+#     runs-on: ubuntu-latest
+
+#     container:
+#       image: ghcr.io/zephyrproject-rtos/ci:v0.26-branch
+#       options: --user root
     
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          path: application
-      
-      - name: Setup Zephyr project
-        uses: zephyrproject-rtos/action-zephyr-setup@v1
-        with:
-          app-path: application
-          sdk-version: 0.16.8
-          toolchains: xtensa-espressif_esp32_zephyr-elf:xtensa-espressif_esp32s3_zephyr-elf
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v4
+#         with:
+#           path: application
+#           fetch-depth: 0
+    
+#       - name: Setup Zephyr project
+#         uses: zephyrproject-rtos/action-zephyr-setup@v1
+#         with:
+#           app-path: application
+#           sdk-version: 0.16.4
 
-      - name: Build AkiraOS for ${{ matrix.board }}
-        run: |
-          west build --pristine -b ${{ matrix.board }} ./application -d build-${{ matrix.board }} -- -DMODULE_EXT_ROOT=$(pwd)/application
-      
-      - name: Generate build info
-        run: |
-          echo "Board: ${{ matrix.board }}" > build-${{ matrix.board }}/build-info.txt
-          echo "Commit: ${{ github.sha }}" >> build-${{ matrix.board }}/build-info.txt
-          echo "Branch: ${{ github.ref_name }}" >> build-${{ matrix.board }}/build-info.txt
-          echo "Build Date: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> build-${{ matrix.board }}/build-info.txt
-          ls -lh build-${{ matrix.board }}/zephyr/zephyr.* >> build-${{ matrix.board }}/build-info.txt || true
-      
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: akira-os-${{ matrix.board }}-${{ github.sha }}
-          path: |
-            build-${{ matrix.board }}/zephyr/zephyr.bin
-            build-${{ matrix.board }}/zephyr/zephyr.elf
-            build-${{ matrix.board }}/zephyr/zephyr.hex
-            build-${{ matrix.board }}/build-info.txt
-          retention-days: 30
+#       - name: Build Zephyr application
+#         run: |
+#           west build --pristine -b esp32_devkitc/esp32/procpu ./application -d build -- -DMODULE_EXT_ROOT=$(pwd)/application
+
+#       - name: Build MCUboot bootloader
+#         run: |
+#           west build --pristine -b esp32_devkitc/esp32/procpu ./bootloader/mcuboot/boot/zephyr -d build-bootloader

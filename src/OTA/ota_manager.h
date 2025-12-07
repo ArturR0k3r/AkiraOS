@@ -48,6 +48,21 @@ enum ota_result
     OTA_ERROR_BOOT_REQUEST_FAILED = -11
 };
 
+/* OTA Transport Interface */
+typedef struct ota_transport
+{
+    const char *name;
+    int (*start)(void *user_data);
+    int (*stop)(void *user_data);
+    int (*send_chunk)(const uint8_t *data, size_t len, void *user_data);
+    int (*report_progress)(uint8_t percent, void *user_data);
+    void *user_data;
+} ota_transport_t;
+
+/* Register/unregister transport */
+int ota_manager_register_transport(const ota_transport_t *transport);
+int ota_manager_unregister_transport(const char *name);
+
 /* OTA Progress information */
 struct ota_progress
 {

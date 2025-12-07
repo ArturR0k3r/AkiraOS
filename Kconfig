@@ -11,6 +11,14 @@ config AKIRA_OS
       Enable AkiraOS specific features and drivers.
     select PRINTK
 
+config AKIRA_LOG_LEVEL
+    int "AkiraOS log level"
+    default 3
+    range 0 4
+    help
+      Set the log level for AkiraOS modules.
+      0=OFF, 1=ERR, 2=WRN, 3=INF, 4=DBG
+
 config AKIRA_DISPLAY_ILI9341
     bool "Enable ILI9341 display driver"
     default y
@@ -46,10 +54,619 @@ config AKIRA_CYBERPUNK_THEME
     help
       Enable cyberpunk-style user interface theme.
 
+# Sensor Drivers
+config AKIRA_NRF24L01
+    bool "Enable NRF24L01+ wireless transceiver"
+    default n
+    depends on SPI && GPIO
+    help
+      Enable NRF24L01+ 2.4GHz wireless transceiver driver.
+      Provides low-power wireless communication with up to 2Mbps data rate.
+
+config AKIRA_LSM6DS3
+    bool "Enable LSM6DS3 6-axis IMU"
+    default n
+    depends on I2C
+    help
+      Enable LSM6DS3 6-axis inertial measurement unit driver.
+      Provides 3-axis accelerometer and 3-axis gyroscope data.
+
+config AKIRA_INA219
+    bool "Enable INA219 current/power monitor"
+    default n
+    depends on I2C
+    help
+      Enable INA219 current and power monitor driver.
+      Measures bus voltage, shunt voltage, current, and power consumption.
+
+# ===== v2.0 Modular Architecture =====
+
+menu "Display Drivers"
+
+config AKIRA_SSD1306
+    bool "Enable SSD1306 OLED display"
+    default n
+    depends on I2C
+    help
+      Enable SSD1306 128x64 OLED display driver.
+      Used on Akira-Micro.
+
+config AKIRA_ST7789
+    bool "Enable ST7789 TFT display"
+    default n
+    depends on SPI && GPIO
+    help
+      Enable ST7789 240x240/240x320 TFT display driver.
+      High-performance SPI display for Akira-Console.
+
+endmenu
+
+menu "RF Drivers"
+
+config AKIRA_RF_FRAMEWORK
+    bool "Enable unified RF framework"
+    default n
+    help
+      Enable the unified RF driver framework that provides
+      a common API for multiple RF chips.
+
+config AKIRA_LR1121
+    bool "Enable LR1121 LoRa driver"
+    default n
+    depends on SPI && GPIO && AKIRA_RF_FRAMEWORK
+    help
+      Enable Semtech LR1121 multi-band LoRa transceiver.
+      Supports LoRa and GFSK modulation, Sub-GHz to 2.4GHz.
+
+config AKIRA_CC1101
+    bool "Enable CC1101 Sub-GHz driver"
+    default n
+    depends on SPI && GPIO && AKIRA_RF_FRAMEWORK
+    help
+      Enable TI CC1101 Sub-GHz transceiver driver.
+      Supports 300-928MHz frequency range.
+
+endmenu
+
+menu "Sensor Drivers"
+
+config AKIRA_BME280
+    bool "Enable BME280 environmental sensor"
+    default n
+    depends on I2C
+    help
+      Enable Bosch BME280 temperature, humidity, and pressure sensor.
+
+endmenu
+
+menu "Connectivity"
+
+config AKIRA_HID
+    bool "Enable HID subsystem"
+    default y
+    help
+      Enable unified HID (Human Interface Device) subsystem.
+      Allows AkiraOS to act as a keyboard, gamepad, or other HID device.
+
+config AKIRA_HID_KEYBOARD
+    bool "Enable keyboard HID profile"
+    default y
+    depends on AKIRA_HID
+    help
+      Enable USB/BLE keyboard HID profile.
+
+config AKIRA_HID_GAMEPAD
+    bool "Enable gamepad HID profile"
+    default y
+    depends on AKIRA_HID
+    help
+      Enable USB/BLE gamepad HID profile.
+
+config AKIRA_BT_HID
+    bool "Enable Bluetooth HID"
+    default y
+    depends on AKIRA_HID && BT
+    help
+      Enable HID over Bluetooth Low Energy (BLE).
+      Requires Bluetooth stack to be enabled.
+
+config AKIRA_USB_HID
+    bool "Enable USB HID"
+    default y
+    depends on AKIRA_HID && USB_DEVICE
+    help
+      Enable HID over USB.
+      Requires USB device stack to be enabled.
+
+config AKIRA_HID_SIM
+    bool "Enable HID simulation (for testing)"
+    default y
+    depends on AKIRA_HID && NATIVE_BUILD
+    help
+      Enable HID simulation transport for native_sim testing.
+      Logs HID events instead of sending to real hardware.
+
+config AKIRA_HTTP_SERVER
+    bool "Enable HTTP server"
+    default y
+    help
+      Enable standalone HTTP server for web interface and APIs.
+
+config AKIRA_HTTP_WEBSOCKET
+    bool "Enable WebSocket support"
+    default y
+    depends on AKIRA_HTTP_SERVER
+    help
+      Enable WebSocket protocol support in HTTP server.
+      Allows real-time bidirectional communication.
+
+config AKIRA_HTTP_MAX_CONNECTIONS
+    int "Maximum HTTP connections"
+    default 4
+    range 1 16
+    depends on AKIRA_HTTP_SERVER
+    help
+      Maximum number of concurrent HTTP connections.
+
+config AKIRA_HTTP_PORT
+    int "HTTP server port"
+    default 80
+    depends on AKIRA_HTTP_SERVER
+    help
+      TCP port for HTTP server to listen on.
+
+endmenu
+
+menu "Client Connectivity"
+
+config AKIRA_WS_CLIENT
+    bool "Enable WebSocket client"
+    default n
+    depends on NETWORKING && WEBSOCKET_CLIENT
+    help
+      Enable WebSocket client for connecting to remote servers.
+      Supports secure (wss://) and insecure (ws://) connections.
+
+config AKIRA_WS_AUTO_RECONNECT
+    bool "Enable WebSocket auto-reconnect"
+    default y
+    depends on AKIRA_WS_CLIENT
+    help
+      Automatically reconnect when WebSocket connection is lost.
+
+config AKIRA_WS_RECONNECT_DELAY_MS
+    int "WebSocket reconnect delay (ms)"
+    default 1000
+    range 100 60000
+    depends on AKIRA_WS_AUTO_RECONNECT
+    help
+      Initial delay before attempting to reconnect.
+      Delay increases exponentially on repeated failures.
+
+config AKIRA_COAP_CLIENT
+    bool "Enable CoAP client"
+    default n
+    depends on NETWORKING && COAP
+    help
+      Enable CoAP (Constrained Application Protocol) client.
+      Ideal for IoT cloud connectivity and LwM2M.
+
+config AKIRA_COAP_DTLS
+    bool "Enable CoAP DTLS security"
+    default n
+    depends on AKIRA_COAP_CLIENT && NET_SOCKETS_SOCKOPT_TLS
+    help
+      Enable DTLS security for CoAP (coaps://).
+      Requires TLS/DTLS support in networking stack.
+
+config AKIRA_COAP_OBSERVE
+    bool "Enable CoAP observe"
+    default y
+    depends on AKIRA_COAP_CLIENT
+    help
+      Enable CoAP observe (RFC 7641) for push notifications.
+
+endmenu
+
+menu "Cloud Connectivity"
+
+config AKIRA_CLOUD_CLIENT
+    bool "Enable unified cloud client"
+    default y
+    help
+      Enable the unified cloud connectivity layer that handles
+      communication from all sources (servers, AkiraApp, web).
+
+config AKIRA_CLOUD_AUTO_CONNECT
+    bool "Auto-connect on boot"
+    default n
+    depends on AKIRA_CLOUD_CLIENT
+    help
+      Automatically connect to cloud server on startup.
+
+config AKIRA_CLOUD_SERVER_URL
+    string "Default cloud server URL"
+    default "wss://akirahub.io/device"
+    depends on AKIRA_CLOUD_CLIENT
+    help
+      Default WebSocket URL for cloud connectivity.
+
+config AKIRA_CLOUD_HEARTBEAT_MS
+    int "Heartbeat interval (ms)"
+    default 30000
+    range 0 300000
+    depends on AKIRA_CLOUD_CLIENT
+    help
+      Interval for sending heartbeat/keep-alive messages.
+      Set to 0 to disable heartbeat.
+
+config AKIRA_CLOUD_BT_ENABLED
+    bool "Enable Bluetooth (AkiraApp) source"
+    default y
+    depends on AKIRA_CLOUD_CLIENT && BT
+    help
+      Accept cloud protocol messages via Bluetooth from AkiraApp.
+
+config AKIRA_CLOUD_WEB_ENABLED
+    bool "Enable Web Server source"
+    default y
+    depends on AKIRA_CLOUD_CLIENT && AKIRA_HTTP_SERVER
+    help
+      Accept cloud protocol messages via local web server WebSocket.
+
+config AKIRA_CLOUD_APP_HANDLER
+    bool "Enable App download handler"
+    default y
+    depends on AKIRA_CLOUD_CLIENT
+    help
+      Handle WASM app download and update messages.
+      Integrates with app_loader and wasm_app_manager.
+
+config AKIRA_CLOUD_OTA_HANDLER
+    bool "Enable OTA handler"
+    default y
+    depends on AKIRA_CLOUD_CLIENT && AKIRA_OTA
+    help
+      Handle firmware update messages from cloud/BT/web.
+      Integrates with OTA manager for flashing.
+
+config AKIRA_CLOUD_AUTO_INSTALL_APPS
+    bool "Auto-install downloaded apps"
+    default y
+    depends on AKIRA_CLOUD_APP_HANDLER
+    help
+      Automatically install apps after successful download.
+
+config AKIRA_CLOUD_AUTO_START_APPS
+    bool "Auto-start installed apps"
+    default n
+    depends on AKIRA_CLOUD_AUTO_INSTALL_APPS
+    help
+      Automatically start apps after installation.
+
+endmenu
+
+menu "App Manager"
+
+config AKIRA_APP_MANAGER
+    bool "Enable App Manager"
+    default y
+    help
+      Enable the App Manager for WASM application lifecycle management.
+      Provides installation, startup, shutdown, and crash recovery.
+
+config AKIRA_APP_MAX_INSTALLED
+    int "Maximum installed apps"
+    default 8
+    range 4 16
+    depends on AKIRA_APP_MANAGER
+    help
+      Maximum number of WASM apps that can be installed.
+      Limited by available flash storage.
+
+config AKIRA_APP_MAX_RUNNING
+    int "Maximum concurrent running apps"
+    default 2
+    range 1 4
+    depends on AKIRA_APP_MANAGER
+    help
+      Maximum number of apps that can run simultaneously.
+      Limited by available RAM.
+
+config AKIRA_APP_MAX_SIZE_KB
+    int "Maximum app size (KB)"
+    default 64
+    range 16 256
+    depends on AKIRA_APP_MANAGER
+    help
+      Maximum size of a single WASM app binary in kilobytes.
+
+config AKIRA_APP_DEFAULT_HEAP_KB
+    int "Default app heap size (KB)"
+    default 16
+    range 4 64
+    depends on AKIRA_APP_MANAGER
+    help
+      Default heap size for apps without manifest.
+
+config AKIRA_APP_DEFAULT_STACK_KB
+    int "Default app stack size (KB)"
+    default 4
+    range 2 16
+    depends on AKIRA_APP_MANAGER
+    help
+      Default stack size for apps without manifest.
+
+menu "App Sources"
+
+config AKIRA_APP_SOURCE_HTTP
+    bool "Enable HTTP app upload"
+    default y
+    depends on AKIRA_APP_MANAGER && AKIRA_HTTP_SERVER
+    help
+      Allow app installation via HTTP POST to /api/apps/install.
+
+config AKIRA_APP_SOURCE_BLE
+    bool "Enable BLE app transfer"
+    default y
+    depends on AKIRA_APP_MANAGER && BT
+    help
+      Allow app installation via Bluetooth GATT transfer.
+
+config AKIRA_APP_SOURCE_USB
+    bool "Enable USB storage app install"
+    default y
+    depends on AKIRA_APP_MANAGER && USB_DEVICE
+    help
+      Allow app installation from USB mass storage.
+
+config AKIRA_APP_SOURCE_SD
+    bool "Enable SD card app install"
+    default y
+    depends on AKIRA_APP_MANAGER && DISK_ACCESS
+    help
+      Allow app installation from SD card.
+
+config AKIRA_APP_SOURCE_FIRMWARE
+    bool "Enable firmware-embedded apps"
+    default y
+    depends on AKIRA_APP_MANAGER
+    help
+      Support apps embedded in firmware at compile time.
+
+endmenu
+
+menu "Auto-Restart"
+
+config AKIRA_APP_AUTO_RESTART
+    bool "Enable auto-restart on crash"
+    default n
+    depends on AKIRA_APP_MANAGER
+    help
+      Automatically restart apps that crash.
+      Can be overridden per-app via manifest.
+
+config AKIRA_APP_MAX_RETRIES
+    int "Maximum restart attempts"
+    default 3
+    range 1 10
+    depends on AKIRA_APP_AUTO_RESTART
+    help
+      Maximum restart attempts before marking app as FAILED.
+
+config AKIRA_APP_RESTART_DELAY_MS
+    int "Restart delay (ms)"
+    default 1000
+    range 100 10000
+    depends on AKIRA_APP_AUTO_RESTART
+    help
+      Delay in milliseconds before attempting restart.
+
+endmenu
+
+endmenu
+
+menu "OTA Updates"
+
+config AKIRA_OTA
+    bool "Enable OTA updates"
+    default y
+    help
+      Enable Over-The-Air firmware update support.
+
+config AKIRA_OTA_HTTP
+    bool "Enable HTTP OTA transport"
+    default y
+    depends on AKIRA_OTA && AKIRA_HTTP_SERVER
+    help
+      Enable OTA updates via HTTP web interface.
+
+config AKIRA_OTA_BLE
+    bool "Enable BLE OTA transport"
+    default y
+    depends on AKIRA_OTA && BT
+    help
+      Enable OTA updates via Bluetooth Low Energy.
+
+config AKIRA_OTA_USB
+    bool "Enable USB OTA transport"
+    default y
+    depends on AKIRA_OTA && USB_DEVICE
+    help
+      Enable OTA updates via USB connection.
+
+config AKIRA_OTA_CLOUD
+    bool "Enable Cloud OTA transport (stub)"
+    default n
+    depends on AKIRA_OTA
+    help
+      Enable OTA updates from cloud service.
+      Currently a stub for future implementation.
+
+config AKIRA_OTA_MAX_CHUNK_SIZE
+    int "OTA chunk size (bytes)"
+    default 4096
+    range 512 65536
+    depends on AKIRA_OTA
+    help
+      Maximum size of each OTA data chunk during transfer.
+
+endmenu
+
+menu "Power Management"
+
+config AKIRA_POWER_MANAGER
+    bool "Enable power management"
+    default y
+    help
+      Enable system power management with sleep modes
+      and battery monitoring.
+
+config AKIRA_POWER_DEEP_SLEEP
+    bool "Enable deep sleep mode"
+    default n
+    depends on AKIRA_POWER_MANAGER
+    help
+      Enable deep sleep mode for maximum power savings.
+
+endmenu
+
+menu "Security"
+
+config AKIRA_CAPABILITY_SYSTEM
+    bool "Enable capability-based security"
+    default y
+    help
+      Enable capability-based permission system for apps.
+
+config AKIRA_APP_SIGNING
+    bool "Enable app signature verification"
+    default n
+    depends on AKIRA_CAPABILITY_SYSTEM
+    help
+      Require cryptographic signature verification for apps.
+
+endmenu
+
+menu "IPC"
+
+config AKIRA_MESSAGE_BUS
+    bool "Enable message bus IPC"
+    default y
+    help
+      Enable pub/sub message bus for inter-app communication.
+
+config AKIRA_SHARED_MEMORY
+    bool "Enable shared memory IPC"
+    default n
+    help
+      Enable shared memory regions for zero-copy data transfer.
+
+config AKIRA_SHMEM_POOL_SIZE
+    int "Shared memory pool size (KB)"
+    default 64
+    depends on AKIRA_SHARED_MEMORY
+    help
+      Size of the shared memory pool in kilobytes.
+
+endmenu
+
+menu "Resource Management"
+
+config AKIRA_RESOURCE_MANAGER
+    bool "Enable resource manager"
+    default y
+    help
+      Enable resource quota management for apps.
+
+config AKIRA_SCHEDULER
+    bool "Enable WASM app scheduler"
+    default y
+    help
+      Enable cooperative scheduler for WASM apps.
+
+endmenu
+
+menu "UI Framework"
+
+config AKIRA_UI_FRAMEWORK
+    bool "Enable UI framework"
+    default y
+    help
+      Enable lightweight widget-based UI framework.
+
+config AKIRA_UI_MAX_WIDGETS
+    int "Maximum widgets per screen"
+    default 32
+    depends on AKIRA_UI_FRAMEWORK
+    help
+      Maximum number of widgets per UI screen.
+
+endmenu
+
 config FS_FATFS_VOLUME_COUNT
     int "Number of FAT volumes"
     default 1
     help
       Maximum number of FAT volumes supported.
+
+config MAX_CONTAINERS
+    int "Maximum number of OCRE containers"
+    default 4
+    range 1 16
+    help
+      Maximum number of containers that can be managed by OCRE.
+
+config OCRE_WAMR_HEAP_BUFFER_SIZE
+    int "WAMR heap buffer size"
+    default 262144
+    help
+      Size of the heap buffer for WAMR runtime.
+      Must be large enough to hold WASM linear memory.
+      Default 256KB, OCRE recommends 512KB for production.
+
+config OCRE_CONTAINER_DEFAULT_STACK_SIZE
+    int "Default container stack size"
+    default 8192
+    help
+      Default stack size for OCRE containers.
+
+config OCRE_CONTAINER_DEFAULT_HEAP_SIZE
+    int "Default container heap size"
+    default 65536
+    help
+      Default heap size for OCRE containers.
+      This is the WASM linear memory size.
+
+config AKIRA_WAMR_MINI_LOADER
+    bool "Use WAMR mini loader"
+    default n
+    depends on AKIRA_APP_MANAGER
+    help
+      Use the WAMR mini loader to reduce code size.
+      This reduces flash usage but may limit some WASM features.
+
+config AKIRA_WAMR_MINIMAL
+    bool "Minimal WAMR build"
+    default n
+    depends on AKIRA_APP_MANAGER
+    help
+      Build WAMR with minimal features to save memory.
+      Disables: bulk_memory, ref_types, multi_module, tail_call, simd, logging.
+      Use this for memory-constrained devices like nRF54L15 or STM32.
+
+config AKIRA_OCRE_CS_THREAD_STACK_SIZE
+    int "OCRE Container Supervisor thread stack size"
+    default 16384 if SOC_SERIES_ESP32S3 || SOC_SERIES_ESP32
+    default 4096
+    depends on AKIRA_APP_MANAGER
+    help
+      Stack size for the OCRE Container Supervisor thread.
+      ESP32-S3 and ESP32 require larger stacks (16384) due to their architecture
+      and WAMR initialization overhead.
+      Other platforms can use the default (4096).
+
+# Akira Module System (Core AkiraOS functionality)
+rsource "src/akira_modules/Kconfig"
 
 endmenu

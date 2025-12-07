@@ -1,6 +1,6 @@
 #include "display_ili9341.h"
 #include "fonts.h"
-#include "akira_hal.h"
+#include "platform_hal.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>

@@ -4,7 +4,7 @@ manifest:
     # Zephyr RTOS
     - name: zephyr
       url: https://github.com/zephyrproject-rtos/zephyr
-      revision: v4.2-branch
+      revision: v4.2.1
       west-commands: scripts/west-commands.yml
       import: true
       
@@ -16,3 +16,5 @@ manifest:
       
   self:
     path: akira-os
+
+

@@ -13,7 +13,7 @@
 #include <zephyr/kernel.h>
 #include <string.h>
 #include <stdlib.h>
-#include "../akira.h"
+#include "akira/akira.h"
 
 /* Include flash and MCUboot APIs only if available */
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
@@ -36,7 +36,7 @@ LOG_MODULE_REGISTER(ota_manager, AKIRA_LOG_LEVEL);
 #define OTA_PROGRESS_REPORT_INTERVAL 8192 // Report every 8KB instead of calculating modulo
 
 /* Thread stack - reduced from default */
-static K_THREAD_STACK_DEFINE(ota_thread_stack, 4096); // Reduced from larger default
+static K_THREAD_STACK_DEFINE(ota_thread_stack, 3072); // Reduced to save memory
 static struct k_thread ota_thread_data;
 static k_tid_t ota_thread_id;
 
@@ -59,9 +59,51 @@ static const struct flash_area *secondary_fa = NULL;
 static uint8_t write_buffer[OTA_WRITE_BUFFER_SIZE] __aligned(4);
 static uint16_t buffer_pos = 0;
 
-/* Progress callback */
+/* Modular OTA transport support */
+#define MAX_OTA_TRANSPORTS 4
+static const ota_transport_t *ota_transports[MAX_OTA_TRANSPORTS];
+static int ota_transport_count = 0;
+
+/* Progress callback (restored for compatibility) */
+typedef void (*ota_progress_cb_t)(const struct ota_progress *progress, void *user_data);
 static ota_progress_cb_t progress_callback = NULL;
 static void *callback_user_data = NULL;
+
+int ota_manager_register_transport(const ota_transport_t *transport)
+{
+    if (!transport || !transport->name)
+        return OTA_ERROR_INVALID_PARAM;
+    if (ota_transport_count >= MAX_OTA_TRANSPORTS)
+        return OTA_ERROR_INSUFFICIENT_SPACE;
+    for (int i = 0; i < ota_transport_count; ++i)
+    {
+        if (strcmp(ota_transports[i]->name, transport->name) == 0)
+        {
+            return OTA_ERROR_ALREADY_IN_PROGRESS; // Already registered
+        }
+    }
+    ota_transports[ota_transport_count++] = transport;
+    return OTA_OK;
+}
+
+int ota_manager_unregister_transport(const char *name)
+{
+    if (!name)
+        return OTA_ERROR_INVALID_PARAM;
+    for (int i = 0; i < ota_transport_count; ++i)
+    {
+        if (strcmp(ota_transports[i]->name, name) == 0)
+        {
+            for (int j = i; j < ota_transport_count - 1; ++j)
+            {
+                ota_transports[j] = ota_transports[j + 1];
+            }
+            ota_transports[--ota_transport_count] = NULL;
+            return OTA_OK;
+        }
+    }
+    return OTA_ERROR_NOT_INITIALIZED;
+}
 
 /* Reduced message queue size */
 #define OTA_MSG_QUEUE_SIZE 8
@@ -212,33 +254,52 @@ static enum ota_result flush_write_buffer(void)
     return OTA_OK;
 }
 
+/* Forward declaration */
+static enum ota_result do_abort_update(void);
+
 /* OTA Operations */
 static enum ota_result do_start_update(uint32_t expected_size)
 {
     LOG_INF("Starting OTA, size: %u", expected_size);
 
+    /* If already in progress, abort the previous one first */
     if (ota_status.state != OTA_STATE_IDLE)
     {
-        return OTA_ERROR_ALREADY_IN_PROGRESS;
+        LOG_WRN("OTA already in state %d, aborting previous...", ota_status.state);
+        do_abort_update();
     }
 
-    /* Open and erase secondary flash */
+    /* Ensure we start fresh */
+    if (secondary_fa != NULL)
+    {
+        flash_area_close(secondary_fa);
+        secondary_fa = NULL;
+    }
+    buffer_pos = 0;
+
+    /* Open secondary flash */
     int ret = flash_area_open(FLASH_AREA_IMAGE_SECONDARY, &secondary_fa);
     if (ret)
     {
         LOG_ERR("Flash open failed: %d", ret);
+        update_progress(OTA_STATE_ERROR, "Flash open failed");
         return OTA_ERROR_FLASH_OPEN_FAILED;
     }
 
     update_progress(OTA_STATE_RECEIVING, "Erasing flash...");
+    LOG_INF("OTA: Erasing flash... (0%%)");
+
     ret = flash_area_erase(secondary_fa, 0, secondary_fa->fa_size);
     if (ret)
     {
         LOG_ERR("Flash erase failed: %d", ret);
         flash_area_close(secondary_fa);
         secondary_fa = NULL;
+        update_progress(OTA_STATE_ERROR, "Flash erase failed");
         return OTA_ERROR_FLASH_ERASE_FAILED;
     }
+
+    LOG_INF("OTA: Ready (0%%)");
 
     /* Initialize state */
     k_mutex_lock(&ota_mutex, K_FOREVER);
@@ -248,8 +309,6 @@ static enum ota_result do_start_update(uint32_t expected_size)
     ota_status.last_error = OTA_OK;
     ota_status.last_progress_report = 0;
     k_mutex_unlock(&ota_mutex);
-
-    buffer_pos = 0;
 
     update_progress(OTA_STATE_RECEIVING, "Ready");
     LOG_INF("OTA started, slot prepared");

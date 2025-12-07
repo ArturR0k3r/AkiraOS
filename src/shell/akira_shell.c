@@ -14,7 +14,12 @@
  */
 
 #include "akira_shell.h"
-#include "../drivers/akira_hal.h"
+#include "../drivers/platform_hal.h"
+#include "../settings/settings.h"
+#include "../OTA/web_server.h"
+#if defined(CONFIG_BT)
+#include "../connectivity/bluetooth/bt_manager.h"
+#endif
 #include <zephyr/logging/log.h>
 #include <zephyr/shell/shell.h>
 #include <zephyr/drivers/gpio.h>
@@ -24,12 +29,189 @@
 #include <zephyr/device.h>
 #include <zephyr/sys/heap_listener.h>
 #include <zephyr/sys/mem_stats.h>
+#include <zephyr/net/net_if.h>
+#include <zephyr/net/wifi_mgmt.h>
+#include <zephyr/net/net_mgmt.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "../akira.h"
+#include <inttypes.h>
+#include "akira/akira.h"
+#include "../storage/fs_manager.h"
+#ifdef CONFIG_AKIRA_APP_MANAGER
+#include "../services/app_manager.h"
+#endif
+#if defined(CONFIG_AKIRA_APP_SOURCE_SD)
+#include "../connectivity/storage/sd_manager.h"
+#endif
+#if defined(CONFIG_AKIRA_APP_SOURCE_USB)
+#include "../connectivity/storage/usb_storage.h"
+#endif
 
 LOG_MODULE_REGISTER(akira_shell, AKIRA_LOG_LEVEL);
+
+#ifdef CONFIG_AKIRA_APP_MANAGER
+/* App Manager Shell Commands */
+static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
+{
+    app_info_t apps[CONFIG_AKIRA_APP_MAX_INSTALLED];
+    int count = app_manager_list(apps, CONFIG_AKIRA_APP_MAX_INSTALLED);
+    if (count < 0)
+    {
+        shell_error(sh, "Failed to list apps");
+        return count;
+    }
+    shell_print(sh, "\n=== Installed Apps ===");
+    for (int i = 0; i < count; i++)
+    {
+        shell_print(sh, "%2d: %-16s %-8s %s %u bytes%s", apps[i].id, apps[i].name, apps[i].version,
+                    app_state_to_str(apps[i].state), apps[i].size,
+                    apps[i].auto_restart ? " [auto-restart]" : "");
+    }
+    shell_print(sh, "Total: %d", count);
+    return 0;
+}
+
+static int cmd_app_info(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "Usage: app info <name>");
+        return -EINVAL;
+    }
+    app_info_t info;
+    int ret = app_manager_get_info(argv[1], &info);
+    if (ret < 0)
+    {
+        shell_error(sh, "App not found: %s", argv[1]);
+        return ret;
+    }
+    shell_print(sh, "\n=== App Info ===");
+    shell_print(sh, "Name: %s", info.name);
+    shell_print(sh, "Version: %s", info.version);
+    shell_print(sh, "State: %s", app_state_to_str(info.state));
+    shell_print(sh, "Size: %u bytes", info.size);
+    shell_print(sh, "Heap: %u KB", info.heap_kb);
+    shell_print(sh, "Stack: %u KB", info.stack_kb);
+    shell_print(sh, "Crash count: %u", info.crash_count);
+    shell_print(sh, "Auto-restart: %s", info.auto_restart ? "Yes" : "No");
+    return 0;
+}
+
+static int cmd_app_start(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "Usage: app start <name>");
+        return -EINVAL;
+    }
+    int ret = app_manager_start(argv[1]);
+    if (ret < 0)
+    {
+        shell_error(sh, "Failed to start app: %s", argv[1]);
+        return ret;
+    }
+    shell_print(sh, "App started: %s", argv[1]);
+    return 0;
+}
+
+static int cmd_app_stop(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "Usage: app stop <name>");
+        return -EINVAL;
+    }
+    int ret = app_manager_stop(argv[1]);
+    if (ret < 0)
+    {
+        shell_error(sh, "Failed to stop app: %s", argv[1]);
+        return ret;
+    }
+    shell_print(sh, "App stopped: %s", argv[1]);
+    return 0;
+}
+
+static int cmd_app_restart(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "Usage: app restart <name>");
+        return -EINVAL;
+    }
+    int ret = app_manager_restart(argv[1]);
+    if (ret < 0)
+    {
+        shell_error(sh, "Failed to restart app: %s", argv[1]);
+        return ret;
+    }
+    shell_print(sh, "App restarted: %s", argv[1]);
+    return 0;
+}
+
+static int cmd_app_uninstall(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "Usage: app uninstall <name>");
+        return -EINVAL;
+    }
+    int ret = app_manager_uninstall(argv[1]);
+    if (ret < 0)
+    {
+        shell_error(sh, "Failed to uninstall app: %s", argv[1]);
+        return ret;
+    }
+    shell_print(sh, "App uninstalled: %s", argv[1]);
+    return 0;
+}
+
+static int cmd_app_scan(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "Usage: app scan <sd|usb>");
+        return -EINVAL;
+    }
+    char names[8][APP_NAME_MAX_LEN];
+    int count = 0;
+    if (strcmp(argv[1], "sd") == 0)
+    {
+#if defined(CONFIG_AKIRA_APP_SOURCE_SD)
+        count = sd_manager_scan_apps(names, 8);
+#else
+        shell_error(sh, "SD card support not enabled");
+        return -ENOTSUP;
+#endif
+    }
+    else if (strcmp(argv[1], "usb") == 0)
+    {
+#if defined(CONFIG_AKIRA_APP_SOURCE_USB)
+        count = usb_storage_scan_apps(names, 8);
+#else
+        shell_error(sh, "USB storage support not enabled");
+        return -ENOTSUP;
+#endif
+    }
+    else
+    {
+        shell_error(sh, "Unknown source: %s", argv[1]);
+        return -EINVAL;
+    }
+    if (count < 0)
+    {
+        shell_error(sh, "Scan failed for %s", argv[1]);
+        return count;
+    }
+    shell_print(sh, "\n=== %s Apps Found ===", argv[1]);
+    for (int i = 0; i < count; i++)
+    {
+        shell_print(sh, "%d: %s", i + 1, names[i]);
+    }
+    shell_print(sh, "Total: %d", count);
+    return 0;
+}
+#endif /* CONFIG_AKIRA_APP_MANAGER */
 
 /* Optimized data structures */
 struct __packed display_state
@@ -91,7 +273,7 @@ static const char *const button_names[] = {
 
 /* Work queue for periodic tasks */
 static struct k_work_q shell_workq;
-static K_THREAD_STACK_DEFINE(shell_workq_stack, 4096); /* Increased from 2048 */
+static K_THREAD_STACK_DEFINE(shell_workq_stack, 1024); /* Reduced to save memory */
 static struct k_work_delayable stats_update_work;
 
 /* Helper functions */
@@ -758,7 +940,7 @@ static int cmd_memory_dump(const struct shell *sh, size_t argc, char **argv)
     }
 
     char history_cmd[64];
-    snprintf(history_cmd, sizeof(history_cmd), "debug memdump 0x%lx %zu %c",
+    snprintf(history_cmd, sizeof(history_cmd), "debug memdump 0x%" PRIxPTR " %zu %c",
              address, length, format);
     add_to_history(history_cmd);
 
@@ -970,7 +1152,326 @@ static int cmd_benchmark(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+#if defined(CONFIG_BT) && defined(CONFIG_AKIRA_BT_HID)
+/* Bluetooth shell command handler - requires AKIRA_BT_HID */
+
+static int cmd_ble_shell(const struct shell *shell, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_print(shell, "Usage: ble_shell <command>");
+        return -EINVAL;
+    }
+    // Concatenate command arguments
+    char cmd_buf[128] = {0};
+    for (size_t i = 1; i < argc; ++i)
+    {
+        strcat(cmd_buf, argv[i]);
+        if (i < argc - 1)
+            strcat(cmd_buf, " ");
+    }
+    bluetooth_manager_receive_shell_command(cmd_buf); /* Defined in bt_manager.c */
+    shell_print(shell, "Sent shell command to phone via BLE: %s", cmd_buf);
+    return 0;
+}
+
+SHELL_CMD_REGISTER(ble_shell, NULL, "Send shell command to phone via BLE", cmd_ble_shell);
+#endif
+
+/* WiFi status command */
+static int cmd_wifi_status(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    struct net_if *iface = net_if_get_default();
+    if (!iface)
+    {
+        shell_print(sh, "No network interface available");
+        return -ENODEV;
+    }
+
+    struct wifi_iface_status status = {0};
+    int ret = net_mgmt(NET_REQUEST_WIFI_IFACE_STATUS, iface, &status, sizeof(status));
+
+    if (ret)
+    {
+        shell_print(sh, "Failed to get WiFi status: %d", ret);
+        return ret;
+    }
+
+    shell_print(sh, "\n=== WiFi Status ===");
+    shell_print(sh, "State: %s",
+                status.state >= WIFI_STATE_ASSOCIATED ? "Connected" : "Disconnected");
+
+    if (status.state >= WIFI_STATE_ASSOCIATED)
+    {
+        shell_print(sh, "SSID: %.*s", status.ssid_len, status.ssid);
+        shell_print(sh, "Channel: %d", status.channel);
+        shell_print(sh, "RSSI: %d dBm", status.rssi);
+        shell_print(sh, "Security: %s",
+                    status.security == WIFI_SECURITY_TYPE_NONE ? "Open" : status.security == WIFI_SECURITY_TYPE_WPA_PSK ? "WPA-PSK"
+                                                                      : status.security == WIFI_SECURITY_TYPE_PSK       ? "WPA2-PSK"
+                                                                      : status.security == WIFI_SECURITY_TYPE_SAE       ? "WPA3-SAE"
+                                                                                                                        : "Unknown");
+
+        /* Get IP address */
+        char addr_str[NET_IPV4_ADDR_LEN];
+        struct in_addr *addr = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
+        if (addr)
+        {
+            net_addr_ntop(AF_INET, addr, addr_str, sizeof(addr_str));
+            shell_print(sh, "IP Address: %s", addr_str);
+        }
+        else
+        {
+            shell_print(sh, "IP Address: (waiting for DHCP)");
+        }
+    }
+
+    return 0;
+}
+
+/* WiFi connect command - manually trigger connection */
+static int cmd_wifi_connect(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    struct net_if *iface = net_if_get_default();
+    if (!iface)
+    {
+        shell_print(sh, "No network interface available");
+        return -ENODEV;
+    }
+
+    /* Get settings */
+    extern const struct user_settings *user_settings_get(void);
+    const struct user_settings *settings = user_settings_get();
+
+    if (!settings->wifi_enabled)
+    {
+        shell_print(sh, "WiFi is disabled. Enable with: settings wifi_enable 1");
+        return -EINVAL;
+    }
+
+    if (strlen(settings->wifi_ssid) == 0)
+    {
+        shell_print(sh, "No WiFi SSID configured. Set with: settings set_wifi <ssid> <password>");
+        return -EINVAL;
+    }
+
+    shell_print(sh, "Connecting to WiFi: %s", settings->wifi_ssid);
+
+    struct wifi_connect_req_params wifi_params = {
+        .ssid = (uint8_t *)settings->wifi_ssid,
+        .ssid_length = strlen(settings->wifi_ssid),
+        .psk = (uint8_t *)settings->wifi_passcode,
+        .psk_length = strlen(settings->wifi_passcode),
+        .channel = WIFI_CHANNEL_ANY,
+        .security = strlen(settings->wifi_passcode) > 0 ? WIFI_SECURITY_TYPE_PSK : WIFI_SECURITY_TYPE_NONE,
+        .mfp = WIFI_MFP_OPTIONAL,
+    };
+
+    int ret = net_mgmt(NET_REQUEST_WIFI_CONNECT, iface, &wifi_params, sizeof(wifi_params));
+    if (ret)
+    {
+        shell_print(sh, "WiFi connection request failed: %d", ret);
+        return ret;
+    }
+
+    shell_print(sh, "Connection request sent. Check wifi_status in a few seconds.");
+    return 0;
+}
+
+/* WiFi scan command */
+static int cmd_wifi_scan(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    struct net_if *iface = net_if_get_default();
+    if (!iface)
+    {
+        shell_print(sh, "No network interface available");
+        return -ENODEV;
+    }
+
+    shell_print(sh, "Starting WiFi scan...");
+
+    int ret = net_mgmt(NET_REQUEST_WIFI_SCAN, iface, NULL, 0);
+    if (ret)
+    {
+        shell_print(sh, "WiFi scan failed: %d", ret);
+        return ret;
+    }
+
+    shell_print(sh, "Scan started. Results will appear in the logs.");
+    return 0;
+}
+
+/* Web server status command */
+static int cmd_web_status(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    enum web_server_state state = web_server_get_state();
+    const char *state_str;
+
+    switch (state)
+    {
+    case WEB_SERVER_STOPPED:
+        state_str = "Stopped";
+        break;
+    case WEB_SERVER_STARTING:
+        state_str = "Starting";
+        break;
+    case WEB_SERVER_RUNNING:
+        state_str = "Running";
+        break;
+    case WEB_SERVER_ERROR:
+        state_str = "Error";
+        break;
+    default:
+        state_str = "Unknown";
+    }
+
+    shell_print(sh, "\n=== Web Server Status ===");
+    shell_print(sh, "State: %s", state_str);
+
+    /* Get IP address to show URL */
+    struct net_if *iface = net_if_get_default();
+    if (iface)
+    {
+        char addr_str[NET_IPV4_ADDR_LEN];
+        struct in_addr *addr = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
+        if (addr)
+        {
+            net_addr_ntop(AF_INET, addr, addr_str, sizeof(addr_str));
+            shell_print(sh, "URL: http://%s:%d/", addr_str, HTTP_PORT);
+        }
+    }
+
+    return 0;
+}
+
+static int cmd_web_start(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    struct net_if *iface = net_if_get_default();
+    if (!iface)
+    {
+        shell_print(sh, "No network interface");
+        return -ENODEV;
+    }
+
+    char addr_str[NET_IPV4_ADDR_LEN];
+    struct in_addr *addr = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
+    if (!addr)
+    {
+        shell_print(sh, "No IP address - connect to WiFi first");
+        return -ENOTCONN;
+    }
+
+    net_addr_ntop(AF_INET, addr, addr_str, sizeof(addr_str));
+    shell_print(sh, "Starting web server at http://%s:80/", addr_str);
+
+    web_server_notify_network_status(true, addr_str);
+
+    return 0;
+}
+
+/* RAM Storage Shell Commands */
+static int cmd_ram_ls(const struct shell *sh, size_t argc, char **argv)
+{
+    ram_file_info_t files[16];
+    int count = fs_manager_list_ram_files(files, 16);
+    
+    if (count < 0) {
+        shell_error(sh, "Failed to list RAM files: %d", count);
+        return count;
+    }
+    
+    if (count == 0) {
+        shell_print(sh, "No files in RAM storage");
+        return 0;
+    }
+    
+    shell_print(sh, "\n=== RAM Storage ===");
+    shell_print(sh, "%-40s %10s", "Path", "Size");
+    shell_print(sh, "---------------------------------------- ----------");
+    
+    size_t total = 0;
+    for (int i = 0; i < count; i++) {
+        shell_print(sh, "%-40s %10zu", files[i].path, files[i].size);
+        total += files[i].size;
+    }
+    
+    shell_print(sh, "---------------------------------------- ----------");
+    shell_print(sh, "Total: %d files, %zu bytes", count, total);
+    return 0;
+}
+
+static int cmd_ram_cat(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: ram cat <path>");
+        return -EINVAL;
+    }
+    
+    uint8_t buffer[256];
+    ssize_t size = fs_manager_read_file(argv[1], buffer, sizeof(buffer) - 1);
+    
+    if (size < 0) {
+        shell_error(sh, "Failed to read file: %zd", size);
+        return size;
+    }
+    
+    /* Print as hex dump for binary files */
+    shell_print(sh, "File: %s (%zd bytes)", argv[1], size);
+    for (int i = 0; i < size; i += 16) {
+        char hex[50] = {0};
+        char ascii[18] = {0};
+        int len = 0;
+        
+        for (int j = 0; j < 16 && (i + j) < size; j++) {
+            len += snprintf(hex + len, sizeof(hex) - len, "%02x ", buffer[i + j]);
+            ascii[j] = (buffer[i + j] >= 32 && buffer[i + j] < 127) ? buffer[i + j] : '.';
+        }
+        shell_print(sh, "%04x: %-48s |%s|", i, hex, ascii);
+    }
+    return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(ram_cmds,
+                               SHELL_CMD(ls, NULL, "List files in RAM storage", cmd_ram_ls),
+                               SHELL_CMD(cat, NULL, "Show file contents <path>", cmd_ram_cat),
+                               SHELL_SUBCMD_SET_END);
+
+SHELL_CMD_REGISTER(ram, &ram_cmds, "RAM storage commands", NULL);
+
+SHELL_CMD_REGISTER(wifi_status, NULL, "Show WiFi connection status", cmd_wifi_status);
+SHELL_CMD_REGISTER(wifi_connect, NULL, "Connect to configured WiFi network", cmd_wifi_connect);
+SHELL_CMD_REGISTER(wifi_scan, NULL, "Scan for WiFi networks", cmd_wifi_scan);
+SHELL_CMD_REGISTER(web_status, NULL, "Show web server status", cmd_web_status);
+SHELL_CMD_REGISTER(web_start, NULL, "Start web server", cmd_web_start);
+
+#ifdef CONFIG_AKIRA_APP_MANAGER
 /* Shell command registration - organized by category */
+SHELL_STATIC_SUBCMD_SET_CREATE(app_cmds,
+                               SHELL_CMD(list, NULL, "List installed apps", cmd_app_list),
+                               SHELL_CMD(info, NULL, "Show app info <name>", cmd_app_info),
+                               SHELL_CMD(start, NULL, "Start app <name>", cmd_app_start),
+                               SHELL_CMD(stop, NULL, "Stop app <name>", cmd_app_stop),
+                               SHELL_CMD(restart, NULL, "Restart app <name>", cmd_app_restart),
+                               SHELL_CMD(uninstall, NULL, "Uninstall app <name>", cmd_app_uninstall),
+                               SHELL_CMD(scan, NULL, "Scan for apps in SD/USB", cmd_app_scan),
+                               SHELL_SUBCMD_SET_END);
+#endif /* CONFIG_AKIRA_APP_MANAGER */
+
 SHELL_STATIC_SUBCMD_SET_CREATE(system_cmds,
                                SHELL_CMD(info, NULL, "Show comprehensive system information", cmd_system_info),
                                SHELL_CMD(stress, NULL, "Run CPU stress test [duration] [cpu_load%]", cmd_stress_test),
@@ -995,3 +1496,6 @@ SHELL_STATIC_SUBCMD_SET_CREATE(debug_cmds,
 SHELL_CMD_REGISTER(sys, &system_cmds, "System management commands", NULL);
 SHELL_CMD_REGISTER(game, &gaming_cmds, "Gaming-specific commands", NULL);
 SHELL_CMD_REGISTER(debug, &debug_cmds, "Debug and diagnostic commands", NULL);
+#ifdef CONFIG_AKIRA_APP_MANAGER
+SHELL_CMD_REGISTER(app, &app_cmds, "App management commands", NULL);
+#endif
