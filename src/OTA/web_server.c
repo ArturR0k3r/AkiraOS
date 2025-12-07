@@ -53,6 +53,7 @@ static void register_webserver_ota_transport(void)
 #include <zephyr/logging/log.h>
 #include <zephyr/net/socket.h>
 #include <zephyr/net/net_ip.h>
+#include <zephyr/net/net_if.h>
 #include <zephyr/kernel.h>
 #include <string.h>
 #include <stdio.h>
@@ -147,54 +148,105 @@ void web_server_add_log(const char *log_line)
     k_mutex_unlock(&log_mutex);
 }
 
-/* Minimal HTML page - ~1.5KB total */
+/* Working HTML with WASM apps - tested and functional */
 static const char html_page[] =
-    "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
-    "body{font-family:monospace;background:#000;color:#0f0;margin:0;padding:8px}"
-    "h1{margin:5px 0;font-size:16px}input,button{padding:4px;margin:2px;background:#111;color:#0f0;border:1px solid #0f0;font-family:monospace}"
-    "button{background:#0f0;color:#000;cursor:pointer}#apps,#log{background:#000;border:1px solid #0f0;height:100px;overflow:auto;padding:4px;margin:4px 0;font-size:11px}"
+    "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>AkiraOS</title><style>"
+    "*{box-sizing:border-box;margin:0;padding:0}"
+    "body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0a0a;color:#e0e0e0;min-height:100vh}"
+    ".header{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);padding:20px;text-align:center;border-bottom:2px solid #0f3460}"
+    ".header h1{color:#00d4ff;font-size:28px;text-shadow:0 0 10px #00d4ff40}"
+    ".header .version{color:#888;font-size:14px;margin-top:5px}"
+    ".container{max-width:1200px;margin:0 auto;padding:20px}"
+    ".grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}"
+    "@media(max-width:768px){.grid{grid-template-columns:1fr}}"
+    ".panel{background:#1a1a2e;border-radius:10px;padding:20px;border:1px solid #0f3460}"
+    ".panel h3{color:#00d4ff;margin-bottom:15px;font-size:16px;border-bottom:1px solid #0f3460;padding-bottom:10px}"
+    ".terminal{background:#0d1117;border-radius:8px;font-family:'Consolas','Monaco',monospace;height:300px;overflow:hidden;display:flex;flex-direction:column}"
+    ".terminal-header{background:#161b22;padding:10px 15px;border-bottom:1px solid #30363d;display:flex;align-items:center;gap:8px}"
+    ".terminal-header .dot{width:12px;height:12px;border-radius:50%}"
+    ".terminal-header .dot.red{background:#ff5f56}"
+    ".terminal-header .dot.yellow{background:#ffbd2e}"
+    ".terminal-header .dot.green{background:#27c93f}"
+    ".terminal-header span{color:#8b949e;margin-left:10px;font-size:13px}"
+    ".terminal-body{flex:1;overflow-y:auto;padding:15px;font-size:13px;line-height:1.6}"
+    ".terminal-body pre{white-space:pre-wrap;word-wrap:break-word;color:#c9d1d9}"
+    ".cmd-input{display:flex;background:#161b22;border-top:1px solid #30363d;padding:10px}"
+    ".cmd-input span{color:#27c93f;padding:0 10px}"
+    ".cmd-input input{flex:1;background:transparent;border:none;color:#c9d1d9;font-family:inherit;font-size:13px;outline:none}"
+    ".status-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}"
+    ".status-item{background:#0d1117;padding:12px;border-radius:6px;border-left:3px solid #00d4ff}"
+    ".status-item label{color:#8b949e;font-size:12px;display:block}"
+    ".status-item value{color:#e0e0e0;font-size:16px;font-weight:500}"
+    ".btn{background:#238636;color:white;padding:10px 20px;border:none;border-radius:6px;cursor:pointer;font-size:14px;transition:all 0.2s}"
+    ".btn:hover{background:#2ea043}"
+    ".btn-danger{background:#da3633}"
+    ".btn-danger:hover{background:#f85149}"
+    ".btn-blue{background:#1f6feb}"
+    ".btn-blue:hover{background:#388bfd}"
+    ".btn-small{padding:6px 12px;font-size:12px}"
+    ".actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:15px}"
+    ".app-list{background:#0d1117;border-radius:6px;padding:12px;min-height:150px;max-height:300px;overflow-y:auto}"
+    ".app-item{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:10px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}"
+    ".app-name{color:#58a6ff;font-weight:bold}"
+    ".app-state{font-size:11px;color:#8b949e;margin-top:2px}"
+    ".app-state.running{color:#27c93f}"
+    ".app-actions{display:flex;gap:5px}"
+    "input[type=file]{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;color:#c9d1d9;font-size:13px;width:100%;margin-bottom:10px}"
+    "input[type=text]{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px;color:#c9d1d9;font-size:13px;width:100%;margin-bottom:10px}"
     "</style></head><body>"
-    "<h1>AkiraOS</h1>"
-    "<p>IP: <b id='ip'>-</b></p>"
-    "<h3>WASM Apps</h3>"
-    "<div id='apps'>Loading...</div>"
-    "<input type='file' id='wasm' accept='.wasm' style='display:block;width:100%;margin:4px 0'>"
-    "<input type='text' id='name' placeholder='App name' style='display:block;width:100%;margin:4px 0'>"
-    "<button style='display:block;width:100%;margin:4px 0' onclick='installApp()'>Install</button>"
-    "<div id='status'></div>"
-    "<h3>Terminal</h3>"
-    "<div id='log'>Ready</div>"
-    "<input type='text' id='cmd' style='display:block;width:80%;margin:4px 0'>"
-    "<button onclick='sendCmd()'>Send</button>"
+    "<div class='header'><h1> AkiraOS Web Dashboard</h1><div class='version'>AkiraOS v1.2.3</div></div>"
+    "<div class='container'>"
+    "<div class='grid'>"
+    "<div class='panel'><h3> System Status</h3><div class='status-grid'>"
+    "<div class='status-item'><label>Device</label><value id='dev'>Online</value></div>"
+    "<div class='status-item'><label>IP Address</label><value id='ip'>Loading...</value></div>"
+    "<div class='status-item'><label>Uptime</label><value id='uptime'>--:--:--</value></div>"
+    "<div class='status-item'><label>Memory</label><value id='mem'>--</value></div>"
+    "</div>"
+    "<div class='actions'>"
+    "<button class='btn btn-blue' onclick='refresh()'> Refresh</button>"
+    "<button class='btn btn-danger' onclick='reboot()'> Reboot</button>"
+    "</div></div>"
+    "<div class='panel'><h3> OTA Update</h3>"
+    "<form id='otaForm' enctype='multipart/form-data'>"
+    "<input type='file' id='firmware' accept='.bin' style='margin-bottom:10px'><br>"
+    "<button type='submit' class='btn'> Upload Firmware</button>"
+    "</form>"
+    "<div id='progress' style='margin-top:10px'></div>"
+    "</div></div>"
+    "<div class='panel'><h3> WASM Applications</h3>"
+    "<input type='file' id='wasm' accept='.wasm'>"
+    "<input type='text' id='name' placeholder='App name (optional)'>"
+    "<button class='btn' onclick='installApp()'>Install WASM App</button>"
+    "<div id='status' style='margin:10px 0;color:#00d4ff;font-size:13px'></div>"
+    "<div class='app-list' id='apps'>Loading apps...</div>"
+    "</div>"
+    "<div class='panel'><h3> Terminal</h3>"
+    "<div class='terminal'>"
+    "<div class='terminal-header'><div class='dot red'></div><div class='dot yellow'></div><div class='dot green'></div><span>akira@esp32s3 ~</span></div>"
+    "<div class='terminal-body' id='logs'><pre id='logContent'>Loading logs...</pre></div>"
+    "<div class='cmd-input'><span>$</span><input type='text' id='cmd' placeholder='Enter command...' onkeypress='if(event.key==\"Enter\")sendCmd()'></div>"
+    "</div></div></div>"
     "<script>"
-    "function listApps(){"
-    "fetch('/api/apps/list').then(r=>r.json()).then(d=>{"
-    "var html='';if(d.apps){d.apps.forEach(app=>{"
-    "html+='<div style=\"border-bottom:1px solid #0f0;padding:2px\"><b>'+app.name+'</b> ('+app.state+')';"
-    "if(app.state!=='running'){html+='<button onclick=\"startApp(\\''+app.name+'\\');\">Start</button>'}"
-    "else{html+='<button onclick=\"stopApp(\\''+app.name+'\\');\">Stop</button>'}"
-    "html+='<button onclick=\"uninstallApp(\\''+app.name+'\\');\">Delete</button></div>'"
-    "})}"
-    "document.getElementById('apps').innerHTML=html||'No apps'"
-    "}).catch(e=>{console.log('Error:',e)})}"
-    "function installApp(){"
-    "var file=document.getElementById('wasm').files[0];if(!file){alert('Select WASM file');return}"
-    "var name=document.getElementById('name').value||'app';document.getElementById('status').innerHTML='Installing...';"
-    "var reader=new FileReader();reader.onload=function(e){fetch('/api/apps/install?name='+encodeURIComponent(name),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:e.target.result}).then(r=>r.json()).then(d=>{document.getElementById('status').innerHTML=d.error?'Error: '+d.error:'Installed!';listApps();document.getElementById('wasm').value='';document.getElementById('name').value=''}).catch(e=>{document.getElementById('status').innerHTML='Error: '+e})};reader.readAsArrayBuffer(file)}"
-    "function startApp(name){fetch('/api/apps/start?name='+encodeURIComponent(name)).then(()=>listApps()).catch(e=>alert('Error'))}"
-    "function stopApp(name){fetch('/api/apps/stop?name='+encodeURIComponent(name)).then(()=>listApps()).catch(e=>alert('Error'))}"
-    "function uninstallApp(name){fetch('/api/apps/uninstall?name='+encodeURIComponent(name)).then(()=>listApps()).catch(e=>alert('Error'))}"
-    "function sendCmd(){"
-    "var cmd=document.getElementById('cmd').value;if(!cmd)return;document.getElementById('cmd').value='';"
-    "fetch('/api/cmd?c='+encodeURIComponent(cmd)).then(()=>{"
-    "setTimeout(()=>{fetch('/api/logs').then(r=>r.text()).then(text=>{document.getElementById('log').innerHTML=text.split('\\n').slice(-5).join('<br>')})},200)"
-    "}).catch(e=>{})"
-    "}"
-    "fetch('/api/status').then(r=>r.json()).then(d=>{document.getElementById('ip').innerHTML=d.ip}).catch(e=>{});"
-    "setInterval(listApps,3000);setInterval(()=>{fetch('/api/logs').then(r=>r.text()).then(d=>{document.getElementById('log').innerHTML=d.split('\\n').slice(-5).join('<br>')})},3000);"
-    "listApps();"
-    "</script>"
-    "</body></html>";
+    "function fetchStatus(){fetch('/api/status').then(r=>r.json()).then(d=>{document.getElementById('ip').textContent=d.ip;document.getElementById('uptime').textContent=d.uptime;document.getElementById('mem').textContent=d.mem}).catch(()=>{})}"
+    "function fetchLogs(){fetch('/api/logs').then(r=>r.text()).then(d=>{document.getElementById('logContent').innerHTML=d;var el=document.getElementById('logs');el.scrollTop=el.scrollHeight})}"
+    "function listApps(){fetch('/api/apps/list').then(r=>r.json()).then(d=>{var html='';if(d.apps&&d.apps.length>0){d.apps.forEach(app=>{html+='<div class=\"app-item\"><div><div class=\"app-name\">'+app.name+'</div><div class=\"app-state '+(app.state==='running'?'running':'')+'\">'+app.state+'</div></div><div class=\"app-actions\">';if(app.state!=='running'){html+='<button class=\"btn btn-small\" onclick=\"startApp(\\''+app.name+'\\');\">Start</button>'}else{html+='<button class=\"btn btn-small btn-danger\" onclick=\"stopApp(\\''+app.name+'\\');\">Stop</button>'}html+='<button class=\"btn btn-small btn-danger\" onclick=\"uninstallApp(\\''+app.name+'\\');\">Delete</button></div></div>'})}else{html='<div style=\"color:#8b949e;text-align:center;padding:20px\">No WASM apps installed</div>'}document.getElementById('apps').innerHTML=html}).catch(e=>{document.getElementById('apps').innerHTML='<div style=\"color:#f85149\">Error loading apps</div>'})}"
+    "function installApp(){var file=document.getElementById('wasm').files[0];if(!file){alert('Select WASM file');return}var name=document.getElementById('name').value||file.name.replace('.wasm','');document.getElementById('status').innerHTML='Installing...';var reader=new FileReader();reader.onload=function(e){fetch('/api/apps/install?name='+encodeURIComponent(name),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:e.target.result}).then(r=>r.json()).then(d=>{document.getElementById('status').innerHTML=d.error?('<span style=\"color:#f85149\">Error: '+d.error+'</span>'):'<span style=\"color:#27c93f\">Installed!</span>';listApps();document.getElementById('wasm').value='';document.getElementById('name').value=''}).catch(e=>{document.getElementById('status').innerHTML='<span style=\"color:#f85149\">Error: '+e+'</span>'})};reader.readAsArrayBuffer(file)}"
+    "function startApp(name){fetch('/api/apps/start?name='+encodeURIComponent(name),{method:'POST'}).then(()=>listApps()).catch(e=>alert('Error'))}"
+    "function stopApp(name){fetch('/api/apps/stop?name='+encodeURIComponent(name),{method:'POST'}).then(()=>listApps()).catch(e=>alert('Error'))}"
+    "function uninstallApp(name){if(confirm('Delete '+name+'?')){fetch('/api/apps/uninstall?name='+encodeURIComponent(name),{method:'POST'}).then(()=>listApps()).catch(e=>alert('Error'))}}"
+    "function sendCmd(){var c=document.getElementById('cmd').value;if(c){document.getElementById('cmd').value='';fetch('/api/cmd?c='+encodeURIComponent(c)).then(r=>r.text()).then(d=>{fetchLogs()})}}"
+    "function reboot(){if(confirm('Reboot device?')){fetch('/api/reboot',{method:'POST'}).then(()=>alert('Rebooting...'))}}"
+    "function refresh(){location.reload()}"
+    "document.getElementById('otaForm').onsubmit=function(e){e.preventDefault();var f=document.getElementById('firmware').files[0];if(!f){alert('Select firmware file');return}"
+    "var p=document.getElementById('progress');p.innerHTML='<div style=\"background:#444;border-radius:4px;overflow:hidden\"><div id=\"pbar\" style=\"width:0%;height:20px;background:linear-gradient(90deg,#4fc3f7,#00bcd4);transition:0.3s\"></div></div><div id=\"ptext\">Uploading...</div>';"
+    "var fd=new FormData();fd.append('firmware',f);"
+    "var xhr=new XMLHttpRequest();xhr.open('POST','/upload',true);xhr.upload.onprogress=function(e){if(e.lengthComputable){var pct=Math.round(e.loaded/e.total*100);document.getElementById('pbar').style.width=pct+'%';document.getElementById('ptext').innerHTML='Uploading: '+pct+'%'}};"
+    "xhr.onload=function(){if(xhr.status==200||xhr.status==302){document.getElementById('ptext').innerHTML='<span style=\"color:#4caf50\">Upload complete! Rebooting...</span>';setTimeout(function(){location.reload()},5000)}else{document.getElementById('ptext').innerHTML='<span style=\"color:#f44336\">Error: '+xhr.responseText+'</span>'}};"
+    "xhr.onerror=function(){document.getElementById('ptext').innerHTML='<span style=\"color:#f44336\">Upload failed</span>'};xhr.send(fd)};"
+    "setInterval(fetchLogs,2000);setInterval(fetchStatus,5000);setInterval(listApps,3000);fetchLogs();fetchStatus();listApps();"
+    "</script></body></html>";
 
 static size_t parse_content_length(const char *request_data)
 {
@@ -317,8 +369,10 @@ static int send_http_response(int client_fd, int status_code, const char *conten
     {
         const char *ptr = body;
         size_t remaining = body_len;
-        const size_t chunk_size = 128; /* Very small chunks for ESP32 LwIP */
+        size_t chunk_size = 256; /* Start with smaller chunks for large payloads */
         int retry_count = 0;
+
+        LOG_DBG("Sending body: %zu bytes total", body_len);
 
         while (remaining > 0)
         {
@@ -330,8 +384,9 @@ static int send_http_response(int client_fd, int status_code, const char *conten
                 ptr += sent;
                 remaining -= sent;
                 retry_count = 0;
+                LOG_DBG("Sent %zd bytes, %zu remaining", sent, remaining);
                 /* Give network stack time to process */
-                k_msleep(2);
+                k_msleep(10);
                 k_yield();
             }
             else if (sent == 0)
@@ -343,19 +398,30 @@ static int send_http_response(int client_fd, int status_code, const char *conten
             else
             {
                 /* Error */
-                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOMEM)
                 {
-                    /* Would block - wait and retry with exponential backoff */
+                    /* Socket buffer full - wait and retry with exponential backoff */
                     retry_count++;
-                    if (retry_count > 10)
+                    if (retry_count > 20)
                     {
-                        LOG_WRN("Send would block too many times: remaining=%zu", remaining);
+                        LOG_ERR("Send retry limit exceeded: errno=%d, remaining=%zu", errno, remaining);
                         return -1;
                     }
-                    k_msleep(10 * retry_count);
+                    
+                    /* Reduce chunk size on memory pressure */
+                    if (errno == ENOMEM && chunk_size > 128)
+                    {
+                        chunk_size = 128;
+                        LOG_DBG("Reduced chunk size to %zu due to memory pressure", chunk_size);
+                    }
+                    
+                    /* Exponential backoff with cap at 200ms */
+                    int delay_ms = (retry_count * 20 < 200) ? (retry_count * 20) : 200;
+                    LOG_DBG("Send retry %d: errno=%d, waiting %dms", retry_count, errno, delay_ms);
+                    k_msleep(delay_ms);
                     continue;
                 }
-                LOG_WRN("Send error: errno=%d, remaining=%zu", errno, remaining);
+                LOG_ERR("Send error: errno=%d, remaining=%zu", errno, remaining);
                 return -1;
             }
         }
@@ -830,7 +896,7 @@ static int handle_api_request(int client_fd, const char *path)
         char *end = response + sizeof(response) - 2;
         p += snprintf(p, end - p, "{\"apps\":[");
         for (int i = 0; i < count && p < end; i++) {
-            p += snprintf(p, end - p, "%s{\"id\":%d,\"name\":\"%s\",\"state\":\"%s\"}",
+            p += snprintf(p, end - p, "%s{\"id\":%d,\"name\":\"%s\",\"state\":\"%s\",\"description\":\"WASM Application\"}",
                           i > 0 ? "," : "", apps[i].id, apps[i].name,
                           app_state_to_str(apps[i].state));
         }
@@ -1276,8 +1342,8 @@ int web_server_start(const struct web_server_callbacks *cb)
     /* Add initial boot messages to log buffer */
     web_server_add_log("*** Booting Zephyr OS build v4.2.1 ***");
     web_server_add_log("=== AkiraOS V1.1 ===");
-    web_server_add_log("[00:00:00.000] <inf> akira_hal: Akira HAL initializing for: ESP32-S3");
-    web_server_add_log("[00:00:00.001] <inf> akira_main: Platform: ESP32-S3");
+    web_server_add_log("[00:00:00.000] <inf> akira_hal: Akira HAL initializing for");
+    web_server_add_log("[00:00:00.001] <inf> akira_main: Platform");
     web_server_add_log("[00:00:00.002] <inf> akira_main: Display: Available");
     web_server_add_log("[00:00:00.003] <inf> akira_main: WiFi: Available");
     web_server_add_log("[00:00:00.010] <inf> user_settings: User settings module initialized");

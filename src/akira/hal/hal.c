@@ -527,11 +527,15 @@ int akira_hal_i2c_write_reg(akira_hal_i2c_t *i2c, uint8_t reg,
     if (!i2c)
         return -1;
 
-    uint8_t buf[len + 1];
+    uint8_t *buf = k_malloc(len + 1);
+    if (!buf) {
+        return -1;
+    }
     buf[0] = reg;
     memcpy(&buf[1], data, len);
-
-    return akira_hal_i2c_write(i2c, buf, len + 1);
+    int ret = akira_hal_i2c_write(i2c, buf, len + 1);
+    k_free(buf);
+    return ret;
 }
 
 int akira_hal_i2c_scan(const char *bus, uint8_t *addresses, size_t max_count)

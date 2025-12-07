@@ -1,5 +1,5 @@
 /**
- * @file akira_core_shell.c
+ * @file akira/shell.c
  * @brief AkiraOS Core Shell Commands
  *
  * Provides shell commands for interacting with and debugging

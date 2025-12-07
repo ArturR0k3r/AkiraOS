@@ -1144,22 +1144,6 @@ ocre load my_app my_app.wasm manifest.json
 ocre start my_app
 ```
 
----
-
-## Future Roadmap
-
-| Feature | Priority | Target |
-|---------|----------|--------|
-| **Graphics Engine** | High | Q2 2025 |
-| **Audio Manager** | High | Q2 2025 |
-| **BLE Mesh** | Medium | Q3 2025 |
-| **Matter Protocol** | Medium | Q3 2025 |
-| **LoRaWAN Stack** | High | Q2 2025 |
-| **ML Inference (TFLite)** | Low | Q4 2025 |
-| **Cloud Sync** | Medium | Q3 2025 |
-
----
-
 ## License
 
 MIT License — See `LICENSE` file.

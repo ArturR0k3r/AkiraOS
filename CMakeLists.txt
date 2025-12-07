@@ -7,7 +7,7 @@ set(KCONFIG_WARN_UNDEF OFF CACHE BOOL "Disable Kconfig warnings" FORCE)
 set(KCONFIG_WERROR OFF CACHE BOOL "Disable Kconfig warnings as errors" FORCE)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(akira_os VERSION 1.0.0)
+project(akira_os VERSION 1.2.3)
 
 
 # Set default board
@@ -319,5 +319,5 @@ target_include_directories(app PRIVATE
 target_compile_definitions(app PRIVATE
     AKIRA_VERSION_MAJOR=1
     AKIRA_VERSION_MINOR=2
-    AKIRA_VERSION_PATCH=1
+    AKIRA_VERSION_PATCH=3
 )
