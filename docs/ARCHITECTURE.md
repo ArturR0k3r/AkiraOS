@@ -190,16 +190,16 @@ The App Manager handles WASM application installation, lifecycle, and resource m
 ### App Lifecycle
 
 ```
-    ┌──────────────────────────────────────┐
-    │                                      │
-    ▼                                      │
+                             ┌─────────────┐ restart 
+                             │             │
+                             ▼             │
 ┌────────┐   install   ┌───────────┐       │
 │  NEW   │ ──────────► │ INSTALLED │       │
 └────────┘             └─────┬─────┘       │
                              │ start       │
                              ▼             │
-                       ┌───────────┐       │
-              ┌─────── │  RUNNING  │ ◄─────┤ restart (if enabled)
+                run    ┌───────────┐       │
+              ┌──────► │  RUNNING  │ ◄─────┤ recover (if enabled)
               │        └─────┬─────┘       │
               │ stop         │ crash       │
               ▼              ▼             │
