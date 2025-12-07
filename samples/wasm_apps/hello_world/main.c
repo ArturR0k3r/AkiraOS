@@ -3,27 +3,45 @@
  * which has been established as Project Ocre a Series of LF Projects, LLC
  * SPDX-License-Identifier: Apache-2.0
  * 
- * Modified for AkiraOS - Hello World WASM App Example
+ * AkiraOS Hello World WASM App - minimal no-stdlib version
  * 
- * This is a minimal example demonstrating how to create a WASM app
- * that runs on AkiraOS using the Ocre Runtime.
+ * Compiles with -nostdlib to avoid WASI imports
+ * Calls putchar directly from env module (provided by WAMR libc-builtin)
  */
 
-#include <stdio.h>
+/* Declare external functions from env module (WAMR libc-builtin) */
+extern int putchar(int c);
 
-// Application entry point
-int main()
+int main(void)
 {
-    printf("\n\
-     _    _    _           ___  ____  \n\
-    / \\  | | _(_)_ __ __ _/ _ \\/ ___| \n\
-   / _ \\ | |/ / | '__/ _` | | | \\___ \\ \n\
-  / ___ \\|   <| | | | (_| | |_| |___) |\n\
- /_/   \\_\\_|\\_\\_|_|  \\__,_|\\___/|____/ \n\
-                                       \n\
-      Hello from WASM App!             \n\
-      Running on AkiraOS v1.2.1        \n\
-                      powered by Ocre  \n");
+    putchar('H');
+    putchar('e');
+    putchar('l');
+    putchar('l');
+    putchar('o');
+    putchar(' ');
+    putchar('f');
+    putchar('r');
+    putchar('o');
+    putchar('m');
+    putchar(' ');
+    putchar('W');
+    putchar('A');
+    putchar('S');
+    putchar('M');
+    putchar(' ');
+    putchar('o');
+    putchar('n');
+    putchar(' ');
+    putchar('A');
+    putchar('k');
+    putchar('i');
+    putchar('r');
+    putchar('a');
+    putchar('O');
+    putchar('S');
+    putchar('!');
+    putchar('\n');
     
     return 0;
 }

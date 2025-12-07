@@ -3,6 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # AkiraOS Hello World WASM App - Based on OCRE SDK patterns
+# 
+# IMPORTANT: This builds for libc-builtin (NOT WASI)
+# libc-builtin uses env.printf and env.putchar
+# WASI uses wasi_snapshot_preview1 functions which are not available on embedded WAMR
 
 cmake_minimum_required(VERSION 3.20.0)
 
@@ -35,3 +39,4 @@ add_link_options(
 
 # Create the executable target
 add_executable(${APPNAME}.wasm main.c)
+

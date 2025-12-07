@@ -1,31 +1,33 @@
-# Hello World WASM App - AkiraOS
-# Build for Ocre Runtime (WASI-based)
-# Based on OCRE SDK patterns: https://github.com/project-ocre/ocre-sdk
-#
-# Two build methods available:
-# 1. CMake (recommended): ./build.sh
-# 2. Direct make: make
-#
-# For embedded targets with constrained memory, we limit WASM linear memory
-# to 64KB (1 page) which fits well in typical WAMR heap configurations.
+# Hello World WASM Application
+# Minimal example for AkiraOS WAMR runtime
+# Uses libc-builtin mode with env module (NOT WASI)
 
 WASI_SDK ?= /opt/wasi-sdk
 CC = $(WASI_SDK)/bin/clang
+OBJDUMP = $(WASI_SDK)/bin/wasm-objdump
 
 # Target
 TARGET = hello_world.wasm
 SRCS = main.c
 
-# Compiler flags - following OCRE SDK patterns
-CFLAGS = -O3
-CFLAGS += -Wall -Wextra
-CFLAGS += -Wno-unused-parameter
-CFLAGS += -Wno-unknown-attributes
+# Compiler flags for embedded WAMR
+# -O3: Optimize for performance (hello_world is simple enough for -O3)
+# -nostdlib: Avoid WASI imports, only use env module
+# -Wall -Wextra: Enable warnings for quality
+CFLAGS = -O3 -nostdlib
+CFLAGS += -Wall -Wextra -Wno-unused-parameter -Wno-unknown-attributes
 
-# Linker flags - optimized for embedded WAMR targets
-LDFLAGS = -Wl,--strip-all
+# Linker flags for WAMR embedded mode
+# --no-entry: No default _start entry point
+# --export=main: Export main function (OCRE runtime entry point)
+# --allow-undefined: Allow imports from env module (putchar, etc.)
+# --strip-all: Remove all symbols for minimal size (382 bytes)
+# -z stack-size: Set stack to 4KB (leaving 60KB for heap)
+# --initial-memory/--max-memory: Limit to 64KB (one WebAssembly page)
+LDFLAGS = -Wl,--no-entry
+LDFLAGS += -Wl,--export=main
 LDFLAGS += -Wl,--allow-undefined
-# Memory constraints for embedded targets
+LDFLAGS += -Wl,--strip-all
 LDFLAGS += -z stack-size=4096
 LDFLAGS += -Wl,--initial-memory=65536
 LDFLAGS += -Wl,--max-memory=65536
@@ -34,24 +36,15 @@ all: $(TARGET)
 
 $(TARGET): $(SRCS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
-	@echo "Built: $(TARGET)"
+	@echo "✓ Built: $(TARGET)"
 	@ls -la $(TARGET)
-
-# Build using CMake (recommended for consistency with OCRE SDK)
-cmake-build:
-	@mkdir -p build
-	@cd build && cmake .. && make
-	@cp build/hello-world.wasm $(TARGET)
-	@echo "Built via CMake: $(TARGET)"
 
 info: $(TARGET)
 	@echo "=== WASM Module Info ==="
-	@ls -la $(TARGET)
-	@echo ""
-	@hexdump -C $(TARGET) | head -20
+	$(OBJDUMP) -x $(TARGET) | head -60
 
 clean:
 	rm -f $(TARGET)
 	rm -rf build
 
-.PHONY: all clean info cmake-build
+.PHONY: all clean info

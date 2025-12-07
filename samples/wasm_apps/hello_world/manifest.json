@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "description": "Simple Hello World example for AkiraOS",
     "author": "AkiraOS Team",
-    "entry": "_start",
+    "entry": "main",
     "heap_kb": 8,
     "stack_kb": 2,
     "permissions": [],
