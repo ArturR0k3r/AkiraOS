@@ -4,7 +4,8 @@
  *
  */
 
-#define _GNU_SOURCE /* For memmem */
+/* Enable GNU extensions for memmem (used for multipart boundary search in HTTP uploads) */
+#define _GNU_SOURCE
 #include <string.h>
 
 #include "web_server.h"
