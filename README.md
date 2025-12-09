@@ -270,8 +270,6 @@ screen /dev/ttyUSB0 115200
 # Using picocom
 picocom -b 115200 /dev/ttyUSB0
 ```
-````
-```
 
 ### Manual Platform Builds
 
