@@ -23,6 +23,7 @@
 #   esp32_devkitc_procpu          ESP32 DevKitC (Akira Console Legacy)
 #   nrf54l15dk_nrf54l15_cpuapp    nRF54L15 DK (Nordic)
 #   steval_stwinbx1               STM32 STWIN.box
+#   b_u585i_iot02a                STM32U5 IoT Discovery Kit
 #
 # Examples:
 #   ./build.sh                              # Build and run native_sim
@@ -69,6 +70,7 @@ declare -A BOARD_MAP=(
     ["esp32_devkitc_procpu"]="esp32_devkitc/esp32/procpu"
     ["nrf54l15dk_nrf54l15_cpuapp"]="nrf54l15dk/nrf54l15/cpuapp"
     ["steval_stwinbx1"]="steval_stwinbx1"
+    ["b_u585i_iot02a"]="b_u585i_iot02a"
 )
 
 declare -A BOARD_CHIP=(
@@ -78,6 +80,7 @@ declare -A BOARD_CHIP=(
     ["esp32_devkitc_procpu"]="esp32"
     ["nrf54l15dk_nrf54l15_cpuapp"]="nrf54l15"
     ["steval_stwinbx1"]="stm32"
+    ["b_u585i_iot02a"]="stm32"
 )
 
 declare -A BOARD_DESC=(
@@ -87,6 +90,7 @@ declare -A BOARD_DESC=(
     ["esp32_devkitc_procpu"]="ESP32 DevKitC (Akira Console Legacy)"
     ["nrf54l15dk_nrf54l15_cpuapp"]="Nordic nRF54L15 DK"
     ["steval_stwinbx1"]="ST STEVAL-STWINBX1"
+    ["b_u585i_iot02a"]="ST B-U585I-IOT02A Discovery Kit"
 )
 
 # =============================================================================

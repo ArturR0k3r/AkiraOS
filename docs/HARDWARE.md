@@ -76,3 +76,5 @@ This device is built around the **ESP32** module (**U2**) and focuses on wireles
 | **Other Connections** | | | | |
 | IO32 | 8 | LED | **STATUS (BLUE)** | Blue Status LED (via R2, 470Ω) |
 | EN | 3 | Power Management | **EN** | Enable Pin (connected to RESET switch SW1) |
+
+

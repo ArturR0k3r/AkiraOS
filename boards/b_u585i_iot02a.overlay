@@ -1,0 +1,154 @@
+/*
+ * B-U585I-IOT02A Device Tree Overlay
+ * ST Discovery Kit for IoT - STM32U585AIIx
+ */
+
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/pinctrl/stm32-pinctrl.h>
+
+/ {
+    aliases {
+        rng0 = &rng_device;
+        led0 = &green_led_1;
+        led1 = &red_led_1;
+    };
+
+    leds {
+        compatible = "gpio-leds";
+        green_led_1: led_1 {
+            gpios = <&gpioh 7 GPIO_ACTIVE_LOW>;
+            label = "User LD7";
+        };
+        red_led_1: led_3 {
+            gpios = <&gpioh 6 GPIO_ACTIVE_LOW>;
+            label = "User LD6";
+        };
+    };
+
+    gpio_keys {
+        compatible = "gpio-keys";
+        user_button: button {
+            label = "User";
+            gpios = <&gpioc 13 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+            zephyr,code = <INPUT_KEY_0>;
+        };
+    };
+
+    rng_device: rng_0 {
+        compatible = "custom,rng-sensor";
+        label = "RNG Sensor";
+        status = "okay";
+    };
+
+    devices {
+        compatible = "custom,devices";
+        status = "okay";
+        device_list = <&rng_device &ism330dhcx &lps22hh &hts221 &iis2mdc &veml6030>;
+    };
+};
+
+/*
+ * Flash Partition Layout (2MB total):
+ * 0x000000 - 0x00FFFF: MCUboot     (64KB)
+ * 0x010000 - 0x0F1FFF: Primary     (904KB) 
+ * 0x0F2000 - 0x1D1FFF: Secondary   (896KB)
+ * 0x1D2000 - 0x201FFF: Storage     (192KB)
+ */
+&flash0 {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        /delete-node/ partition@0;
+        /delete-node/ partition@10000;
+        /delete-node/ partition@78000;
+        /delete-node/ partition@e0000;
+        /delete-node/ partition@f0000;
+
+        boot_partition: partition@0 {
+            label = "mcuboot";
+            reg = <0x0 0x10000>;
+        };
+        
+        slot0_partition: partition@10000 {
+            label = "image-0";
+            reg = <0x10000 0xE2000>;
+        };
+        
+        slot1_partition: partition@F2000 {
+            label = "image-1"; 
+            reg = <0xF2000 0xE0000>;
+        };
+        
+        storage_partition: partition@1D2000 {
+            label = "storage";
+            reg = <0x1D2000 0x30000>;
+        };
+    };
+};
+
+&i2c2 {
+    ism330dhcx: ism330dhcx@6b { 
+        label = "imu";
+        status = "okay";
+        accel-odr = <4>;
+        accel-range = <4>;
+        gyro-odr = <4>;
+        gyro-range = <250>;
+    };
+    lps22hh: lps22hh@5d { 
+        label = "pressure";
+        status = "okay";
+    };
+    hts221: hts221@5f { 
+        label = "humidity";
+        status = "okay";
+    };
+    iis2mdc: iis2mdc@1e { 
+        label = "magnetometer";
+        status = "okay";
+    };
+    veml6030: veml6030@10 { 
+        label = "light";
+        status = "okay";
+    };
+};
+
+&spi1 {
+    eth0: ethernet@0 {
+        status = "okay";
+        reg = <0>;
+        compatible = "wiznet,w5500";
+        int-gpios = <&gpiod 15 GPIO_ACTIVE_LOW>;
+        spi-max-frequency = <32000000>;
+        local-mac-address = [ 00 80 00 01 02 03 ];
+    };
+};
+
+&mx25lm51245 {
+    partitions {
+        /delete-node/ partition;
+
+        user_data_partition: partition@0 {
+            label = "user_data";
+            reg = <0x00000000 DT_SIZE_M(64)>;
+        };
+    };
+};
+
+&die_temp {
+    status = "disabled";
+};
+
+&adc1 {
+    status = "disabled";
+};
+
+&vref1 {
+    status = "disabled";
+};
+
+&vbat4 {
+    status = "disabled";
+};

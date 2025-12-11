@@ -11,6 +11,7 @@ This document lists all supported hardware platforms for AkiraOS.
 | `esp32_devkitc_procpu` | esp32_devkitc/esp32/procpu | ESP32 DevKitC | WiFi, BLE |
 | `xiao_nrf54l15_nrf54l15_cpuapp` | xiao_nrf54l15/nrf54l15/cpuapp | Seeed XIAO nRF54L15 | BLE 6.0, 802.15.4 |
 | `steval_stwinbx1` | steval_stwinbx1 | ST STEVAL-STWINBX1 | BLE, WiFi, Sensors |
+| `b_u585i_iot02a` | b_u585i_iot02a | ST B-U585I-IOT02A | WiFi, BLE, Sensors |
 
 ---
 
@@ -120,6 +121,104 @@ west flash -d build-steval_stwinbx1
 
 ---
 
+## ST B-U585I-IOT02A (Discovery Kit for IoT) - EXPERIMENTAL
+
+**Board ID:** `b_u585i_iot02a`  
+**Status:** ✅ **BUILDS SUCCESSFULLY** - Minimal configuration working, WiFi driver pending
+
+### Specifications
+- **SoC:** STM32U585AIIx (ARM Cortex-M33 @ 160MHz)
+- **Flash:** 2MB internal + 64MB Octo-SPI NOR external
+- **RAM:** 768KB SRAM (192KB SRAM1 + 64KB SRAM2 + 512KB SRAM3)
+- **Security:** TrustZone-M, STSAFE-A110 secure element
+- **Connectivity:** MXCHIP EMW3080B (WiFi 802.11b/g/n + BLE 5.0), USB Type-C
+
+### On-Board Sensors
+| Sensor | Type | Interface |
+|--------|------|-----------|
+| HTS221 | Humidity & Temperature | I2C |
+| LPS22HH | Pressure | I2C |
+| ISM330DHCX | 6-axis IMU + ML Core | I2C |
+| IIS2MDC | 3-axis Magnetometer | I2C |
+| VL53L5CX | Time-of-Flight Multi-Zone | I2C |
+| VEML3328 | Ambient Light & Color | I2C |
+| MP23DB01HP | Digital MEMS Microphone | PDM |
+
+### Current Build Status ✅
+**Binary:** `/home/artur_ubuntu/Akira/build-b-u585i-iot02a/zephyr/zephyr.bin`
+- **Flash Usage:** 205 KB / 416 KB (49.25%)
+- **RAM Usage:** 180 KB / 768 KB (23.40%)
+- **Status:** Successfully building minimal configuration
+
+### Supported Features
+- ✅ Platform-independent code (works with/without networking)
+- ✅ Basic I2C/SPI/GPIO peripherals
+- ✅ Onboard sensors (HTS221, LPS22HH, ISM330DHCX, IIS2MDC)
+- ✅ USB Type-C console & shell
+- ✅ Hardware Crypto (TinyCrypt AES, SHA-256)
+- ✅ Settings persistence (NVS)
+- ✅ LittleFS support
+- ✅ TrustZone-M Security
+- ✅ Secure Element (STSAFE-A110)
+- ❌ WiFi 802.11 b/g/n - **MXCHIP driver not available in Zephyr**
+- ❌ Bluetooth LE 5.0 - **MXCHIP driver required**
+- ❌ Web Server - **Requires WiFi/networking**
+- ❌ OCRE/WASM - **WAMR needs sockets (requires networking)**
+- ❌ OTA Updates - **Requires networking**
+
+### Known Limitations & Blockers
+1. **WiFi Driver:** MXCHIP EMW3080B has no upstream Zephyr driver - requires custom development (SPI-AT or native protocol)
+2. **Flash Partition:** 416KB MCUboot slot insufficient for full AkiraOS with WASM (~800KB needed) - can't override base DTS without label conflicts
+3. **WAMR Dependencies:** WebAssembly runtime requires socket support (CONFIG_NETWORKING=y), which requires WiFi driver
+4. **No PSRAM:** Board has 768KB internal SRAM (sufficient for WASM heap), but flash code size is the bottleneck
+
+### Build & Flash
+```bash
+# Build minimal configuration (works now - 205KB)
+./build.sh -b b_u585i_iot02a
+
+# Build with MCUboot bootloader
+./build.sh -b b_u585i_iot02a -bl y
+
+# Build and flash
+./build.sh -b b_u585i_iot02a -r all
+
+# Flash only via DFU (hold BOOT0 button while connecting USB)
+./build.sh -b b_u585i_iot02a -r a
+
+# Or with ST-LINK debugger
+west flash -d build-b-u585i-iot02a
+```
+
+### Memory Configuration
+- **Heap:** 128 KB (sufficient for sensors, crypto, shell)
+- **Main Stack:** 8 KB
+- **ISR Stack:** 4 KB
+- **Flash Partitions:** 64KB boot + 416KB slot0 + 416KB slot1 + 64KB scratch + 64KB storage
+
+### TODO / Future Work
+- [ ] **MXCHIP WiFi Driver Development** (SPI-AT commands or native protocol) - enables full networking features
+- [ ] **Investigate WAMR with minimal TCP/UDP stack** (no WiFi, sockets only) - may enable WASM without WiFi hardware
+- [ ] **Upstream Zephyr patch for larger partitions** (896KB slots) - enables full AkiraOS with all features
+- [ ] **External Octo-SPI flash support** (64MB MX25LM51245G) - additional storage for assets/WASM modules
+
+### Programming Methods
+1. **DFU Mode:** Hold BOOT0 button, connect USB-C, release button, run flash command
+2. **ST-LINK:** Connect CN4 (STDC14), use `west flash` or STM32CubeProgrammer
+2. **SWD:** Use ST-LINK/V3 via CN8 connector
+3. **USB Virtual COM:** STLINK-V3E provides virtual COM port
+
+### Memory Configuration
+- **MCUboot:** 64KB (0x00000000 - 0x0000FFFF)
+- **Slot 0 (Primary):** 416KB (0x00010000 - 0x00077FFF)
+- **Slot 1 (Secondary):** 416KB (0x00078000 - 0x000DFFFF)
+- **Scratch:** 64KB (0x000E0000 - 0x000EFFFF)
+- **Storage (NVS):** 64KB (0x000F0000 - 0x000FFFFF)
+
+**Note:** Partition layout from base Zephyr board definition may need adjustment for full AkiraOS features.
+
+---
+
 ## ESP32 DevKitC (Legacy)
 
 **Board ID:** `esp32_devkitc_procpu`
@@ -174,17 +273,20 @@ To add support for a new board:
 
 ## Feature Compatibility Matrix
 
-| Feature | ESP32-S3 | ESP32 | nRF54L15 | STM32U5 |
-|---------|----------|-------|----------|---------|
-| WiFi | ✅ | ✅ | ❌ | ✅* |
-| BLE | ✅ | ✅ | ✅ | ✅ |
-| 802.15.4 | ❌ | ❌ | ✅ | ❌ |
-| Thread/Matter | ❌ | ❌ | ✅ | ❌ |
-| USB | ✅ | ❌ | ✅ | ✅ |
-| Display | ✅ | ✅ | ❌ | ❌ |
-| SD Card | ✅ | ✅ | ❌ | ✅ |
-| CAN | ❌ | ❌ | ❌ | ✅ |
-| Sensors | ❌ | ❌ | ✅** | ✅ |
+| Feature | ESP32-S3 | ESP32 | nRF54L15 | STWINBX1 | B-U585I |
+|---------|----------|-------|----------|----------|---------|
+| WiFi | ✅ | ✅ | ❌ | ✅* | ✅* |
+| BLE | ✅ | ✅ | ✅ | ✅ | ✅* |
+| 802.15.4 | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Thread/Matter | ❌ | ❌ | ✅ | ❌ | ❌ |
+| USB | ✅ | ❌ | ✅ | ✅ | ✅ |
+| Display | ✅ | ✅ | ❌ | ❌ | ❌ |
+| SD Card | ✅ | ✅ | ❌ | ✅ | ✅ |
+| CAN | ❌ | ❌ | ❌ | ✅ | ❌ |
+| Sensors | ❌ | ❌ | ✅** | ✅ | ✅ |
+| TrustZone | ❌ | ❌ | ✅ | ❌ | ✅ |
+| Ext Flash | ❌ | ❌ | ❌ | ❌ | ✅*** |
 
 \* Via external MXCHIP module  
-\** LSM6DSO IMU on board
+\** LSM6DSO IMU on board  
+\*** 64MB Octo-SPI NOR Flash

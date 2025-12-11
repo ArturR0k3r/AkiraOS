@@ -5,11 +5,13 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/printk.h>
 #include <zephyr/sys/reboot.h>
+#ifdef CONFIG_NETWORKING
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/net_mgmt.h>
 #include <zephyr/net/wifi_mgmt.h>
 #include <zephyr/net/socket.h>
 #include <zephyr/net/net_ip.h>
+#endif
 #include <zephyr/fs/fs.h>
 #include <zephyr/storage/disk_access.h>
 #include <zephyr/drivers/disk.h>
@@ -29,8 +31,11 @@
 
 LOG_MODULE_REGISTER(akira_main, AKIRA_LOG_LEVEL);
 
+#ifdef CONFIG_NETWORKING
 static bool wifi_connected = false;
 static struct net_mgmt_event_callback wifi_cb;
+#endif
+
 static FATFS fatfs;
 static struct fs_mount_t fs = {
     .type = FS_FATFS,
@@ -38,8 +43,7 @@ static struct fs_mount_t fs = {
     .mnt_point = "/SD:",
 };
 
-
-
+#ifdef CONFIG_NETWORKING
 static void wifi_event_handler(struct net_mgmt_event_callback *cb,
                                uint64_t mgmt_event, struct net_if *iface);
 static int initialize_wifi(void);
@@ -74,6 +78,7 @@ static void get_ip_work_handler(struct k_work *work)
 }
 
 static K_WORK_DELAYABLE_DEFINE(ip_work, get_ip_work_handler);
+#endif /* CONFIG_NETWORKING */
 
 static int get_system_info_callback(char *buffer, size_t buffer_size)
 {
@@ -155,6 +160,7 @@ static int initialize_sd_card(void)
     return 0;
 }
 
+#ifdef CONFIG_NETWORKING
 static int get_settings_info_callback(char *buffer, size_t buffer_size)
 {
     return user_settings_to_json(buffer, buffer_size);
@@ -454,6 +460,7 @@ static void on_settings_changed(const char *key, const void *value, void *user_d
         }
     }
 }
+#endif /* CONFIG_NETWORKING */
 
 static void on_ota_progress(const struct ota_progress *progress, void *user_data)
 {
@@ -641,8 +648,10 @@ int main(void)
     }
     LOG_INF("✅ Settings module initialized");
 
-    // Register settings change callback
+#ifdef CONFIG_NETWORKING
+    // Register settings change callback (WiFi-related)
     user_settings_register_callback(on_settings_changed, NULL);
+#endif
 
     // Initialize Filesystem Manager (MUST be before App Manager)
     ret = fs_manager_init();
@@ -684,6 +693,7 @@ int main(void)
     }
     LOG_INF("✅ Akira shell initialized");
 
+#ifdef CONFIG_NETWORKING
     // Prepare web server callbacks
     struct web_server_callbacks web_callbacks = {
         .get_system_info = get_system_info_callback,
@@ -710,6 +720,9 @@ int main(void)
     {
         LOG_INF("✅ WiFi initialization started");
     }
+#else
+    LOG_INF("📡 Networking disabled - web server and WiFi unavailable");
+#endif
 
     /* Add startup logs to web terminal */
     web_server_add_log("<inf> AkiraOS v1.2.0 started");
