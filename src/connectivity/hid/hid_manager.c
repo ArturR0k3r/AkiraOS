@@ -16,6 +16,10 @@ LOG_MODULE_REGISTER(hid_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 #define MAX_HID_TRANSPORTS 4
 
+/* HID Report Rate Limiting (USB HID spec: 125Hz max = 8ms interval) */
+#define HID_REPORT_INTERVAL_MS  8  /**< Minimum interval between reports (125Hz) */
+#define HID_REPORT_INTERVAL_US  (HID_REPORT_INTERVAL_MS * 1000)
+
 /*===========================================================================*/
 /* Internal State                                                            */
 /*===========================================================================*/
@@ -36,6 +40,10 @@ static struct
     void *event_cb_data;
     hid_output_callback_t output_cb;
     void *output_cb_data;
+
+    /* Rate limiting */
+    int64_t last_keyboard_report_us;
+    int64_t last_gamepad_report_us;
 
     /* Mutex for thread safety */
     struct k_mutex mutex;
@@ -70,10 +78,21 @@ static int send_keyboard_report(void)
         return -ENODEV;
     }
 
+    /* Rate limiting: enforce minimum interval between reports */
+    int64_t now = k_uptime_get() * 1000; /* Convert to microseconds */
+    int64_t elapsed = now - hid_mgr.last_keyboard_report_us;
+    
+    if (elapsed < HID_REPORT_INTERVAL_US)
+    {
+        /* Too soon, throttle */
+        return -EAGAIN;
+    }
+
     int ret = hid_mgr.active_transport->send_keyboard(&hid_mgr.state.keyboard);
     if (ret == 0)
     {
         hid_mgr.state.reports_sent++;
+        hid_mgr.last_keyboard_report_us = now;
     }
     else
     {
@@ -89,10 +108,21 @@ static int send_gamepad_report(void)
         return -ENODEV;
     }
 
+    /* Rate limiting: enforce minimum interval between reports */
+    int64_t now = k_uptime_get() * 1000; /* Convert to microseconds */
+    int64_t elapsed = now - hid_mgr.last_gamepad_report_us;
+    
+    if (elapsed < HID_REPORT_INTERVAL_US)
+    {
+        /* Too soon, throttle */
+        return -EAGAIN;
+    }
+
     int ret = hid_mgr.active_transport->send_gamepad(&hid_mgr.state.gamepad);
     if (ret == 0)
     {
         hid_mgr.state.reports_sent++;
+        hid_mgr.last_gamepad_report_us = now;
     }
     else
     {
@@ -210,12 +240,24 @@ int hid_manager_init(const hid_config_t *config)
     }
     else
     {
-        /* Default config */
+        /* Default config from Kconfig */
         hid_mgr.config.device_types = HID_DEVICE_COMBO;
         hid_mgr.config.preferred_transport = HID_TRANSPORT_BLE;
+#ifdef CONFIG_AKIRA_HID_PRODUCT
+        hid_mgr.config.device_name = CONFIG_AKIRA_HID_PRODUCT;
+#else
         hid_mgr.config.device_name = "AkiraOS HID";
-        hid_mgr.config.vendor_id = 0x1234;
-        hid_mgr.config.product_id = 0x5678;
+#endif
+#ifdef CONFIG_AKIRA_HID_VID
+        hid_mgr.config.vendor_id = CONFIG_AKIRA_HID_VID;
+#else
+        hid_mgr.config.vendor_id = 0x1209;  /* pid.codes */
+#endif
+#ifdef CONFIG_AKIRA_HID_PID
+        hid_mgr.config.product_id = CONFIG_AKIRA_HID_PID;
+#else
+        hid_mgr.config.product_id = 0x0001;
+#endif
         hid_mgr.state.device_type = HID_DEVICE_COMBO;
     }
 

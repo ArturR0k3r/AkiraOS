@@ -186,6 +186,70 @@ config AKIRA_HID_SIM
       Enable HID simulation transport for native_sim testing.
       Logs HID events instead of sending to real hardware.
 
+config AKIRA_HID_VID
+    hex "USB/BLE Vendor ID (VID)"
+    default 0x1209
+    depends on AKIRA_HID
+    help
+      USB Vendor ID for HID device identification.
+      Default: 0x1209 (pid.codes - Open Source Hardware)
+      
+      For production use, you should obtain your own VID from USB-IF
+      or use a community VID like pid.codes with proper PID allocation.
+
+config AKIRA_HID_PID
+    hex "USB/BLE Product ID (PID)"
+    default 0x0001
+    depends on AKIRA_HID
+    help
+      USB Product ID for HID device identification.
+      Default: 0x0001 (Example - configure per device type)
+      
+      If using pid.codes VID (0x1209), register your PID at:
+      https://pid.codes/
+
+config AKIRA_HID_MANUFACTURER
+    string "HID Manufacturer Name"
+    default "AkiraOS"
+    depends on AKIRA_HID
+    help
+      Manufacturer name string reported to USB/BLE host.
+      Maximum 32 characters.
+
+config AKIRA_HID_PRODUCT
+    string "HID Product Name"
+    default "Akira HID Device"
+    depends on AKIRA_HID
+    help
+      Product name string reported to USB/BLE host.
+      Maximum 32 characters.
+
+config AKIRA_HID_SERIAL
+    string "HID Serial Number"
+    default "123456"
+    depends on AKIRA_HID
+    help
+      Serial number string reported to USB/BLE host.
+      Maximum 32 characters. Leave empty to generate from device ID.
+
+config AKIRA_BUTTONS
+    bool "Enable button input driver"
+    default y
+    depends on GPIO
+    help
+      Enable enhanced button driver with interrupts, debouncing,
+      long press detection, and event callbacks.
+      Supports up to 10 buttons (ONOFF, SETTINGS, D-PAD, ABXY).
+
+config AKIRA_ENCODER
+    bool "Enable rotary encoder driver"
+    default y
+    depends on GPIO
+    help
+      Enable rotary encoder driver with quadrature decoding,
+      velocity tracking, and optional button support.
+      Commonly used for volume control and menu navigation.
+
 config AKIRA_HTTP_SERVER
     bool "Enable HTTP server"
     default y

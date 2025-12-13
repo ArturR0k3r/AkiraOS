@@ -178,6 +178,26 @@ extern "C"
     int hid_gamepad_reset(void);
 
     /*===========================================================================*/
+    /* Rate-Limited Sending (Automatic Throttling)                              */
+    /*===========================================================================*/
+
+    /**
+     * @brief Send keyboard report with rate limiting
+     * 
+     * Enforces minimum 8ms interval between reports (125Hz max).
+     * @return 0 on success, -EAGAIN if too soon, other negative on error
+     */
+    int hid_keyboard_send_throttled(void);
+
+    /**
+     * @brief Send gamepad report with rate limiting
+     * 
+     * Enforces minimum 8ms interval between reports (125Hz max).
+     * @return 0 on success, -EAGAIN if too soon, other negative on error
+     */
+    int hid_gamepad_send_throttled(void);
+
+    /*===========================================================================*/
     /* Callbacks                                                                 */
     /*===========================================================================*/
 
