@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <inttypes.h>
+#include <ff.h>
 #include "akira/akira.h"
 #include "../storage/fs_manager.h"
 #ifdef CONFIG_AKIRA_APP_MANAGER
@@ -1448,6 +1449,89 @@ static int cmd_ram_cat(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+/**
+ * @brief Hardware test command for Akira-Micro
+ * Tests buttons, SD card, and LED
+ */
+static int cmd_hwtest(const struct shell *sh, size_t argc, char **argv)
+{
+    shell_print(sh, "===========================================");
+    shell_print(sh, "  Akira-Micro Hardware Test");
+    shell_print(sh, "===========================================\n");
+
+    const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
+    if (!device_is_ready(gpio_dev)) {
+        shell_error(sh, "GPIO device not ready");
+        return -ENODEV;
+    }
+
+    /* Test 1: LED Blink */
+    shell_print(sh, "Test 1: Status LED (GPIO32)");
+    gpio_pin_configure(gpio_dev, 32, GPIO_OUTPUT_ACTIVE);
+    
+    for (int i = 0; i < 5; i++) {
+        gpio_pin_set(gpio_dev, 32, 1);
+        k_msleep(200);
+        gpio_pin_set(gpio_dev, 32, 0);
+        k_msleep(200);
+    }
+    shell_print(sh, "  ✓ LED test complete\n");
+
+    /* Test 2: Button States */
+    shell_print(sh, "Test 2: Button States");
+    const int button_pins[] = {35, 34, 39, 36, 14, 13};
+    const char *button_names[] = {"KEY1", "KEY2", "KEY3", "KEY4", "KEY5", "KEY6"};
+    
+    for (int i = 0; i < 6; i++) {
+        gpio_pin_configure(gpio_dev, button_pins[i], GPIO_INPUT | GPIO_PULL_UP);
+    }
+    
+    shell_print(sh, "  Reading button states (press buttons to test):");
+    for (int i = 0; i < 6; i++) {
+        int val = gpio_pin_get(gpio_dev, button_pins[i]);
+        shell_print(sh, "    %s (GPIO%d): %s", button_names[i], button_pins[i], 
+                    val ? "Released" : "PRESSED");
+    }
+    shell_print(sh, "  ✓ Button test complete\n");
+
+    /* Test 3: SD Card */
+    shell_print(sh, "Test 3: SD Card");
+    FATFS fat_fs;
+    FIL file;
+    FRESULT res;
+    UINT bytes_written;
+    const char *test_file = "/SD:/hwtest.txt";
+    const char *test_data = "Akira-Micro Hardware Test\n";
+
+    res = f_mount(&fat_fs, "/SD:", 1);
+    if (res != FR_OK) {
+        shell_error(sh, "  ✗ Failed to mount SD card: %d", res);
+    } else {
+        shell_print(sh, "  ✓ SD card mounted");
+
+        res = f_open(&file, test_file, FA_CREATE_ALWAYS | FA_WRITE);
+        if (res != FR_OK) {
+            shell_error(sh, "  ✗ Failed to create test file: %d", res);
+        } else {
+            res = f_write(&file, test_data, strlen(test_data), &bytes_written);
+            f_close(&file);
+            
+            if (res == FR_OK) {
+                shell_print(sh, "  ✓ Wrote %u bytes to %s", bytes_written, test_file);
+            } else {
+                shell_error(sh, "  ✗ Write failed: %d", res);
+            }
+        }
+        f_unmount("/SD:");
+    }
+
+    shell_print(sh, "\n===========================================");
+    shell_print(sh, "Hardware test complete!");
+    shell_print(sh, "===========================================");
+    
+    return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(ram_cmds,
                                SHELL_CMD(ls, NULL, "List files in RAM storage", cmd_ram_ls),
                                SHELL_CMD(cat, NULL, "Show file contents <path>", cmd_ram_cat),
@@ -1495,6 +1579,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(debug_cmds,
                                SHELL_CMD(clear_history, NULL, "Clear command history", cmd_clear_history),
                                SHELL_CMD(benchmark, NULL, "Run performance benchmark", cmd_benchmark),
                                SHELL_CMD(shell_stats, NULL, "Show shell statistics", cmd_shell_stats),
+                               SHELL_CMD(hwtest, NULL, "Test Akira-Micro hardware (buttons, SD, LED)", cmd_hwtest),
                                SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(sys, &system_cmds, "System management commands", NULL);
