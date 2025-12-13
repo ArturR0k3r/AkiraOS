@@ -156,6 +156,15 @@ if(CONFIG_AKIRA_INA219)
     target_sources(app PRIVATE src/drivers/ina219.c)
 endif()
 
+# Input drivers (buttons and encoder)
+if(CONFIG_AKIRA_BUTTONS)
+    target_sources(app PRIVATE src/drivers/akira_buttons.c)
+endif()
+
+if(CONFIG_AKIRA_ENCODER)
+    target_sources(app PRIVATE src/drivers/akira_encoder.c)
+endif()
+
 # Conditional OTA manager based on flash availability
 if(CONFIG_FLASH_MAP AND CONFIG_BOOTLOADER_MCUBOOT)
     target_sources(app PRIVATE src/OTA/ota_manager.c)
@@ -193,6 +202,15 @@ endif()
 if(CONFIG_AKIRA_HID)
     target_sources(app PRIVATE src/connectivity/hid/hid_manager.c)
     
+    # HID Protocol Layer
+    if(CONFIG_AKIRA_HID_KEYBOARD)
+        target_sources(app PRIVATE src/connectivity/hid/hid_keyboard.c)
+    endif()
+    
+    if(CONFIG_AKIRA_HID_GAMEPAD)
+        target_sources(app PRIVATE src/connectivity/hid/hid_gamepad.c)
+    endif()
+    
     # HID Simulation (native_sim only)
     if(CONFIG_AKIRA_HID_SIM)
         target_sources(app PRIVATE src/connectivity/hid/hid_sim.c)
@@ -209,6 +227,7 @@ if(CONFIG_AKIRA_BT_HID)
     target_sources(app PRIVATE
         src/connectivity/bluetooth/bt_manager.c
         src/connectivity/bluetooth/bt_hid.c
+        src/connectivity/bluetooth/bt_hid_service.c
     )
 endif()
 
@@ -217,6 +236,7 @@ if(CONFIG_AKIRA_USB_HID)
     target_sources(app PRIVATE
         src/connectivity/usb/usb_manager.c
         src/connectivity/usb/usb_hid.c
+        src/connectivity/usb/usb_hid_device.c
     )
 endif()
 

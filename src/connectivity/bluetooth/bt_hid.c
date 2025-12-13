@@ -4,6 +4,7 @@
  */
 
 #include "bt_hid.h"
+#include "bt_hid_service.h"
 #include "bt_manager.h"
 #include "../hid/hid_manager.h"
 #include <zephyr/kernel.h>
@@ -164,7 +165,19 @@ static int ble_hid_init(hid_device_type_t types)
     bt_hid_state.initialized = true;
 
 #if BT_AVAILABLE
-    /* TODO: Register GATT services based on device types */
+    /* Initialize BT HID GATT service */
+    int ret = bt_hid_service_init();
+    if (ret) {
+        LOG_ERR("Failed to initialize BT HID service (err %d)", ret);
+        return ret;
+    }
+    
+    /* Register service with BT stack */
+    ret = bt_hid_service_register();
+    if (ret) {
+        LOG_ERR("Failed to register BT HID service (err %d)", ret);
+        return ret;
+    }
 #endif
 
     return 0;
@@ -209,14 +222,18 @@ static int ble_hid_send_keyboard(const hid_keyboard_report_t *report)
     }
 
 #if BT_AVAILABLE
-    /* TODO: Send keyboard report via GATT notification */
-    LOG_DBG("BLE KB: mod=%02x keys=[%02x %02x %02x %02x %02x %02x]",
-            report->modifiers,
-            report->keys[0], report->keys[1], report->keys[2],
-            report->keys[3], report->keys[4], report->keys[5]);
+    /* Send keyboard report via GATT notification */
+    int ret = bt_hid_service_send_keyboard_report(report);
+    if (ret == 0) {
+        LOG_DBG("BLE KB: mod=%02x keys=[%02x %02x %02x %02x %02x %02x]",
+                report->modifiers,
+                report->keys[0], report->keys[1], report->keys[2],
+                report->keys[3], report->keys[4], report->keys[5]);
+    }
+    return ret;
+#else
+    return -ENOTSUP;
 #endif
-
-    return 0;
 }
 
 static int ble_hid_send_gamepad(const hid_gamepad_report_t *report)
@@ -232,11 +249,15 @@ static int ble_hid_send_gamepad(const hid_gamepad_report_t *report)
     }
 
 #if BT_AVAILABLE
-    /* TODO: Send gamepad report via GATT notification */
-    LOG_DBG("BLE GP: btns=%04x hat=%d", report->buttons, report->hat);
+    /* Send gamepad report via GATT notification */
+    int ret = bt_hid_service_send_gamepad_report(report);
+    if (ret == 0) {
+        LOG_DBG("BLE GP: btns=%04x hat=%d", report->buttons, report->hat);
+    }
+    return ret;
+#else
+    return -ENOTSUP;
 #endif
-
-    return 0;
 }
 
 static int ble_hid_register_event_cb(hid_event_callback_t cb, void *user_data)
