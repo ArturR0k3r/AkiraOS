@@ -13,7 +13,7 @@
 #include <zephyr/logging/log.h>
 #include <string.h>
 
-LOG_MODULE_REGISTER(usb_hid, CONFIG_AKIRA_LOG_LEVEL);
+LOG_MODULE_REGISTER(akira_usb_hid, CONFIG_AKIRA_LOG_LEVEL);
 
 /*===========================================================================*/
 /* Internal State                                                            */
@@ -165,13 +165,13 @@ static const hid_transport_ops_t usb_hid_transport = {
 /* Public API                                                                */
 /*===========================================================================*/
 
-int usb_hid_init(void)
+int akira_usb_hid_init(void)
 {
     LOG_INF("Registering USB HID transport");
     return hid_manager_register_transport(&usb_hid_transport);
 }
 
-const hid_transport_ops_t *usb_hid_get_transport(void)
+const hid_transport_ops_t *akira_usb_hid_get_transport(void)
 {
     return &usb_hid_transport;
 }

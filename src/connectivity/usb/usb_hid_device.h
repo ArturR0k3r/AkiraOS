@@ -11,9 +11,15 @@
 #ifndef AKIRA_USB_HID_DEVICE_H
 #define AKIRA_USB_HID_DEVICE_H
 
-#include "../hid/hid_common.h"
 #include <stdint.h>
 #include <stdbool.h>
+
+/* Include Zephyr HID definitions first if USB is available */
+#if defined(CONFIG_USB_DEVICE_STACK)
+#include <zephyr/usb/class/hid.h>
+#endif
+
+#include "../hid/hid_common.h"
 
 #ifdef __cplusplus
 extern "C" {

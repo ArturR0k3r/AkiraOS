@@ -69,7 +69,6 @@ int hid_keyboard_init(void)
     k_mutex_init(&kbd_state.mutex);
 
     memset(&kbd_state.report, 0, sizeof(hid_keyboard_report_t));
-    kbd_state.report.report_id = 0x01;  // Keyboard report ID
 
     kbd_state.initialized = true;
     return 0;
@@ -148,7 +147,7 @@ int hid_keyboard_release_key(uint8_t keycode)
     return 0;
 }
 
-int hid_keyboard_release_all(void)
+int hid_keyboard_clear(void)
 {
     if (!kbd_state.initialized) {
         return -ENODEV;
@@ -163,7 +162,7 @@ int hid_keyboard_release_all(void)
     return 0;
 }
 
-int hid_keyboard_set_modifiers(uint8_t modifiers)
+int hid_keyboard_set_modifier(uint8_t modifiers)
 {
     if (!kbd_state.initialized) {
         return -ENODEV;
@@ -311,10 +310,10 @@ uint8_t hid_keyboard_ascii_to_keycode(char ch, uint8_t *modifier)
     case '|': *modifier = HID_MOD_LEFT_SHIFT; return HID_KEY_BACKSLASH;
     case ';': return HID_KEY_SEMICOLON;
     case ':': *modifier = HID_MOD_LEFT_SHIFT; return HID_KEY_SEMICOLON;
-    case '\'': return HID_KEY_APOSTROPHE;
-    case '"': *modifier = HID_MOD_LEFT_SHIFT; return HID_KEY_APOSTROPHE;
-    case '`': return HID_KEY_GRAVE_ACCENT;
-    case '~': *modifier = HID_MOD_LEFT_SHIFT; return HID_KEY_GRAVE_ACCENT;
+    case '\'': return HID_KEY_QUOTE;
+    case '"': *modifier = HID_MOD_LEFT_SHIFT; return HID_KEY_QUOTE;
+    case '`': return HID_KEY_GRAVE;
+    case '~': *modifier = HID_MOD_LEFT_SHIFT; return HID_KEY_GRAVE;
     case ',': return HID_KEY_COMMA;
     case '<': *modifier = HID_MOD_LEFT_SHIFT; return HID_KEY_COMMA;
     case '.': return HID_KEY_DOT;

@@ -53,6 +53,13 @@ target_sources(app PRIVATE
     src/settings/settings.c
 )
 
+# HID Shell Commands
+if(CONFIG_AKIRA_HID)
+    target_sources(app PRIVATE
+        src/shell/hid_shell.c
+    )
+endif()
+
 # ===== v2.0 Modular Architecture Files =====
 
 # API Layer (WASM exports)

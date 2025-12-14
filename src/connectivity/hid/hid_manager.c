@@ -4,6 +4,8 @@
  */
 
 #include "hid_manager.h"
+#include "hid_keyboard.h"
+#include "hid_gamepad.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
@@ -420,7 +422,7 @@ const hid_state_t *hid_manager_get_state(void)
 }
 
 /*===========================================================================*/
-/* Keyboard API Implementation                                               */
+/* Keyboard API Implementation (wrappers to protocol layer)                 */
 /*===========================================================================*/
 
 int hid_keyboard_press(hid_key_code_t key)
@@ -430,26 +432,7 @@ int hid_keyboard_press(hid_key_code_t key)
         return -EINVAL;
     }
 
-    k_mutex_lock(&hid_mgr.mutex, K_FOREVER);
-
-    /* Add key to report if not already present */
-    for (int i = 0; i < HID_MAX_KEYS; i++)
-    {
-        if (hid_mgr.state.keyboard.keys[i] == key)
-        {
-            k_mutex_unlock(&hid_mgr.mutex);
-            return 0; /* Already pressed */
-        }
-        if (hid_mgr.state.keyboard.keys[i] == HID_KEY_NONE)
-        {
-            hid_mgr.state.keyboard.keys[i] = key;
-            break;
-        }
-    }
-
-    int ret = send_keyboard_report();
-    k_mutex_unlock(&hid_mgr.mutex);
-    return ret;
+    return hid_keyboard_press_key(key);
 }
 
 int hid_keyboard_release(hid_key_code_t key)
@@ -459,26 +442,7 @@ int hid_keyboard_release(hid_key_code_t key)
         return -EINVAL;
     }
 
-    k_mutex_lock(&hid_mgr.mutex, K_FOREVER);
-
-    /* Remove key from report */
-    for (int i = 0; i < HID_MAX_KEYS; i++)
-    {
-        if (hid_mgr.state.keyboard.keys[i] == key)
-        {
-            /* Shift remaining keys */
-            for (int j = i; j < HID_MAX_KEYS - 1; j++)
-            {
-                hid_mgr.state.keyboard.keys[j] = hid_mgr.state.keyboard.keys[j + 1];
-            }
-            hid_mgr.state.keyboard.keys[HID_MAX_KEYS - 1] = HID_KEY_NONE;
-            break;
-        }
-    }
-
-    int ret = send_keyboard_report();
-    k_mutex_unlock(&hid_mgr.mutex);
-    return ret;
+    return hid_keyboard_release_key(key);
 }
 
 int hid_keyboard_release_all(void)
@@ -488,14 +452,7 @@ int hid_keyboard_release_all(void)
         return -EINVAL;
     }
 
-    k_mutex_lock(&hid_mgr.mutex, K_FOREVER);
-
-    memset(hid_mgr.state.keyboard.keys, 0, sizeof(hid_mgr.state.keyboard.keys));
-    hid_mgr.state.keyboard.modifiers = 0;
-
-    int ret = send_keyboard_report();
-    k_mutex_unlock(&hid_mgr.mutex);
-    return ret;
+    return hid_keyboard_clear();
 }
 
 int hid_keyboard_set_modifiers(uint8_t modifiers)
@@ -505,43 +462,7 @@ int hid_keyboard_set_modifiers(uint8_t modifiers)
         return -EINVAL;
     }
 
-    k_mutex_lock(&hid_mgr.mutex, K_FOREVER);
-    hid_mgr.state.keyboard.modifiers = modifiers;
-    int ret = send_keyboard_report();
-    k_mutex_unlock(&hid_mgr.mutex);
-    return ret;
-}
-
-int hid_keyboard_type_string(const char *str)
-{
-    if (!hid_mgr.initialized || !str)
-    {
-        return -EINVAL;
-    }
-
-    for (const char *p = str; *p; p++)
-    {
-        uint8_t modifier;
-        hid_key_code_t key = ascii_to_keycode(*p, &modifier);
-
-        if (key != HID_KEY_NONE)
-        {
-            if (modifier)
-            {
-                hid_keyboard_set_modifiers(modifier);
-            }
-            hid_keyboard_press(key);
-            k_sleep(K_MSEC(10));
-            hid_keyboard_release(key);
-            if (modifier)
-            {
-                hid_keyboard_set_modifiers(0);
-            }
-            k_sleep(K_MSEC(10));
-        }
-    }
-
-    return 0;
+    return hid_keyboard_set_modifier(modifiers);
 }
 
 int hid_keyboard_send_report(const hid_keyboard_report_t *report)
@@ -559,7 +480,7 @@ int hid_keyboard_send_report(const hid_keyboard_report_t *report)
 }
 
 /*===========================================================================*/
-/* Gamepad API Implementation                                                */
+/* Gamepad API Implementation (wrappers to protocol layer)                  */
 /*===========================================================================*/
 
 int hid_gamepad_press(hid_gamepad_btn_t button)
@@ -569,11 +490,7 @@ int hid_gamepad_press(hid_gamepad_btn_t button)
         return -EINVAL;
     }
 
-    k_mutex_lock(&hid_mgr.mutex, K_FOREVER);
-    hid_mgr.state.gamepad.buttons |= button;
-    int ret = send_gamepad_report();
-    k_mutex_unlock(&hid_mgr.mutex);
-    return ret;
+    return hid_gamepad_press_button(button);
 }
 
 int hid_gamepad_release(hid_gamepad_btn_t button)
@@ -583,25 +500,7 @@ int hid_gamepad_release(hid_gamepad_btn_t button)
         return -EINVAL;
     }
 
-    k_mutex_lock(&hid_mgr.mutex, K_FOREVER);
-    hid_mgr.state.gamepad.buttons &= ~button;
-    int ret = send_gamepad_report();
-    k_mutex_unlock(&hid_mgr.mutex);
-    return ret;
-}
-
-int hid_gamepad_set_axis(hid_gamepad_axis_t axis, int16_t value)
-{
-    if (!hid_mgr.initialized || axis >= HID_GAMEPAD_MAX_AXES)
-    {
-        return -EINVAL;
-    }
-
-    k_mutex_lock(&hid_mgr.mutex, K_FOREVER);
-    hid_mgr.state.gamepad.axes[axis] = value;
-    int ret = send_gamepad_report();
-    k_mutex_unlock(&hid_mgr.mutex);
-    return ret;
+    return hid_gamepad_release_button(button);
 }
 
 int hid_gamepad_set_dpad(uint8_t direction)
@@ -611,11 +510,7 @@ int hid_gamepad_set_dpad(uint8_t direction)
         return -EINVAL;
     }
 
-    k_mutex_lock(&hid_mgr.mutex, K_FOREVER);
-    hid_mgr.state.gamepad.hat = direction;
-    int ret = send_gamepad_report();
-    k_mutex_unlock(&hid_mgr.mutex);
-    return ret;
+    return hid_gamepad_set_hat(direction);
 }
 
 int hid_gamepad_send_report(const hid_gamepad_report_t *report)
@@ -627,20 +522,6 @@ int hid_gamepad_send_report(const hid_gamepad_report_t *report)
 
     k_mutex_lock(&hid_mgr.mutex, K_FOREVER);
     memcpy(&hid_mgr.state.gamepad, report, sizeof(hid_gamepad_report_t));
-    int ret = send_gamepad_report();
-    k_mutex_unlock(&hid_mgr.mutex);
-    return ret;
-}
-
-int hid_gamepad_reset(void)
-{
-    if (!hid_mgr.initialized)
-    {
-        return -EINVAL;
-    }
-
-    k_mutex_lock(&hid_mgr.mutex, K_FOREVER);
-    memset(&hid_mgr.state.gamepad, 0, sizeof(hid_gamepad_report_t));
     int ret = send_gamepad_report();
     k_mutex_unlock(&hid_mgr.mutex);
     return ret;

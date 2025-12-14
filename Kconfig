@@ -173,7 +173,7 @@ config AKIRA_BT_HID
 config AKIRA_USB_HID
     bool "Enable USB HID"
     default y
-    depends on AKIRA_HID && USB_DEVICE
+    depends on AKIRA_HID && USB_DEVICE_STACK
     help
       Enable HID over USB.
       Requires USB device stack to be enabled.

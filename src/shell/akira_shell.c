@@ -1178,6 +1178,7 @@ static int cmd_ble_shell(const struct shell *shell, size_t argc, char **argv)
 SHELL_CMD_REGISTER(ble_shell, NULL, "Send shell command to phone via BLE", cmd_ble_shell);
 #endif
 
+#ifdef CONFIG_NETWORKING
 /* WiFi status command */
 static int cmd_wifi_status(const struct shell *sh, size_t argc, char **argv)
 {
@@ -1383,6 +1384,7 @@ static int cmd_web_start(const struct shell *sh, size_t argc, char **argv)
 
     return 0;
 }
+#endif /* CONFIG_NETWORKING */
 
 /* RAM Storage Shell Commands */
 static int cmd_ram_ls(const struct shell *sh, size_t argc, char **argv)
@@ -1453,11 +1455,13 @@ SHELL_STATIC_SUBCMD_SET_CREATE(ram_cmds,
 
 SHELL_CMD_REGISTER(ram, &ram_cmds, "RAM storage commands", NULL);
 
+#ifdef CONFIG_NETWORKING
 SHELL_CMD_REGISTER(wifi_status, NULL, "Show WiFi connection status", cmd_wifi_status);
 SHELL_CMD_REGISTER(wifi_connect, NULL, "Connect to configured WiFi network", cmd_wifi_connect);
 SHELL_CMD_REGISTER(wifi_scan, NULL, "Scan for WiFi networks", cmd_wifi_scan);
 SHELL_CMD_REGISTER(web_status, NULL, "Show web server status", cmd_web_status);
 SHELL_CMD_REGISTER(web_start, NULL, "Start web server", cmd_web_start);
+#endif
 
 #ifdef CONFIG_AKIRA_APP_MANAGER
 /* Shell command registration - organized by category */

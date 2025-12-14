@@ -36,8 +36,7 @@ int hid_gamepad_init(void)
     k_mutex_init(&gp_state.mutex);
 
     memset(&gp_state.report, 0, sizeof(hid_gamepad_report_t));
-    gp_state.report.report_id = 0x02;  // Gamepad report ID
-    gp_state.report.hat = -1;          // Center position
+    gp_state.report.hat = 0xFF;        // Null state (no direction)
 
     gp_state.initialized = true;
     return 0;
@@ -113,7 +112,7 @@ int hid_gamepad_set_axis(hid_gamepad_axis_t axis, int16_t value)
         return -ENODEV;
     }
 
-    if (axis >= HID_GAMEPAD_AXIS_COUNT) {
+    if (axis >= HID_GAMEPAD_MAX_AXES) {
         return -EINVAL;
     }
 
@@ -140,8 +139,9 @@ int hid_gamepad_set_trigger(uint8_t trigger, int16_t value)
         value = 0;
     }
 
+    // Triggers are axes 4 (LT) and 5 (RT)
     k_mutex_lock(&gp_state.mutex, K_FOREVER);
-    gp_state.report.triggers[trigger] = value;
+    gp_state.report.axes[HID_AXIS_LT + trigger] = value;
     k_mutex_unlock(&gp_state.mutex);
 
     LOG_DBG("Trigger %u set to %d", trigger, value);
@@ -177,17 +177,13 @@ int hid_gamepad_reset(void)
     // Reset buttons
     gp_state.report.buttons = 0;
     
-    // Center all axes
-    for (int i = 0; i < HID_GAMEPAD_AXIS_COUNT; i++) {
+    // Center all axes (including triggers)
+    for (int i = 0; i < HID_GAMEPAD_MAX_AXES; i++) {
         gp_state.report.axes[i] = 0;
     }
     
-    // Release triggers
-    gp_state.report.triggers[0] = 0;
-    gp_state.report.triggers[1] = 0;
-    
     // Center D-pad
-    gp_state.report.hat = -1;
+    gp_state.report.hat = 0xFF;  // Null state
     
     k_mutex_unlock(&gp_state.mutex);
 
@@ -240,7 +236,7 @@ uint16_t hid_gamepad_get_button_state(void)
 
 int16_t hid_gamepad_get_axis(hid_gamepad_axis_t axis)
 {
-    if (!gp_state.initialized || axis >= HID_GAMEPAD_AXIS_COUNT) {
+    if (!gp_state.initialized || axis >= HID_GAMEPAD_MAX_AXES) {
         return 0;
     }
 

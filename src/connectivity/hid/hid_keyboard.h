@@ -44,17 +44,17 @@ int hid_keyboard_press_key(uint8_t keycode);
 int hid_keyboard_release_key(uint8_t keycode);
 
 /**
- * @brief Release all keys
+ * @brief Clear all keys and modifiers (internal)
  * @return 0 on success
  */
-int hid_keyboard_release_all(void);
+int hid_keyboard_clear(void);
 
 /**
- * @brief Set modifier keys (Ctrl, Shift, Alt, GUI)
+ * @brief Set modifier keys bitmask (internal)
  * @param modifiers Bitmask of HID_MOD_* values
  * @return 0 on success
  */
-int hid_keyboard_set_modifiers(uint8_t modifiers);
+int hid_keyboard_set_modifier(uint8_t modifiers);
 
 /**
  * @brief Press a modifier key

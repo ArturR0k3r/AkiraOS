@@ -120,9 +120,10 @@ extern "C"
     /**
      * @brief Type a string (press and release each key)
      * @param str ASCII string to type
+     * @param send_callback Optional callback for sending each report
      * @return 0 on success
      */
-    int hid_keyboard_type_string(const char *str);
+    int hid_keyboard_type_string(const char *str, int (*send_callback)(const hid_keyboard_report_t *));
 
     /**
      * @brief Send raw keyboard report

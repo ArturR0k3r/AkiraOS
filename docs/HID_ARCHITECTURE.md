@@ -13,20 +13,20 @@ Clear separation between HID protocol, transports (BT/USB), and hardware drivers
 - ✅ OCRE event system integration
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    WASM Applications                        │
-│  (keypad_app.wasm, volume_control.wasm, macro_pad.wasm)   │
-└────────────────────┬────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│                    WASM Applications                       │
+│  (keypad_app.wasm, volume_control.wasm, macro_pad.wasm)    │
+└────────────────────┬───────────────────────────────────────┘
                      │
-┌────────────────────▼────────────────────────────────────────┐
-│                 WASM API Layer                              │
+┌────────────────────▼───────────────────────────────────────┐
+│                 WASM API Layer                             │
 │  • akira_hid_*     - HID control API                       │
 │  • akira_bt_*      - Bluetooth control API                 │
 │  • akira_usb_*     - USB control API                       │
 │  • akira_button_*  - Button driver API                     │
 │  • akira_encoder_* - Encoder driver API                    │
-└──┬────────────┬────────────┬────────────┬──────────────┬───┘
-   │            │            │            │              │
+└──┬────────────┬────────────┬────────────┬────────────┬─────┘
+   │            │            │            │            │
 ┌──▼─────┐  ┌──▼──────┐  ┌──▼──────┐  ┌─▼────────┐  ┌──▼──────┐
 │  HID   │  │   BT    │  │   USB   │  │ Buttons  │  │Encoders │
 │ Layer  │  │  Layer  │  │  Layer  │  │  Driver  │  │ Driver  │

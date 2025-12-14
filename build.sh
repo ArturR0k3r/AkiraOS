@@ -399,13 +399,17 @@ flash_esp32() {
 
 flash_nordic() {
     local build_dir=$(get_build_dir)
+    local mcuboot_dir=$(get_mcuboot_build_dir)
     
-    # Flash bootloader
+    # Flash bootloader (only if MCUboot is enabled for this board)
     if [[ "$FLASH_TARGET" == "b" || "$FLASH_TARGET" == "all" ]]; then
-        local mcuboot_dir=$(get_mcuboot_build_dir)
-        print_step "Flashing MCUboot (Nordic)..."
-        west flash -d "$mcuboot_dir"
-        print_success "MCUboot flashed!"
+        if [[ -d "$mcuboot_dir" ]]; then
+            print_step "Flashing MCUboot (Nordic)..."
+            west flash -d "$mcuboot_dir"
+            print_success "MCUboot flashed!"
+        else
+            print_info "Skipping MCUboot (not built for this board)"
+        fi
     fi
     
     # Flash application
@@ -418,13 +422,17 @@ flash_nordic() {
 
 flash_stm32() {
     local build_dir=$(get_build_dir)
+    local mcuboot_dir=$(get_mcuboot_build_dir)
     
-    # Flash bootloader
+    # Flash bootloader (only if MCUboot is enabled for this board)
     if [[ "$FLASH_TARGET" == "b" || "$FLASH_TARGET" == "all" ]]; then
-        local mcuboot_dir=$(get_mcuboot_build_dir)
-        print_step "Flashing MCUboot (STM32)..."
-        west flash -d "$mcuboot_dir"
-        print_success "MCUboot flashed!"
+        if [[ -d "$mcuboot_dir" ]]; then
+            print_step "Flashing MCUboot (STM32)..."
+            west flash -d "$mcuboot_dir"
+            print_success "MCUboot flashed!"
+        else
+            print_info "Skipping MCUboot (not built for this board)"
+        fi
     fi
     
     # Flash application

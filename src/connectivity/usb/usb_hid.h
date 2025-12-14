@@ -19,13 +19,13 @@ extern "C"
      * @brief Initialize USB HID device
      * @return 0 on success
      */
-    int usb_hid_init(void);
+    int akira_usb_hid_init(void);
 
     /**
      * @brief Get USB HID transport operations
      * @return Transport operations pointer
      */
-    const hid_transport_ops_t *usb_hid_get_transport(void);
+    const hid_transport_ops_t *akira_usb_hid_get_transport(void);
 
     /**
      * @brief Enable USB HID

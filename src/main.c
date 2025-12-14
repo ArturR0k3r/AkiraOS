@@ -25,6 +25,9 @@
 #ifdef CONFIG_AKIRA_APP_MANAGER
 #include "services/app_manager.h"
 #endif
+#ifdef CONFIG_AKIRA_HID
+#include "connectivity/hid/hid_manager.h"
+#endif
 #include "akira/akira.h"
 
 LOG_MODULE_REGISTER(akira_main, AKIRA_LOG_LEVEL);
@@ -38,11 +41,11 @@ static struct fs_mount_t fs = {
     .mnt_point = "/SD:",
 };
 
-
-
+#ifdef CONFIG_WIFI
 static void wifi_event_handler(struct net_mgmt_event_callback *cb,
                                uint64_t mgmt_event, struct net_if *iface);
 static int initialize_wifi(void);
+#endif
 
 static void get_ip_work_handler(struct k_work *work)
 {
@@ -311,6 +314,7 @@ static int execute_shell_command_callback(const char *command, char *response, s
                     command);
 }
 
+#ifdef CONFIG_WIFI
 /* WiFi event handling */
 static void wifi_event_handler(struct net_mgmt_event_callback *cb,
                                uint64_t mgmt_event,
@@ -430,11 +434,13 @@ static int initialize_wifi(void)
 
     return 0;
 }
+#endif /* CONFIG_WIFI */
 
 static void on_settings_changed(const char *key, const void *value, void *user_data)
 {
     LOG_INF("Setting changed: %s", key);
 
+#ifdef CONFIG_WIFI
     if (strcmp(key, WIFI_SSID_KEY) == 0 || strcmp(key, WIFI_PASSCODE_KEY) == 0)
     {
         LOG_INF("WiFi credentials updated - reconnecting...");
@@ -453,6 +459,7 @@ static void on_settings_changed(const char *key, const void *value, void *user_d
             initialize_wifi();
         }
     }
+#endif
 }
 
 static void on_ota_progress(const struct ota_progress *progress, void *user_data)
@@ -684,6 +691,70 @@ int main(void)
     }
     LOG_INF("✅ Akira shell initialized");
 
+#ifdef CONFIG_AKIRA_HID
+    // Initialize HID subsystem
+    hid_config_t hid_config = {
+        .device_types = HID_DEVICE_COMBO,
+#ifdef CONFIG_AKIRA_USB_HID
+        .preferred_transport = HID_TRANSPORT_USB,
+#else
+        .preferred_transport = HID_TRANSPORT_BLE,
+#endif
+        .device_name = "AkiraOS HID",
+        .vendor_id = 0x1209,
+        .product_id = 0x0001,
+    };
+    
+    ret = hid_manager_init(&hid_config);
+    if (ret)
+    {
+        LOG_ERR("HID manager initialization failed: %d", ret);
+    }
+    else
+    {
+        LOG_INF("✅ HID manager initialized");
+        
+        // Register USB HID transport if enabled
+#ifdef CONFIG_AKIRA_USB_HID
+        extern int akira_usb_hid_init(void);
+        ret = akira_usb_hid_init();
+        if (ret)
+        {
+            LOG_ERR("USB HID transport registration failed: %d", ret);
+        }
+        else
+        {
+            LOG_INF("✅ USB HID transport registered");
+            
+            // Enable HID manager (will activate USB transport)
+            ret = hid_manager_enable();
+            if (ret)
+            {
+                LOG_ERR("HID manager enable failed: %d", ret);
+            }
+            else
+            {
+                LOG_INF("✅ HID manager enabled");
+            }
+        }
+#endif
+        
+        // Register BT HID transport if enabled
+#ifdef CONFIG_AKIRA_BT_HID
+        extern int bt_hid_init(void);
+        ret = bt_hid_init();
+        if (ret)
+        {
+            LOG_ERR("BT HID transport registration failed: %d", ret);
+        }
+        else
+        {
+            LOG_INF("✅ BT HID transport registered");
+        }
+#endif
+    }
+#endif
+
     // Prepare web server callbacks
     struct web_server_callbacks web_callbacks = {
         .get_system_info = get_system_info_callback,
@@ -699,6 +770,7 @@ int main(void)
     }
     LOG_INF("✅ Web server initialized and started");
 
+#ifdef CONFIG_WIFI
     // Initialize WiFi
     ret = initialize_wifi();
     if (ret)
@@ -710,6 +782,7 @@ int main(void)
     {
         LOG_INF("✅ WiFi initialization started");
     }
+#endif
 
     /* Add startup logs to web terminal */
     web_server_add_log("<inf> AkiraOS v1.2.0 started");
