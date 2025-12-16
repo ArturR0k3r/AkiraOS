@@ -456,9 +456,8 @@ static void status_bar_update_work_handler(struct k_work *work)
     }
     
     /* Reschedule for next update */
-    k_work_reschedule_for_queue(&shell_workq, 
-                                 K_WORK_DELAYABLE_FROM_WORK(work), 
-                                 K_SECONDS(1));
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    k_work_reschedule_for_queue(&shell_workq, dwork, K_SECONDS(1));
 }
 static K_WORK_DELAYABLE_DEFINE(status_bar_work, status_bar_update_work_handler);
 
@@ -499,7 +498,10 @@ int akira_shell_init(void)
             /* Welcome message */
             shell_display_print("", SHELL_TEXT_NORMAL);
             shell_display_print("=== AkiraOS Shell ===", SHELL_TEXT_PROMPT);
-            shell_display_printf(SHELL_TEXT_NORMAL, "Version: %s", CONFIG_AKIRA_VERSION);
+            char version[32];
+        snprintf(version, sizeof(version), "%d.%d.%d", 
+                 AKIRA_VERSION_MAJOR, AKIRA_VERSION_MINOR, AKIRA_VERSION_PATCH);
+        shell_display_printf(SHELL_TEXT_NORMAL, "Version: %s", version);
             shell_display_print("Type 'help' for commands", SHELL_TEXT_NORMAL);
             shell_display_print("", SHELL_TEXT_NORMAL);
         }

@@ -53,6 +53,7 @@ target_sources(app PRIVATE
     src/drivers/platform_hal.c
     src/drivers/driver_registry.c
     src/shell/akira_shell.c
+    src/shell/shell_display.c
     src/settings/settings.c
 )
 
@@ -100,6 +101,13 @@ target_sources(app PRIVATE
 # App Loader
 target_sources(app PRIVATE
     src/apps/app_loader.c
+)
+
+# ===== Core Libraries =====
+# Shared utilities used across modules
+target_sources(app PRIVATE
+    src/lib/path_utils.c
+    src/lib/error_codes.c
 )
 
 # ===== Akira Core (kernel, HAL) =====
@@ -256,10 +264,9 @@ if(CONFIG_AKIRA_CLOUD_CLIENT)
     endif()
 endif()
 
-# Services (OCRE/WASM runtime wrappers)
+# Services (OCRE/WASM runtime wrapper)
 target_sources(app PRIVATE
     src/services/akira_runtime.c
-    src/services/wasm_app_manager.c
 )
 
 # Filesystem Manager (MUST be before App Manager)

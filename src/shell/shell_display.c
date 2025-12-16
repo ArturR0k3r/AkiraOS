@@ -44,6 +44,9 @@ typedef struct {
     bool dirty;                                       // Needs redraw
 } shell_text_buffer_t;
 
+/* Mutex for thread-safe access */
+static K_MUTEX_DEFINE(shell_display_mutex);
+
 /* Shell display state */
 static struct {
     shell_text_buffer_t buffer;
@@ -51,7 +54,6 @@ static struct {
     uint8_t cursor_pos;                               // Cursor position in input
     bool initialized;
     bool enabled;
-    K_MUTEX_DEFINE(mutex);
 } shell_display = {
     .initialized = false,
     .enabled = false,
@@ -62,7 +64,7 @@ static void render_status_bar(void);
 static void render_text_buffer(void);
 static void render_input_line(void);
 static void scroll_buffer_up(void);
-static void clear_line(uint8_t row);
+// static void clear_line(uint8_t row);  // Disabled - needs ili9341_fill_rect
 
 /**
  * @brief Initialize shell display system
@@ -74,14 +76,14 @@ int shell_display_init(void)
     }
 
     // Initialize display hardware
-    int ret = ili9341_init();
+    int ret = ili9341_init(NULL, NULL, NULL);
     if (ret < 0) {
         LOG_ERR("Failed to initialize display: %d", ret);
         return ret;
     }
 
     // Clear screen
-    ili9341_fill_screen(SHELL_BG_COLOR);
+    ili9341_fill_color(SHELL_BG_COLOR);
 
     // Initialize buffer
     memset(&shell_display.buffer, 0, sizeof(shell_text_buffer_t));
@@ -107,9 +109,9 @@ int shell_display_init(void)
  */
 void shell_display_set_enabled(bool enabled)
 {
-    k_mutex_lock(&shell_display.mutex, K_FOREVER);
+    k_mutex_lock(&shell_display_mutex, K_FOREVER);
     shell_display.enabled = enabled;
-    k_mutex_unlock(&shell_display.mutex);
+    k_mutex_unlock(&shell_display_mutex);
 }
 
 /**
@@ -129,7 +131,7 @@ void shell_display_print(const char *text, shell_text_type_t type)
         return;
     }
 
-    k_mutex_lock(&shell_display.mutex, K_FOREVER);
+    k_mutex_lock(&shell_display_mutex, K_FOREVER);
 
     // Determine color based on type
     uint16_t color;
@@ -179,7 +181,7 @@ void shell_display_print(const char *text, shell_text_type_t type)
         }
     }
 
-    k_mutex_unlock(&shell_display.mutex);
+    k_mutex_unlock(&shell_display_mutex);
 
     // Trigger redraw
     shell_display_refresh();
@@ -212,18 +214,19 @@ void shell_display_clear(void)
         return;
     }
 
-    k_mutex_lock(&shell_display.mutex, K_FOREVER);
+    k_mutex_lock(&shell_display_mutex, K_FOREVER);
 
     memset(&shell_display.buffer, 0, sizeof(shell_text_buffer_t));
     shell_display.buffer.dirty = true;
 
-    k_mutex_unlock(&shell_display.mutex);
+    k_mutex_unlock(&shell_display_mutex);
 
     // Clear screen
-    ili9341_fill_rect(0, SHELL_STATUS_BAR_HEIGHT, 
-                      SHELL_DISPLAY_WIDTH, 
-                      SHELL_DISPLAY_HEIGHT - SHELL_STATUS_BAR_HEIGHT,
-                      SHELL_BG_COLOR);
+    // Clear text area (TODO: implement ili9341_fill_rect)
+    // ili9341_fill_rect(0, SHELL_STATUS_BAR_HEIGHT,
+    //                   SHELL_DISPLAY_WIDTH, 
+    //                   SHELL_DISPLAY_HEIGHT - SHELL_STATUS_BAR_HEIGHT,
+    //                   SHELL_BG_COLOR);
 }
 
 /**
@@ -235,7 +238,7 @@ void shell_display_refresh(void)
         return;
     }
 
-    k_mutex_lock(&shell_display.mutex, K_FOREVER);
+    k_mutex_lock(&shell_display_mutex, K_FOREVER);
 
     if (shell_display.buffer.dirty) {
         render_text_buffer();
@@ -243,7 +246,7 @@ void shell_display_refresh(void)
         shell_display.buffer.dirty = false;
     }
 
-    k_mutex_unlock(&shell_display.mutex);
+    k_mutex_unlock(&shell_display_mutex);
 }
 
 /**
@@ -255,13 +258,13 @@ void shell_display_set_input(const char *text, uint8_t cursor_pos)
         return;
     }
 
-    k_mutex_lock(&shell_display.mutex, K_FOREVER);
+    k_mutex_lock(&shell_display_mutex, K_FOREVER);
 
     strncpy(shell_display.input_line, text, SHELL_MAX_COLS);
     shell_display.input_line[SHELL_MAX_COLS] = '\0';
     shell_display.cursor_pos = cursor_pos;
 
-    k_mutex_unlock(&shell_display.mutex);
+    k_mutex_unlock(&shell_display_mutex);
 
     render_input_line();
 }
@@ -289,14 +292,13 @@ static void scroll_buffer_up(void)
  */
 static void render_status_bar(void)
 {
-    // Background
-    ili9341_fill_rect(0, 0, SHELL_DISPLAY_WIDTH, SHELL_STATUS_BAR_HEIGHT, 
-                      SHELL_STATUS_BG_COLOR);
+    // Background (TODO: implement ili9341_fill_rect)
+    // ili9341_fill_rect(0, 0, SHELL_DISPLAY_WIDTH, SHELL_STATUS_BAR_HEIGHT,
+    //                   SHELL_STATUS_BG_COLOR);
 
     // Title text
     const char *title = "AkiraOS Shell";
-    ili9341_draw_string(2, 2, title, Font7x10, SHELL_STATUS_TEXT_COLOR, 
-                        SHELL_STATUS_BG_COLOR);
+    ili9341_draw_text(2, 2, title, SHELL_STATUS_TEXT_COLOR, FONT_7X10);
 
     // System info (right side)
     uint64_t uptime_sec = k_uptime_get() / 1000;
@@ -308,9 +310,8 @@ static void render_status_bar(void)
     
     // Right-aligned
     int info_width = strlen(info) * SHELL_FONT_WIDTH;
-    ili9341_draw_string(SHELL_DISPLAY_WIDTH - info_width - 2, 2, 
-                        info, Font7x10, SHELL_STATUS_TEXT_COLOR, 
-                        SHELL_STATUS_BG_COLOR);
+    ili9341_draw_text(SHELL_DISPLAY_WIDTH - info_width - 2, 2, 
+                        info, SHELL_STATUS_TEXT_COLOR, FONT_7X10);
 }
 
 /**
@@ -327,19 +328,18 @@ static void render_text_buffer(void)
             break;  // Don't overlap input line
         }
 
-        // Clear line background
-        ili9341_fill_rect(SHELL_PADDING_LEFT, y, 
-                          SHELL_DISPLAY_WIDTH - SHELL_PADDING_LEFT * 2, 
-                          SHELL_FONT_HEIGHT, 
-                          SHELL_BG_COLOR);
+        // Clear line background (TODO: implement ili9341_fill_rect)
+        // ili9341_fill_rect(SHELL_PADDING_LEFT, y,
+        //                   SHELL_DISPLAY_WIDTH - SHELL_PADDING_LEFT * 2,
+        //                   SHELL_FONT_HEIGHT,
+        //                   SHELL_BG_COLOR);
 
         // Draw text
         if (shell_display.buffer.lines[i][0] != '\0') {
-            ili9341_draw_string(SHELL_PADDING_LEFT, y, 
+            ili9341_draw_text(SHELL_PADDING_LEFT, y, 
                                shell_display.buffer.lines[i], 
-                               Font7x10,
                                shell_display.buffer.colors[i], 
-                               SHELL_BG_COLOR);
+                               FONT_7X10);
         }
     }
 }
@@ -351,34 +351,33 @@ static void render_input_line(void)
 {
     int y = SHELL_DISPLAY_HEIGHT - SHELL_FONT_HEIGHT - 2;
 
-    // Clear input line area
-    ili9341_fill_rect(0, y, SHELL_DISPLAY_WIDTH, SHELL_FONT_HEIGHT + 2, 
-                      SHELL_BG_COLOR);
+    // Clear input line area (TODO: implement ili9341_fill_rect)
+    // ili9341_fill_rect(0, y, SHELL_DISPLAY_WIDTH, SHELL_FONT_HEIGHT + 2,
+    //                   SHELL_BG_COLOR);
 
     // Draw prompt
     const char *prompt = "$ ";
     int prompt_width = strlen(prompt) * SHELL_FONT_WIDTH;
-    ili9341_draw_string(SHELL_PADDING_LEFT, y, prompt, Font7x10, 
-                        SHELL_PROMPT_COLOR, SHELL_BG_COLOR);
+    ili9341_draw_text(SHELL_PADDING_LEFT, y, prompt, 
+                        SHELL_PROMPT_COLOR, FONT_7X10);
 
     // Draw input text
     if (shell_display.input_line[0] != '\0') {
-        ili9341_draw_string(SHELL_PADDING_LEFT + prompt_width, y, 
-                           shell_display.input_line, Font7x10,
-                           SHELL_TEXT_COLOR, SHELL_BG_COLOR);
-    }
-
-    // Draw cursor (blinking block)
+        ili9341_draw_text(SHELL_PADDING_LEFT + prompt_width, y, 
+                           shell_display.input_line, 
+                           SHELL_TEXT_COLOR, FONT_7X10);
+    }    // Draw cursor (blinking block)
     int cursor_x = SHELL_PADDING_LEFT + prompt_width + 
                    (shell_display.cursor_pos * SHELL_FONT_WIDTH);
     
-    // Simple cursor (rectangle)
-    ili9341_fill_rect(cursor_x, y, SHELL_FONT_WIDTH, SHELL_FONT_HEIGHT, 
-                      SHELL_TEXT_COLOR);
+    // Simple cursor (rectangle) - TODO: implement ili9341_fill_rect
+    // ili9341_fill_rect(cursor_x, y, SHELL_FONT_WIDTH, SHELL_FONT_HEIGHT,
+    //                   SHELL_TEXT_COLOR);
 }
 
+#if 0  // Disabled - unused, needs ili9341_fill_rect implementation
 /**
- * @brief Clear a specific line
+ * @brief Clear a specific line on display
  */
 static void clear_line(uint8_t row)
 {
@@ -387,11 +386,13 @@ static void clear_line(uint8_t row)
     }
 
     int y = SHELL_STATUS_BAR_HEIGHT + SHELL_PADDING_TOP + (row * SHELL_FONT_HEIGHT);
-    ili9341_fill_rect(SHELL_PADDING_LEFT, y, 
-                      SHELL_DISPLAY_WIDTH - SHELL_PADDING_LEFT * 2, 
-                      SHELL_FONT_HEIGHT, 
-                      SHELL_BG_COLOR);
+    // TODO: implement ili9341_fill_rect
+    // ili9341_fill_rect(SHELL_PADDING_LEFT, y,
+    //                   SHELL_DISPLAY_WIDTH - SHELL_PADDING_LEFT * 2,
+    //                   SHELL_FONT_HEIGHT,
+    //                   SHELL_BG_COLOR);
 }
+#endif  // Disabled
 
 /**
  * @brief Periodic status bar update (call every second)

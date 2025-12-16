@@ -36,9 +36,6 @@
 #ifdef CONFIG_AKIRA_APP_MANAGER
 #include "services/app_manager.h"
 #endif
-#ifdef CONFIG_AKIRA_OCRE_RUNTIME
-#include "runtime/ocre/ocre_runtime.h"
-#endif
 #ifdef CONFIG_AKIRA_SHELL
 #include "shell/akira_shell.h"
 #endif
@@ -117,15 +114,8 @@ int main(void)
         LOG_WRN("USB init failed");
     }
 #endif
-    
-    /* Runtime (optional) */
-#ifdef CONFIG_AKIRA_OCRE_RUNTIME
-    if (ocre_runtime_init() < 0) {
-        LOG_WRN("OCRE runtime failed");
-    }
-#endif
 
-    /* App manager (optional) */
+    /* App manager (optional) - includes runtime initialization */
 #ifdef CONFIG_AKIRA_APP_MANAGER
     if (app_manager_init() < 0) {
         LOG_WRN("App manager failed");

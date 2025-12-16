@@ -290,22 +290,3 @@ bool akira_storage_exists(const char *path)
     int rc = fs_stat(full_path, &entry);
     return (rc == 0);
 }
-
-    if (!path)
-    {
-        return -1;
-    }
-
-    char full_path[MAX_PATH_LEN];
-    if (build_app_path(path, full_path, sizeof(full_path)) < 0)
-    {
-        return -2;
-    }
-
-    // TODO: Get file info using fs_stat()
-    // struct fs_dirent entry;
-    // fs_stat(full_path, &entry);
-    // return entry.size;
-
-    return -1; // Not implemented
-}
