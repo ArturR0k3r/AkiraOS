@@ -27,8 +27,17 @@ static struct {
 } fs_state = {0};
 
 /* Simple RAM-based file storage for fallback */
-#define RAM_FILE_MAX_COUNT 16
-#define RAM_FILE_MAX_SIZE  (64 * 1024)  /* 64KB per file */
+/* Reduced limits to prevent excessive RAM usage */
+#if defined(CONFIG_SOC_ESP32S3)
+    #define RAM_FILE_MAX_COUNT 4           /* 4 files max */
+    #define RAM_FILE_MAX_SIZE  (16 * 1024) /* 16KB per file = 64KB max */
+#elif defined(CONFIG_SOC_ESP32)
+    #define RAM_FILE_MAX_COUNT 4
+    #define RAM_FILE_MAX_SIZE  (12 * 1024) /* 48KB max total */
+#else
+    #define RAM_FILE_MAX_COUNT 8           /* More RAM available */
+    #define RAM_FILE_MAX_SIZE  (32 * 1024) /* 256KB max total */
+#endif
 #define RAM_FILE_NAME_MAX  128
 
 typedef struct {

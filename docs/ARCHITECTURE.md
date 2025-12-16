@@ -9,8 +9,10 @@ AkiraOS is a modular, security-focused embedded OS designed for resource-constra
 - **STUPID SIMPLE** — minimal complexity, maximum clarity
 - **Secure by Design** — capability-based security, signed apps, sandboxing
 - **Modular** — use only what you need
+- **Configuration-Driven** — Kconfig-based initialization
 - **Multi-Platform** — ESP32, nRF5x/nRF91, STM32 support
 - **Driver Rich** — unified framework for displays, RF chips, sensors
+- **Event-Driven** — loose coupling via event bus
 
 ## System Architecture
 
@@ -28,8 +30,18 @@ AkiraOS is a modular, security-focused embedded OS designed for resource-constra
 │  │ App Lifecycle │  Security    │  Resource    │ IPC Message │ │
 │  │   Manager     │  Enforcer    │  Scheduler   │     Bus     │ │
 │  └───────────────┴──────────────┴──────────────┴─────────────┘ │
-│        (Isolation, quotas, signing, inter-app communication)    │
+├─────────────────────────────────────────────────────────────────┤
+│                      System Manager (NEW)                       │
+│  • Config-driven initialization (Kconfig)                       │
+│  • Declarative init table with priorities                       │
+│  • Graceful degradation (required vs optional)                  │
+│  • System lifecycle coordination                                │
 ├────────────────┬────────────────────────┬───────────────────────┤
+│  Hardware Mgr  │    Network Manager     │   Event Bus (NEW)     │
+│  (NEW)         │       (NEW)            │   (Pub/Sub)           │
+│  • HAL + Drv   │  • WiFi/BT/USB coord   │   • Loose coupling    │
+│    Registry    │  • Settings integration│   • Inter-module comm │
+├────────────────┴────────────────────────┴───────────────────────┤
 │  RF Manager    │    OTA Manager         │  Power Manager        │
 │ (Multi-radio)  │ (Multi-transport)      │ (Battery, sleep)      │
 ├────────────────┴────────────────────────┴───────────────────────┤
@@ -49,14 +61,8 @@ AkiraOS is a modular, security-focused embedded OS designed for resource-constra
 │              Akira System HAL (akira/hal)                       │
 │        (System version, uptime, reboot, device info)            │
 ├─────────────────────────────────────────────────────────────────┤
-│                      Driver Framework                           │
-│  ┌──────────────┬──────────────┬──────────────┬──────────────┐ │
-│  │ RF Drivers   │ Display      │ Sensor       │ Storage      │ │
-│  │ LR1121       │ ILI9341      │ LSM6DS3      │ LittleFS     │ │
-│  │ LR1210       │ SSD1306      │ BME280       │ NVS          │ │
-│  │ CC1101       │ ST7789       │ MPU6050      │              │ │
-│  │ nRF24L01     │ E-Paper      │ INA219       │              │ │
-│  └──────────────┴──────────────┴──────────────┴──────────────┘ │
+│              Driver Registry (Runtime Driver Loading)           │
+│        (Display, Sensors, RF, Storage drivers)                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                        Zephyr RTOS                              │
 │         (Real-time kernel, networking, storage, USB)            │
@@ -64,6 +70,34 @@ AkiraOS is a modular, security-focused embedded OS designed for resource-constra
 │              Hardware (ESP32 | nRF5x/nRF91 | STM32)            │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+### New Core Management Layer
+
+The system is now orchestrated by three key managers that work together:
+
+**System Manager** (`src/core/system_manager`)
+- Reads Kconfig to determine enabled features
+- Initializes subsystems via priority-based init table
+- Coordinates system lifecycle (boot, run, shutdown)
+- Provides system-wide status and diagnostics
+
+**Hardware Manager** (`src/core/hardware_manager`)
+- Leverages existing HAL and driver_registry
+- Platform-specific initialization (display, sensors, RF)
+- Hardware capability queries
+- Driver loading and registration
+
+**Network Manager** (`src/core/network_manager`)
+- Coordinates existing connectivity layers (WiFi, BT, USB)
+- Integrates with settings for credentials
+- Publishes network events via event bus
+- Manages HTTP server lifecycle
+
+**Event Bus** (`src/core/event_bus`)
+- Pub/sub pattern for loose coupling
+- Events: NETWORK_UP, OTA_PROGRESS, STORAGE_READY, etc.
+- Thread-safe message queue
+- Enables reactive architecture
 
 ## Trust Model
 
@@ -122,6 +156,83 @@ OCRE verifies full chain before execution.
 | permissions | none |
 
 OCRE enforces permissions at runtime. Apps cannot call APIs outside granted capabilities.
+
+---
+
+## Initialization System
+
+AkiraOS uses a **configuration-driven initialization** system that automatically starts only the features enabled in Kconfig.
+
+### Init Table Architecture
+
+The system uses a declarative initialization table with priorities:
+
+```c
+// src/core/init_table.c
+typedef struct {
+    const char *name;
+    bool (*is_enabled)(void);      // Check Kconfig
+    int (*init_func)(void);
+    int (*start_func)(void);       // Optional post-init
+    uint8_t priority;              // 0=highest
+    bool required;                 // Fail if init fails
+} subsystem_entry_t;
+
+static const subsystem_entry_t init_table[] = {
+    // Priority 0-9: Critical Foundation
+    {"HAL",        always_enabled,    akira_hal_init,        NULL, 0, true},
+    {"Drivers",    always_enabled,    driver_registry_init,  NULL, 1, true},
+    {"Hardware",   hw_enabled,        hardware_manager_init, NULL, 2, true},
+    
+    // Priority 10-19: Core Services
+    {"Storage",    storage_enabled,   fs_manager_init,       NULL, 10, true},
+    {"Settings",   always_enabled,    user_settings_init,    NULL, 11, true},
+    
+    // Priority 20-29: Networking
+    {"Network",    network_enabled,   network_manager_init,  network_manager_start, 20, false},
+    
+    // Priority 30-39: Applications
+    {"Shell",      shell_enabled,     akira_shell_init,      NULL, 30, true},
+    {"OTA",        ota_enabled,       ota_manager_init,      NULL, 31, false},
+    {"WebServer",  http_enabled,      http_server_init,      http_server_start, 32, false},
+    {"AppManager", app_mgr_enabled,   app_manager_init,      NULL, 33, false},
+    
+    {NULL} // Sentinel
+};
+```
+
+### Main Entry Point
+
+The refactored `main.c` is now minimal (< 100 lines):
+
+```c
+#include "core/system_manager.h"
+
+int main(void) {
+    LOG_INF("=== AkiraOS v%s Starting ===", CONFIG_AKIRA_VERSION);
+    
+    // Initialize system manager (reads Kconfig, loads settings)
+    system_manager_init();
+    
+    // Start all enabled subsystems via init table
+    system_manager_start();
+    
+    LOG_INF("=== AkiraOS Ready ===");
+    
+    // Run main event loop
+    system_manager_run();
+    
+    return 0;
+}
+```
+
+### Benefits
+
+- ✅ **Config-driven**: Only enabled features are initialized
+- ✅ **Dependency order**: Priority ensures correct initialization sequence
+- ✅ **Graceful degradation**: Optional subsystems can fail without crashing
+- ✅ **Maintainable**: Easy to add/remove subsystems
+- ✅ **Testable**: Each subsystem can be tested in isolation
 
 ---
 

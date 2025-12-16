@@ -6,7 +6,7 @@
  */
 
 #include "../ota_transport.h"
-#include "../ota_manager.h"
+/* Removed: #include "../ota_manager.h" - Use interface only */
 #include "../../connectivity/bluetooth/bt_manager.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>

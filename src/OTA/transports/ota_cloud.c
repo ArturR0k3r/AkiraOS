@@ -6,7 +6,7 @@
  */
 
 #include "../ota_transport.h"
-#include "../ota_manager.h"
+/* Removed: #include "../ota_manager.h" - Use interface only */
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
