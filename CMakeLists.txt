@@ -45,6 +45,15 @@ endif()
 # Add source files
 target_sources(app PRIVATE
     src/main.c
+    
+    # Core System Manager (NEW)
+    src/core/event_bus.c
+    src/core/init_table.c
+    src/core/system_manager.c
+    src/core/hardware_manager.c
+    src/core/network_manager.c
+    
+    # Legacy drivers (to be migrated)
     src/drivers/display_ili9341.c
     src/drivers/fonts.c
     src/drivers/font_data.c
