@@ -368,6 +368,54 @@ int ili9341_fill_color(uint16_t color)
     return 0;
 }
 
+int ili9341_fill_screen(uint16_t color)
+{
+    // Alias for ili9341_fill_color for compatibility
+    return ili9341_fill_color(color);
+}
+
+int ili9341_fill_rect(int x, int y, int width, int height, uint16_t color)
+{
+    // Bounds checking
+    if (x < 0 || y < 0 || x >= ILI9341_DISPLAY_WIDTH || y >= ILI9341_DISPLAY_HEIGHT) {
+        return -EINVAL;
+    }
+    
+    // Clip to screen bounds
+    if (x + width > ILI9341_DISPLAY_WIDTH) {
+        width = ILI9341_DISPLAY_WIDTH - x;
+    }
+    if (y + height > ILI9341_DISPLAY_HEIGHT) {
+        height = ILI9341_DISPLAY_HEIGHT - y;
+    }
+    
+    if (width <= 0 || height <= 0) {
+        return 0; // Nothing to draw
+    }
+
+    int ret = ili9341_set_area(x, y, x + width - 1, y + height - 1);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = ili9341_send_cmd(ILI9341_RAMWR);
+    if (ret < 0) {
+        return ret;
+    }
+
+    uint8_t color_bytes[2] = {color >> 8, color & 0xFF};
+
+    // Send color data for the rectangle
+    for (int i = 0; i < width * height; i++) {
+        ret = ili9341_send_data(color_bytes, 2);
+        if (ret < 0) {
+            return ret;
+        }
+    }
+
+    return 0;
+}
+
 int ili9341_draw_color_bars(void)
 {
     uint16_t colors[] = {WHITE_COLOR, RED_COLOR, GREEN_COLOR, BLUE_COLOR,

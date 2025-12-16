@@ -64,7 +64,7 @@ static void render_status_bar(void);
 static void render_text_buffer(void);
 static void render_input_line(void);
 static void scroll_buffer_up(void);
-// static void clear_line(uint8_t row);  // Disabled - needs ili9341_fill_rect
+static void clear_line(uint8_t row);
 
 /**
  * @brief Initialize shell display system
@@ -222,11 +222,10 @@ void shell_display_clear(void)
     k_mutex_unlock(&shell_display_mutex);
 
     // Clear screen
-    // Clear text area (TODO: implement ili9341_fill_rect)
-    // ili9341_fill_rect(0, SHELL_STATUS_BAR_HEIGHT,
-    //                   SHELL_DISPLAY_WIDTH, 
-    //                   SHELL_DISPLAY_HEIGHT - SHELL_STATUS_BAR_HEIGHT,
-    //                   SHELL_BG_COLOR);
+    ili9341_fill_rect(0, SHELL_STATUS_BAR_HEIGHT,
+                      SHELL_DISPLAY_WIDTH, 
+                      SHELL_DISPLAY_HEIGHT - SHELL_STATUS_BAR_HEIGHT,
+                      SHELL_BG_COLOR);
 }
 
 /**
@@ -292,9 +291,9 @@ static void scroll_buffer_up(void)
  */
 static void render_status_bar(void)
 {
-    // Background (TODO: implement ili9341_fill_rect)
-    // ili9341_fill_rect(0, 0, SHELL_DISPLAY_WIDTH, SHELL_STATUS_BAR_HEIGHT,
-    //                   SHELL_STATUS_BG_COLOR);
+    // Background
+    ili9341_fill_rect(0, 0, SHELL_DISPLAY_WIDTH, SHELL_STATUS_BAR_HEIGHT,
+                      SHELL_STATUS_BG_COLOR);
 
     // Title text
     const char *title = "AkiraOS Shell";
@@ -328,11 +327,11 @@ static void render_text_buffer(void)
             break;  // Don't overlap input line
         }
 
-        // Clear line background (TODO: implement ili9341_fill_rect)
-        // ili9341_fill_rect(SHELL_PADDING_LEFT, y,
-        //                   SHELL_DISPLAY_WIDTH - SHELL_PADDING_LEFT * 2,
-        //                   SHELL_FONT_HEIGHT,
-        //                   SHELL_BG_COLOR);
+        // Clear line background
+        ili9341_fill_rect(SHELL_PADDING_LEFT, y,
+                          SHELL_DISPLAY_WIDTH - SHELL_PADDING_LEFT * 2,
+                          SHELL_FONT_HEIGHT,
+                          SHELL_BG_COLOR);
 
         // Draw text
         if (shell_display.buffer.lines[i][0] != '\0') {
@@ -351,9 +350,9 @@ static void render_input_line(void)
 {
     int y = SHELL_DISPLAY_HEIGHT - SHELL_FONT_HEIGHT - 2;
 
-    // Clear input line area (TODO: implement ili9341_fill_rect)
-    // ili9341_fill_rect(0, y, SHELL_DISPLAY_WIDTH, SHELL_FONT_HEIGHT + 2,
-    //                   SHELL_BG_COLOR);
+    // Clear input line area
+    ili9341_fill_rect(0, y, SHELL_DISPLAY_WIDTH, SHELL_FONT_HEIGHT + 2,
+                      SHELL_BG_COLOR);
 
     // Draw prompt
     const char *prompt = "$ ";
@@ -370,12 +369,11 @@ static void render_input_line(void)
     int cursor_x = SHELL_PADDING_LEFT + prompt_width + 
                    (shell_display.cursor_pos * SHELL_FONT_WIDTH);
     
-    // Simple cursor (rectangle) - TODO: implement ili9341_fill_rect
-    // ili9341_fill_rect(cursor_x, y, SHELL_FONT_WIDTH, SHELL_FONT_HEIGHT,
-    //                   SHELL_TEXT_COLOR);
+    // Simple cursor (rectangle)
+    ili9341_fill_rect(cursor_x, y, SHELL_FONT_WIDTH, SHELL_FONT_HEIGHT,
+                      SHELL_TEXT_COLOR);
 }
 
-#if 0  // Disabled - unused, needs ili9341_fill_rect implementation
 /**
  * @brief Clear a specific line on display
  */
@@ -386,13 +384,11 @@ static void clear_line(uint8_t row)
     }
 
     int y = SHELL_STATUS_BAR_HEIGHT + SHELL_PADDING_TOP + (row * SHELL_FONT_HEIGHT);
-    // TODO: implement ili9341_fill_rect
-    // ili9341_fill_rect(SHELL_PADDING_LEFT, y,
-    //                   SHELL_DISPLAY_WIDTH - SHELL_PADDING_LEFT * 2,
-    //                   SHELL_FONT_HEIGHT,
-    //                   SHELL_BG_COLOR);
+    ili9341_fill_rect(SHELL_PADDING_LEFT, y,
+                      SHELL_DISPLAY_WIDTH - SHELL_PADDING_LEFT * 2,
+                      SHELL_FONT_HEIGHT,
+                      SHELL_BG_COLOR);
 }
-#endif  // Disabled
 
 /**
  * @brief Periodic status bar update (call every second)
