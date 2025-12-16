@@ -14,6 +14,7 @@
  */
 
 #include "akira_shell.h"
+#include "shell_display.h"
 #include "../drivers/platform_hal.h"
 #include "../settings/settings.h"
 #include "../OTA/web_server.h"
@@ -50,6 +51,40 @@
 
 LOG_MODULE_REGISTER(akira_shell, AKIRA_LOG_LEVEL);
 
+/* Shell display enabled flag */
+static bool shell_display_enabled = IS_ENABLED(CONFIG_ILI9341);
+
+/* Custom shell print wrapper - intercepts output for display */
+static void akira_shell_print_internal(const struct shell *sh, const char *text, bool is_error)
+{
+    /* Print to UART/console (normal behavior) */
+    if (is_error) {
+        shell_fprintf(sh, SHELL_ERROR, "%s\n", text);
+    } else {
+        shell_fprintf(sh, SHELL_NORMAL, "%s\n", text);
+    }
+    
+    /* Also display on screen if enabled */
+    if (shell_display_enabled && shell_display_is_enabled()) {
+        shell_display_print(text, is_error ? SHELL_TEXT_ERROR : SHELL_TEXT_NORMAL);
+    }
+}
+
+/* Wrapper macros for intercepting shell output */
+#define AKIRA_SHELL_PRINT(sh, fmt, ...) \
+    do { \
+        char _buf[256]; \
+        snprintf(_buf, sizeof(_buf), fmt, ##__VA_ARGS__); \
+        akira_shell_print_internal(sh, _buf, false); \
+    } while (0)
+
+#define AKIRA_SHELL_ERROR(sh, fmt, ...) \
+    do { \
+        char _buf[256]; \
+        snprintf(_buf, sizeof(_buf), fmt, ##__VA_ARGS__); \
+        akira_shell_print_internal(sh, _buf, true); \
+    } while (0)
+
 #ifdef CONFIG_AKIRA_APP_MANAGER
 /* App Manager Shell Commands */
 static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
@@ -58,17 +93,17 @@ static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
     int count = app_manager_list(apps, CONFIG_AKIRA_APP_MAX_INSTALLED);
     if (count < 0)
     {
-        shell_error(sh, "Failed to list apps");
+        AKIRA_SHELL_ERROR(sh, "Failed to list apps");
         return count;
     }
-    shell_print(sh, "\n=== Installed Apps ===");
+    AKIRA_SHELL_PRINT(sh, "\n=== Installed Apps ===");
     for (int i = 0; i < count; i++)
     {
-        shell_print(sh, "%2d: %-16s %-8s %s %u bytes%s", apps[i].id, apps[i].name, apps[i].version,
+        AKIRA_SHELL_PRINT(sh, "%2d: %-16s %-8s %s %u bytes%s", apps[i].id, apps[i].name, apps[i].version,
                     app_state_to_str(apps[i].state), apps[i].size,
                     apps[i].auto_restart ? " [auto-restart]" : "");
     }
-    shell_print(sh, "Total: %d", count);
+    AKIRA_SHELL_PRINT(sh, "Total: %d", count);
     return 0;
 }
 
@@ -76,25 +111,25 @@ static int cmd_app_info(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 2)
     {
-        shell_error(sh, "Usage: app info <name>");
+        AKIRA_SHELL_ERROR(sh, "Usage: app info <name>");
         return -EINVAL;
     }
     app_info_t info;
     int ret = app_manager_get_info(argv[1], &info);
     if (ret < 0)
     {
-        shell_error(sh, "App not found: %s", argv[1]);
+        AKIRA_SHELL_ERROR(sh, "App not found: %s", argv[1]);
         return ret;
     }
-    shell_print(sh, "\n=== App Info ===");
-    shell_print(sh, "Name: %s", info.name);
-    shell_print(sh, "Version: %s", info.version);
-    shell_print(sh, "State: %s", app_state_to_str(info.state));
-    shell_print(sh, "Size: %u bytes", info.size);
-    shell_print(sh, "Heap: %u KB", info.heap_kb);
-    shell_print(sh, "Stack: %u KB", info.stack_kb);
-    shell_print(sh, "Crash count: %u", info.crash_count);
-    shell_print(sh, "Auto-restart: %s", info.auto_restart ? "Yes" : "No");
+    AKIRA_SHELL_PRINT(sh, "\n=== App Info ===");
+    AKIRA_SHELL_PRINT(sh, "Name: %s", info.name);
+    AKIRA_SHELL_PRINT(sh, "Version: %s", info.version);
+    AKIRA_SHELL_PRINT(sh, "State: %s", app_state_to_str(info.state));
+    AKIRA_SHELL_PRINT(sh, "Size: %u bytes", info.size);
+    AKIRA_SHELL_PRINT(sh, "Heap: %u KB", info.heap_kb);
+    AKIRA_SHELL_PRINT(sh, "Stack: %u KB", info.stack_kb);
+    AKIRA_SHELL_PRINT(sh, "Crash count: %u", info.crash_count);
+    AKIRA_SHELL_PRINT(sh, "Auto-restart: %s", info.auto_restart ? "Yes" : "No");
     return 0;
 }
 
@@ -102,16 +137,16 @@ static int cmd_app_start(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 2)
     {
-        shell_error(sh, "Usage: app start <name>");
+        AKIRA_SHELL_ERROR(sh, "Usage: app start <name>");
         return -EINVAL;
     }
     int ret = app_manager_start(argv[1]);
     if (ret < 0)
     {
-        shell_error(sh, "Failed to start app: %s", argv[1]);
+        AKIRA_SHELL_ERROR(sh, "Failed to start app: %s", argv[1]);
         return ret;
     }
-    shell_print(sh, "App started: %s", argv[1]);
+    AKIRA_SHELL_PRINT(sh, "App started: %s", argv[1]);
     return 0;
 }
 
@@ -413,6 +448,20 @@ static void stats_update_work_handler(struct k_work *work)
     k_work_reschedule_for_queue(&shell_workq, &stats_update_work, K_SECONDS(30));
 }
 
+/* Status bar update work */
+static void status_bar_update_work_handler(struct k_work *work)
+{
+    if (shell_display_enabled && shell_display_is_enabled()) {
+        shell_display_update_status();
+    }
+    
+    /* Reschedule for next update */
+    k_work_reschedule_for_queue(&shell_workq, 
+                                 K_WORK_DELAYABLE_FROM_WORK(work), 
+                                 K_SECONDS(1));
+}
+static K_WORK_DELAYABLE_DEFINE(status_bar_work, status_bar_update_work_handler);
+
 /* Public API Implementation */
 int akira_shell_init(void)
 {
@@ -436,6 +485,25 @@ int akira_shell_init(void)
 
     /* Initialize cached stats */
     update_system_stats();
+
+    /* Initialize shell display if available */
+    if (shell_display_enabled) {
+        ret = shell_display_init();
+        if (ret < 0) {
+            LOG_WRN("Shell display init failed: %d", ret);
+            shell_display_enabled = false;
+        } else {
+            /* Start status bar updates */
+            k_work_schedule_for_queue(&shell_workq, &status_bar_work, K_SECONDS(1));
+            
+            /* Welcome message */
+            shell_display_print("", SHELL_TEXT_NORMAL);
+            shell_display_print("=== AkiraOS Shell ===", SHELL_TEXT_PROMPT);
+            shell_display_printf(SHELL_TEXT_NORMAL, "Version: %s", CONFIG_AKIRA_VERSION);
+            shell_display_print("Type 'help' for commands", SHELL_TEXT_NORMAL);
+            shell_display_print("", SHELL_TEXT_NORMAL);
+        }
+    }
 
     LOG_INF("Akira shell module initialized");
     return 0;

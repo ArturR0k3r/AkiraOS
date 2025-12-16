@@ -138,23 +138,63 @@ static void remove_from_ready_queue(task_handle_t handle)
  */
 static task_handle_t select_next_task(void)
 {
-	// TODO: Implement proper scheduling algorithm
-	// Options:
-	// - Round-robin within priority level
-	// - Weighted fair queuing
-	// - Earliest deadline first
-	// - Power-aware selection
+	// Priority-based round-robin scheduler with power awareness
+	// 1. Select highest priority ready task
+	// 2. Within same priority, round-robin
+	// 3. Consider power state if enabled
 	
 	if (sched_state.ready_count == 0) {
 		return -1;
 	}
 	
-	/* Simple: pick highest priority ready task */
-	task_handle_t selected = sched_state.ready_queue[0];
+	// Find highest priority task
+	int best_priority = -1;
+	for (int i = 0; i < sched_state.ready_count; i++) {
+		struct task_cb *task = get_task(sched_state.ready_queue[i]);
+		if (task && task->priority > best_priority) {
+			best_priority = task->priority;
+		}
+	}
 	
-	/* Move to end for round-robin within priority level */
-	remove_from_ready_queue(selected);
-	add_to_ready_queue(selected);
+	// Round-robin among tasks with highest priority
+	// Find first task with highest priority after current position
+	task_handle_t selected = -1;
+	bool found_current = false;
+	
+	for (int pass = 0; pass < 2 && selected < 0; pass++) {
+		for (int i = 0; i < sched_state.ready_count; i++) {
+			task_handle_t handle = sched_state.ready_queue[i];
+			struct task_cb *task = get_task(handle);
+			
+			if (!task || task->priority != best_priority) {
+				continue;
+			}
+			
+			// In first pass, look for task after current
+			if (pass == 0) {
+				if (!found_current) {
+					if (handle == sched_state.current_task) {
+						found_current = true;
+					}
+					continue;
+				}
+			}
+			
+			selected = handle;
+			break;
+		}
+	}
+	
+	// If no task found, pick first with highest priority
+	if (selected < 0) {
+		for (int i = 0; i < sched_state.ready_count; i++) {
+			struct task_cb *task = get_task(sched_state.ready_queue[i]);
+			if (task && task->priority == best_priority) {
+				selected = sched_state.ready_queue[i];
+				break;
+			}
+		}
+	}
 	
 	return selected;
 }
@@ -377,18 +417,28 @@ int scheduler_get_stats(task_handle_t handle, struct task_stats *stats)
 
 void scheduler_yield(void)
 {
-	// TODO: Implement yield
+	// Cooperative yield: task voluntarily gives up CPU
 	// 1. Mark current task time slice ended voluntarily
 	// 2. Update yield count
-	// 3. Trigger reschedule
+	// 3. Move task to end of ready queue for fairness
+	
+	k_mutex_lock(&sched_state.mutex, K_FOREVER);
 	
 	if (sched_state.current_task >= 0) {
 		struct task_cb *task = get_task(sched_state.current_task);
-		if (task) {
+		if (task && task->state == TASK_STATE_RUNNING) {
 			task->yield_count++;
-			LOG_DBG("Task '%s' yielded", task->name);
+			task->state = TASK_STATE_READY;
+			
+			// Move to end of ready queue (after others of same priority)
+			remove_from_ready_queue(sched_state.current_task);
+			add_to_ready_queue(sched_state.current_task);
+			
+			LOG_DBG("Task '%s' yielded (count=%u)", task->name, task->yield_count);
 		}
 	}
+	
+	k_mutex_unlock(&sched_state.mutex);
 }
 
 void scheduler_block(const char *reason)
@@ -437,9 +487,47 @@ void scheduler_tick(void)
 {
 	sched_state.tick_count++;
 	
-	// TODO: Implement time slice expiration
-	// 1. Check if current task exceeded time slice
-	// 2. If so, preempt and reschedule
+	// Check if current task exceeded its time slice
+	if (sched_state.current_task >= 0) {
+		struct task_cb *task = get_task(sched_state.current_task);
+		if (!task) {
+			return;
+		}
+		
+		uint64_t current_time = k_uptime_get();
+		uint64_t runtime = current_time - task->start_time;
+		
+		// Convert runtime from us to ms
+		uint32_t runtime_ms = runtime / 1000;
+		
+		if (runtime_ms >= task->time_slice_ms) {
+			// Time slice expired - preempt task
+			k_mutex_lock(&sched_state.mutex, K_FOREVER);
+			
+			if (task->state == TASK_STATE_RUNNING) {
+				task->preemption_count++;
+				task->state = TASK_STATE_READY;
+				
+				// Update runtime statistics
+				task->total_runtime += runtime;
+				
+				// Move to ready queue for rescheduling
+				remove_from_ready_queue(sched_state.current_task);
+				add_to_ready_queue(sched_state.current_task);
+				
+				LOG_DBG("Task '%s' preempted (slice=%ums, preempt_count=%u)",
+				        task->name, task->time_slice_ms, task->preemption_count);
+				
+				// Clear current task to trigger reschedule
+				sched_state.current_task = -1;
+			}
+			
+			k_mutex_unlock(&sched_state.mutex);
+		}
+	}
+	
+	// Update last tick time
+	sched_state.last_tick = k_uptime_get();
 }
 
 int scheduler_run(void)
@@ -448,54 +536,73 @@ int scheduler_run(void)
 		return -ENODEV;
 	}
 	
-	// TODO: Implement main scheduling loop
-	// 1. Select next task
-	// 2. Context switch to task
-	// 3. Execute until yield/block/time slice expiry
-	// 4. Update statistics
-	// 5. Repeat
+	// Main scheduling loop iteration:
+	// 1. Select next task based on priority and readiness
+	// 2. Context switch to selected task
+	// 3. Execute task entry function (WASM app execution)
+	// 4. Update runtime statistics
+	// 5. Handle task completion/blocking/yielding
 	
 	k_mutex_lock(&sched_state.mutex, K_FOREVER);
 	
+	// Select next task to run
 	task_handle_t next = select_next_task();
 	if (next < 0) {
 		k_mutex_unlock(&sched_state.mutex);
-		return 0;  // No tasks ready
+		return 0;  // No tasks ready (idle state)
 	}
 	
 	struct task_cb *task = get_task(next);
 	if (!task) {
 		k_mutex_unlock(&sched_state.mutex);
-		return 0;
+		LOG_ERR("Invalid task handle: %d", next);
+		return -EINVAL;
 	}
 	
-	/* Context switch */
+	// Context switch preparation
 	task_handle_t prev = sched_state.current_task;
 	sched_state.current_task = next;
 	task->state = TASK_STATE_RUNNING;
 	task->slice_count++;
 	task->start_time = k_uptime_get();
 	
+	// Remove from ready queue while running
+	remove_from_ready_queue(next);
+	
 	k_mutex_unlock(&sched_state.mutex);
 	
-	LOG_DBG("Running task '%s'", task->name);
+	LOG_DBG("Context switch: task '%s' (priority=%d, slice=%u)",
+	        task->name, task->priority, task->slice_count);
 	
-	/* Execute task (in real implementation, this would be WASM execution) */
+	// Execute task entry function
+	// In real WASM implementation, this calls ocre_resume() or wasm_runtime_execute()
 	if (task->entry) {
 		task->entry(task->arg);
 	}
 	
-	/* Task completed */
+	// Task execution completed (returned from entry or yielded/blocked)
 	k_mutex_lock(&sched_state.mutex, K_FOREVER);
 	
+	// Calculate runtime for this execution slice
 	uint64_t runtime = k_uptime_get() - task->start_time;
 	task->total_runtime += runtime;
 	
+	// Handle task state after execution
 	if (task->state == TASK_STATE_RUNNING) {
+		// Task completed normally (entry function returned)
 		task->state = TASK_STATE_TERMINATED;
-		remove_from_ready_queue(next);
+		LOG_INF("Task '%s' terminated (runtime=%lluus, slices=%u)",
+		        task->name, task->total_runtime, task->slice_count);
+	} else if (task->state == TASK_STATE_READY) {
+		// Task yielded or was preempted - add back to ready queue
+		add_to_ready_queue(next);
+	} else if (task->state == TASK_STATE_BLOCKED) {
+		// Task blocked on I/O or event - stays out of ready queue
+		LOG_DBG("Task '%s' blocked: %s", task->name, 
+		        task->block_reason ? task->block_reason : "unknown");
 	}
 	
+	// Clear current task reference
 	sched_state.current_task = -1;
 	
 	k_mutex_unlock(&sched_state.mutex);

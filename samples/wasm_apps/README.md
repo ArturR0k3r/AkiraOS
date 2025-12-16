@@ -2,12 +2,57 @@
 
 This directory contains WebAssembly (WASM) applications for AkiraOS running on the OCRE runtime with WAMR (WebAssembly Micro Runtime) backend.
 
+## Available Apps
+
+### 1. Hello World (`hello_world/`)
+Basic "Hello, World!" application demonstrating:
+- App initialization
+- Logging output
+- System sleep
+
+### 2. Blink LED (`blink_led/`)
+LED blinking demonstration showing:
+- GPIO control
+- Timing loops
+- Hardware interaction
+
+### 3. Sensor Demo (`sensor_demo/`)
+Sensor reading application featuring:
+- Reading accelerometer/gyroscope
+- Data formatting
+- Periodic updates
+
+### 4. Display Graphics (`display_graphics/`) ⭐ NEW
+Interactive graphics demo with:
+- Bouncing ball animation
+- Color gradients and patterns
+- Pixel manipulation
+- 60 FPS rendering
+- Score display
+
+### 5. Storage Demo (`storage_demo/`) ⭐ NEW
+File system operations showcase:
+- Reading and writing files
+- File listing
+- Size checking
+- Delete operations
+- Data persistence (high scores, configs)
+
+### 6. GUI Demo (`gui_demo/`) ⭐ NEW - LVGL Graphics
+Modern graphical user interface featuring:
+- Buttons with event callbacks
+- Slider widget with value display
+- Smooth animations (fade in/out)
+- Real-time status updates
+- Professional UI styling
+- 100 FPS interactive experience
+
 ## Architecture Overview
 
 - **Runtime**: OCRE Container Supervisor (WAMR backend)
 - **WAMR Mode**: libc-builtin (NOT WASI) with `env` module imports
 - **Memory**: 64KB linear memory per app (one WebAssembly page), backed by PSRAM on ESP32-S3
-- **Entry Point**: `main` function (not `_start`)
+- **Entry Point**: `_start` function for new apps, `main` for legacy apps
 - **Build System**: WASI SDK + libc-builtin toolchain
 
 ## Prerequisites

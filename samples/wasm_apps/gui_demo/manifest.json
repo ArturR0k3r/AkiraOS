@@ -1,0 +1,16 @@
+{
+  "name": "gui_demo",
+  "version": "1.0.0",
+  "description": "LVGL GUI demonstration with buttons, slider, and animations",
+  "author": "AkiraOS Team",
+  "entry": "gui_demo.wasm",
+  "capabilities": [
+    "gui",
+    "display"
+  ],
+  "resources": {
+    "heap_kb": 64,
+    "stack_kb": 32
+  },
+  "auto_restart": false
+}

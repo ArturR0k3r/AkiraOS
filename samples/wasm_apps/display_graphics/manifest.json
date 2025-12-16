@@ -1,0 +1,15 @@
+{
+  "name": "display_graphics",
+  "version": "1.0.0",
+  "description": "Display graphics demonstration with bouncing ball and color patterns",
+  "author": "AkiraOS Team",
+  "entry": "display_graphics.wasm",
+  "capabilities": [
+    "display"
+  ],
+  "resources": {
+    "heap_kb": 32,
+    "stack_kb": 16
+  },
+  "auto_restart": false
+}
