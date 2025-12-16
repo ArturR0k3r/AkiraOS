@@ -18,7 +18,7 @@
 #endif
 
 #ifdef CONFIG_AKIRA_STORAGE_FATFS
-#include "../storage/fatfs/fatfs_manager.h"
+#include "../storage/fs_manager.h"
 #endif
 
 #ifdef CONFIG_AKIRA_OTA_MANAGER
@@ -63,7 +63,7 @@ static int init_shell_subsystem(void);
 static int init_storage_subsystem(void)
 {
 #ifdef CONFIG_AKIRA_STORAGE_FATFS
-    int ret = fatfs_manager_init();
+    int ret = fs_manager_init();
     if (ret < 0) {
         LOG_ERR("Storage initialization failed: %d", ret);
         return ret;
@@ -85,7 +85,7 @@ static int init_storage_subsystem(void)
 static int init_settings_subsystem(void)
 {
 #ifdef CONFIG_AKIRA_SETTINGS
-    int ret = settings_init();
+    int ret = user_settings_init();
     if (ret < 0) {
         LOG_ERR("Settings initialization failed: %d", ret);
         return ret;
@@ -139,11 +139,8 @@ static int init_app_subsystem(void)
 static int init_services_subsystem(void)
 {
 #ifdef CONFIG_AKIRA_HTTP_SERVER
-    int ret = http_server_init();
-    if (ret < 0) {
-        LOG_WRN("HTTP server initialization failed: %d", ret);
-        /* Non-critical */
-    }
+    /* HTTP server requires network - will be started after network is up */
+    LOG_DBG("HTTP server available (start deferred to network ready event)");
 #endif
     
     return 0;
