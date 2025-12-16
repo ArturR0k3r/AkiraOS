@@ -199,6 +199,11 @@ endif()
 
 # ===== Connectivity Layer =====
 
+# WiFi Manager
+if(CONFIG_WIFI)
+    target_sources(app PRIVATE src/connectivity/wifi/wifi_manager.c)
+endif()
+
 # HID Manager (when enabled)
 if(CONFIG_AKIRA_HID)
     target_sources(app PRIVATE src/connectivity/hid/hid_manager.c)

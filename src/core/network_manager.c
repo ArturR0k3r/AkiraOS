@@ -12,15 +12,17 @@
 
 #ifdef CONFIG_WIFI
 #include <zephyr/net/wifi_mgmt.h>
-/* WiFi manager not yet implemented - using direct Zephyr API for now */
+#include "../connectivity/wifi/wifi_manager.h"
 #endif
 
 #ifdef CONFIG_BT
-#include \"../connectivity/bluetooth/bt_manager.h\"
+#include <zephyr/bluetooth/bluetooth.h>
+#include "../connectivity/bluetooth/bt_manager.h"
 #endif
 
 #ifdef CONFIG_USB_DEVICE_STACK
-#include \"../connectivity/usb/usb_manager.h\"
+#include <zephyr/usb/usb_device.h>
+#include "../connectivity/usb/usb_manager.h"
 #endif
 
 #ifdef CONFIG_AKIRA_CLOUD_CLIENT
@@ -63,17 +65,22 @@ static void wifi_event_handler(const system_event_t *event, void *user_data)
 
 static int init_wifi(void)
 {
+    int ret;
+    
     LOG_INF("Initializing WiFi");
     
     /* Subscribe to WiFi events */
     event_bus_subscribe(EVENT_NETWORK_CONNECTED, wifi_event_handler, NULL);
     event_bus_subscribe(EVENT_NETWORK_DISCONNECTED, wifi_event_handler, NULL);
     
-    /* WiFi manager not yet implemented - initialization deferred to legacy main code */
-    LOG_DBG("WiFi initialization deferred (manager not yet migrated)");
+    ret = wifi_manager_init();
+    if (ret < 0) {
+        LOG_ERR("WiFi manager initialization failed: %d", ret);
+        return ret;
+    }
     
     net_state.wifi_enabled = true;
-    LOG_INF("✅ WiFi subsystem ready");
+    LOG_INF("✅ WiFi initialized");
     
     return 0;
 }
@@ -114,7 +121,17 @@ static int init_bluetooth(void)
     event_bus_subscribe(EVENT_BT_CONNECTED, bt_event_handler, NULL);
     event_bus_subscribe(EVENT_BT_DISCONNECTED, bt_event_handler, NULL);
     
-    ret = bt_manager_init();
+    /* Configure Bluetooth with default settings */
+    bt_config_t bt_config = {
+        .device_name = "AkiraOS",
+        .vendor_id = 0xFFFF,
+        .product_id = 0x0001,
+        .services = BT_SERVICE_ALL,
+        .auto_advertise = true,
+        .pairable = true
+    };
+    
+    ret = bt_manager_init(&bt_config);
     if (ret < 0) {
         LOG_ERR("Bluetooth manager initialization failed: %d", ret);
         return ret;
@@ -140,7 +157,17 @@ static int init_usb(void)
     
     LOG_INF("Initializing USB");
     
-    ret = usb_manager_init();
+    /* Configure USB with default settings */
+    usb_config_t usb_config = {
+        .manufacturer = "AkiraOS",
+        .product = "AkiraOS Device",
+        .serial = "123456",
+        .vendor_id = 0xFFFF,
+        .product_id = 0x0001,
+        .classes = USB_CLASS_ALL
+    };
+    
+    ret = usb_manager_init(&usb_config);
     if (ret < 0) {
         LOG_ERR("USB manager initialization failed: %d", ret);
         return ret;

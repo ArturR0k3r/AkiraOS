@@ -14,8 +14,12 @@
 /* Forward declare hal_init - implemented in platform_hal.c */
 extern int akira_hal_init(void);
 
+#ifdef CONFIG_DISPLAY
+#include <zephyr/drivers/display.h>
+#endif
+
 #ifdef CONFIG_AKIRA_UI_LVGL
-#include \"../ui/lvgl/ui_manager.h\"
+#include "../ui/lvgl/ui_manager.h"
 #endif
 
 LOG_MODULE_REGISTER(hw_manager, CONFIG_AKIRA_LOG_LEVEL);
@@ -116,9 +120,22 @@ int hardware_manager_init(void)
         /* Non-critical, continue */
     }
     
-#ifdef CONFIG_AKIRA_DISPLAY
-    /* Display initialization deferred to legacy display code */
-    LOG_DBG("Display initialization deferred (manager not yet migrated)");
+#ifdef CONFIG_DISPLAY
+    /* Initialize display device */
+    const struct device *display_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+    if (device_is_ready(display_dev)) {
+        struct display_capabilities caps;
+        display_get_capabilities(display_dev, &caps);
+        LOG_INF("Display: %dx%d ready", caps.x_resolution, caps.y_resolution);
+        
+        system_event_t event = {
+            .type = EVENT_DISPLAY_READY,
+            .timestamp = k_uptime_get()
+        };
+        event_bus_publish(&event);
+    } else {
+        LOG_WRN("Display device not ready");
+    }
 #endif
 
 #ifdef CONFIG_AKIRA_UI_LVGL
