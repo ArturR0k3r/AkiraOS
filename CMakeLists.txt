@@ -46,14 +46,7 @@ endif()
 target_sources(app PRIVATE
     src/main.c
     
-    # Core System Manager (NEW)
-    src/core/event_bus.c
-    src/core/init_table.c
-    src/core/system_manager.c
-    src/core/hardware_manager.c
-    src/core/network_manager.c
-    
-    # Legacy drivers (to be migrated)
+    # Core drivers and shell
     src/drivers/display_ili9341.c
     src/drivers/fonts.c
     src/drivers/font_data.c
@@ -199,10 +192,7 @@ endif()
 
 # ===== Connectivity Layer =====
 
-# WiFi Manager
-if(CONFIG_WIFI)
-    target_sources(app PRIVATE src/connectivity/wifi/wifi_manager.c)
-endif()
+# WiFi uses Zephyr's native stack - no wrapper needed
 
 # HID Manager (when enabled)
 if(CONFIG_AKIRA_HID)

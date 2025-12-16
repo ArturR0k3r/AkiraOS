@@ -6,13 +6,11 @@
 
 AkiraOS is a modular, security-focused embedded OS designed for resource-constrained devices. Built on OCRE container runtime, it provides:
 
-- **STUPID SIMPLE** — minimal complexity, maximum clarity
+- **STUPID SIMPLE** — minimal complexity, direct initialization
 - **Secure by Design** — capability-based security, signed apps, sandboxing
-- **Modular** — use only what you need
-- **Configuration-Driven** — Kconfig-based initialization
+- **Modular** — use only what you need via Kconfig
 - **Multi-Platform** — ESP32, nRF5x/nRF91, STM32 support
 - **Driver Rich** — unified framework for displays, RF chips, sensors
-- **Event-Driven** — loose coupling via event bus
 
 ## System Architecture
 
@@ -31,73 +29,70 @@ AkiraOS is a modular, security-focused embedded OS designed for resource-constra
 │  │   Manager     │  Enforcer    │  Scheduler   │     Bus     │ │
 │  └───────────────┴──────────────┴──────────────┴─────────────┘ │
 ├─────────────────────────────────────────────────────────────────┤
-│                      System Manager (NEW)                       │
-│  • Config-driven initialization (Kconfig)                       │
-│  • Declarative init table with priorities                       │
-│  • Graceful degradation (required vs optional)                  │
-│  • System lifecycle coordination                                │
-├────────────────┬────────────────────────┬───────────────────────┤
-│  Hardware Mgr  │    Network Manager     │   Event Bus (NEW)     │
-│  (NEW)         │       (NEW)            │   (Pub/Sub)           │
-│  • HAL + Drv   │  • WiFi/BT/USB coord   │   • Loose coupling    │
-│    Registry    │  • Settings integration│   • Inter-module comm │
-├────────────────┴────────────────────────┴───────────────────────┤
-│  RF Manager    │    OTA Manager         │  Power Manager        │
-│ (Multi-radio)  │ (Multi-transport)      │ (Battery, sleep)      │
-├────────────────┴────────────────────────┴───────────────────────┤
-│                       Cloud Client                              │
-│        (Unified messaging: Cloud, BT App, Web, USB)             │
+│                       main.c (Simple Init)                      │
+│  • Direct calls to subsystem init functions                     │
+│  • Kconfig-based conditional compilation                        │
+│  • No abstraction layers or wrappers                            │
+│  • ~150 lines, single responsibility                            │
 ├─────────────────────────────────────────────────────────────────┤
-│                    Connectivity Layer                           │
+│                     Subsystem Managers                          │
 │  ┌──────────────┬──────────────┬──────────────┬──────────────┐ │
-│  │ HID Manager  │ HTTP Server  │ BT Manager   │ USB Manager  │ │
-│  │ (Keyboard/   │ (WebSocket)  │ (BLE HID)    │ (USB HID)    │ │
-│  │  Gamepad)    │              │              │              │ │
+│  │ BT Manager   │ USB Manager  │ HID Manager  │ OTA Manager  │ │
+│  │ (BLE stack)  │ (USB stack)  │ (Input dev)  │ (Updates)    │ │
+│  └──────────────┴──────────────┴──────────────┴──────────────┘ │
+│  ┌──────────────┬──────────────┬──────────────┬──────────────┐ │
+│  │ FS Manager   │ App Manager  │Power Manager │Cloud Client  │ │
+│  │ (Storage)    │ (App runtime)│ (Sleep)      │ (Messaging)  │ │
 │  └──────────────┴──────────────┴──────────────┴──────────────┘ │
 ├─────────────────────────────────────────────────────────────────┤
 │              Platform HAL (platform_hal)                        │
 │        (Hardware GPIO, SPI, Display simulation)                 │
 ├─────────────────────────────────────────────────────────────────┤
-│              Akira System HAL (akira/hal)                       │
-│        (System version, uptime, reboot, device info)            │
-├─────────────────────────────────────────────────────────────────┤
 │              Driver Registry (Runtime Driver Loading)           │
 │        (Display, Sensors, RF, Storage drivers)                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                        Zephyr RTOS                              │
-│         (Real-time kernel, networking, storage, USB)            │
+│   (Real-time kernel, networking, storage, USB, WiFi native)     │
 ├─────────────────────────────────────────────────────────────────┤
 │              Hardware (ESP32 | nRF5x/nRF91 | STM32)            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### New Core Management Layer
+### Initialization Flow (Direct & Simple)
 
-The system is now orchestrated by three key managers that work together:
+**main.c** orchestrates system boot with direct function calls:
 
-**System Manager** (`src/core/system_manager`)
-- Reads Kconfig to determine enabled features
-- Initializes subsystems via priority-based init table
-- Coordinates system lifecycle (boot, run, shutdown)
-- Provides system-wide status and diagnostics
+```c
+1. Hardware Layer
+   ├─ akira_hal_init()          // Platform HAL (GPIO, SPI, display)
+   └─ driver_registry_init()    // Driver loading system
 
-**Hardware Manager** (`src/core/hardware_manager`)
-- Leverages existing HAL and driver_registry
-- Platform-specific initialization (display, sensors, RF)
-- Hardware capability queries
-- Driver loading and registration
+2. Storage (optional - #ifdef CONFIG_AKIRA_STORAGE_FATFS)
+   └─ fs_manager_init()         // Filesystem
 
-**Network Manager** (`src/core/network_manager`)
-- Coordinates existing connectivity layers (WiFi, BT, USB)
-- Integrates with settings for credentials
-- Publishes network events via event bus
-- Manages HTTP server lifecycle
+3. Settings (optional - #ifdef CONFIG_AKIRA_SETTINGS)
+   └─ user_settings_init()      // Persistent settings
 
-**Event Bus** (`src/core/event_bus`)
-- Pub/sub pattern for loose coupling
-- Events: NETWORK_UP, OTA_PROGRESS, STORAGE_READY, etc.
-- Thread-safe message queue
-- Enables reactive architecture
+4. Network (optional - via Kconfig)
+   ├─ Zephyr WiFi (native API)  // No wrapper needed
+   ├─ bt_manager_init()         // Bluetooth stack
+   └─ usb_manager_init()        // USB stack
+
+5. Runtime (optional - #ifdef CONFIG_AKIRA_OCRE_RUNTIME)
+   └─ ocre_runtime_init()       // WASM container runtime
+
+6. Services (optional)
+   ├─ app_manager_init()        // App lifecycle
+   └─ akira_shell_init()        // Debug shell
+```
+
+**Design Principles:**
+- No event bus or pub/sub complexity
+- No init table with priority sorting
+- No manager wrappers around existing APIs
+- Use Zephyr's native stacks where well-designed (WiFi, networking)
+- Direct calls with Kconfig for optional features
+- Fail gracefully on optional features
 
 ## Trust Model
 
