@@ -58,6 +58,7 @@ target_sources(app PRIVATE
     src/drivers/fonts.c
     src/drivers/font_data.c
     src/drivers/platform_hal.c
+    src/drivers/driver_registry.c
     src/shell/akira_shell.c
     src/settings/settings.c
 )

@@ -9,15 +9,13 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/gpio.h>
 
-#include "../akira/hal/hal.h"
 #include "../drivers/driver_registry.h"
 
-#ifdef CONFIG_AKIRA_DISPLAY
-#include "../ui/display/display_manager.h"
-#endif
+/* Forward declare hal_init - implemented in platform_hal.c */
+extern int akira_hal_init(void);
 
 #ifdef CONFIG_AKIRA_UI_LVGL
-#include "../ui/lvgl/ui_manager.h"
+#include \"../ui/lvgl/ui_manager.h\"
 #endif
 
 LOG_MODULE_REGISTER(hw_manager, CONFIG_AKIRA_LOG_LEVEL);
@@ -96,7 +94,7 @@ int hardware_manager_init(void)
     LOG_INF("Initializing hardware manager");
     
     /* Initialize HAL */
-    ret = hal_init();
+    ret = akira_hal_init();
     if (ret < 0) {
         LOG_ERR("HAL initialization failed: %d", ret);
         return ret;
@@ -119,20 +117,8 @@ int hardware_manager_init(void)
     }
     
 #ifdef CONFIG_AKIRA_DISPLAY
-    /* Initialize display */
-    ret = display_manager_init();
-    if (ret < 0) {
-        LOG_WRN("Display initialization failed: %d", ret);
-        /* Non-critical, continue */
-    } else {
-        LOG_INF("✅ Display initialized");
-        
-        system_event_t event = {
-            .type = EVENT_DISPLAY_READY,
-            .timestamp = k_uptime_get()
-        };
-        event_bus_publish(&event);
-    }
+    /* Display initialization deferred to legacy display code */
+    LOG_DBG("Display initialization deferred (manager not yet migrated)");
 #endif
 
 #ifdef CONFIG_AKIRA_UI_LVGL

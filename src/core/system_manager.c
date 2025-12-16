@@ -26,7 +26,7 @@
 #endif
 
 #ifdef CONFIG_AKIRA_APP_MANAGER
-#include "../apps/app_manager.h"
+#include "../services/app_manager.h"
 #endif
 
 #ifdef CONFIG_AKIRA_OCRE_RUNTIME
