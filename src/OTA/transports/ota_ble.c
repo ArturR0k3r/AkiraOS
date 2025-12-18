@@ -6,7 +6,7 @@
  */
 
 #include "../ota_transport.h"
-/* Removed: #include "../ota_manager.h" - Use interface only */
+#include "../ota_manager.h"
 #include "../../connectivity/bluetooth/bt_manager.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -92,8 +92,8 @@ static ssize_t ota_control_write(struct bt_conn *conn,
                 LOG_INF("Starting BLE OTA: size=%u bytes", size);
                 
                 /* Start OTA update */
-                int ret = ota_start_update(size, OTA_SOURCE_BLE);
-                if (ret < 0) {
+                enum ota_result ret = ota_start_update(size);
+                if (ret != OTA_OK) {
                     LOG_ERR("Failed to start OTA: %d", ret);
                     ble_ota.state = OTA_TRANSPORT_ERROR;
                     return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
@@ -141,12 +141,11 @@ static ssize_t ota_control_read(struct bt_conn *conn,
         case OTA_TRANSPORT_RECEIVING:
             status = OTA_STATUS_RECEIVING;
             break;
-        case OTA_TRANSPORT_COMPLETE:
-            status = OTA_STATUS_COMPLETE;
-            break;
         case OTA_TRANSPORT_ERROR:
-        default:
             status = OTA_STATUS_ERROR;
+            break;
+        default:
+            status = OTA_STATUS_IDLE;
             break;
     }
     
@@ -165,8 +164,8 @@ static ssize_t ota_data_write(struct bt_conn *conn,
     }
     
     /* Write data chunk */
-    int ret = ota_write_data(buf, len);
-    if (ret < 0) {
+    enum ota_result ret = ota_write_chunk(buf, len);
+    if (ret != OTA_OK) {
         LOG_ERR("Failed to write OTA data: %d", ret);
         ble_ota.state = OTA_TRANSPORT_ERROR;
         return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
@@ -184,11 +183,11 @@ static ssize_t ota_data_write(struct bt_conn *conn,
     if (ble_ota.bytes_received >= ble_ota.total_size) {
         LOG_INF("BLE OTA complete, finalizing...");
         ret = ota_finalize_update();
-        if (ret < 0) {
+        if (ret != OTA_OK) {
             LOG_ERR("Failed to finalize OTA: %d", ret);
             ble_ota.state = OTA_TRANSPORT_ERROR;
         } else {
-            ble_ota.state = OTA_TRANSPORT_COMPLETE;
+            ble_ota.state = OTA_TRANSPORT_READY;
             LOG_INF("BLE OTA successful!");
         }
     }
