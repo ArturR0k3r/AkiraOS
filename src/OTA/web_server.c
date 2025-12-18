@@ -550,7 +550,10 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
             header_size, first_data_len, expected_size);
 
     /* Start OTA update with expected size */
+    LOG_INF("=== OTA START DEBUG ===");
+    LOG_INF("Calling ota_start_update with size: %u", expected_size);
     enum ota_result result = ota_start_update(expected_size);
+    LOG_INF("ota_start_update returned: %d (%s)", result, ota_result_to_string(result));
     if (result != OTA_OK)
     {
         send_http_response(client_fd, 500, "text/plain", ota_result_to_string(result), 0);
@@ -561,7 +564,9 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
     size_t total_written = 0;
     if (first_data_len > 0)
     {
+        LOG_INF("Writing first chunk: %u bytes", first_data_len);
         result = ota_write_chunk((uint8_t *)data_start, first_data_len);
+        LOG_INF("First chunk write returned: %d (%s)", result, ota_result_to_string(result));
         if (result != OTA_OK)
         {
             LOG_ERR("OTA write failed: %s", ota_result_to_string(result));
@@ -570,6 +575,7 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
             return -1;
         }
         total_written = first_data_len;
+        LOG_INF("First chunk written successfully, total: %u bytes", total_written);
     }
 
     /* Now receive and write the rest of the file */
@@ -584,10 +590,15 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
     int retry_count = 0;
     uint8_t last_progress = 0;
 
+    LOG_INF("Starting receive loop: total_received=%u, content_length=%u", 
+            total_received, content_length);
+
     while (total_received < content_length)
     {
         size_t chunk_size = MIN(1024, content_length - total_received);
+        LOG_DBG("Calling recv for %u bytes...", chunk_size);
         ssize_t received = recv(client_fd, upload_buffer, chunk_size, 0);
+        LOG_DBG("recv returned: %d", received);
 
         if (received < 0)
         {

@@ -25,7 +25,7 @@
 #endif
 
 /* Storage & Settings */
-#ifdef CONFIG_AKIRA_STORAGE_FATFS
+#ifdef CONFIG_FILE_SYSTEM
 #include "storage/fs_manager.h"
 #endif
 #ifdef CONFIG_AKIRA_SETTINGS
@@ -38,6 +38,14 @@
 #endif
 #ifdef CONFIG_AKIRA_SHELL
 #include "shell/akira_shell.h"
+#endif
+#ifdef CONFIG_AKIRA_HTTP_SERVER
+#include "OTA/web_server.h"
+#endif
+
+/* OTA Manager */
+#ifdef CONFIG_AKIRA_OTA
+#include "OTA/ota_manager.h"
 #endif
 
 LOG_MODULE_REGISTER(akira_main, CONFIG_AKIRA_LOG_LEVEL);
@@ -62,7 +70,7 @@ int main(void)
     }
     
     /* Storage (optional) */
-#ifdef CONFIG_AKIRA_STORAGE_FATFS
+#ifdef CONFIG_FILE_SYSTEM
     if (fs_manager_init() < 0) {
         LOG_WRN("Storage init failed");
     }
@@ -115,6 +123,13 @@ int main(void)
     }
 #endif
 
+    /* OTA Manager - initialize before app manager and web server */
+#ifdef CONFIG_AKIRA_OTA
+    if (ota_manager_init() < 0) {
+        LOG_ERR("OTA manager init failed");
+    }
+#endif
+
     /* App manager (optional) - includes runtime initialization */
 #ifdef CONFIG_AKIRA_APP_MANAGER
     if (app_manager_init() < 0) {
@@ -126,6 +141,13 @@ int main(void)
 #ifdef CONFIG_AKIRA_SHELL
     if (akira_shell_init() < 0) {
         LOG_WRN("Shell init failed");
+    }
+#endif
+    
+    /* Web server (optional) */
+#ifdef CONFIG_AKIRA_HTTP_SERVER
+    if (web_server_start(NULL) < 0) {
+        LOG_WRN("Web server init failed");
     }
 #endif
     

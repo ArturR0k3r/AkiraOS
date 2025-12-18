@@ -67,7 +67,7 @@ AkiraOS is a modular, security-focused embedded OS designed for resource-constra
    ├─ akira_hal_init()          // Platform HAL (GPIO, SPI, display)
    └─ driver_registry_init()    // Driver loading system
 
-2. Storage (optional - #ifdef CONFIG_AKIRA_STORAGE_FATFS)
+2. Storage (optional - #ifdef CONFIG_FILE_SYSTEM)
    └─ fs_manager_init()         // Filesystem
 
 3. Settings (optional - #ifdef CONFIG_AKIRA_SETTINGS)

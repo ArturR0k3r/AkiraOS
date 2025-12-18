@@ -48,8 +48,8 @@ bool path_is_safe(const char *path);
  * @brief Build a safe path from components
  *
  * Constructs: base/app/file
- * Example: path_build(out, 64, "/data", "myapp", "config.json")
- *          -> "/data/myapp/config.json"
+ * Example: path_build(out, 64, "/lfs", "myapp", "config.json")
+ *          -> "/lfs/myapp/config.json"
  *
  * @param out Output buffer
  * @param out_len Output buffer size
@@ -66,7 +66,7 @@ int path_build(char *out, size_t out_len, const char *base,
 /**
  * @brief Normalize a path (remove redundant separators, etc.)
  *
- * Converts: "//data//app///file" -> "/data/app/file"
+ * Converts: "//lfs//apps///file" -> "/lfs/apps/file"
  *
  * @param path Path to normalize (modified in-place)
  * @return 0 on success, negative on error
@@ -76,7 +76,7 @@ int path_normalize(char *path);
 /**
  * @brief Get the filename from a path
  *
- * "/data/apps/hello.wasm" -> "hello.wasm"
+ * "/lfs/apps/hello.wasm" -> "hello.wasm"
  *
  * @param path Full path
  * @return Pointer to filename within path, or NULL if no filename
@@ -87,7 +87,7 @@ const char *path_get_filename(const char *path);
  * @brief Get the directory from a path
  *
  * Copies directory portion into output buffer.
- * "/data/apps/hello.wasm" -> "/data/apps"
+ * "/lfs/apps/hello.wasm" -> "/lfs/apps"
  *
  * @param path Full path
  * @param out Output buffer for directory
