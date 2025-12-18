@@ -19,6 +19,9 @@
 #include "../settings/settings.h"
 #include "../OTA/web_server.h"
 #if defined(CONFIG_BT)
+#include "connectivity/bluetooth/bt_manager.h"
+#endif
+#if defined(CONFIG_BT)
 #include "../connectivity/bluetooth/bt_manager.h"
 #endif
 #include <zephyr/logging/log.h>
@@ -1247,6 +1250,147 @@ static int cmd_ble_shell(const struct shell *shell, size_t argc, char **argv)
 
 SHELL_CMD_REGISTER(ble_shell, NULL, "Send shell command to phone via BLE", cmd_ble_shell);
 #endif
+
+#if defined(CONFIG_BT)
+/* ===== Bluetooth commands ===== */
+static int cmd_bt_info(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    bt_stats_t stats;
+    int ret = bt_manager_get_stats(&stats);
+    if (ret)
+    {
+        AKIRA_SHELL_ERROR(sh, "Failed to get BT stats: %d", ret);
+        return ret;
+    }
+
+    char addr[32] = {0};
+    bt_manager_get_address(addr, sizeof(addr));
+
+    AKIRA_SHELL_PRINT(sh, "\n=== Bluetooth ===");
+    AKIRA_SHELL_PRINT(sh, "State: %d", stats.state);
+    AKIRA_SHELL_PRINT(sh, "Address: %s", addr);
+    AKIRA_SHELL_PRINT(sh, "Connected: %s", bt_manager_is_connected() ? "Yes" : "No");
+    AKIRA_SHELL_PRINT(sh, "Connections: %u  Disconnections: %u", stats.connections, stats.disconnections);
+    AKIRA_SHELL_PRINT(sh, "RX: %u bytes  TX: %u bytes  RSSI: %d dBm", stats.bytes_rx, stats.bytes_tx, stats.rssi);
+    AKIRA_SHELL_PRINT(sh, "Bonded: %s", stats.bonded ? "Yes" : "No");
+    return 0;
+}
+
+static int cmd_bt_stats(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    bt_stats_t stats;
+    int ret = bt_manager_get_stats(&stats);
+    if (ret)
+    {
+        AKIRA_SHELL_ERROR(sh, "Failed to get BT stats: %d", ret);
+        return ret;
+    }
+
+    AKIRA_SHELL_PRINT(sh, "Connections: %u", stats.connections);
+    AKIRA_SHELL_PRINT(sh, "Disconnections: %u", stats.disconnections);
+    AKIRA_SHELL_PRINT(sh, "Bytes RX: %u", stats.bytes_rx);
+    AKIRA_SHELL_PRINT(sh, "Bytes TX: %u", stats.bytes_tx);
+    AKIRA_SHELL_PRINT(sh, "RSSI: %d", stats.rssi);
+    return 0;
+}
+
+static int cmd_bt_addr(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    char buf[32] = {0};
+    int ret = bt_manager_get_address(buf, sizeof(buf));
+    if (ret)
+    {
+        AKIRA_SHELL_ERROR(sh, "Failed to get address: %d", ret);
+        return ret;
+    }
+    AKIRA_SHELL_PRINT(sh, "Address: %s", buf);
+    return 0;
+}
+
+static int cmd_bt_disconnect(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    int ret = bt_manager_disconnect();
+    if (ret)
+    {
+        AKIRA_SHELL_ERROR(sh, "Disconnect failed: %d", ret);
+        return ret;
+    }
+    AKIRA_SHELL_PRINT(sh, "Disconnect requested");
+    return 0;
+}
+
+static int cmd_bt_unpair(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    int ret = bt_manager_unpair_all();
+    if (ret)
+    {
+        AKIRA_SHELL_ERROR(sh, "Unpair failed: %d", ret);
+        return ret;
+    }
+    AKIRA_SHELL_PRINT(sh, "All bonds deleted");
+    return 0;
+}
+
+static int cmd_bt_adv_start(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+    int ret = bt_manager_start_advertising();
+    if (ret)
+    {
+        AKIRA_SHELL_ERROR(sh, "Failed to start advertising: %d", ret);
+        return ret;
+    }
+    AKIRA_SHELL_PRINT(sh, "Advertising started");
+    return 0;
+}
+
+static int cmd_bt_adv_stop(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+    int ret = bt_manager_stop_advertising();
+    if (ret)
+    {
+        AKIRA_SHELL_ERROR(sh, "Failed to stop advertising: %d", ret);
+        return ret;
+    }
+    AKIRA_SHELL_PRINT(sh, "Advertising stopped");
+    return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(bt_adv_cmds,
+                               SHELL_CMD(start, NULL, "Start advertising", cmd_bt_adv_start),
+                               SHELL_CMD(stop, NULL, "Stop advertising", cmd_bt_adv_stop),
+                               SHELL_CMD(status, NULL, "Show advertising status", cmd_bt_info),
+                               SHELL_SUBCMD_SET_END);
+
+SHELL_STATIC_SUBCMD_SET_CREATE(bt_cmds,
+                               SHELL_CMD(info, NULL, "Show Bluetooth status", cmd_bt_info),
+                               SHELL_CMD(stats, NULL, "Show Bluetooth statistics", cmd_bt_stats),
+                               SHELL_CMD(addr, NULL, "Show local BT address", cmd_bt_addr),
+                               SHELL_CMD(disconnect, NULL, "Disconnect current connection", cmd_bt_disconnect),
+                               SHELL_CMD(unpair, NULL, "Delete all bonds", cmd_bt_unpair),
+                               SHELL_CMD(adv, &bt_adv_cmds, "Advertising control", NULL),
+                               SHELL_SUBCMD_SET_END);
+
+SHELL_CMD_REGISTER(bt, &bt_cmds, "Bluetooth commands", NULL);
+#endif /* CONFIG_BT */
 
 #ifdef CONFIG_NETWORKING
 /* WiFi status command */
