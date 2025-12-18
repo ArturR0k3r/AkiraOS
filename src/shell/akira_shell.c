@@ -20,6 +20,9 @@
 #include "../OTA/web_server.h"
 #if defined(CONFIG_BT)
 #include "connectivity/bluetooth/bt_manager.h"
+#if defined(CONFIG_AKIRA_BT_ECHO)
+#include "connectivity/bluetooth/bt_echo.h"
+#endif
 #endif
 #if defined(CONFIG_BT)
 #include "../connectivity/bluetooth/bt_manager.h"
@@ -1374,6 +1377,38 @@ static int cmd_bt_adv_stop(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+#if defined(CONFIG_AKIRA_BT_ECHO)
+static int cmd_bt_echo(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        AKIRA_SHELL_ERROR(sh, "Usage: bt echo <on|off|status>");
+        return -EINVAL;
+    }
+
+    if (strcmp(argv[1], "on") == 0)
+    {
+        bt_echo_enable(true);
+        AKIRA_SHELL_PRINT(sh, "Echo enabled");
+        return 0;
+    }
+    else if (strcmp(argv[1], "off") == 0)
+    {
+        bt_echo_enable(false);
+        AKIRA_SHELL_PRINT(sh, "Echo disabled");
+        return 0;
+    }
+    else if (strcmp(argv[1], "status") == 0)
+    {
+        AKIRA_SHELL_PRINT(sh, "Echo: %s", bt_echo_is_enabled() ? "enabled" : "disabled");
+        return 0;
+    }
+
+    AKIRA_SHELL_ERROR(sh, "Unknown arg: %s", argv[1]);
+    return -EINVAL;
+}
+#endif
+
 SHELL_STATIC_SUBCMD_SET_CREATE(bt_adv_cmds,
                                SHELL_CMD(start, NULL, "Start advertising", cmd_bt_adv_start),
                                SHELL_CMD(stop, NULL, "Stop advertising", cmd_bt_adv_stop),
@@ -1386,6 +1421,9 @@ SHELL_STATIC_SUBCMD_SET_CREATE(bt_cmds,
                                SHELL_CMD(addr, NULL, "Show local BT address", cmd_bt_addr),
                                SHELL_CMD(disconnect, NULL, "Disconnect current connection", cmd_bt_disconnect),
                                SHELL_CMD(unpair, NULL, "Delete all bonds", cmd_bt_unpair),
+#if defined(CONFIG_AKIRA_BT_ECHO)
+                               SHELL_CMD(echo, NULL, "Echo service control: <on|off|status>", cmd_bt_echo),
+#endif
                                SHELL_CMD(adv, &bt_adv_cmds, "Advertising control", NULL),
                                SHELL_SUBCMD_SET_END);
 
@@ -1592,7 +1630,7 @@ static int cmd_web_start(const struct shell *sh, size_t argc, char **argv)
     }
 
     net_addr_ntop(AF_INET, addr, addr_str, sizeof(addr_str));
-    shell_print(sh, "Starting web server at http://%s:80/", addr_str);
+    shell_print(sh, "Starting web server at http://%s:%d/", addr_str, HTTP_PORT);
 
     web_server_notify_network_status(true, addr_str);
 

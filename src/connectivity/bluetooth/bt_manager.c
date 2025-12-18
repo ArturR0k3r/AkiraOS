@@ -19,6 +19,10 @@
 #define BT_AVAILABLE 0
 #endif
 
+#if defined(CONFIG_AKIRA_BT_ECHO)
+#include "bt_echo.h"
+#endif
+
 LOG_MODULE_REGISTER(bt_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 /*===========================================================================*/
@@ -74,7 +78,7 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     LOG_INF("Connected: %s", addr);
 
     notify_event(BT_EVENT_CONNECTED, NULL);
-}
+} 
 
 static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
 {
@@ -98,6 +102,10 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
     {
         bt_manager_start_advertising();
     }
+
+#if defined(CONFIG_AKIRA_BT_ECHO)
+    bt_echo_init();
+#endif
 }
 
 #if defined(CONFIG_BT_SMP) || defined(CONFIG_BT_CLASSIC)

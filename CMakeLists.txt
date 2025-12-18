@@ -174,8 +174,12 @@ else()
     target_sources(app PRIVATE src/OTA/ota_manager_stub.c)
 endif()
 
-# Legacy web server (used by main.c)
-target_sources(app PRIVATE src/OTA/web_server.c)
+# Legacy embedded web UI (optional — add stub when disabled)
+if(CONFIG_AKIRA_EMBEDDED_WEB)
+    target_sources(app PRIVATE src/OTA/web_server.c)
+else()
+    target_sources(app PRIVATE src/OTA/web_server_stub.c)
+endif()
 
 # ===== OTA Transport Layer =====
 if(CONFIG_AKIRA_OTA)
@@ -223,6 +227,9 @@ if(CONFIG_AKIRA_BT_HID)
         src/connectivity/bluetooth/bt_manager.c
         src/connectivity/bluetooth/bt_hid.c
     )
+    if(CONFIG_AKIRA_BT_ECHO)
+        target_sources(app PRIVATE src/connectivity/bluetooth/bt_echo.c)
+    endif()
 endif()
 
 # USB HID (conditional)

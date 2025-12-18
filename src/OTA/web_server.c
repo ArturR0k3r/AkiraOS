@@ -76,10 +76,21 @@ LOG_MODULE_REGISTER(web_server, AKIRA_LOG_LEVEL);
 #define HTTP_RESPONSE_BUFFER_SIZE 1536
 #undef UPLOAD_CHUNK_SIZE
 #define UPLOAD_CHUNK_SIZE 512
-#define MAX_CONNECTIONS 2
+/* Backwards compatible fallback for MAX_CONNECTIONS: if CONFIG_AKIRA_HTTP_MAX_CONNECTIONS
+ * isn't defined at build time, fall back to a sane default. This prevents
+ * passing an invalid backlog to listen() which can lead to odd errno values
+ * on some network stacks. */
+#ifndef MAX_CONNECTIONS
+#if defined(CONFIG_AKIRA_HTTP_MAX_CONNECTIONS)
+#define MAX_CONNECTIONS CONFIG_AKIRA_HTTP_MAX_CONNECTIONS
+#else
+#define MAX_CONNECTIONS 5
+#endif
+#endif
 
-/* Thread stack - increased for socket operations */
-static K_THREAD_STACK_DEFINE(web_server_stack, 8192);
+/* Thread stack - tuned to fit DRAM budget. 6KB provides sufficient room
+ * for socket handling while lowering internal RAM usage. */
+static K_THREAD_STACK_DEFINE(web_server_stack, 6144);
 static struct k_thread web_server_thread_data;
 static k_tid_t web_server_thread_id;
 
@@ -98,7 +109,7 @@ static struct web_server_callbacks callbacks = {0};
 static K_MUTEX_DEFINE(server_mutex);
 
 /* Message queue - reduced size */
-#define SERVER_MSG_QUEUE_SIZE 8
+#define SERVER_MSG_QUEUE_SIZE 6
 
 enum server_msg_type
 {
@@ -123,8 +134,8 @@ struct server_msg
 
 K_MSGQ_DEFINE(server_msgq, sizeof(struct server_msg), SERVER_MSG_QUEUE_SIZE, 4);
 
-/* Log buffer for web terminal - compact size */
-#define LOG_BUFFER_SIZE 2048
+#/* Log buffer for web terminal - compact size */
+#define LOG_BUFFER_SIZE 1024
 #define MAX_LOG_LINES 30
 static char log_buffer[LOG_BUFFER_SIZE];
 static size_t log_buffer_pos = 0;
@@ -1194,19 +1205,76 @@ static int run_web_server(void)
 
     if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
     {
-        LOG_ERR("Bind failed: %d", errno);
+        LOG_ERR("Bind failed: %d (%s)", errno, strerror(errno));
         close(server_fd);
         return -1;
     }
-
-    if (listen(server_fd, MAX_CONNECTIONS) < 0)
+    /* Attempt to listen with a small retry loop since embedded socket
+     * stacks may transiently fail (returning errno). Retry bind/listen
+     * sequence a few times before giving up. */
+    int attempts = 0;
+    const int max_attempts = 3;
+    for (;;)
     {
-        LOG_ERR("Listen failed: %d", errno);
-        close(server_fd);
-        return -1;
-    }
+        if (listen(server_fd, MAX_CONNECTIONS) == 0)
+        {
+            LOG_INF("HTTP server listening on port %d", HTTP_PORT);
+            break;
+        }
 
-    LOG_INF("HTTP server listening on port %d", HTTP_PORT);
+            int saved_errno = errno;
+            LOG_ERR("Listen failed (attempt %d/%d): %d (%s) - fd=%d", ++attempts, max_attempts, saved_errno, strerror(saved_errno), server_fd);
+
+            /* Additional diagnostics */
+            struct sockaddr_in sa = {0};
+            socklen_t sa_len = sizeof(sa);
+            if (getsockname(server_fd, (struct sockaddr *)&sa, &sa_len) == 0)
+            {
+                LOG_INF("Socket bound to %s:%d", inet_ntoa(sa.sin_addr), ntohs(sa.sin_port));
+            }
+
+            int so_err = 0;
+            socklen_t so_len = sizeof(so_err);
+            if (getsockopt(server_fd, SOL_SOCKET, SO_ERROR, &so_err, &so_len) == 0 && so_err != 0)
+            {
+                LOG_INF("SO_ERROR on socket: %d (%s)", so_err, strerror(so_err));
+            }
+
+            /* Try to dump fd flags if available */
+    #if defined(F_GETFL)
+            int flags = fcntl(server_fd, F_GETFL, 0);
+            if (flags >= 0)
+            {
+                LOG_INF("FD flags: 0x%08x", flags);
+            }
+    #endif
+        if (attempts >= max_attempts)
+        {
+            close(server_fd);
+            return -1;
+        }
+
+        /* Try closing and recreating the socket (handle transient port/controller issues) */
+        close(server_fd);
+        k_sleep(K_MSEC(200));
+
+        server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (server_fd < 0)
+        {
+            LOG_ERR("Socket recreation failed: %d (%s)", errno, strerror(errno));
+            k_sleep(K_MSEC(200));
+            continue;
+        }
+        setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        setsockopt(server_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+        {
+            LOG_ERR("Bind retry failed: %d (%s)", errno, strerror(errno));
+            close(server_fd);
+            k_sleep(K_MSEC(200));
+            continue;
+        }
+    }
 
     while (server_state.state == WEB_SERVER_RUNNING)
     {
