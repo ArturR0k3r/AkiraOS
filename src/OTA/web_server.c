@@ -419,14 +419,14 @@ static int send_http_response(int client_fd, int status_code, const char *conten
                         LOG_ERR("Send retry limit exceeded: errno=%d, remaining=%zu", errno, remaining);
                         return -1;
                     }
-                    
+
                     /* Reduce chunk size on memory pressure */
                     if (errno == ENOMEM && chunk_size > 128)
                     {
                         chunk_size = 128;
                         LOG_DBG("Reduced chunk size to %zu due to memory pressure", chunk_size);
                     }
-                    
+
                     /* Exponential backoff with cap at 200ms */
                     int delay_ms = (retry_count * 20 < 200) ? (retry_count * 20) : 200;
                     LOG_DBG("Send retry %d: errno=%d, waiting %dms", retry_count, errno, delay_ms);
@@ -601,7 +601,7 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
     int retry_count = 0;
     uint8_t last_progress = 0;
 
-    LOG_INF("Starting receive loop: total_received=%u, content_length=%u", 
+    LOG_INF("Starting receive loop: total_received=%u, content_length=%u",
             total_received, content_length);
 
     while (total_received < content_length)
@@ -900,8 +900,8 @@ static int handle_api_request(int client_fd, const char *path)
     if (strcmp(path, "/api/system") == 0)
     {
         snprintf(response, sizeof(response),
-             "{\"uptime\":\"%.1f hours\",\"memory\":\"Available\",\"wifi\":\"Connected\",\"cpu\":\"ESP32\"}",
-             (double)k_uptime_get() / 3600000.0);
+                 "{\"uptime\":\"%.1f hours\",\"memory\":\"Available\",\"wifi\":\"Connected\",\"cpu\":\"ESP32\"}",
+                 (double)k_uptime_get() / 3600000.0);
         return send_http_response(client_fd, 200, "application/json", response, 0);
     }
 
@@ -911,14 +911,16 @@ static int handle_api_request(int client_fd, const char *path)
     {
         app_info_t apps[CONFIG_AKIRA_APP_MAX_INSTALLED];
         int count = app_manager_list(apps, CONFIG_AKIRA_APP_MAX_INSTALLED);
-        if (count < 0) {
+        if (count < 0)
+        {
             return send_http_response(client_fd, 500, "application/json", "{\"apps\":[]}", 0);
         }
         /* Build JSON object with apps array */
         char *p = response;
         char *end = response + sizeof(response) - 2;
         p += snprintf(p, end - p, "{\"apps\":[");
-        for (int i = 0; i < count && p < end; i++) {
+        for (int i = 0; i < count && p < end; i++)
+        {
             p += snprintf(p, end - p, "%s{\"id\":%d,\"name\":\"%s\",\"state\":\"%s\",\"description\":\"WASM Application\"}",
                           i > 0 ? "," : "", apps[i].id, apps[i].name,
                           app_state_to_str(apps[i].state));
@@ -930,7 +932,8 @@ static int handle_api_request(int client_fd, const char *path)
     if (strncmp(path, "/api/apps/start?", 16) == 0)
     {
         const char *name = strstr(path, "name=");
-        if (!name) {
+        if (!name)
+        {
             return send_http_response(client_fd, 400, "text/plain", "Missing name parameter", 0);
         }
         name += 5;
@@ -938,9 +941,11 @@ static int handle_api_request(int client_fd, const char *path)
         strncpy(app_name, name, sizeof(app_name) - 1);
         app_name[sizeof(app_name) - 1] = '\0';
         char *amp = strchr(app_name, '&');
-        if (amp) *amp = '\0';
+        if (amp)
+            *amp = '\0';
         int ret = app_manager_start(app_name);
-        if (ret < 0) {
+        if (ret < 0)
+        {
             snprintf(response, sizeof(response), "{\"error\":\"Failed to start app: %d\"}", ret);
             return send_http_response(client_fd, 500, "application/json", response, 0);
         }
@@ -951,7 +956,8 @@ static int handle_api_request(int client_fd, const char *path)
     if (strncmp(path, "/api/apps/stop?", 15) == 0)
     {
         const char *name = strstr(path, "name=");
-        if (!name) {
+        if (!name)
+        {
             return send_http_response(client_fd, 400, "text/plain", "Missing name parameter", 0);
         }
         name += 5;
@@ -959,9 +965,11 @@ static int handle_api_request(int client_fd, const char *path)
         strncpy(app_name, name, sizeof(app_name) - 1);
         app_name[sizeof(app_name) - 1] = '\0';
         char *amp = strchr(app_name, '&');
-        if (amp) *amp = '\0';
+        if (amp)
+            *amp = '\0';
         int ret = app_manager_stop(app_name);
-        if (ret < 0) {
+        if (ret < 0)
+        {
             snprintf(response, sizeof(response), "{\"error\":\"Failed to stop app: %d\"}", ret);
             return send_http_response(client_fd, 500, "application/json", response, 0);
         }
@@ -972,7 +980,8 @@ static int handle_api_request(int client_fd, const char *path)
     if (strncmp(path, "/api/apps/uninstall?", 20) == 0)
     {
         const char *name = strstr(path, "name=");
-        if (!name) {
+        if (!name)
+        {
             return send_http_response(client_fd, 400, "text/plain", "Missing name parameter", 0);
         }
         name += 5;
@@ -980,9 +989,11 @@ static int handle_api_request(int client_fd, const char *path)
         strncpy(app_name, name, sizeof(app_name) - 1);
         app_name[sizeof(app_name) - 1] = '\0';
         char *amp = strchr(app_name, '&');
-        if (amp) *amp = '\0';
+        if (amp)
+            *amp = '\0';
         int ret = app_manager_uninstall(app_name);
-        if (ret < 0) {
+        if (ret < 0)
+        {
             snprintf(response, sizeof(response), "{\"error\":\"Failed to uninstall app: %d\"}", ret);
             return send_http_response(client_fd, 500, "application/json", response, 0);
         }
@@ -1222,32 +1233,32 @@ static int run_web_server(void)
             break;
         }
 
-            int saved_errno = errno;
-            LOG_ERR("Listen failed (attempt %d/%d): %d (%s) - fd=%d", ++attempts, max_attempts, saved_errno, strerror(saved_errno), server_fd);
+        int saved_errno = errno;
+        LOG_ERR("Listen failed (attempt %d/%d): %d (%s) - fd=%d", ++attempts, max_attempts, saved_errno, strerror(saved_errno), server_fd);
 
-            /* Additional diagnostics */
-            struct sockaddr_in sa = {0};
-            socklen_t sa_len = sizeof(sa);
-            if (getsockname(server_fd, (struct sockaddr *)&sa, &sa_len) == 0)
-            {
-                LOG_INF("Socket bound to %s:%d", inet_ntoa(sa.sin_addr), ntohs(sa.sin_port));
-            }
+        /* Additional diagnostics */
+        struct sockaddr_in sa = {0};
+        socklen_t sa_len = sizeof(sa);
+        if (getsockname(server_fd, (struct sockaddr *)&sa, &sa_len) == 0)
+        {
+            LOG_INF("Socket bound to %s:%d", inet_ntoa(sa.sin_addr), ntohs(sa.sin_port));
+        }
 
-            int so_err = 0;
-            socklen_t so_len = sizeof(so_err);
-            if (getsockopt(server_fd, SOL_SOCKET, SO_ERROR, &so_err, &so_len) == 0 && so_err != 0)
-            {
-                LOG_INF("SO_ERROR on socket: %d (%s)", so_err, strerror(so_err));
-            }
+        int so_err = 0;
+        socklen_t so_len = sizeof(so_err);
+        if (getsockopt(server_fd, SOL_SOCKET, SO_ERROR, &so_err, &so_len) == 0 && so_err != 0)
+        {
+            LOG_INF("SO_ERROR on socket: %d (%s)", so_err, strerror(so_err));
+        }
 
-            /* Try to dump fd flags if available */
-    #if defined(F_GETFL)
-            int flags = fcntl(server_fd, F_GETFL, 0);
-            if (flags >= 0)
-            {
-                LOG_INF("FD flags: 0x%08x", flags);
-            }
-    #endif
+        /* Try to dump fd flags if available */
+#if defined(F_GETFL)
+        int flags = fcntl(server_fd, F_GETFL, 0);
+        if (flags >= 0)
+        {
+            LOG_INF("FD flags: 0x%08x", flags);
+        }
+#endif
         if (attempts >= max_attempts)
         {
             close(server_fd);

@@ -84,26 +84,27 @@ static int cmd_akira_psram(const struct shell *sh, size_t argc, char **argv)
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
-    if (!akira_psram_available()) {
+    if (!akira_psram_available())
+    {
         shell_print(sh, "PSRAM: Not available on this platform");
         return 0;
     }
 
     akira_psram_stats_t stats;
-    if (akira_psram_get_stats(&stats) < 0) {
+    if (akira_psram_get_stats(&stats) < 0)
+    {
         shell_error(sh, "Failed to get PSRAM stats");
         return -EIO;
     }
 
     shell_print(sh, "=== PSRAM Status (ESP32-S3 N16R8) ===");
-    shell_print(sh, "Total:   %zu bytes (%.2f MB)", 
-                stats.total_bytes, 
+    shell_print(sh, "Total:   %zu bytes (%.2f MB)",
+                stats.total_bytes,
                 (double)stats.total_bytes / (1024.0 * 1024.0));
-    shell_print(sh, "Used:    %zu bytes (%.1f%%)", 
+    shell_print(sh, "Used:    %zu bytes (%.1f%%)",
                 stats.used_bytes,
-                stats.total_bytes > 0 ? 
-                    (double)stats.used_bytes * 100.0 / stats.total_bytes : 0.0);
-    shell_print(sh, "Free:    %zu bytes (%.2f MB)", 
+                stats.total_bytes > 0 ? (double)stats.used_bytes * 100.0 / stats.total_bytes : 0.0);
+    shell_print(sh, "Free:    %zu bytes (%.2f MB)",
                 stats.free_bytes,
                 (double)stats.free_bytes / (1024.0 * 1024.0));
     shell_print(sh, "Peak:    %zu bytes", stats.peak_usage);

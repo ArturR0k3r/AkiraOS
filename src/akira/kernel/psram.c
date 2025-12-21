@@ -23,19 +23,20 @@ LOG_MODULE_REGISTER(akira_psram, CONFIG_AKIRA_LOG_LEVEL);
 
 /* ESP32-S3 PSRAM address range (memory-mapped) */
 #define ESP32S3_PSRAM_START 0x3C000000
-#define ESP32S3_PSRAM_END   0x3DFFFFFF
+#define ESP32S3_PSRAM_END 0x3DFFFFFF
 #endif
 
 /*===========================================================================*/
 /* Internal State                                                            */
 /*===========================================================================*/
 
-static struct {
+static struct
+{
     bool initialized;
     bool available;
     size_t total_size;
     struct k_mutex mutex;
-    
+
     /* Statistics */
     size_t used_bytes;
     size_t peak_usage;
@@ -54,7 +55,8 @@ static struct {
 
 static void psram_init_once(void)
 {
-    if (psram_state.initialized) {
+    if (psram_state.initialized)
+    {
         return;
     }
 
@@ -92,47 +94,53 @@ size_t akira_psram_get_size(void)
 size_t akira_psram_get_free(void)
 {
     psram_init_once();
-    
-    if (!psram_state.available) {
+
+    if (!psram_state.available)
+    {
         return 0;
     }
-    
+
     k_mutex_lock(&psram_state.mutex, K_FOREVER);
     size_t free = psram_state.total_size - psram_state.used_bytes;
     k_mutex_unlock(&psram_state.mutex);
-    
+
     return free;
 }
 
 void *akira_psram_alloc(size_t size)
 {
     psram_init_once();
-    
-    if (!psram_state.available || size == 0) {
+
+    if (!psram_state.available || size == 0)
+    {
         return NULL;
     }
 
 #if defined(CONFIG_ESP_SPIRAM)
     void *ptr = shared_multi_heap_alloc(SMH_REG_ATTR_EXTERNAL, size);
-    
-    if (ptr) {
+
+    if (ptr)
+    {
         k_mutex_lock(&psram_state.mutex, K_FOREVER);
         psram_state.used_bytes += size;
         psram_state.alloc_count++;
-        if (psram_state.used_bytes > psram_state.peak_usage) {
+        if (psram_state.used_bytes > psram_state.peak_usage)
+        {
             psram_state.peak_usage = psram_state.used_bytes;
         }
         k_mutex_unlock(&psram_state.mutex);
-        
+
         LOG_DBG("PSRAM alloc: %zu bytes at %p", size, ptr);
-    } else {
+    }
+    else
+    {
         k_mutex_lock(&psram_state.mutex, K_FOREVER);
         psram_state.alloc_failures++;
         k_mutex_unlock(&psram_state.mutex);
-        
+
         LOG_WRN("PSRAM alloc failed: %zu bytes", size);
     }
-    
+
     return ptr;
 #else
     /* Fallback to regular malloc if no PSRAM */
@@ -143,32 +151,37 @@ void *akira_psram_alloc(size_t size)
 void *akira_psram_aligned_alloc(size_t alignment, size_t size)
 {
     psram_init_once();
-    
-    if (!psram_state.available || size == 0) {
+
+    if (!psram_state.available || size == 0)
+    {
         return NULL;
     }
 
 #if defined(CONFIG_ESP_SPIRAM)
     void *ptr = shared_multi_heap_aligned_alloc(SMH_REG_ATTR_EXTERNAL, alignment, size);
-    
-    if (ptr) {
+
+    if (ptr)
+    {
         k_mutex_lock(&psram_state.mutex, K_FOREVER);
         psram_state.used_bytes += size;
         psram_state.alloc_count++;
-        if (psram_state.used_bytes > psram_state.peak_usage) {
+        if (psram_state.used_bytes > psram_state.peak_usage)
+        {
             psram_state.peak_usage = psram_state.used_bytes;
         }
         k_mutex_unlock(&psram_state.mutex);
-        
+
         LOG_DBG("PSRAM aligned alloc: %zu bytes (align=%zu) at %p", size, alignment, ptr);
-    } else {
+    }
+    else
+    {
         k_mutex_lock(&psram_state.mutex, K_FOREVER);
         psram_state.alloc_failures++;
         k_mutex_unlock(&psram_state.mutex);
-        
+
         LOG_WRN("PSRAM aligned alloc failed: %zu bytes", size);
     }
-    
+
     return ptr;
 #else
     return akira_aligned_alloc(alignment, size);
@@ -179,31 +192,36 @@ void *akira_psram_calloc(size_t count, size_t size)
 {
     size_t total = count * size;
     void *ptr = akira_psram_alloc(total);
-    
-    if (ptr) {
+
+    if (ptr)
+    {
         memset(ptr, 0, total);
     }
-    
+
     return ptr;
 }
 
 void akira_psram_free(void *ptr)
 {
-    if (!ptr) {
+    if (!ptr)
+    {
         return;
     }
 
 #if defined(CONFIG_ESP_SPIRAM)
-    if (akira_psram_ptr_is_psram(ptr)) {
+    if (akira_psram_ptr_is_psram(ptr))
+    {
         shared_multi_heap_free(ptr);
-        
+
         k_mutex_lock(&psram_state.mutex, K_FOREVER);
         psram_state.free_count++;
         /* Note: We can't track exact freed size with shared_multi_heap */
         k_mutex_unlock(&psram_state.mutex);
-        
+
         LOG_DBG("PSRAM free: %p", ptr);
-    } else {
+    }
+    else
+    {
         /* Not PSRAM, use regular free */
         akira_free(ptr);
     }
@@ -225,14 +243,15 @@ bool akira_psram_ptr_is_psram(const void *ptr)
 
 int akira_psram_get_stats(akira_psram_stats_t *stats)
 {
-    if (!stats) {
+    if (!stats)
+    {
         return -EINVAL;
     }
 
     psram_init_once();
 
     k_mutex_lock(&psram_state.mutex, K_FOREVER);
-    
+
     stats->total_bytes = psram_state.total_size;
     stats->used_bytes = psram_state.used_bytes;
     stats->free_bytes = psram_state.total_size - psram_state.used_bytes;
@@ -240,7 +259,7 @@ int akira_psram_get_stats(akira_psram_stats_t *stats)
     stats->alloc_count = psram_state.alloc_count;
     stats->free_count = psram_state.free_count;
     stats->alloc_failures = psram_state.alloc_failures;
-    
+
     k_mutex_unlock(&psram_state.mutex);
 
     return 0;
@@ -249,25 +268,27 @@ int akira_psram_get_stats(akira_psram_stats_t *stats)
 void akira_psram_dump_stats(void)
 {
     akira_psram_stats_t stats;
-    
-    if (akira_psram_get_stats(&stats) < 0) {
+
+    if (akira_psram_get_stats(&stats) < 0)
+    {
         LOG_ERR("Failed to get PSRAM stats");
         return;
     }
 
     LOG_INF("=== PSRAM Status ===");
     LOG_INF("Available: %s", psram_state.available ? "Yes" : "No");
-    
-    if (psram_state.available) {
-        LOG_INF("Total: %zu bytes (%.2f MB)", 
-            stats.total_bytes, 
-            (double)stats.total_bytes / (1024.0 * 1024.0));
-        LOG_INF("Used: %zu bytes (%.1f%%)", 
-            stats.used_bytes,
-            (double)stats.used_bytes * 100.0 / stats.total_bytes);
-        LOG_INF("Free: %zu bytes (%.2f MB)", 
-            stats.free_bytes,
-            (double)stats.free_bytes / (1024.0 * 1024.0));
+
+    if (psram_state.available)
+    {
+        LOG_INF("Total: %zu bytes (%.2f MB)",
+                stats.total_bytes,
+                (double)stats.total_bytes / (1024.0 * 1024.0));
+        LOG_INF("Used: %zu bytes (%.1f%%)",
+                stats.used_bytes,
+                (double)stats.used_bytes * 100.0 / stats.total_bytes);
+        LOG_INF("Free: %zu bytes (%.2f MB)",
+                stats.free_bytes,
+                (double)stats.free_bytes / (1024.0 * 1024.0));
         LOG_INF("Peak: %zu bytes", stats.peak_usage);
         LOG_INF("Allocs: %u, Frees: %u, Failures: %u",
                 stats.alloc_count, stats.free_count, stats.alloc_failures);
@@ -280,15 +301,17 @@ void akira_psram_dump_stats(void)
 
 void *akira_psram_pool_create(const char *name, size_t size)
 {
-    if (!akira_psram_available()) {
+    if (!akira_psram_available())
+    {
         LOG_ERR("Cannot create PSRAM pool: PSRAM not available");
         return NULL;
     }
 
     /* Allocate pool buffer from PSRAM */
     void *buffer = akira_psram_alloc(size);
-    if (!buffer) {
-        LOG_ERR("Failed to allocate PSRAM pool '%s' (%zu bytes)", 
+    if (!buffer)
+    {
+        LOG_ERR("Failed to allocate PSRAM pool '%s' (%zu bytes)",
                 name ? name : "unnamed", size);
         return NULL;
     }
@@ -303,14 +326,15 @@ void *akira_psram_pool_create(const char *name, size_t size)
     };
 
     akira_pool_t *pool = akira_pool_create(&config);
-    if (!pool) {
+    if (!pool)
+    {
         akira_psram_free(buffer);
-        LOG_ERR("Failed to create pool structure for PSRAM pool '%s'", 
+        LOG_ERR("Failed to create pool structure for PSRAM pool '%s'",
                 name ? name : "unnamed");
         return NULL;
     }
 
-    LOG_INF("Created PSRAM pool '%s': %zu bytes at %p", 
+    LOG_INF("Created PSRAM pool '%s': %zu bytes at %p",
             name ? name : "unnamed", size, buffer);
 
     return pool;
@@ -318,7 +342,8 @@ void *akira_psram_pool_create(const char *name, size_t size)
 
 void akira_psram_pool_destroy(void *pool)
 {
-    if (!pool) {
+    if (!pool)
+    {
         return;
     }
 

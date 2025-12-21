@@ -58,6 +58,14 @@ int akira_runtime_init(void)
         return -EIO;
     }
 
+    /* Register Akira native exports with OCRE so WASM apps can call into
+     * Akira display/input APIs without modifying the OCRE core.
+     */
+    extern int register_akira_native_module(void);
+    if (register_akira_native_module() != 0) {
+        LOG_WRN("Akira: failed to register native module with OCRE");
+    }
+
     g_initialized = true;
     LOG_INF("Akira runtime initialized successfully");
     return 0;

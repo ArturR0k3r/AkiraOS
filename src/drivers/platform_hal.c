@@ -43,8 +43,7 @@ static uint32_t *shared_buttons = NULL;
  * use `akira_framebuffer_get()` to obtain a pointer to the correct buffer.
  */
 #if defined(CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM) && defined(CONFIG_MEMC)
-__attribute__((section(".ext_ram.bss"), aligned(4)))
-static uint16_t hw_framebuffer[240 * 320];
+__attribute__((section(".ext_ram.bss"), aligned(4))) static uint16_t hw_framebuffer[240 * 320];
 #else
 static uint16_t hw_framebuffer[1]; /* placeholder when no HW framebuffer */
 #endif
