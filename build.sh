@@ -20,7 +20,7 @@
 # Boards:
 #   native_sim                    Native simulator (default)
 #   esp32s3_devkitm_esp32s3_procpu  ESP32-S3 DevKitM (Akira Console)
-#   esp32_devkitc_procpu          ESP32 DevKitC (Akira Console Legacy)
+#   esp32_devkitc_procpu          ESP32 DevKitC (Akira Micro)
 #   nrf54l15dk_nrf54l15_cpuapp    nRF54L15 DK (Nordic)
 #   steval_stwinbx1               STM32 STWIN.box
 #   b_u585i_iot02a                STM32U5 IoT Discovery Kit
@@ -87,7 +87,7 @@ declare -A BOARD_DESC=(
     ["native_sim"]="Native Simulator"
     ["esp32s3_devkitm_esp32s3_procpu"]="ESP32-S3 DevKitM (Akira Console)"
     ["esp32c3_devkitm"]="ESP32-C3 DevKitM (RISC-V)"
-    ["esp32_devkitc_procpu"]="ESP32 DevKitC (Akira Console Legacy)"
+    ["esp32_devkitc_procpu"]="ESP32 DevKitC (Akira Micro)"
     ["nrf54l15dk_nrf54l15_cpuapp"]="Nordic nRF54L15 DK"
     ["steval_stwinbx1"]="ST STEVAL-STWINBX1"
     ["b_u585i_iot02a"]="ST B-U585I-IOT02A Discovery Kit"
@@ -376,8 +376,14 @@ flash_esp32() {
             exit 1
         fi
         
-        print_step "Flashing MCUboot -> 0x0"
-        esptool --chip "$chip" --port "$PORT" --baud "$BAUD" write_flash 0x0 "$bootloader_bin"
+        # ESP32 classic needs bootloader at 0x1000, others at 0x0
+        local bootloader_offset="0x0"
+        if [[ "$chip" == "esp32" ]]; then
+            bootloader_offset="0x1000"
+        fi
+        
+        print_step "Flashing MCUboot -> $bootloader_offset"
+        esptool --chip "$chip" --port "$PORT" --baud "$BAUD" write_flash "$bootloader_offset" "$bootloader_bin"
         print_success "MCUboot flashed!"
     fi
     
