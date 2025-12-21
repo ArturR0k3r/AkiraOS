@@ -260,14 +260,14 @@ void akira_psram_dump_stats(void)
     
     if (psram_state.available) {
         LOG_INF("Total: %zu bytes (%.2f MB)", 
-                stats.total_bytes, 
-                (float)stats.total_bytes / (1024 * 1024));
+            stats.total_bytes, 
+            (double)stats.total_bytes / (1024.0 * 1024.0));
         LOG_INF("Used: %zu bytes (%.1f%%)", 
-                stats.used_bytes,
-                (float)stats.used_bytes * 100 / stats.total_bytes);
+            stats.used_bytes,
+            (double)stats.used_bytes * 100.0 / stats.total_bytes);
         LOG_INF("Free: %zu bytes (%.2f MB)", 
-                stats.free_bytes,
-                (float)stats.free_bytes / (1024 * 1024));
+            stats.free_bytes,
+            (double)stats.free_bytes / (1024.0 * 1024.0));
         LOG_INF("Peak: %zu bytes", stats.peak_usage);
         LOG_INF("Allocs: %u, Frees: %u, Failures: %u",
                 stats.alloc_count, stats.free_count, stats.alloc_failures);

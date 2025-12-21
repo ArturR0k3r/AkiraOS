@@ -101,6 +101,27 @@ config AKIRA_ST7789
 
 endmenu
 
+menu "PSRAM / External RAM options"
+
+config AKIRA_FONTS_IN_PSRAM
+    bool "Place font data in PSRAM (if available)"
+    default n
+    depends on MEMC
+    help
+      When enabled, large font data (e.g., font11x18) will be placed in PSRAM
+      (where supported by the board) instead of the default RO data section.
+
+config AKIRA_FRAMEBUFFER_IN_PSRAM
+    bool "Place framebuffer in PSRAM (if available)"
+    default n
+    depends on MEMC
+    help
+      When enabled, large framebuffer buffers used on hardware platforms
+      will be allocated/placed in PSRAM if the underlying driver supports
+      PSRAM placement. This is ignored on native_sim.
+
+endmenu
+
 menu "RF Drivers"
 
 config AKIRA_RF_FRAMEWORK

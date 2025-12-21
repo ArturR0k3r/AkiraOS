@@ -128,16 +128,62 @@ extern "C"
     /**
      * @brief Get AkiraOS version string
      *
-     * @return Version string (e.g., "2.0.0")
+     * Kept for compatibility with older callers; prefer
+     * `akira_version_string()` which is the canonical implementation.
+     *
+     * @return Version string (e.g., "1.2.3")
      */
     const char *akira_version(void);
 
     /**
+     * @brief Get AkiraOS version string (canonical)
+     *
+     * @return Version string (e.g., "1.2.3")
+     */
+    const char *akira_version_string(void);
+
+    /**
+     * @brief Print the Akira banner to console
+     */
+    void akira_print_banner(void);
+
+    /**
+     * @brief Print a compact Akira status summary (logs)
+     */
+    void akira_print_status(void);
+
+    /**
      * @brief Check if system is fully initialized
+     *
+     * Kept for compatibility; prefer `akira_is_initialized()`.
      *
      * @return true if system is ready
      */
     bool akira_is_ready(void);
+
+    /**
+     * @brief Check if system is initialized (canonical)
+     *
+     * @return true if system is initialized
+     */
+    bool akira_is_initialized(void);
+
+    /**
+     * @brief Check if system is currently running
+     *
+     * @return true if Akira is running
+     */
+    bool akira_is_running(void);
+
+    /**
+     * @brief Retrieve version struct
+     */
+    void akira_version_get(akira_version_t *version);
+
+    /**
+     * @brief Get initialization time in ms
+     */
+    uint32_t akira_init_time(void);
 
     /*===========================================================================*/
     /* System State                                                              */

@@ -900,8 +900,8 @@ static int handle_api_request(int client_fd, const char *path)
     if (strcmp(path, "/api/system") == 0)
     {
         snprintf(response, sizeof(response),
-                 "{\"uptime\":\"%.1f hours\",\"memory\":\"Available\",\"wifi\":\"Connected\",\"cpu\":\"ESP32\"}",
-                 (float)k_uptime_get() / 3600000.0f);
+             "{\"uptime\":\"%.1f hours\",\"memory\":\"Available\",\"wifi\":\"Connected\",\"cpu\":\"ESP32\"}",
+             (double)k_uptime_get() / 3600000.0);
         return send_http_response(client_fd, 200, "application/json", response, 0);
     }
 

@@ -98,14 +98,14 @@ static int cmd_akira_psram(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "=== PSRAM Status (ESP32-S3 N16R8) ===");
     shell_print(sh, "Total:   %zu bytes (%.2f MB)", 
                 stats.total_bytes, 
-                (float)stats.total_bytes / (1024 * 1024));
+                (double)stats.total_bytes / (1024.0 * 1024.0));
     shell_print(sh, "Used:    %zu bytes (%.1f%%)", 
                 stats.used_bytes,
                 stats.total_bytes > 0 ? 
-                    (float)stats.used_bytes * 100 / stats.total_bytes : 0);
+                    (double)stats.used_bytes * 100.0 / stats.total_bytes : 0.0);
     shell_print(sh, "Free:    %zu bytes (%.2f MB)", 
                 stats.free_bytes,
-                (float)stats.free_bytes / (1024 * 1024));
+                (double)stats.free_bytes / (1024.0 * 1024.0));
     shell_print(sh, "Peak:    %zu bytes", stats.peak_usage);
     shell_print(sh, "Allocs:  %u", stats.alloc_count);
     shell_print(sh, "Frees:   %u", stats.free_count);
