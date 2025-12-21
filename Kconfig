@@ -664,6 +664,17 @@ config OCRE_WAMR_HEAP_BUFFER_SIZE
       Must be large enough to hold WASM linear memory.
       Default 256KB, OCRE recommends 512KB for production.
 
+config OCRE_WAMR_HEAP_BUFFER_IN_PSRAM
+    bool "Place WAMR heap buffer in PSRAM when available"
+    depends on MEMC
+    default n
+    help
+      When set, the global WAMR heap buffer (configured via
+      CONFIG_OCRE_WAMR_HEAP_BUFFER_SIZE) will be placed into the
+      external PSRAM section (if supported by the board and MEMC
+      driver). This frees internal DRAM for other runtime usage.
+
+
 config OCRE_CONTAINER_DEFAULT_STACK_SIZE
     int "Default container stack size"
     default 8192
