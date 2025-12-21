@@ -2,7 +2,8 @@
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/spi/spi.h>
 
-// Configure SPI pins - Fixed pin mapping
+// Configure SPI pins for Akira-Micro
+// Based on HARDWARE.md: IO5=MISO, IO18=SCK, IO19=MOSI
 &pinctrl
 {
 spim2_default:
@@ -10,9 +11,9 @@ spim2_default:
     {
         group1
         {
-            pinmux = <SPIM2_MISO_GPIO25>, // MISO - GPIO25
-                <SPIM2_MOSI_GPIO23>,      // MOSI - GPIO23
-                <SPIM2_SCLK_GPIO19>;      // SCK  - GPIO19
+            pinmux = <SPIM2_MISO_GPIO5>,  // MISO - GPIO5
+                <SPIM2_MOSI_GPIO19>,      // MOSI - GPIO19
+                <SPIM2_SCLK_GPIO18>;      // SCK  - GPIO18
         };
     };
 };
@@ -21,34 +22,51 @@ spim2_default:
     status = "okay";
     pinctrl-0 = <&spim2_default>;
     pinctrl-names = "default";
-    cs-gpios = <&gpio0 22 GPIO_ACTIVE_LOW>; // Manual CS control
+    // CS for SD Card on GPIO0
+    cs-gpios = <&gpio0 0 GPIO_ACTIVE_LOW>;
+    
+    // SD Card on SPI
+    sd_card: sdhc@0 {
+        compatible = "zephyr,sdhc-spi-slot";
+        reg = <0>;
+        status = "okay";
+        spi-max-frequency = <24000000>;
+        mmc {
+            compatible = "zephyr,sdmmc-disk";
+            status = "okay";
+            disk-name = "SD";
+        };
+    };
 };
 
 &gpio0 {
     status = "okay";
-    // ILI9341 Display Control Pins
-    ili9341_cs: ili9341_cs {
+    
+    // Akira-Micro Status LED (Blue) - GPIO32
+    status_led: status_led {
         gpio-hog;
-        gpios = <22 GPIO_ACTIVE_LOW>; // CS - GPIO22
-        output-high;                // CS idle high
+        gpios = <32 GPIO_ACTIVE_HIGH>;
+        output-low;
     };
-
-    ili9341_dc: ili9341_dc {
+    
+    // CC1101 CS - GPIO23
+    cc1101_cs: cc1101_cs {
         gpio-hog;
-        gpios = <21 GPIO_ACTIVE_HIGH>; // DC - GPIO21
-        output-low;                  // DC starts low (command mode)
+        gpios = <23 GPIO_ACTIVE_LOW>;
+        output-high;
     };
-
-    ili9341_reset: ili9341_reset {
+    
+    // nRF24L01 Chip Enable pins
+    nrf24_ce1: nrf24_ce1 {
         gpio-hog;
-        gpios = <18 GPIO_ACTIVE_HIGH>; // RESET - GPIO18
-        output-high;                 // RESET idle high
+        gpios = <17 GPIO_ACTIVE_HIGH>;  // CE_1 (U9)
+        output-low;
     };
-
-    ili9341_bl: ili9341_bl {
+    
+    nrf24_ce2: nrf24_ce2 {
         gpio-hog;
-        gpios = <27 GPIO_ACTIVE_HIGH>; // Backlight - GPIO27
-        output-high;                 // Backlight on
+        gpios = <16 GPIO_ACTIVE_HIGH>;  // CE_2 (U1)
+        output-low;
     };
 };
 
@@ -65,14 +83,23 @@ spim2_default:
     current-speed = <115200>;
 };
 
-// I2C configuration (for future expansion)
+// I2C configuration for OLED (SSD1306)
+// GPIO21 = SDA, GPIO22 = SCL
 &i2c0 {
     status = "okay";
     clock-frequency = <I2C_BITRATE_STANDARD>;
-    // Reserved for future peripherals:
-    // - IMU/Accelerometer
-    // - Audio codec
-    // - Battery management IC
+    
+    ssd1306: ssd1306@3c {
+        compatible = "solomon,ssd1306fb";
+        reg = <0x3c>;
+        width = <128>;
+        height = <64>;
+        segment-offset = <0>;
+        page-offset = <0>;
+        display-offset = <0>;
+        multiplex-ratio = <63>;
+        prechargep = <0x22>;
+    };
 };
 
 // Chosen nodes for Zephyr configuration
@@ -81,16 +108,56 @@ spim2_default:
         zephyr,console = &uart0;
         zephyr,shell-uart = &uart0;
     };
+    
+    aliases {
+        user-data-partition = &storage_partition;
+        led0 = &status_led;
+        spi-flash0 = &sd_card;
+    };
+    
+    // Button definitions for Akira-Micro
+    gpio_keys {
+        compatible = "gpio-keys";
+        
+        key1: key_1 {
+            gpios = <&gpio0 35 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "KEY 1";
+            zephyr,code = <1>;
+        };
+        
+        key2: key_2 {
+            gpios = <&gpio0 34 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "KEY 2";
+            zephyr,code = <2>;
+        };
+        
+        key3: key_3 {
+            gpios = <&gpio0 39 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "KEY 3";
+            zephyr,code = <3>;
+        };
+        
+        key4: key_4 {
+            gpios = <&gpio0 36 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "KEY 4";
+            zephyr,code = <4>;
+        };
+        
+        key5: key_5 {
+            gpios = <&gpio0 14 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "KEY 5";
+            zephyr,code = <5>;
+        };
+        
+        key6: key_6 {
+            gpios = <&gpio0 13 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "KEY 6";
+            zephyr,code = <6>;
+        };
+    };
 };
 
 // Change storage partition label to user-data-partition for LittleFS
 user_data_partition: &storage_partition {
     label = "user_data_partition";
-};
-
-// Add alias for user-data-partition
-/ {
-    aliases {
-        user-data-partition = &storage_partition;
-    };
 };
