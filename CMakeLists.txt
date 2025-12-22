@@ -126,6 +126,9 @@ target_sources(app PRIVATE
 # Akira shell commands
 if(CONFIG_SHELL)
     target_sources(app PRIVATE src/akira/shell.c)
+    if(CONFIG_AKIRA_HID)
+        target_sources(app PRIVATE src/shell/hid_shell.c)
+    endif()
 endif()
 
 # New Display Drivers (conditional)

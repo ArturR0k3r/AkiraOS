@@ -144,13 +144,168 @@ static struct
 } bt_hid_state;
 
 /*===========================================================================*/
-/* BLE GATT Service (Stub - requires full implementation)                    */
+/* BLE GATT Service (HIDS implementation)                                    */
 /*===========================================================================*/
 
 #if BT_AVAILABLE
-/* TODO: Implement full GATT HID service with proper characteristics */
-/* This requires registering HIDS, Battery Service, Device Info Service */
-#endif
+/* Combined report map (keyboard + gamepad) */
+static const uint8_t report_map[] = {
+    /* Keyboard */
+    /* (Report ID 1) */
+    /* Included as-is from keyboard_report_desc */
+};
+
+/* We'll build a combined map at runtime by concatenating the two descriptors */
+static const uint8_t *get_report_map(size_t *len)
+{
+    static uint8_t *map = NULL;
+    static size_t map_len = 0;
+
+    if (!map)
+    {
+        map_len = sizeof(keyboard_report_desc) + sizeof(gamepad_report_desc);
+        map = k_malloc(map_len);
+        if (!map)
+        {
+            map_len = 0;
+            return NULL;
+        }
+        memcpy(map, keyboard_report_desc, sizeof(keyboard_report_desc));
+        memcpy(map + sizeof(keyboard_report_desc), gamepad_report_desc, sizeof(gamepad_report_desc));
+    }
+
+    if (len)
+        *len = map_len;
+    return map;
+}
+
+/* HID Information: bcdHID = 0x0111, country = 0, flags = 0 */
+static const uint8_t hid_info[] = { 0x11, 0x01, 0x00, 0x00 };
+
+/* Current report state buffers */
+static hid_keyboard_report_t current_keyboard = {0};
+static hid_gamepad_report_t current_gamepad = {0};
+
+/* Report reference descriptors */
+static const uint8_t kb_report_ref[] = { 0x01, 0x01 }; /* ID=1, Type=input */
+static const uint8_t gp_report_ref[] = { 0x02, 0x01 }; /* ID=2, Type=input */
+
+/* Boot keyboard OUT to receive LED state from host */
+static uint8_t boot_kb_out = 0;
+
+/* CCC configs */
+static struct bt_gatt_ccc_cfg kb_ccc_cfg[BT_GATT_CCC_MAX] = {};
+static struct bt_gatt_ccc_cfg gp_ccc_cfg[BT_GATT_CCC_MAX] = {};
+
+/* Simple read callbacks */
+static ssize_t read_hid_info(struct bt_conn *conn,
+                             const struct bt_gatt_attr *attr,
+                             void *buf, uint16_t len,
+                             uint16_t offset)
+{
+    const uint8_t *value = attr->user_data;
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(hid_info));
+}
+
+static ssize_t read_report_map_cb(struct bt_conn *conn,
+                                  const struct bt_gatt_attr *attr,
+                                  void *buf, uint16_t len,
+                                  uint16_t offset)
+{
+    size_t map_len;
+    const uint8_t *map = get_report_map(&map_len);
+    if (!map)
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, map, map_len);
+}
+
+static ssize_t read_kb_report(struct bt_conn *conn,
+                              const struct bt_gatt_attr *attr,
+                              void *buf, uint16_t len, uint16_t offset)
+{
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, &current_keyboard, sizeof(current_keyboard));
+}
+
+static ssize_t read_gp_report(struct bt_conn *conn,
+                              const struct bt_gatt_attr *attr,
+                              void *buf, uint16_t len, uint16_t offset)
+{
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, &current_gamepad, sizeof(current_gamepad));
+}
+
+static ssize_t read_report_ref(struct bt_conn *conn,
+                               const struct bt_gatt_attr *attr,
+                               void *buf, uint16_t len, uint16_t offset)
+{
+    const uint8_t *ref = attr->user_data;
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, ref, 2);
+}
+
+static ssize_t write_boot_kb_out(struct bt_conn *conn,
+                                 const struct bt_gatt_attr *attr,
+                                 const void *buf, uint16_t len,
+                                 uint16_t offset, uint8_t flags)
+{
+    ARG_UNUSED(offset);
+    ARG_UNUSED(flags);
+
+    if (len < 1)
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+
+    boot_kb_out = *((const uint8_t *)buf);
+
+    LOG_INF("HID: Boot KB OUT (LEDs)=0x%02x", boot_kb_out);
+
+    /* Notify higher layer (hid_manager) via output callback */
+    if (bt_hid_state.output_cb)
+    {
+        bt_hid_state.output_cb(&boot_kb_out, 1, bt_hid_state.output_cb_data);
+    }
+
+    return len;
+}
+
+/* Service definition */
+BT_GATT_SERVICE_DEFINE(hids_svc,
+    BT_GATT_PRIMARY_SERVICE(BT_UUID_HIDS),
+    BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_INFO, BT_GATT_CHRC_READ,
+                           BT_GATT_PERM_READ, read_hid_info, NULL, (void *)hid_info),
+    BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_REPORT_MAP, BT_GATT_CHRC_READ,
+                           BT_GATT_PERM_READ, read_report_map_cb, NULL, NULL),
+
+    /* Keyboard report (ID = 1) */
+    BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_REPORT, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+                           BT_GATT_PERM_READ, read_kb_report, NULL, &current_keyboard),
+    BT_GATT_DESCRIPTOR(BT_UUID_HIDS_REPORT_REF, BT_GATT_PERM_READ, read_report_ref, NULL, (void *)kb_report_ref),
+    BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+
+    /* Gamepad report (ID = 2) */
+    BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_REPORT, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+                           BT_GATT_PERM_READ, read_gp_report, NULL, &current_gamepad),
+    BT_GATT_DESCRIPTOR(BT_UUID_HIDS_REPORT_REF, BT_GATT_PERM_READ, read_report_ref, NULL, (void *)gp_report_ref),
+    BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+
+    /* Boot Keyboard OUT (for LED feedback) */
+    BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_BOOT_KB_OUT_REPORT, BT_GATT_CHRC_WRITE_WITHOUT_RESP,
+                           BT_GATT_PERM_WRITE, NULL, write_boot_kb_out, NULL),
+);
+
+/* Helper: find attribute by its user_data pointer */
+static const struct bt_gatt_attr *find_attr_by_user_data(const void *user_data)
+{
+    const struct bt_gatt_attr *attrs = hids_svc.attrs;
+    size_t count = hids_svc.attr_count;
+    for (size_t i = 0; i < count; i++)
+    {
+        if (attrs[i].user_data == user_data)
+            return &attrs[i];
+    }
+    return NULL;
+}
+
+#else /* BT_AVAILABLE */
+/* When BT not available, the service doesn't exist */
+#endif /* BT_AVAILABLE */
 
 /*===========================================================================*/
 /* Transport Implementation                                                  */
@@ -209,15 +364,31 @@ static int ble_hid_send_keyboard(const hid_keyboard_report_t *report)
     }
 
 #if BT_AVAILABLE
-    /* TODO: Send keyboard report via GATT notification */
-    LOG_DBG("BLE KB: mod=%02x keys=[%02x %02x %02x %02x %02x %02x]",
-            report->modifiers,
-            report->keys[0], report->keys[1], report->keys[2],
-            report->keys[3], report->keys[4], report->keys[5]);
+    /* Copy into local buffer and notify connected peer(s) */
+    memcpy(&current_keyboard, report, sizeof(current_keyboard));
+
+    const struct bt_gatt_attr *attr = find_attr_by_user_data(&current_keyboard);
+    if (!attr)
+    {
+        LOG_WRN("BLE HID: Keyboard attribute not found for notify");
+        return -ENODEV;
+    }
+
+    int rc = bt_gatt_notify(NULL, attr, &current_keyboard, sizeof(current_keyboard));
+    if (rc < 0)
+    {
+        LOG_ERR("BLE KB notify failed: %d", rc);
+        return rc;
+    }
+
+    LOG_DBG("BLE KB notify sent: mod=%02x keys=[%02x %02x %02x %02x %02x %02x]",
+            current_keyboard.modifiers,
+            current_keyboard.keys[0], current_keyboard.keys[1], current_keyboard.keys[2],
+            current_keyboard.keys[3], current_keyboard.keys[4], current_keyboard.keys[5]);
 #endif
 
     return 0;
-}
+} 
 
 static int ble_hid_send_gamepad(const hid_gamepad_report_t *report)
 {
@@ -232,12 +403,26 @@ static int ble_hid_send_gamepad(const hid_gamepad_report_t *report)
     }
 
 #if BT_AVAILABLE
-    /* TODO: Send gamepad report via GATT notification */
-    LOG_DBG("BLE GP: btns=%04x hat=%d", report->buttons, report->hat);
-#endif
+    memcpy(&current_gamepad, report, sizeof(current_gamepad));
 
+    const struct bt_gatt_attr *attr = find_attr_by_user_data(&current_gamepad);
+    if (!attr)
+    {
+        LOG_WRN("BLE HID: Gamepad attribute not found for notify");
+        return -ENODEV;
+    }
+
+    int rc = bt_gatt_notify(NULL, attr, &current_gamepad, sizeof(current_gamepad));
+    if (rc < 0)
+    {
+        LOG_ERR("BLE GP notify failed: %d", rc);
+        return rc;
+    }
+
+    LOG_DBG("BLE GP notify sent: btns=%04x hat=%d", current_gamepad.buttons, current_gamepad.hat);
+#endif
     return 0;
-}
+} 
 
 static int ble_hid_register_event_cb(hid_event_callback_t cb, void *user_data)
 {
@@ -278,9 +463,34 @@ static const hid_transport_ops_t ble_hid_transport = {
 /* Public API                                                                */
 /*===========================================================================*/
 
+static void bt_hid_bt_event_handler(bt_event_t event, void *data, void *user_data)
+{
+    ARG_UNUSED(data);
+    ARG_UNUSED(user_data);
+
+    if (!bt_hid_state.event_cb)
+        return;
+
+    switch (event)
+    {
+    case BT_EVENT_CONNECTED:
+        bt_hid_state.event_cb(HID_EVENT_CONNECTED, NULL, bt_hid_state.event_cb_data);
+        break;
+    case BT_EVENT_DISCONNECTED:
+        bt_hid_state.event_cb(HID_EVENT_DISCONNECTED, NULL, bt_hid_state.event_cb_data);
+        break;
+    default:
+        break;
+    }
+}
+
 int bt_hid_init(void)
 {
     LOG_INF("Registering BLE HID transport");
+
+    /* Register for BT manager events so we can forward connected/disconnected to HID manager */
+    bt_manager_register_callback(bt_hid_bt_event_handler, NULL);
+
     return hid_manager_register_transport(&ble_hid_transport);
 }
 

@@ -24,6 +24,17 @@
 #include "connectivity/usb/usb_manager.h"
 #endif
 
+/* HID */
+#ifdef CONFIG_AKIRA_HID
+#include "connectivity/hid/hid_manager.h"
+#endif
+#ifdef CONFIG_AKIRA_HID_SIM
+#include "connectivity/hid/hid_sim.h"
+#endif
+#ifdef CONFIG_AKIRA_BT_HID
+#include "connectivity/bluetooth/bt_hid.h"
+#endif
+
 /* Storage & Settings */
 #ifdef CONFIG_FILE_SYSTEM
 #include "storage/fs_manager.h"
@@ -106,7 +117,33 @@ int main(void)
     if (bt_manager_init(&bt_cfg) < 0) {
         LOG_WRN("Bluetooth init failed");
     }
+
+    /* HID subsystem initialization */
+#ifdef CONFIG_AKIRA_HID
+    hid_config_t hid_cfg = {
+        .device_types = HID_DEVICE_KEYBOARD | HID_DEVICE_GAMEPAD,
+        .preferred_transport = HID_TRANSPORT_BLE,
+        .device_name = "AkiraOS HID",
+        .vendor_id = 0x1234,
+        .product_id = 0x5678,
+    };
+
+    if (hid_manager_init(&hid_cfg) < 0) {
+        LOG_WRN("HID manager init failed");
+    }
+
+#ifdef CONFIG_AKIRA_HID_SIM
+    hid_sim_init();
+#endif /* CONFIG_AKIRA_HID_SIM */
+#endif /* CONFIG_AKIRA_HID */
+
+#ifdef CONFIG_AKIRA_BT_HID
+    bt_hid_init();
+    /* Default to BLE transport and enable HID so device advertises */
+    hid_manager_set_transport(HID_TRANSPORT_BLE);
+    hid_manager_enable();
 #endif
+#endif /* CONFIG_BT */
 
     /* USB (optional) */
 #ifdef CONFIG_USB_DEVICE_STACK
