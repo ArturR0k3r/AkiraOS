@@ -68,38 +68,45 @@ int main(void)
     printk("   Modular Embedded Operating System\n");
     printk("════════════════════════════════════════\n\n");
     LOG_INF("Build: %s %s", __DATE__, __TIME__);
-    
+
     /* Hardware initialization */
-    if (akira_hal_init() < 0) {
+    if (akira_hal_init() < 0)
+    {
         LOG_ERR("HAL init failed");
         return -1;
     }
-    
-    if (driver_registry_init() < 0) {
+
+    if (driver_registry_init() < 0)
+    {
         LOG_ERR("Driver registry failed");
         return -1;
     }
-    
+
     /* Storage (optional) */
 #ifdef CONFIG_FILE_SYSTEM
-    if (fs_manager_init() < 0) {
+    if (fs_manager_init() < 0)
+    {
         LOG_WRN("Storage init failed");
     }
 #endif
-    
+
     /* Settings (optional) */
 #ifdef CONFIG_AKIRA_SETTINGS
-    if (user_settings_init() < 0) {
+    if (user_settings_init() < 0)
+    {
         LOG_WRN("Settings init failed");
     }
 #endif
-    
+
     /* WiFi (optional) */
 #ifdef CONFIG_WIFI
     struct net_if *iface = net_if_get_default();
-    if (iface) {
+    if (iface)
+    {
         LOG_INF("WiFi interface ready");
-    } else {
+    }
+    else
+    {
         LOG_WRN("No WiFi interface found");
     }
 #endif
@@ -112,9 +119,9 @@ int main(void)
         .product_id = 0x0001,
         .services = BT_SERVICE_ALL,
         .auto_advertise = true,
-        .pairable = true
-    };
-    if (bt_manager_init(&bt_cfg) < 0) {
+        .pairable = true};
+    if (bt_manager_init(&bt_cfg) < 0)
+    {
         LOG_WRN("Bluetooth init failed");
     }
 
@@ -128,7 +135,8 @@ int main(void)
         .product_id = 0x5678,
     };
 
-    if (hid_manager_init(&hid_cfg) < 0) {
+    if (hid_manager_init(&hid_cfg) < 0)
+    {
         LOG_WRN("HID manager init failed");
     }
 
@@ -153,48 +161,52 @@ int main(void)
         .serial = "123456",
         .vendor_id = 0xFFFF,
         .product_id = 0x0001,
-        .classes = USB_CLASS_ALL
-    };
-    if (usb_manager_init(&usb_cfg) < 0) {
+        .classes = USB_CLASS_ALL};
+    if (usb_manager_init(&usb_cfg) < 0)
+    {
         LOG_WRN("USB init failed");
     }
 #endif
 
     /* OTA Manager - initialize before app manager and web server */
 #ifdef CONFIG_AKIRA_OTA
-    if (ota_manager_init() < 0) {
+    if (ota_manager_init() < 0)
+    {
         LOG_ERR("OTA manager init failed");
     }
 #endif
 
     /* App manager (optional) - includes runtime initialization */
 #ifdef CONFIG_AKIRA_APP_MANAGER
-    if (app_manager_init() < 0) {
+    if (app_manager_init() < 0)
+    {
         LOG_WRN("App manager failed");
     }
 #endif
-    
+
     /* Shell (optional) */
 #ifdef CONFIG_AKIRA_SHELL
-    if (akira_shell_init() < 0) {
+    if (akira_shell_init() < 0)
+    {
         LOG_WRN("Shell init failed");
     }
 #endif
-    
+
     /* Web server (optional) */
 #ifdef CONFIG_AKIRA_HTTP_SERVER
-    if (web_server_start(NULL) < 0) {
+    if (web_server_start(NULL) < 0)
+    {
         LOG_WRN("Web server init failed");
     }
 #endif
-    
+
     LOG_INF("✅ AkiraOS is ready");
-    
+
     /* Main loop - just sleep */
-    while (1) {
+    while (1)
+    {
         k_sleep(K_SECONDS(10));
     }
-    
+
     return 0;
 }
-

@@ -155,28 +155,25 @@ static int cmd_status(const struct shell *sh, size_t argc, char **argv)
 }
 
 SHELL_STATIC_SUBCMD_SET_CREATE(hid_keyboard_commands,
-    SHELL_CMD_ARG(type, NULL, "Type a string via HID keyboard", cmd_kb_type, 2, 255),
-    SHELL_SUBCMD_SET_END
-);
+                               SHELL_CMD_ARG(type, NULL, "Type a string via HID keyboard", cmd_kb_type, 2, 255),
+                               SHELL_SUBCMD_SET_END);
 
 #if IS_ENABLED(CONFIG_AKIRA_HID_SIM)
 SHELL_STATIC_SUBCMD_SET_CREATE(hid_sim_commands,
-    SHELL_CMD_ARG(connect, NULL, "Connect HID sim", cmd_sim, 2, 0),
-    SHELL_CMD_ARG(disconnect, NULL, "Disconnect HID sim", cmd_sim, 2, 0),
-    SHELL_SUBCMD_SET_END
-);
+                               SHELL_CMD_ARG(connect, NULL, "Connect HID sim", cmd_sim, 2, 0),
+                               SHELL_CMD_ARG(disconnect, NULL, "Disconnect HID sim", cmd_sim, 2, 0),
+                               SHELL_SUBCMD_SET_END);
 #endif
 
 SHELL_STATIC_SUBCMD_SET_CREATE(hid_commands,
-    SHELL_CMD_ARG(enable, NULL, "Enable HID subsystem", cmd_hid_enable, 1, 0),
-    SHELL_CMD_ARG(disable, NULL, "Disable HID subsystem", cmd_hid_disable, 1, 0),
-    SHELL_CMD_ARG(transport, NULL, "Set HID transport (ble|sim)", cmd_hid_transport, 2, 0),
-    SHELL_CMD(status, NULL, "HID status", cmd_status),
+                               SHELL_CMD_ARG(enable, NULL, "Enable HID subsystem", cmd_hid_enable, 1, 0),
+                               SHELL_CMD_ARG(disable, NULL, "Disable HID subsystem", cmd_hid_disable, 1, 0),
+                               SHELL_CMD_ARG(transport, NULL, "Set HID transport (ble|sim)", cmd_hid_transport, 2, 0),
+                               SHELL_CMD(status, NULL, "HID status", cmd_status),
 #if IS_ENABLED(CONFIG_AKIRA_HID_SIM)
-    SHELL_CMD(sim, &hid_sim_commands, "Simulation transport commands", NULL),
+                               SHELL_CMD(sim, &hid_sim_commands, "Simulation transport commands", NULL),
 #endif
-    SHELL_CMD(keyboard, &hid_keyboard_commands, "Keyboard commands", NULL),
-    SHELL_SUBCMD_SET_END
-);
+                               SHELL_CMD(keyboard, &hid_keyboard_commands, "Keyboard commands", NULL),
+                               SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(hid, &hid_commands, "HID commands", NULL);

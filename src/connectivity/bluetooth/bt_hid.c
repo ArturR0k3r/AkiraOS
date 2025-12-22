@@ -180,15 +180,15 @@ static const uint8_t *get_report_map(size_t *len)
 }
 
 /* HID Information: bcdHID = 0x0111, country = 0, flags = 0 */
-static const uint8_t hid_info[] = { 0x11, 0x01, 0x00, 0x00 };
+static const uint8_t hid_info[] = {0x11, 0x01, 0x00, 0x00};
 
 /* Current report state buffers */
 static hid_keyboard_report_t current_keyboard = {0};
 static hid_gamepad_report_t current_gamepad = {0};
 
 /* Report reference descriptors */
-static const uint8_t kb_report_ref[] = { 0x01, 0x01 }; /* ID=1, Type=input */
-static const uint8_t gp_report_ref[] = { 0x02, 0x01 }; /* ID=2, Type=input */
+static const uint8_t kb_report_ref[] = {0x01, 0x01}; /* ID=1, Type=input */
+static const uint8_t gp_report_ref[] = {0x02, 0x01}; /* ID=2, Type=input */
 
 /* Boot keyboard OUT to receive LED state from host */
 static uint8_t boot_kb_out = 0;
@@ -267,28 +267,27 @@ static ssize_t write_boot_kb_out(struct bt_conn *conn,
 
 /* Service definition */
 BT_GATT_SERVICE_DEFINE(hids_svc,
-    BT_GATT_PRIMARY_SERVICE(BT_UUID_HIDS),
-    BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_INFO, BT_GATT_CHRC_READ,
-                           BT_GATT_PERM_READ, read_hid_info, NULL, (void *)hid_info),
-    BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_REPORT_MAP, BT_GATT_CHRC_READ,
-                           BT_GATT_PERM_READ, read_report_map_cb, NULL, NULL),
+                       BT_GATT_PRIMARY_SERVICE(BT_UUID_HIDS),
+                       BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_INFO, BT_GATT_CHRC_READ,
+                                              BT_GATT_PERM_READ, read_hid_info, NULL, (void *)hid_info),
+                       BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_REPORT_MAP, BT_GATT_CHRC_READ,
+                                              BT_GATT_PERM_READ, read_report_map_cb, NULL, NULL),
 
-    /* Keyboard report (ID = 1) */
-    BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_REPORT, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-                           BT_GATT_PERM_READ, read_kb_report, NULL, &current_keyboard),
-    BT_GATT_DESCRIPTOR(BT_UUID_HIDS_REPORT_REF, BT_GATT_PERM_READ, read_report_ref, NULL, (void *)kb_report_ref),
-    BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+                       /* Keyboard report (ID = 1) */
+                       BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_REPORT, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+                                              BT_GATT_PERM_READ, read_kb_report, NULL, &current_keyboard),
+                       BT_GATT_DESCRIPTOR(BT_UUID_HIDS_REPORT_REF, BT_GATT_PERM_READ, read_report_ref, NULL, (void *)kb_report_ref),
+                       BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
-    /* Gamepad report (ID = 2) */
-    BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_REPORT, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-                           BT_GATT_PERM_READ, read_gp_report, NULL, &current_gamepad),
-    BT_GATT_DESCRIPTOR(BT_UUID_HIDS_REPORT_REF, BT_GATT_PERM_READ, read_report_ref, NULL, (void *)gp_report_ref),
-    BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+                       /* Gamepad report (ID = 2) */
+                       BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_REPORT, BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+                                              BT_GATT_PERM_READ, read_gp_report, NULL, &current_gamepad),
+                       BT_GATT_DESCRIPTOR(BT_UUID_HIDS_REPORT_REF, BT_GATT_PERM_READ, read_report_ref, NULL, (void *)gp_report_ref),
+                       BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
-    /* Boot Keyboard OUT (for LED feedback) */
-    BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_BOOT_KB_OUT_REPORT, BT_GATT_CHRC_WRITE_WITHOUT_RESP,
-                           BT_GATT_PERM_WRITE, NULL, write_boot_kb_out, NULL),
-);
+                       /* Boot Keyboard OUT (for LED feedback) */
+                       BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_BOOT_KB_OUT_REPORT, BT_GATT_CHRC_WRITE_WITHOUT_RESP,
+                                              BT_GATT_PERM_WRITE, NULL, write_boot_kb_out, NULL), );
 
 /* Helper: find attribute by its user_data pointer */
 static const struct bt_gatt_attr *find_attr_by_user_data(const void *user_data)
@@ -303,7 +302,7 @@ static const struct bt_gatt_attr *find_attr_by_user_data(const void *user_data)
     return NULL;
 }
 
-#else /* BT_AVAILABLE */
+#else  /* BT_AVAILABLE */
 /* When BT not available, the service doesn't exist */
 #endif /* BT_AVAILABLE */
 
@@ -388,7 +387,7 @@ static int ble_hid_send_keyboard(const hid_keyboard_report_t *report)
 #endif
 
     return 0;
-} 
+}
 
 static int ble_hid_send_gamepad(const hid_gamepad_report_t *report)
 {
@@ -422,7 +421,7 @@ static int ble_hid_send_gamepad(const hid_gamepad_report_t *report)
     LOG_DBG("BLE GP notify sent: btns=%04x hat=%d", current_gamepad.buttons, current_gamepad.hat);
 #endif
     return 0;
-} 
+}
 
 static int ble_hid_register_event_cb(hid_event_callback_t cb, void *user_data)
 {
