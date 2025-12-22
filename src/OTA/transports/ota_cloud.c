@@ -6,7 +6,7 @@
  */
 
 #include "../ota_transport.h"
-#include "../ota_manager.h"
+/* Removed: #include "../ota_manager.h" - Use interface only */
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
@@ -31,15 +31,105 @@ static struct
 } cloud_ota;
 
 /*===========================================================================*/
-/* Cloud Protocol (Stub)                                                     */
+/* Cloud Protocol Implementation Plan                                        */
 /*===========================================================================*/
 
-/* Future implementation will:
- * 1. Connect to AkiraHub server via HTTPS/MQTT
- * 2. Check for available firmware updates
- * 3. Download firmware in chunks
- * 4. Verify signature and apply update
+/* Future implementation will include:
+ *
+ * 1. HTTPS/MQTT Connection to AkiraHub Server
+ *    - TLS 1.3 with certificate pinning
+ *    - JWT authentication with refresh tokens
+ *    - Automatic reconnection on network failure
+ *
+ * 2. Update Check Protocol
+ *    - POST /api/v1/device/check_update
+ *    - Request: {device_id, current_version, hw_revision}
+ *    - Response: {update_available, version, download_url, signature}
+ *
+ * 3. Firmware Download
+ *    - Chunked download with resume support
+ *    - Concurrent chunk download (parallel)
+ *    - Progress reporting to server
+ *    - SHA256 checksum per chunk
+ *
+ * 4. Signature Verification
+ *    - RSA-2048 or Ed25519 signature verification
+ *    - Certificate chain validation
+ *    - Rollback protection (version numbers)
+ *
+ * 5. Differential Updates (Future)
+ *    - Binary diff patches (bsdiff/courgette)
+ *    - Reduces bandwidth for minor updates
+ *
+ * 6. Scheduling & Policies
+ *    - Auto-update window (e.g., 2-4 AM)
+ *    - Battery level check (>50%)
+ *    - WiFi-only downloads (no cellular)
+ *    - User confirmation for major updates
+ *
+ * Reference Implementation:
+ * See: https://docs.akirahub.io/ota/cloud-protocol
  */
+
+/* Example HTTPS request for checking updates */
+static const char *update_check_request_template = 
+    "POST /api/v1/device/check_update HTTP/1.1\r\n"
+    "Host: ota.akirahub.io\r\n"
+    "Authorization: Bearer %s\r\n"
+    "Content-Type: application/json\r\n"
+    "Content-Length: %d\r\n"
+    "\r\n"
+    "{\"device_id\":\"%s\",\"version\":\"%s\",\"hw_revision\":\"%s\"}";
+
+/* Example server response */
+static const char *update_available_response_example =
+    "{"
+    "  \"update_available\": true,"
+    "  \"version\": \"2.1.0\","
+    "  \"download_url\": \"https://cdn.akirahub.io/fw/akiraos-2.1.0.bin\","
+    "  \"size\": 1048576,"
+    "  \"sha256\": \"abcdef123456...\","
+    "  \"signature\": \"base64_encoded_signature\","
+    "  \"release_notes\": \"Security fixes and performance improvements\""
+    "}";
+
+/**
+ * @brief Check for available firmware updates (stub)
+ */
+static int cloud_check_for_updates(void)
+{
+    /* TODO: Implement HTTPS request to server */
+    LOG_WRN("Cloud update check not yet implemented");
+    
+    /* Future implementation:
+     * 1. Construct request JSON
+     * 2. Make HTTPS POST to server
+     * 3. Parse JSON response
+     * 4. Verify signature
+     * 5. Return update availability
+     */
+    
+    return -ENOTSUP;
+}
+
+/**
+ * @brief Download firmware from cloud (stub)
+ */
+static int cloud_download_firmware(const char *url, size_t size)
+{
+    /* TODO: Implement chunked HTTP download */
+    LOG_WRN("Cloud download not yet implemented");
+    
+    /* Future implementation:
+     * 1. Start OTA update
+     * 2. Download in 4KB chunks
+     * 3. Write each chunk to flash
+     * 4. Verify SHA256 checksum
+     * 5. Finalize update
+     */
+    
+    return -ENOTSUP;
+}
 
 /*===========================================================================*/
 /* Transport Implementation                                                  */

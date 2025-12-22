@@ -4,7 +4,7 @@ description: Intelligent maintenance and issue-fixing agent for AkiraOS.
 version: 1.0.0
 author: ArturR0k3r
 repository: https://github.com/ArturR0k3r/AkiraOS
-license: MIT
+license: GPL-3.0-only
 ---
 
 # AkiraAgent

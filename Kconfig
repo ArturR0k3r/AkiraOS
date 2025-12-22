@@ -101,6 +101,27 @@ config AKIRA_ST7789
 
 endmenu
 
+menu "PSRAM / External RAM options"
+
+config AKIRA_FONTS_IN_PSRAM
+    bool "Place font data in PSRAM (if available)"
+    default n
+    depends on MEMC
+    help
+      When enabled, large font data (e.g., font11x18) will be placed in PSRAM
+      (where supported by the board) instead of the default RO data section.
+
+config AKIRA_FRAMEBUFFER_IN_PSRAM
+    bool "Place framebuffer in PSRAM (if available)"
+    default n
+    depends on MEMC
+    help
+      When enabled, large framebuffer buffers used on hardware platforms
+      will be allocated/placed in PSRAM if the underlying driver supports
+      PSRAM placement. This is ignored on native_sim.
+
+endmenu
+
 menu "RF Drivers"
 
 config AKIRA_RF_FRAMEWORK
@@ -170,6 +191,15 @@ config AKIRA_BT_HID
       Enable HID over Bluetooth Low Energy (BLE).
       Requires Bluetooth stack to be enabled.
 
+config AKIRA_BT_ECHO
+    bool "Enable Bluetooth Echo service"
+    default n
+    depends on BT
+    help
+      Enable a small developer GATT Echo service. The service receives writes
+      and echoes the payload back via notifications. Useful for testing and
+      debugging BT connectivity. Can also be toggled at runtime via shell.
+
 config AKIRA_USB_HID
     bool "Enable USB HID"
     default y
@@ -214,6 +244,15 @@ config AKIRA_HTTP_PORT
     depends on AKIRA_HTTP_SERVER
     help
       TCP port for HTTP server to listen on.
+
+config AKIRA_EMBEDDED_WEB
+    bool "Enable embedded HTML Web UI"
+    default y
+    depends on AKIRA_HTTP_SERVER
+    help
+      Enable the embedded HTML web UI server hosted directly on the device.
+      Disabling this saves memory when the device connects to a centrally
+      hosted web server and doesn't need to serve pages locally.
 
 endmenu
 
@@ -624,6 +663,17 @@ config OCRE_WAMR_HEAP_BUFFER_SIZE
       Size of the heap buffer for WAMR runtime.
       Must be large enough to hold WASM linear memory.
       Default 256KB, OCRE recommends 512KB for production.
+
+config OCRE_WAMR_HEAP_BUFFER_IN_PSRAM
+    bool "Place WAMR heap buffer in PSRAM when available"
+    depends on MEMC
+    default n
+    help
+      When set, the global WAMR heap buffer (configured via
+      CONFIG_OCRE_WAMR_HEAP_BUFFER_SIZE) will be placed into the
+      external PSRAM section (if supported by the board and MEMC
+      driver). This frees internal DRAM for other runtime usage.
+
 
 config OCRE_CONTAINER_DEFAULT_STACK_SIZE
     int "Default container stack size"

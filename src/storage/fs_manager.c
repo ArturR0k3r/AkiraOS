@@ -27,8 +27,17 @@ static struct {
 } fs_state = {0};
 
 /* Simple RAM-based file storage for fallback */
-#define RAM_FILE_MAX_COUNT 16
-#define RAM_FILE_MAX_SIZE  (64 * 1024)  /* 64KB per file */
+/* Reduced limits to prevent excessive RAM usage */
+#if defined(CONFIG_SOC_ESP32S3)
+    #define RAM_FILE_MAX_COUNT 4           /* 4 files max */
+    #define RAM_FILE_MAX_SIZE  (16 * 1024) /* 16KB per file = 64KB max */
+#elif defined(CONFIG_SOC_ESP32)
+    #define RAM_FILE_MAX_COUNT 4
+    #define RAM_FILE_MAX_SIZE  (12 * 1024) /* 48KB max total */
+#else
+    #define RAM_FILE_MAX_COUNT 8           /* More RAM available */
+    #define RAM_FILE_MAX_SIZE  (32 * 1024) /* 256KB max total */
+#endif
 #define RAM_FILE_NAME_MAX  128
 
 typedef struct {
@@ -169,20 +178,20 @@ static int init_internal_storage(void) {
     
     fs_state.internal_available = false;
     
-    /* Try to check if /data mount point exists */
+    /* Try to check if /lfs mount point exists */
     struct fs_dirent entry;
-    int ret = fs_stat("/data", &entry);
+    int ret = fs_stat("/lfs", &entry);
     if (ret == 0) {
-        LOG_INF("Internal storage available at /data");
+        LOG_INF("Internal storage available at /lfs");
         fs_state.internal_available = true;
         
         /* Create app directories */
-        fs_mkdir("/data/apps");
-        fs_mkdir("/data/app_data");
+        fs_mkdir("/lfs/apps");
+        fs_mkdir("/lfs/app_data");
         return 0;
     }
     
-    LOG_DBG("No internal flash storage at /data: %d", ret);
+    LOG_DBG("No internal flash storage at /lfs: %d", ret);
     return -ENODEV;
 }
 
@@ -256,9 +265,9 @@ int fs_manager_get_info(fs_info_t *info, size_t max_count) {
     /* Internal storage */
     if (fs_state.internal_available && count < max_count) {
         struct fs_statvfs stat;
-        if (fs_statvfs("/data", &stat) == 0) {
+        if (fs_statvfs("/lfs", &stat) == 0) {
             info[count].type = FS_TYPE_INTERNAL;
-            info[count].mount_point = "/data";
+            info[count].mount_point = "/lfs";
             info[count].total_bytes = stat.f_frsize * stat.f_blocks;
             info[count].free_bytes = stat.f_frsize * stat.f_bfree;
             info[count].used_bytes = info[count].total_bytes - info[count].free_bytes;
@@ -345,7 +354,25 @@ int fs_manager_mkdir(const char *path) {
  * Write file
  */
 ssize_t fs_manager_write_file(const char *path, const void *data, size_t size) {
-    if (!path || !data || !fs_state.initialized) {
+    // /* DEBUG: Log all parameters */
+    // LOG_DBG("fs_manager_write_file called:");
+    // LOG_DBG("  path: %s", path ? path : "NULL");
+    // LOG_DBG("  data: %p", data);
+    // LOG_DBG("  size: %zu", size);
+    // LOG_DBG("  initialized: %d", fs_state.initialized);
+    
+    if (!path) {
+        LOG_ERR("fs_manager_write_file: path is NULL!");
+        return -EINVAL;
+    }
+    
+    if (!data) {
+        LOG_ERR("fs_manager_write_file: data pointer is NULL!");
+        return -EINVAL;
+    }
+    
+    if (!fs_state.initialized) {
+        LOG_ERR("fs_manager_write_file: fs_manager not initialized!");
         return -EINVAL;
     }
 
@@ -594,9 +621,9 @@ int fs_manager_alloc_app_storage(const char *app_name, size_t max_size, app_stor
         ctx->storage_type = FS_TYPE_SD_CARD;
         fs_manager_mkdir("/SD:/apps");
     } else if (fs_state.internal_available) {
-        snprintf(ctx->storage_path, sizeof(ctx->storage_path), "/data/apps/%s", app_name);
+        snprintf(ctx->storage_path, sizeof(ctx->storage_path), "/lfs/apps/%s", app_name);
         ctx->storage_type = FS_TYPE_INTERNAL;
-        fs_manager_mkdir("/data/apps");
+        fs_manager_mkdir("/lfs/apps");
     } else {
         /* Use RAM storage */
         snprintf(ctx->storage_path, sizeof(ctx->storage_path), "/ram/apps/%s", app_name);

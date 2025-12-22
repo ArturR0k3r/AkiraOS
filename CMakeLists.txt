@@ -45,11 +45,15 @@ endif()
 # Add source files
 target_sources(app PRIVATE
     src/main.c
+    
+    # Core drivers and shell
     src/drivers/display_ili9341.c
     src/drivers/fonts.c
     src/drivers/font_data.c
     src/drivers/platform_hal.c
+    src/drivers/driver_registry.c
     src/shell/akira_shell.c
+    src/shell/shell_display.c
     src/settings/settings.c
 )
 
@@ -97,6 +101,13 @@ target_sources(app PRIVATE
 # App Loader
 target_sources(app PRIVATE
     src/apps/app_loader.c
+)
+
+# ===== Core Libraries =====
+# Shared utilities used across modules
+target_sources(app PRIVATE
+    src/lib/path_utils.c
+    src/lib/error_codes.c
 )
 
 # ===== Akira Core (kernel, HAL) =====
@@ -163,8 +174,12 @@ else()
     target_sources(app PRIVATE src/OTA/ota_manager_stub.c)
 endif()
 
-# Legacy web server (used by main.c)
-target_sources(app PRIVATE src/OTA/web_server.c)
+# Legacy embedded web UI (optional — add stub when disabled)
+if(CONFIG_AKIRA_EMBEDDED_WEB)
+    target_sources(app PRIVATE src/OTA/web_server.c)
+else()
+    target_sources(app PRIVATE src/OTA/web_server_stub.c)
+endif()
 
 # ===== OTA Transport Layer =====
 if(CONFIG_AKIRA_OTA)
@@ -189,6 +204,8 @@ endif()
 
 # ===== Connectivity Layer =====
 
+# WiFi uses Zephyr's native stack - no wrapper needed
+
 # HID Manager (when enabled)
 if(CONFIG_AKIRA_HID)
     target_sources(app PRIVATE src/connectivity/hid/hid_manager.c)
@@ -210,6 +227,9 @@ if(CONFIG_AKIRA_BT_HID)
         src/connectivity/bluetooth/bt_manager.c
         src/connectivity/bluetooth/bt_hid.c
     )
+    if(CONFIG_AKIRA_BT_ECHO)
+        target_sources(app PRIVATE src/connectivity/bluetooth/bt_echo.c)
+    endif()
 endif()
 
 # USB HID (conditional)
@@ -251,10 +271,9 @@ if(CONFIG_AKIRA_CLOUD_CLIENT)
     endif()
 endif()
 
-# Services (OCRE/WASM runtime wrappers)
+# Services (OCRE/WASM runtime wrapper)
 target_sources(app PRIVATE
     src/services/akira_runtime.c
-    src/services/wasm_app_manager.c
 )
 
 # Filesystem Manager (MUST be before App Manager)

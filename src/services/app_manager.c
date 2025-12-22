@@ -19,9 +19,9 @@ LOG_MODULE_REGISTER(app_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 /* ===== Configuration ===== */
 
-#define REGISTRY_PATH "/data/apps/registry.bin"
-#define APPS_DIR "/data/apps"
-#define APP_DATA_DIR "/data/app_data"
+#define REGISTRY_PATH "/lfs/apps/registry.bin"
+#define APPS_DIR "/lfs/apps"
+#define APP_DATA_DIR "/lfs/app_data"
 #define REGISTRY_MAGIC 0x414B4150 /* "AKAP" */
 #define REGISTRY_VERSION 1
 #define MAX_WASM_MAGIC 8
@@ -1221,12 +1221,43 @@ static int validate_wasm(const void *binary, size_t size)
 
 static int save_app_binary(const char *name, const void *binary, size_t size)
 {
+    /* CRITICAL DEBUG LOGS */
+    // LOG_INF("=== SAVE_APP_BINARY DEBUG ===");
+    // LOG_INF("name: %s", name ? name : "NULL");
+    // LOG_INF("binary ptr: %p", binary);
+    // LOG_INF("size: %zu", size);
+    
+    if (!name) {
+        LOG_ERR("INVALID: name is NULL");
+        return -EINVAL;
+    }
+    
+    if (!binary) {
+        LOG_ERR("INVALID: binary pointer is NULL");
+        return -EINVAL;
+    }
+    
+    if (size == 0) {
+        LOG_ERR("INVALID: size is zero");
+        return -EINVAL;
+    }
+    
+    /* Verify WASM magic bytes */
+    const uint8_t *data = (const uint8_t *)binary;
+    LOG_INF("First 4 bytes: 0x%02x 0x%02x 0x%02x 0x%02x", data[0], data[1], data[2], data[3]);
+    if (size >= 4 && data[0] == 0x00 && data[1] == 0x61 && data[2] == 0x73 && data[3] == 0x6D) {
+        LOG_INF("✅ Valid WASM magic number");
+    } else {
+        LOG_WRN("❌ Invalid WASM magic number");
+    }
+    
     /* Find ID for this app */
     app_entry_t *app = find_app_by_name(name);
     uint8_t id = app ? app->id : (g_app_count + 1);
 
     char path[APP_PATH_MAX_LEN];
     snprintf(path, sizeof(path), "%s/%03d_%s.wasm", APPS_DIR, id, name);
+    // LOG_INF("Constructed path: %s", path);
 
     /* Use fs_manager to save (handles RAM fallback) */
     ssize_t written = fs_manager_write_file(path, binary, size);

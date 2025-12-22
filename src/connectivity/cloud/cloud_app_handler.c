@@ -12,12 +12,7 @@
 #include <string.h>
 
 /* Include app management */
-#include "apps/app_loader.h"
-#include "services/ocre_runtime.h"
-
-/* Forward declarations for wasm_app_manager functions */
-extern int wasm_app_upload(const char *name, const void *binary, size_t size, uint32_t version);
-extern int wasm_app_start(const char *name);
+#include "../../services/app_manager.h"
 
 LOG_MODULE_REGISTER(cloud_app, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -115,10 +110,19 @@ static void complete_download(struct download_context *ctx, bool success, const 
     {
         LOG_INF("Auto-installing app: %s", ctx->app_id);
 
-        /* Use wasm_app_manager to install */
-        int ret = wasm_app_upload(ctx->name, ctx->buffer, ctx->received,
-                                  (ctx->version[0] << 24) | (ctx->version[1] << 16) |
-                                      (ctx->version[2] << 8) | ctx->version[3]);
+        /* Build version from bytes */
+        uint32_t version = (ctx->version[0] << 24) | (ctx->version[1] << 16) |
+                          (ctx->version[2] << 8) | ctx->version[3];
+        
+        /* Create manifest */
+        app_manifest_t manifest = {0};
+        strncpy(manifest.name, ctx->name, APP_NAME_MAX_LEN - 1);
+        snprintf(manifest.version, APP_VERSION_MAX_LEN, "%u.%u.%u.%u",
+                 ctx->version[0], ctx->version[1], ctx->version[2], ctx->version[3]);
+
+        /* Use app_manager to install */
+        int ret = app_manager_install(ctx->name, ctx->buffer, ctx->received,
+                                     &manifest, APP_SOURCE_HTTP);
 
         if (ret >= 0)
         {
@@ -127,7 +131,7 @@ static void complete_download(struct download_context *ctx, bool success, const 
             if (ctx->auto_start)
             {
                 LOG_INF("Auto-starting app: %s", ctx->name);
-                wasm_app_start(ctx->name);
+                app_manager_start(ctx->name);
             }
         }
         else

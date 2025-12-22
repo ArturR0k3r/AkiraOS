@@ -260,7 +260,8 @@ static enum ota_result do_abort_update(void);
 /* OTA Operations */
 static enum ota_result do_start_update(uint32_t expected_size)
 {
-    LOG_INF("Starting OTA, size: %u", expected_size);
+    // LOG_INF("=== do_start_update called ===");
+    LOG_INF("Starting OTA, size: %u bytes (%.1f KB)", expected_size, expected_size / 1024.0);
 
     /* If already in progress, abort the previous one first */
     if (ota_status.state != OTA_STATE_IDLE)
@@ -496,10 +497,10 @@ static void ota_thread_main(void *p1, void *p2, void *p3)
 
     while (1)
     {
-        printk("OTA: Waiting for OTA message...\n");
+        LOG_DBG("OTA thread: Waiting for message...");
         if (k_msgq_get(&ota_msgq, &msg, K_FOREVER) == 0)
         {
-            printk("OTA: OTA message received.\n");
+            LOG_INF("=== OTA THREAD: Message received, type=%d ===", msg.type);
             result = OTA_ERROR_INVALID_PARAM;
 
             switch (msg.type)
@@ -568,12 +569,14 @@ static enum ota_result send_ota_message_sync(struct ota_msg *msg)
         return OTA_ERROR_TIMEOUT;
     }
 
-    /* Wait with timeout to prevent infinite blocking */
-    if (k_sem_take(&completion_sem, K_MSEC(30000)) != 0)
+    /* Wait with timeout to prevent infinite blocking - 120s for large firmware */
+    LOG_INF("Waiting for OTA operation to complete (120s timeout)...");
+    if (k_sem_take(&completion_sem, K_MSEC(120000)) != 0)
     {
-        LOG_ERR("OTA operation timed out");
+        LOG_ERR("OTA operation timed out after 120 seconds");
         return OTA_ERROR_TIMEOUT;
     }
+    LOG_INF("OTA operation completed, result: %d", result);
 
     return result;
 }

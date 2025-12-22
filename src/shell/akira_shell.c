@@ -14,9 +14,16 @@
  */
 
 #include "akira_shell.h"
+#include "shell_display.h"
 #include "../drivers/platform_hal.h"
 #include "../settings/settings.h"
 #include "../OTA/web_server.h"
+#if defined(CONFIG_BT)
+#include "connectivity/bluetooth/bt_manager.h"
+#if defined(CONFIG_AKIRA_BT_ECHO)
+#include "connectivity/bluetooth/bt_echo.h"
+#endif
+#endif
 #if defined(CONFIG_BT)
 #include "../connectivity/bluetooth/bt_manager.h"
 #endif
@@ -51,6 +58,40 @@
 
 LOG_MODULE_REGISTER(akira_shell, AKIRA_LOG_LEVEL);
 
+/* Shell display enabled flag */
+static bool shell_display_enabled = IS_ENABLED(CONFIG_ILI9341);
+
+/* Custom shell print wrapper - intercepts output for display */
+static void akira_shell_print_internal(const struct shell *sh, const char *text, bool is_error)
+{
+    /* Print to UART/console (normal behavior) */
+    if (is_error) {
+        shell_fprintf(sh, SHELL_ERROR, "%s\n", text);
+    } else {
+        shell_fprintf(sh, SHELL_NORMAL, "%s\n", text);
+    }
+    
+    /* Also display on screen if enabled */
+    if (shell_display_enabled && shell_display_is_enabled()) {
+        shell_display_print(text, is_error ? SHELL_TEXT_ERROR : SHELL_TEXT_NORMAL);
+    }
+}
+
+/* Wrapper macros for intercepting shell output */
+#define AKIRA_SHELL_PRINT(sh, fmt, ...) \
+    do { \
+        char _buf[256]; \
+        snprintf(_buf, sizeof(_buf), fmt, ##__VA_ARGS__); \
+        akira_shell_print_internal(sh, _buf, false); \
+    } while (0)
+
+#define AKIRA_SHELL_ERROR(sh, fmt, ...) \
+    do { \
+        char _buf[256]; \
+        snprintf(_buf, sizeof(_buf), fmt, ##__VA_ARGS__); \
+        akira_shell_print_internal(sh, _buf, true); \
+    } while (0)
+
 #ifdef CONFIG_AKIRA_APP_MANAGER
 /* App Manager Shell Commands */
 static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
@@ -59,17 +100,17 @@ static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
     int count = app_manager_list(apps, CONFIG_AKIRA_APP_MAX_INSTALLED);
     if (count < 0)
     {
-        shell_error(sh, "Failed to list apps");
+        AKIRA_SHELL_ERROR(sh, "Failed to list apps");
         return count;
     }
-    shell_print(sh, "\n=== Installed Apps ===");
+    AKIRA_SHELL_PRINT(sh, "\n=== Installed Apps ===");
     for (int i = 0; i < count; i++)
     {
-        shell_print(sh, "%2d: %-16s %-8s %s %u bytes%s", apps[i].id, apps[i].name, apps[i].version,
+        AKIRA_SHELL_PRINT(sh, "%2d: %-16s %-8s %s %u bytes%s", apps[i].id, apps[i].name, apps[i].version,
                     app_state_to_str(apps[i].state), apps[i].size,
                     apps[i].auto_restart ? " [auto-restart]" : "");
     }
-    shell_print(sh, "Total: %d", count);
+    AKIRA_SHELL_PRINT(sh, "Total: %d", count);
     return 0;
 }
 
@@ -77,25 +118,25 @@ static int cmd_app_info(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 2)
     {
-        shell_error(sh, "Usage: app info <name>");
+        AKIRA_SHELL_ERROR(sh, "Usage: app info <name>");
         return -EINVAL;
     }
     app_info_t info;
     int ret = app_manager_get_info(argv[1], &info);
     if (ret < 0)
     {
-        shell_error(sh, "App not found: %s", argv[1]);
+        AKIRA_SHELL_ERROR(sh, "App not found: %s", argv[1]);
         return ret;
     }
-    shell_print(sh, "\n=== App Info ===");
-    shell_print(sh, "Name: %s", info.name);
-    shell_print(sh, "Version: %s", info.version);
-    shell_print(sh, "State: %s", app_state_to_str(info.state));
-    shell_print(sh, "Size: %u bytes", info.size);
-    shell_print(sh, "Heap: %u KB", info.heap_kb);
-    shell_print(sh, "Stack: %u KB", info.stack_kb);
-    shell_print(sh, "Crash count: %u", info.crash_count);
-    shell_print(sh, "Auto-restart: %s", info.auto_restart ? "Yes" : "No");
+    AKIRA_SHELL_PRINT(sh, "\n=== App Info ===");
+    AKIRA_SHELL_PRINT(sh, "Name: %s", info.name);
+    AKIRA_SHELL_PRINT(sh, "Version: %s", info.version);
+    AKIRA_SHELL_PRINT(sh, "State: %s", app_state_to_str(info.state));
+    AKIRA_SHELL_PRINT(sh, "Size: %u bytes", info.size);
+    AKIRA_SHELL_PRINT(sh, "Heap: %u KB", info.heap_kb);
+    AKIRA_SHELL_PRINT(sh, "Stack: %u KB", info.stack_kb);
+    AKIRA_SHELL_PRINT(sh, "Crash count: %u", info.crash_count);
+    AKIRA_SHELL_PRINT(sh, "Auto-restart: %s", info.auto_restart ? "Yes" : "No");
     return 0;
 }
 
@@ -103,16 +144,16 @@ static int cmd_app_start(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 2)
     {
-        shell_error(sh, "Usage: app start <name>");
+        AKIRA_SHELL_ERROR(sh, "Usage: app start <name>");
         return -EINVAL;
     }
     int ret = app_manager_start(argv[1]);
     if (ret < 0)
     {
-        shell_error(sh, "Failed to start app: %s", argv[1]);
+        AKIRA_SHELL_ERROR(sh, "Failed to start app: %s", argv[1]);
         return ret;
     }
-    shell_print(sh, "App started: %s", argv[1]);
+    AKIRA_SHELL_PRINT(sh, "App started: %s", argv[1]);
     return 0;
 }
 
@@ -414,6 +455,19 @@ static void stats_update_work_handler(struct k_work *work)
     k_work_reschedule_for_queue(&shell_workq, &stats_update_work, K_SECONDS(30));
 }
 
+/* Status bar update work */
+static void status_bar_update_work_handler(struct k_work *work)
+{
+    if (shell_display_enabled && shell_display_is_enabled()) {
+        shell_display_update_status();
+    }
+    
+    /* Reschedule for next update */
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    k_work_reschedule_for_queue(&shell_workq, dwork, K_SECONDS(1));
+}
+static K_WORK_DELAYABLE_DEFINE(status_bar_work, status_bar_update_work_handler);
+
 /* Public API Implementation */
 int akira_shell_init(void)
 {
@@ -437,6 +491,28 @@ int akira_shell_init(void)
 
     /* Initialize cached stats */
     update_system_stats();
+
+    /* Initialize shell display if available */
+    if (shell_display_enabled) {
+        ret = shell_display_init();
+        if (ret < 0) {
+            LOG_WRN("Shell display init failed: %d", ret);
+            shell_display_enabled = false;
+        } else {
+            /* Start status bar updates */
+            k_work_schedule_for_queue(&shell_workq, &status_bar_work, K_SECONDS(1));
+            
+            /* Welcome message */
+            shell_display_print("", SHELL_TEXT_NORMAL);
+            shell_display_print("=== AkiraOS Shell ===", SHELL_TEXT_PROMPT);
+            char version[32];
+        snprintf(version, sizeof(version), "%d.%d.%d", 
+                 AKIRA_VERSION_MAJOR, AKIRA_VERSION_MINOR, AKIRA_VERSION_PATCH);
+        shell_display_printf(SHELL_TEXT_NORMAL, "Version: %s", version);
+            shell_display_print("Type 'help' for commands", SHELL_TEXT_NORMAL);
+            shell_display_print("", SHELL_TEXT_NORMAL);
+        }
+    }
 
     LOG_INF("Akira shell module initialized");
     return 0;
@@ -1179,6 +1255,182 @@ static int cmd_ble_shell(const struct shell *shell, size_t argc, char **argv)
 SHELL_CMD_REGISTER(ble_shell, NULL, "Send shell command to phone via BLE", cmd_ble_shell);
 #endif
 
+#if defined(CONFIG_BT)
+/* ===== Bluetooth commands ===== */
+static int cmd_bt_info(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    bt_stats_t stats;
+    int ret = bt_manager_get_stats(&stats);
+    if (ret)
+    {
+        AKIRA_SHELL_ERROR(sh, "Failed to get BT stats: %d", ret);
+        return ret;
+    }
+
+    char addr[32] = {0};
+    bt_manager_get_address(addr, sizeof(addr));
+
+    AKIRA_SHELL_PRINT(sh, "\n=== Bluetooth ===");
+    AKIRA_SHELL_PRINT(sh, "State: %d", stats.state);
+    AKIRA_SHELL_PRINT(sh, "Address: %s", addr);
+    AKIRA_SHELL_PRINT(sh, "Connected: %s", bt_manager_is_connected() ? "Yes" : "No");
+    AKIRA_SHELL_PRINT(sh, "Connections: %u  Disconnections: %u", stats.connections, stats.disconnections);
+    AKIRA_SHELL_PRINT(sh, "RX: %u bytes  TX: %u bytes  RSSI: %d dBm", stats.bytes_rx, stats.bytes_tx, stats.rssi);
+    AKIRA_SHELL_PRINT(sh, "Bonded: %s", stats.bonded ? "Yes" : "No");
+    return 0;
+}
+
+static int cmd_bt_stats(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    bt_stats_t stats;
+    int ret = bt_manager_get_stats(&stats);
+    if (ret)
+    {
+        AKIRA_SHELL_ERROR(sh, "Failed to get BT stats: %d", ret);
+        return ret;
+    }
+
+    AKIRA_SHELL_PRINT(sh, "Connections: %u", stats.connections);
+    AKIRA_SHELL_PRINT(sh, "Disconnections: %u", stats.disconnections);
+    AKIRA_SHELL_PRINT(sh, "Bytes RX: %u", stats.bytes_rx);
+    AKIRA_SHELL_PRINT(sh, "Bytes TX: %u", stats.bytes_tx);
+    AKIRA_SHELL_PRINT(sh, "RSSI: %d", stats.rssi);
+    return 0;
+}
+
+static int cmd_bt_addr(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    char buf[32] = {0};
+    int ret = bt_manager_get_address(buf, sizeof(buf));
+    if (ret)
+    {
+        AKIRA_SHELL_ERROR(sh, "Failed to get address: %d", ret);
+        return ret;
+    }
+    AKIRA_SHELL_PRINT(sh, "Address: %s", buf);
+    return 0;
+}
+
+static int cmd_bt_disconnect(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    int ret = bt_manager_disconnect();
+    if (ret)
+    {
+        AKIRA_SHELL_ERROR(sh, "Disconnect failed: %d", ret);
+        return ret;
+    }
+    AKIRA_SHELL_PRINT(sh, "Disconnect requested");
+    return 0;
+}
+
+static int cmd_bt_unpair(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    int ret = bt_manager_unpair_all();
+    if (ret)
+    {
+        AKIRA_SHELL_ERROR(sh, "Unpair failed: %d", ret);
+        return ret;
+    }
+    AKIRA_SHELL_PRINT(sh, "All bonds deleted");
+    return 0;
+}
+
+static int cmd_bt_adv_start(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+    int ret = bt_manager_start_advertising();
+    if (ret)
+    {
+        AKIRA_SHELL_ERROR(sh, "Failed to start advertising: %d", ret);
+        return ret;
+    }
+    AKIRA_SHELL_PRINT(sh, "Advertising started");
+    return 0;
+}
+
+static int cmd_bt_adv_stop(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+    int ret = bt_manager_stop_advertising();
+    if (ret)
+    {
+        AKIRA_SHELL_ERROR(sh, "Failed to stop advertising: %d", ret);
+        return ret;
+    }
+    AKIRA_SHELL_PRINT(sh, "Advertising stopped");
+    return 0;
+}
+
+#if defined(CONFIG_AKIRA_BT_ECHO)
+static int cmd_bt_echo(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        AKIRA_SHELL_ERROR(sh, "Usage: bt echo <on|off|status>");
+        return -EINVAL;
+    }
+
+    if (strcmp(argv[1], "on") == 0)
+    {
+        bt_echo_enable(true);
+        AKIRA_SHELL_PRINT(sh, "Echo enabled");
+        return 0;
+    }
+    else if (strcmp(argv[1], "off") == 0)
+    {
+        bt_echo_enable(false);
+        AKIRA_SHELL_PRINT(sh, "Echo disabled");
+        return 0;
+    }
+    else if (strcmp(argv[1], "status") == 0)
+    {
+        AKIRA_SHELL_PRINT(sh, "Echo: %s", bt_echo_is_enabled() ? "enabled" : "disabled");
+        return 0;
+    }
+
+    AKIRA_SHELL_ERROR(sh, "Unknown arg: %s", argv[1]);
+    return -EINVAL;
+}
+#endif
+
+SHELL_STATIC_SUBCMD_SET_CREATE(bt_adv_cmds,
+                               SHELL_CMD(start, NULL, "Start advertising", cmd_bt_adv_start),
+                               SHELL_CMD(stop, NULL, "Stop advertising", cmd_bt_adv_stop),
+                               SHELL_CMD(status, NULL, "Show advertising status", cmd_bt_info),
+                               SHELL_SUBCMD_SET_END);
+
+SHELL_STATIC_SUBCMD_SET_CREATE(bt_cmds,
+                               SHELL_CMD(info, NULL, "Show Bluetooth status", cmd_bt_info),
+                               SHELL_CMD(stats, NULL, "Show Bluetooth statistics", cmd_bt_stats),
+                               SHELL_CMD(addr, NULL, "Show local BT address", cmd_bt_addr),
+                               SHELL_CMD(disconnect, NULL, "Disconnect current connection", cmd_bt_disconnect),
+                               SHELL_CMD(unpair, NULL, "Delete all bonds", cmd_bt_unpair),
+#if defined(CONFIG_AKIRA_BT_ECHO)
+                               SHELL_CMD(echo, NULL, "Echo service control: <on|off|status>", cmd_bt_echo),
+#endif
+                               SHELL_CMD(adv, &bt_adv_cmds, "Advertising control", NULL),
+                               SHELL_SUBCMD_SET_END);
+
+SHELL_CMD_REGISTER(bt, &bt_cmds, "Bluetooth commands", NULL);
+#endif /* CONFIG_BT */
+
 #ifdef CONFIG_NETWORKING
 /* WiFi status command */
 static int cmd_wifi_status(const struct shell *sh, size_t argc, char **argv)
@@ -1379,7 +1631,7 @@ static int cmd_web_start(const struct shell *sh, size_t argc, char **argv)
     }
 
     net_addr_ntop(AF_INET, addr, addr_str, sizeof(addr_str));
-    shell_print(sh, "Starting web server at http://%s:80/", addr_str);
+    shell_print(sh, "Starting web server at http://%s:%d/", addr_str, HTTP_PORT);
 
     web_server_notify_network_status(true, addr_str);
 

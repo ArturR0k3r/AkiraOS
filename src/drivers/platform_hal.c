@@ -19,10 +19,12 @@
 #include <unistd.h>
 #endif
 
-LOG_MODULE_REGISTER(akira_hal, LOG_LEVEL_INF);
+/* Logging module set at source level */
+LOG_MODULE_REGISTER(akira_hal, CONFIG_AKIRA_LOG_LEVEL);
 
 #if AKIRA_PLATFORM_NATIVE_SIM
 /* Simulated display framebuffer (240x320 RGB565) */
+/* For native simulation we keep the static framebuffer in normal RAM. */
 static uint16_t sim_framebuffer[240 * 320];
 static bool sim_display_dirty = false;
 
@@ -35,6 +37,16 @@ static int shm_buttons_fd = -1;
 static uint16_t *shared_framebuffer = NULL;
 static uint32_t *shared_buttons = NULL;
 #endif /* AKIRA_PLATFORM_NATIVE_SIM */
+
+/* On hardware platforms, large framebuffers can optionally be placed in
+ * PSRAM when configured (AKIRA_FRAMEBUFFER_IN_PSRAM && MEMC). Drivers should
+ * use `akira_framebuffer_get()` to obtain a pointer to the correct buffer.
+ */
+#if defined(CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM) && defined(CONFIG_MEMC)
+__attribute__((section(".ext_ram.bss"), aligned(4))) static uint16_t hw_framebuffer[240 * 320];
+#else
+static uint16_t hw_framebuffer[1]; /* placeholder when no HW framebuffer */
+#endif
 
 int akira_hal_init(void)
 {
@@ -113,6 +125,18 @@ int akira_hal_init(void)
 #endif
 
     return 0;
+}
+
+/* Public accessor for hardware framebuffer (if present). Returns NULL when
+ * no dedicated hw framebuffer is configured for this platform.
+ */
+uint16_t *akira_framebuffer_get(void)
+{
+#if defined(CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM) && defined(CONFIG_MEMC)
+    return hw_framebuffer;
+#else
+    return NULL;
+#endif
 }
 
 bool akira_has_display(void)

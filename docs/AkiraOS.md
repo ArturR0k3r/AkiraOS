@@ -16,6 +16,8 @@
 ├─────────────────────────────┤
 │      Settings Module        │ ← Persistent User/Device Settings
 ├─────────────────────────────┤
+│    System Manager (NEW)     │ ← Config-driven Init, Event Bus, Lifecycle
+├─────────────────────────────┤
 │     Connectivity Layer      │ ← HID (KB/Gamepad), HTTP/WebSocket, BT, USB
 ├─────────────────────────────┤
 │      Networking Stack       │ ← WiFi, TCP/IP, HTTP, Web Server
@@ -33,6 +35,34 @@
 │      ESP32 HAL              │ ← Hardware Abstraction, GPIO, SPI, UART, I2C
 └─────────────────────────────┘
 ```
+
+### Core Management System (NEW)
+
+AkiraOS now features a modular initialization system with three key managers:
+
+**System Manager** - Orchestrates the entire system
+- Configuration-driven initialization via Kconfig
+- Declarative init table with dependency priorities
+- Graceful degradation for optional features
+- System lifecycle coordination (boot → run → shutdown)
+
+**Hardware Manager** - Hardware orchestration
+- Leverages existing HAL and driver_registry
+- Platform-specific initialization (ESP32, nRF, STM32)
+- Display, sensor, and RF module setup
+- Runtime driver loading and registration
+
+**Network Manager** - Connectivity coordination
+- WiFi, Bluetooth, USB management
+- Integration with settings for credentials
+- Event-driven network state changes
+- HTTP server lifecycle management
+
+**Event Bus** - Inter-module communication
+- Pub/sub pattern for loose coupling
+- System events: NETWORK_UP, OTA_PROGRESS, STORAGE_READY, etc.
+- Thread-safe message queue
+- Enables reactive, event-driven architecture
 
 ## Connectivity Layer
 

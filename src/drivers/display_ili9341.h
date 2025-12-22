@@ -120,13 +120,13 @@
 int ili9341_init(const struct device *spi_dev, const struct device *gpio_dev,
                  struct spi_config *spi_cfg);
 int ili9341_fill_color(uint16_t color);
+int ili9341_fill_screen(uint16_t color);
+int ili9341_fill_rect(int x, int y, int width, int height, uint16_t color);
 int ili9341_draw_color_bars(void);
 int ili9341_draw_test_pattern(void);
 int ili9341_backlight_init(const struct device *gpio_dev, int pin);
 void ili9341_draw_text(int x, int y, const char *text, uint16_t color, FontType font);
 void ili9341_draw_pixel(int x, int y, uint16_t color);
 void ili9341_crt_screensaver(void);
-
-// TO DO add fill_screen, clear_screen,
 
 #endif // __DISPLAY_ILI9341_H__
