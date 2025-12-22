@@ -45,7 +45,7 @@ static int akira_display_rect_wasm(wasm_exec_env_t exec_env, int x, int y, int w
 
 static int akira_display_text_wasm(wasm_exec_env_t exec_env, int x, int y, uint32_t text_ptr, int color)
 {
-    WASMModuleInstanceCommon *module_inst = wasm_runtime_get_module_inst(exec_env);
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
     if (!module_inst)
         return -1;
     const char *text = (const char *)wasm_runtime_addr_app_to_native(module_inst, text_ptr);
@@ -57,7 +57,7 @@ static int akira_display_text_wasm(wasm_exec_env_t exec_env, int x, int y, uint3
 
 static int akira_display_get_size_wasm(wasm_exec_env_t exec_env, uint32_t width_ptr, uint32_t height_ptr)
 {
-    WASMModuleInstanceCommon *module_inst = wasm_runtime_get_module_inst(exec_env);
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
     if (!module_inst)
         return -1;
     int *w = (int *)wasm_runtime_addr_app_to_native(module_inst, width_ptr);
@@ -70,7 +70,7 @@ static int akira_display_get_size_wasm(wasm_exec_env_t exec_env, uint32_t width_
 
 static int akira_storage_read_wasm(wasm_exec_env_t exec_env, uint32_t path_ptr, uint32_t buf_ptr, int len)
 {
-    WASMModuleInstanceCommon *module_inst = wasm_runtime_get_module_inst(exec_env);
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
     if (!module_inst)
         return -1;
     const char *path = (const char *)wasm_runtime_addr_app_to_native(module_inst, path_ptr);
@@ -82,7 +82,7 @@ static int akira_storage_read_wasm(wasm_exec_env_t exec_env, uint32_t path_ptr, 
 
 static int akira_storage_write_wasm(wasm_exec_env_t exec_env, uint32_t path_ptr, uint32_t data_ptr, int len)
 {
-    WASMModuleInstanceCommon *module_inst = wasm_runtime_get_module_inst(exec_env);
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
     if (!module_inst)
         return -1;
     const char *path = (const char *)wasm_runtime_addr_app_to_native(module_inst, path_ptr);
@@ -94,7 +94,7 @@ static int akira_storage_write_wasm(wasm_exec_env_t exec_env, uint32_t path_ptr,
 
 static int akira_http_get_wasm(wasm_exec_env_t exec_env, uint32_t url_ptr, uint32_t buf_ptr, int max_len)
 {
-    WASMModuleInstanceCommon *module_inst = wasm_runtime_get_module_inst(exec_env);
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
     if (!module_inst)
         return -1;
     const char *url = (const char *)wasm_runtime_addr_app_to_native(module_inst, url_ptr);
@@ -106,7 +106,7 @@ static int akira_http_get_wasm(wasm_exec_env_t exec_env, uint32_t url_ptr, uint3
 
 static int akira_storage_delete_wasm(wasm_exec_env_t exec_env, uint32_t path_ptr)
 {
-    WASMModuleInstanceCommon *module_inst = wasm_runtime_get_module_inst(exec_env);
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
     if (!module_inst)
         return -1;
     const char *path = (const char *)wasm_runtime_addr_app_to_native(module_inst, path_ptr);
@@ -117,7 +117,7 @@ static int akira_storage_delete_wasm(wasm_exec_env_t exec_env, uint32_t path_ptr
 
 static int akira_storage_size_wasm(wasm_exec_env_t exec_env, uint32_t path_ptr)
 {
-    WASMModuleInstanceCommon *module_inst = wasm_runtime_get_module_inst(exec_env);
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
     if (!module_inst)
         return -1;
     const char *path = (const char *)wasm_runtime_addr_app_to_native(module_inst, path_ptr);
@@ -128,7 +128,7 @@ static int akira_storage_size_wasm(wasm_exec_env_t exec_env, uint32_t path_ptr)
 
 static int akira_http_post_wasm(wasm_exec_env_t exec_env, uint32_t url_ptr, uint32_t data_ptr, int len)
 {
-    WASMModuleInstanceCommon *module_inst = wasm_runtime_get_module_inst(exec_env);
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
     if (!module_inst)
         return -1;
     const char *url = (const char *)wasm_runtime_addr_app_to_native(module_inst, url_ptr);

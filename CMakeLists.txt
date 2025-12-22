@@ -61,6 +61,7 @@ target_sources(app PRIVATE
 
 # API Layer (WASM exports)
 target_sources(app PRIVATE
+    src/akira/akira_native_exports.c
     src/api/akira_display_api.c
     src/api/akira_input_api.c
     src/api/akira_rf_api.c
