@@ -1252,7 +1252,7 @@ ocre start my_app
 
 ## License
 
-MIT License — See `LICENSE` file.
+GNU General Public License v3.0 — See `LICENSE` file.
 
 ## Contributing
 
