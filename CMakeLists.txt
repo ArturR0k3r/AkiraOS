@@ -61,6 +61,7 @@ target_sources(app PRIVATE
 
 # API Layer (WASM exports)
 target_sources(app PRIVATE
+    src/akira/akira_native_exports.c
     src/api/akira_display_api.c
     src/api/akira_input_api.c
     src/api/akira_rf_api.c
@@ -125,6 +126,9 @@ target_sources(app PRIVATE
 # Akira shell commands
 if(CONFIG_SHELL)
     target_sources(app PRIVATE src/akira/shell.c)
+    if(CONFIG_AKIRA_HID)
+        target_sources(app PRIVATE src/shell/hid_shell.c)
+    endif()
 endif()
 
 # New Display Drivers (conditional)
