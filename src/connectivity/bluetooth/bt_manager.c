@@ -43,8 +43,62 @@ static struct
     bt_event_callback_t event_cb;
     void *event_cb_data;
 
+    /* Runtime device name storage (max from Kconfig) */
+    char device_name[CONFIG_BT_DEVICE_NAME_MAX + 1];
+
     struct k_mutex mutex;
 } bt_mgr;
+
+/*===========================================================================*/
+/* Name management API */
+/*===========================================================================*/
+
+int bt_manager_set_name(const char *name)
+{
+#if BT_AVAILABLE
+    if (!name)
+    {
+        return -EINVAL;
+    }
+
+    size_t len = strlen(name);
+    if (len >= CONFIG_BT_DEVICE_NAME_MAX)
+    {
+        return -EINVAL;
+    }
+#endif
+
+    k_mutex_lock(&bt_mgr.mutex, K_FOREVER);
+    strncpy(bt_mgr.device_name, name ? name : "", CONFIG_BT_DEVICE_NAME_MAX);
+    bt_mgr.device_name[CONFIG_BT_DEVICE_NAME_MAX] = '\0';
+
+#if BT_AVAILABLE
+    /* If advertising, restart to apply new name */
+    if (bt_mgr.state == BT_STATE_ADVERTISING)
+    {
+        bt_manager_stop_advertising();
+        bt_manager_start_advertising();
+    }
+#endif
+    k_mutex_unlock(&bt_mgr.mutex);
+
+    LOG_INF("Bluetooth name set to: %s", bt_mgr.device_name);
+    return 0;
+}
+
+int bt_manager_get_name(char *buffer, size_t len)
+{
+    if (!buffer || len == 0)
+    {
+        return -EINVAL;
+    }
+
+    k_mutex_lock(&bt_mgr.mutex, K_FOREVER);
+    strncpy(buffer, bt_mgr.device_name, len - 1);
+    buffer[len - 1] = '\0';
+    k_mutex_unlock(&bt_mgr.mutex);
+    return 0;
+}
 
 /*===========================================================================*/
 /* Internal Functions                                                        */
@@ -172,13 +226,17 @@ int bt_manager_init(const bt_config_t *config)
     }
     else
     {
-        bt_mgr.config.device_name = "AkiraOS";
+        bt_mgr.config.device_name = CONFIG_BT_DEVICE_NAME;
         bt_mgr.config.vendor_id = 0x1234;
         bt_mgr.config.product_id = 0x5678;
         bt_mgr.config.services = BT_SERVICE_ALL;
         bt_mgr.config.auto_advertise = true;
         bt_mgr.config.pairable = true;
     }
+
+    /* Initialize internal device_name buffer from config (truncate if needed) */
+    strncpy(bt_mgr.device_name, bt_mgr.config.device_name ? bt_mgr.config.device_name : "", CONFIG_BT_DEVICE_NAME_MAX);
+    bt_mgr.device_name[CONFIG_BT_DEVICE_NAME_MAX] = '\0';
 
     bt_mgr.state = BT_STATE_INITIALIZING;
 
@@ -257,8 +315,8 @@ int bt_manager_start_advertising(void)
         NULL);
 
     struct bt_data sd[] = {
-        BT_DATA(BT_DATA_NAME_COMPLETE, bt_mgr.config.device_name,
-                strlen(bt_mgr.config.device_name)),
+        BT_DATA(BT_DATA_NAME_COMPLETE, bt_mgr.device_name,
+                strlen(bt_mgr.device_name)),
     };
 
     int err = bt_le_adv_start(&adv_param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));

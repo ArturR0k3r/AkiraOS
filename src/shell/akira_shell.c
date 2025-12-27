@@ -1350,6 +1350,38 @@ static int cmd_bt_unpair(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+/* Get or set Bluetooth device name at runtime */
+static int cmd_bt_name(const struct shell *sh, size_t argc, char **argv)
+{
+    char buf[CONFIG_BT_DEVICE_NAME_MAX + 1] = {0};
+
+    if (argc == 1)
+    {
+        int ret = bt_manager_get_name(buf, sizeof(buf));
+        if (ret)
+        {
+            AKIRA_SHELL_ERROR(sh, "Failed to get name: %d", ret);
+            return ret;
+        }
+        AKIRA_SHELL_PRINT(sh, "Device name: %s", buf);
+        return 0;
+    }
+    else if (argc == 2)
+    {
+        int ret = bt_manager_set_name(argv[1]);
+        if (ret)
+        {
+            AKIRA_SHELL_ERROR(sh, "Failed to set name: %d", ret);
+            return ret;
+        }
+        AKIRA_SHELL_PRINT(sh, "Device name set to: %s", argv[1]);
+        return 0;
+    }
+
+    AKIRA_SHELL_ERROR(sh, "Usage: bt name [<name>]");
+    return -EINVAL;
+}
+
 static int cmd_bt_adv_start(const struct shell *sh, size_t argc, char **argv)
 {
     ARG_UNUSED(argc);
@@ -1420,6 +1452,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(bt_cmds,
                                SHELL_CMD(info, NULL, "Show Bluetooth status", cmd_bt_info),
                                SHELL_CMD(stats, NULL, "Show Bluetooth statistics", cmd_bt_stats),
                                SHELL_CMD(addr, NULL, "Show local BT address", cmd_bt_addr),
+                               SHELL_CMD(name, NULL, "Get/set device name: bt name [<name>]", cmd_bt_name),
                                SHELL_CMD(disconnect, NULL, "Disconnect current connection", cmd_bt_disconnect),
                                SHELL_CMD(unpair, NULL, "Delete all bonds", cmd_bt_unpair),
 #if defined(CONFIG_AKIRA_BT_ECHO)

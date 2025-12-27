@@ -159,6 +159,21 @@ extern "C"
      */
     int bt_manager_get_address(char *buffer, size_t len);
 
+    /**
+     * @brief Set device name at runtime
+     * @param name New device name (NULL-terminated)
+     * @return 0 on success
+     */
+    int bt_manager_set_name(const char *name);
+
+    /**
+     * @brief Get current device name
+     * @param buffer Output buffer
+     * @param len Buffer length
+     * @return 0 on success
+     */
+    int bt_manager_get_name(char *buffer, size_t len);
+
 #ifdef __cplusplus
 }
 #endif
