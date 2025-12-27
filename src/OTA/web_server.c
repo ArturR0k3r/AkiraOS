@@ -11,8 +11,6 @@
 #include "web_server.h"
 #include "ota_manager.h"
 
-
-
 /* WebServer OTA transport implementation */
 static int webserver_ota_start(void *user_data)
 {
