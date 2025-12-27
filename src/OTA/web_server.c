@@ -11,9 +11,7 @@
 #include "web_server.h"
 #include "ota_manager.h"
 
-/* Use Kconfig-provided log level constant to avoid relying on AKIRA_LOG_LEVEL macro
- * which may not be defined if akira.h isn't included. */
-LOG_MODULE_REGISTER(web_server, CONFIG_AKIRA_LOG_LEVEL);
+
 
 /* WebServer OTA transport implementation */
 static int webserver_ota_start(void *user_data)

@@ -23,6 +23,10 @@
 #include "bt_echo.h"
 #endif
 
+#ifndef CONFIG_BT_DEVICE_NAME_MAX
+#define CONFIG_BT_DEVICE_NAME_MAX 65
+#endif
+
 LOG_MODULE_REGISTER(bt_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 /*===========================================================================*/
@@ -82,6 +86,14 @@ int bt_manager_set_name(const char *name)
 #endif
     k_mutex_unlock(&bt_mgr.mutex);
 
+#if IS_ENABLED(CONFIG_SETTINGS)
+    int rc = settings_save_one("bt/name", bt_mgr.device_name, strlen(bt_mgr.device_name) + 1);
+    if (rc)
+    {
+        LOG_ERR("Failed to save BT name to settings (err %d)", rc);
+    }
+#endif
+
     LOG_INF("Bluetooth name set to: %s", bt_mgr.device_name);
     return 0;
 }
@@ -99,6 +111,55 @@ int bt_manager_get_name(char *buffer, size_t len)
     k_mutex_unlock(&bt_mgr.mutex);
     return 0;
 }
+
+#if IS_ENABLED(CONFIG_SETTINGS)
+/* Settings handler to persist bt/* subtree (currently handles "bt/name") */
+static int bt_settings_set(const char *key, size_t len, settings_read_cb read_cb, void *cb_arg)
+{
+    if (!key)
+    {
+        return -EINVAL;
+    }
+
+    if (strcmp(key, "name") == 0)
+    {
+        if (len == 0 || len > CONFIG_BT_DEVICE_NAME_MAX)
+        {
+            return -EINVAL;
+        }
+
+        char tmp[CONFIG_BT_DEVICE_NAME_MAX + 1] = {0};
+        int rc = read_cb(cb_arg, tmp, len);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        tmp[len] = '\0';
+
+        k_mutex_lock(&bt_mgr.mutex, K_FOREVER);
+        strncpy(bt_mgr.device_name, tmp, CONFIG_BT_DEVICE_NAME_MAX);
+        bt_mgr.device_name[CONFIG_BT_DEVICE_NAME_MAX] = '\0';
+        bool was_adv = (bt_mgr.state == BT_STATE_ADVERTISING);
+        k_mutex_unlock(&bt_mgr.mutex);
+
+        if (was_adv)
+        {
+            bt_manager_stop_advertising();
+            bt_manager_start_advertising();
+        }
+
+        LOG_INF("Loaded BT name from settings: %s", bt_mgr.device_name);
+        return 0;
+    }
+
+    return -ENOENT;
+}
+
+static struct settings_handler bt_settings = {
+    .name = "bt",
+    .h_set = bt_settings_set,
+};
+#endif
 
 /*===========================================================================*/
 /* Internal Functions                                                        */
@@ -132,7 +193,7 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     LOG_INF("Connected: %s", addr);
 
     notify_event(BT_EVENT_CONNECTED, NULL);
-} 
+}
 
 static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
 {
@@ -249,9 +310,10 @@ int bt_manager_init(const bt_config_t *config)
         return err;
     }
 
-    /* Load stored bonds */
+    /* Load stored bonds and settings */
     if (IS_ENABLED(CONFIG_SETTINGS))
     {
+        settings_register(&bt_settings);
         settings_load();
     }
 

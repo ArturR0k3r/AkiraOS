@@ -56,6 +56,10 @@
 #include "../connectivity/storage/usb_storage.h"
 #endif
 
+#ifndef CONFIG_BT_DEVICE_NAME_MAX
+#define CONFIG_BT_DEVICE_NAME_MAX 65
+#endif
+
 LOG_MODULE_REGISTER(akira_shell, AKIRA_LOG_LEVEL);
 
 /* Shell display enabled flag */
@@ -65,31 +69,37 @@ static bool shell_display_enabled = IS_ENABLED(CONFIG_ILI9341);
 static void akira_shell_print_internal(const struct shell *sh, const char *text, bool is_error)
 {
     /* Print to UART/console (normal behavior) */
-    if (is_error) {
+    if (is_error)
+    {
         shell_fprintf(sh, SHELL_ERROR, "%s\n", text);
-    } else {
+    }
+    else
+    {
         shell_fprintf(sh, SHELL_NORMAL, "%s\n", text);
     }
-    
+
     /* Also display on screen if enabled */
-    if (shell_display_enabled && shell_display_is_enabled()) {
+    if (shell_display_enabled && shell_display_is_enabled())
+    {
         shell_display_print(text, is_error ? SHELL_TEXT_ERROR : SHELL_TEXT_NORMAL);
     }
 }
 
 /* Wrapper macros for intercepting shell output */
-#define AKIRA_SHELL_PRINT(sh, fmt, ...) \
-    do { \
-        char _buf[256]; \
+#define AKIRA_SHELL_PRINT(sh, fmt, ...)                   \
+    do                                                    \
+    {                                                     \
+        char _buf[256];                                   \
         snprintf(_buf, sizeof(_buf), fmt, ##__VA_ARGS__); \
-        akira_shell_print_internal(sh, _buf, false); \
+        akira_shell_print_internal(sh, _buf, false);      \
     } while (0)
 
-#define AKIRA_SHELL_ERROR(sh, fmt, ...) \
-    do { \
-        char _buf[256]; \
+#define AKIRA_SHELL_ERROR(sh, fmt, ...)                   \
+    do                                                    \
+    {                                                     \
+        char _buf[256];                                   \
         snprintf(_buf, sizeof(_buf), fmt, ##__VA_ARGS__); \
-        akira_shell_print_internal(sh, _buf, true); \
+        akira_shell_print_internal(sh, _buf, true);       \
     } while (0)
 
 #ifdef CONFIG_AKIRA_APP_MANAGER
@@ -107,8 +117,8 @@ static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
     for (int i = 0; i < count; i++)
     {
         AKIRA_SHELL_PRINT(sh, "%2d: %-16s %-8s %s %u bytes%s", apps[i].id, apps[i].name, apps[i].version,
-                    app_state_to_str(apps[i].state), apps[i].size,
-                    apps[i].auto_restart ? " [auto-restart]" : "");
+                          app_state_to_str(apps[i].state), apps[i].size,
+                          apps[i].auto_restart ? " [auto-restart]" : "");
     }
     AKIRA_SHELL_PRINT(sh, "Total: %d", count);
     return 0;
@@ -458,10 +468,11 @@ static void stats_update_work_handler(struct k_work *work)
 /* Status bar update work */
 static void status_bar_update_work_handler(struct k_work *work)
 {
-    if (shell_display_enabled && shell_display_is_enabled()) {
+    if (shell_display_enabled && shell_display_is_enabled())
+    {
         shell_display_update_status();
     }
-    
+
     /* Reschedule for next update */
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
     k_work_reschedule_for_queue(&shell_workq, dwork, K_SECONDS(1));
@@ -493,22 +504,26 @@ int akira_shell_init(void)
     update_system_stats();
 
     /* Initialize shell display if available */
-    if (shell_display_enabled) {
+    if (shell_display_enabled)
+    {
         ret = shell_display_init();
-        if (ret < 0) {
+        if (ret < 0)
+        {
             LOG_WRN("Shell display init failed: %d", ret);
             shell_display_enabled = false;
-        } else {
+        }
+        else
+        {
             /* Start status bar updates */
             k_work_schedule_for_queue(&shell_workq, &status_bar_work, K_SECONDS(1));
-            
+
             /* Welcome message */
             shell_display_print("", SHELL_TEXT_NORMAL);
             shell_display_print("=== AkiraOS Shell ===", SHELL_TEXT_PROMPT);
             char version[32];
-        snprintf(version, sizeof(version), "%d.%d.%d", 
-                 AKIRA_VERSION_MAJOR, AKIRA_VERSION_MINOR, AKIRA_VERSION_PATCH);
-        shell_display_printf(SHELL_TEXT_NORMAL, "Version: %s", version);
+            snprintf(version, sizeof(version), "%d.%d.%d",
+                     AKIRA_VERSION_MAJOR, AKIRA_VERSION_MINOR, AKIRA_VERSION_PATCH);
+            shell_display_printf(SHELL_TEXT_NORMAL, "Version: %s", version);
             shell_display_print("Type 'help' for commands", SHELL_TEXT_NORMAL);
             shell_display_print("", SHELL_TEXT_NORMAL);
         }
@@ -1677,27 +1692,30 @@ static int cmd_ram_ls(const struct shell *sh, size_t argc, char **argv)
 {
     ram_file_info_t files[16];
     int count = fs_manager_list_ram_files(files, 16);
-    
-    if (count < 0) {
+
+    if (count < 0)
+    {
         shell_error(sh, "Failed to list RAM files: %d", count);
         return count;
     }
-    
-    if (count == 0) {
+
+    if (count == 0)
+    {
         shell_print(sh, "No files in RAM storage");
         return 0;
     }
-    
+
     shell_print(sh, "\n=== RAM Storage ===");
     shell_print(sh, "%-40s %10s", "Path", "Size");
     shell_print(sh, "---------------------------------------- ----------");
-    
+
     size_t total = 0;
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < count; i++)
+    {
         shell_print(sh, "%-40s %10zu", files[i].path, files[i].size);
         total += files[i].size;
     }
-    
+
     shell_print(sh, "---------------------------------------- ----------");
     shell_print(sh, "Total: %d files, %zu bytes", count, total);
     return 0;
@@ -1705,27 +1723,31 @@ static int cmd_ram_ls(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_ram_cat(const struct shell *sh, size_t argc, char **argv)
 {
-    if (argc < 2) {
+    if (argc < 2)
+    {
         shell_error(sh, "Usage: ram cat <path>");
         return -EINVAL;
     }
-    
+
     uint8_t buffer[256];
     ssize_t size = fs_manager_read_file(argv[1], buffer, sizeof(buffer) - 1);
-    
-    if (size < 0) {
+
+    if (size < 0)
+    {
         shell_error(sh, "Failed to read file: %zd", size);
         return size;
     }
-    
+
     /* Print as hex dump for binary files */
     shell_print(sh, "File: %s (%zd bytes)", argv[1], size);
-    for (int i = 0; i < size; i += 16) {
+    for (int i = 0; i < size; i += 16)
+    {
         char hex[50] = {0};
         char ascii[18] = {0};
         int len = 0;
-        
-        for (int j = 0; j < 16 && (i + j) < size; j++) {
+
+        for (int j = 0; j < 16 && (i + j) < size; j++)
+        {
             len += snprintf(hex + len, sizeof(hex) - len, "%02x ", buffer[i + j]);
             ascii[j] = (buffer[i + j] >= 32 && buffer[i + j] < 127) ? buffer[i + j] : '.';
         }
@@ -1745,7 +1767,8 @@ static int cmd_hwtest(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "===========================================\n");
 
     const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
-    if (!device_is_ready(gpio_dev)) {
+    if (!device_is_ready(gpio_dev))
+    {
         shell_error(sh, "GPIO device not ready");
         return -ENODEV;
     }
@@ -1753,8 +1776,9 @@ static int cmd_hwtest(const struct shell *sh, size_t argc, char **argv)
     /* Test 1: LED Blink */
     shell_print(sh, "Test 1: Status LED (GPIO32)");
     gpio_pin_configure(gpio_dev, 32, GPIO_OUTPUT_ACTIVE);
-    
-    for (int i = 0; i < 5; i++) {
+
+    for (int i = 0; i < 5; i++)
+    {
         gpio_pin_set(gpio_dev, 32, 1);
         k_msleep(200);
         gpio_pin_set(gpio_dev, 32, 0);
@@ -1766,15 +1790,17 @@ static int cmd_hwtest(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "Test 2: Button States");
     const int button_pins[] = {35, 34, 39, 36, 14, 13};
     const char *button_names[] = {"KEY1", "KEY2", "KEY3", "KEY4", "KEY5", "KEY6"};
-    
-    for (int i = 0; i < 6; i++) {
+
+    for (int i = 0; i < 6; i++)
+    {
         gpio_pin_configure(gpio_dev, button_pins[i], GPIO_INPUT | GPIO_PULL_UP);
     }
-    
+
     shell_print(sh, "  Reading button states (press buttons to test):");
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 6; i++)
+    {
         int val = gpio_pin_get(gpio_dev, button_pins[i]);
-        shell_print(sh, "    %s (GPIO%d): %s", button_names[i], button_pins[i], 
+        shell_print(sh, "    %s (GPIO%d): %s", button_names[i], button_pins[i],
                     val ? "Released" : "PRESSED");
     }
     shell_print(sh, "  ✓ Button test complete\n");
@@ -1789,21 +1815,30 @@ static int cmd_hwtest(const struct shell *sh, size_t argc, char **argv)
     const char *test_data = "Akira-Micro Hardware Test\n";
 
     res = f_mount(&fat_fs, "/SD:", 1);
-    if (res != FR_OK) {
+    if (res != FR_OK)
+    {
         shell_error(sh, "  ✗ Failed to mount SD card: %d", res);
-    } else {
+    }
+    else
+    {
         shell_print(sh, "  ✓ SD card mounted");
 
         res = f_open(&file, test_file, FA_CREATE_ALWAYS | FA_WRITE);
-        if (res != FR_OK) {
+        if (res != FR_OK)
+        {
             shell_error(sh, "  ✗ Failed to create test file: %d", res);
-        } else {
+        }
+        else
+        {
             res = f_write(&file, test_data, strlen(test_data), &bytes_written);
             f_close(&file);
-            
-            if (res == FR_OK) {
+
+            if (res == FR_OK)
+            {
                 shell_print(sh, "  ✓ Wrote %u bytes to %s", bytes_written, test_file);
-            } else {
+            }
+            else
+            {
                 shell_error(sh, "  ✗ Write failed: %d", res);
             }
         }
@@ -1813,7 +1848,7 @@ static int cmd_hwtest(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "\n===========================================");
     shell_print(sh, "Hardware test complete!");
     shell_print(sh, "===========================================");
-    
+
     return 0;
 }
 
