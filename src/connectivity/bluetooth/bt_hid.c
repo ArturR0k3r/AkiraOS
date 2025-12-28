@@ -490,7 +490,13 @@ int bt_hid_init(void)
     /* Register for BT manager events so we can forward connected/disconnected to HID manager */
     bt_manager_register_callback(bt_hid_bt_event_handler, NULL);
 
-    return hid_manager_register_transport(&ble_hid_transport);
+    int rc = hid_manager_register_transport(&ble_hid_transport);
+    if (rc != 0) {
+        LOG_ERR("Failed to register BLE HID transport: %d", rc);
+    } else {
+        LOG_INF("BLE HID transport registered");
+    }
+    return rc;
 }
 
 const hid_transport_ops_t *bt_hid_get_transport(void)
