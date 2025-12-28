@@ -491,9 +491,12 @@ int bt_hid_init(void)
     bt_manager_register_callback(bt_hid_bt_event_handler, NULL);
 
     int rc = hid_manager_register_transport(&ble_hid_transport);
-    if (rc != 0) {
+    if (rc != 0)
+    {
         LOG_ERR("Failed to register BLE HID transport: %d", rc);
-    } else {
+    }
+    else
+    {
         LOG_INF("BLE HID transport registered");
     }
     return rc;

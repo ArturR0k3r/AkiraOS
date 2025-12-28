@@ -381,10 +381,14 @@ int bt_manager_start_advertising(void)
                 strlen(bt_mgr.device_name)),
     };
 
+    /* Debug info: print device name and adv params to help diagnose failures */
+    LOG_DBG("Starting advertising: name='%s' len=%zu", bt_mgr.device_name, strlen(bt_mgr.device_name));
+    LOG_DBG("Adv params: opts=0x%08x int_min=%u int_max=%u", adv_param.options, adv_param.interval_min, adv_param.interval_max);
+
     int err = bt_le_adv_start(&adv_param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
     if (err)
     {
-        LOG_ERR("Advertising start failed (err %d)", err);
+        LOG_ERR("Advertising start failed (err %d) - check controller state and HCI logs", err);
         return err;
     }
 

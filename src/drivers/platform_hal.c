@@ -121,7 +121,7 @@ int akira_hal_init(void)
 #elif AKIRA_PLATFORM_ESP32
     LOG_INF("Running on ESP32 - full hardware support");
 #else
-    LOG_WRN("Running on unknown platform");
+    LOG_WRN("Running on Hardware platform ");
 #endif
 
     return 0;
