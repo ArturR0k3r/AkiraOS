@@ -14,8 +14,10 @@
 /* Connectivity */
 #ifdef CONFIG_WIFI
 #include <zephyr/net/wifi_mgmt.h>
+#if defined(CONFIG_NETWORKING)
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/net_mgmt.h>
+#endif
 #endif
 #ifdef CONFIG_BT
 #include "connectivity/bluetooth/bt_manager.h"
@@ -99,7 +101,7 @@ int main(void)
 #endif
 
     /* WiFi (optional) */
-#ifdef CONFIG_WIFI
+#if defined(CONFIG_WIFI) && defined(CONFIG_NETWORKING)
     struct net_if *iface = net_if_get_default();
     if (iface)
     {

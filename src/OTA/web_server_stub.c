@@ -8,7 +8,9 @@
 #include <string.h>
 #include <zephyr/logging/log.h>
 
-LOG_MODULE_REGISTER(web_server_stub, AKIRA_LOG_LEVEL);
+/* Use Kconfig-provided log level constant to avoid relying on AKIRA_LOG_LEVEL macro
+ * which may not be defined if akira.h isn't included. */
+LOG_MODULE_REGISTER(web_server_stub, CONFIG_AKIRA_LOG_LEVEL);
 
 int web_server_start(const struct web_server_callbacks *callbacks)
 {
