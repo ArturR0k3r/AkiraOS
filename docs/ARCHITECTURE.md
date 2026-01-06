@@ -24,26 +24,20 @@ AkiraOS is a modular, security-focused embedded OS designed for resource-constra
 │     (Capability-based API: display, RF, sensors, storage)       │
 ├─────────────────────────────────────────────────────────────────┤
 │                    OCRE Container Runtime                       │
-│  ┌───────────────┬──────────────┬──────────────┬─────────────┐ │
-│  │ App Lifecycle │  Security    │  Resource    │ IPC Message │ │
-│  │   Manager     │  Enforcer    │  Scheduler   │     Bus     │ │
-│  └───────────────┴──────────────┴──────────────┴─────────────┘ │
-├─────────────────────────────────────────────────────────────────┤
-│                       main.c (Simple Init)                      │
-│  • Direct calls to subsystem init functions                     │
-│  • Kconfig-based conditional compilation                        │
-│  • No abstraction layers or wrappers                            │
-│  • ~150 lines, single responsibility                            │
+│  ┌───────────────┬──────────────┬──────────────┬─────────────┐  │
+│  │ App Lifecycle │  Security    │  Resource    │ IPC Message │  │
+│  │   Manager     │  Enforcer    │  Scheduler   │     Bus     │  │
+│  └───────────────┴──────────────┴──────────────┴─────────────┘  │
 ├─────────────────────────────────────────────────────────────────┤
 │                     Subsystem Managers                          │
-│  ┌──────────────┬──────────────┬──────────────┬──────────────┐ │
-│  │ BT Manager   │ USB Manager  │ HID Manager  │ OTA Manager  │ │
-│  │ (BLE stack)  │ (USB stack)  │ (Input dev)  │ (Updates)    │ │
-│  └──────────────┴──────────────┴──────────────┴──────────────┘ │
-│  ┌──────────────┬──────────────┬──────────────┬──────────────┐ │
-│  │ FS Manager   │ App Manager  │Power Manager │Cloud Client  │ │
-│  │ (Storage)    │ (App runtime)│ (Sleep)      │ (Messaging)  │ │
-│  └──────────────┴──────────────┴──────────────┴──────────────┘ │
+│  ┌──────────────┬──────────────┬──────────────┬──────────────┐  │
+│  │ BT Manager   │ USB Manager  │ HID Manager  │ OTA Manager  │  │
+│  │ (BLE stack)  │ (USB stack)  │ (Input dev)  │ (Updates)    │  │
+│  └──────────────┴──────────────┴──────────────┴──────────────┘  │
+│  ┌──────────────┬──────────────┬──────────────┬──────────────┐  │
+│  │ FS Manager   │ App Manager  │Power Manager │Cloud Client  │  │
+│  │ (Storage)    │ (App runtime)│ (Sleep)      │ (Messaging)  │  │
+│  └──────────────┴──────────────┴──────────────┴──────────────┘  │
 ├─────────────────────────────────────────────────────────────────┤
 │              Platform HAL (platform_hal)                        │
 │        (Hardware GPIO, SPI, Display simulation)                 │
@@ -54,7 +48,7 @@ AkiraOS is a modular, security-focused embedded OS designed for resource-constra
 │                        Zephyr RTOS                              │
 │   (Real-time kernel, networking, storage, USB, WiFi native)     │
 ├─────────────────────────────────────────────────────────────────┤
-│              Hardware (ESP32 | nRF5x/nRF91 | STM32)            │
+│              Hardware (ESP32 | nRF5x/nRF91 | STM32)             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
