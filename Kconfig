@@ -19,6 +19,286 @@ config AKIRA_LOG_LEVEL
       Set the log level for AkiraOS modules.
       0=OFF, 1=ERR, 2=WRN, 3=INF, 4=DBG
 
+###############################################################################
+# One-Click Feature Enablers
+# These automatically select all required dependencies
+# Inspired by AKIRA_WIFI pattern - enables one feature = all sub-configs auto-set
+###############################################################################
+
+config AKIRA_WIFI
+    bool "Enable WiFi connectivity"
+    default n
+    select NETWORKING
+    select NET_IPV4
+    select NET_TCP
+    select NET_UDP
+    select NET_SOCKETS
+    select NET_DHCPV4
+    select NET_MGMT
+    select NET_MGMT_EVENT
+    select NET_L2_WIFI_MGMT
+    select WIFI
+    help
+      Enable WiFi connectivity with all required networking stack.
+      Just enable this - all dependencies are auto-selected.
+      Board config still needs CONFIG_WIFI_ESP32=y for ESP32 boards.
+
+config AKIRA_BLUETOOTH
+    bool "Enable Bluetooth connectivity"
+    default y
+    select BT
+    select BT_PERIPHERAL
+    select BT_GATT_CLIENT
+    select BT_SMP
+    select BT_SIGNING
+    select BT_BONDABLE
+    help
+      Enable Bluetooth Low Energy with all required settings.
+      Just enable this - all dependencies are auto-selected.
+
+config AKIRA_STORAGE
+    bool "Enable storage subsystem"
+    default y
+    select FILE_SYSTEM
+    select FILE_SYSTEM_LITTLEFS
+    select FLASH
+    select FLASH_MAP
+    select FLASH_PAGE_LAYOUT
+    select NVS
+    select SETTINGS
+    help
+      Enable full storage subsystem with LittleFS and settings.
+      Just enable this - all dependencies are auto-selected.
+      Note: Set CONFIG_SETTINGS_NVS=y in board config if needed.
+
+config AKIRA_SETTINGS
+    bool "Enable user settings storage"
+    default y
+    select SETTINGS
+    select SETTINGS_RUNTIME
+    select NVS
+    help
+      Enable persistent user settings storage.
+      Just enable this - all dependencies are auto-selected.
+
+###############################################################################
+# NEW: One-Click Connectivity Bundles
+###############################################################################
+
+config AKIRA_HTTP_FULL
+    bool "Enable complete HTTP stack (server + client)"
+    default n
+    select NETWORKING
+    select NET_IPV4
+    select NET_TCP
+    select NET_SOCKETS
+    select NET_MGMT
+    select AKIRA_HTTP_SERVER
+    select AKIRA_EMBEDDED_WEB
+    help
+      Enable full HTTP server and client support with web UI.
+      Includes: HTTP server, WebSocket, embedded HTML UI.
+      Use this for web-enabled devices (desktop, console).
+
+config AKIRA_IOT_CLIENT
+    bool "Enable IoT cloud connectivity (CoAP + WebSocket)"
+    default n
+    select NETWORKING
+    select NET_IPV4
+    select NET_UDP
+    select NET_TCP
+    select NET_SOCKETS
+    select NET_MGMT
+    select COAP
+    select AKIRA_COAP_CLIENT
+    select AKIRA_WS_CLIENT
+    select AKIRA_CLOUD_CLIENT
+    help
+      Enable IoT connectivity with CoAP + WebSocket clients.
+      Ideal for constrained IoT devices.
+      Includes: CoAP for device mgmt, WebSocket for real-time data.
+
+config AKIRA_DEVICE_CONSOLE
+    bool "Enable full device console (terminal + networking)"
+    default n
+    select SHELL
+    select SHELL_BACKENDS
+    select SHELL_BACKEND_SERIAL
+    select SHELL_HISTORY
+    select SHELL_TAB_AUTOCOMPLETION
+    select NETWORKING
+    select NET_IPV4
+    select NET_TCP
+    select NET_UDP
+    select NET_SOCKETS
+    select NET_DHCPV4
+    select NET_SHELL
+    select AKIRA_TERMINAL_MODE
+    select AKIRA_HTTP_FULL
+    help
+      Enable complete developer terminal with network tools.
+      Includes: Rich shell, networking, terminal emulator.
+      Use for hacker terminal, testing, debugging.
+
+###############################################################################
+# NEW: One-Click App Platform Bundles
+###############################################################################
+
+config AKIRA_WASM_PLATFORM
+    bool "Enable WebAssembly app platform (OCRE + runtime)"
+    default n
+    select AKIRA_APP_MANAGER
+    select AKIRA_APP_SOURCE_HTTP
+    select AKIRA_APP_SOURCE_BLE
+    select AKIRA_CLOUD_APP_HANDLER
+    select AKIRA_MESSAGE_BUS
+    help
+      Enable full WASM app platform with installation and IPC.
+      Includes: App manager, HTTP/BLE installation, cloud sync, messaging.
+      Allows running custom WASM apps on device.
+
+config AKIRA_WASM_GAMES
+    bool "Enable WASM gaming support"
+    default n
+    select AKIRA_WASM_PLATFORM
+    select DISPLAY
+    select INPUT
+    select AKIRA_DISPLAY_ILI9341
+    select AKIRA_INPUT
+    select AKIRA_AUDIO_STUB
+    help
+      Enable full support for interactive WASM games.
+      Includes: Display, input, frame timing, audio hooks.
+
+config AKIRA_EMBEDDED_APPS
+    bool "Enable firmware-embedded WASM apps"
+    default n
+    depends on AKIRA_APP_MANAGER
+    select AKIRA_APP_SOURCE_FIRMWARE
+    help
+      Support preloading WASM apps directly into firmware.
+      Apps run immediately on boot, no download needed.
+      Good for demo apps, core utilities.
+
+###############################################################################
+# NEW: One-Click Hardware Feature Bundles
+###############################################################################
+
+config AKIRA_SENSOR_SUITE
+    bool "Enable all integrated sensors"
+    default n
+    select I2C
+    select SENSOR
+    select AKIRA_BME280
+    select AKIRA_LSM6DS3
+    select AKIRA_INA219
+    help
+      Enable all standard Akira sensors.
+      Includes: Temperature/humidity/pressure, IMU, power monitor.
+      Use on boards like STEVAL-STWINBX1.
+
+config AKIRA_RF_SUITE
+    bool "Enable all RF transceivers"
+    default n
+    select SPI
+    select GPIO
+    select AKIRA_RF_FRAMEWORK
+    select AKIRA_NRF24L01
+    select AKIRA_LR1121
+    select AKIRA_CC1101
+    help
+      Enable all RF wireless chips.
+      Includes: 2.4GHz (NRF24), Sub-GHz (LR1121, CC1101).
+      Use on boards with multiple RF modules.
+
+config AKIRA_DISPLAY_FULL
+    bool "Enable all display drivers"
+    default n
+    select DISPLAY
+    select SPI
+    select GPIO
+    select AKIRA_DISPLAY_ILI9341
+    select AKIRA_SSD1306
+    select AKIRA_ST7789
+    select AKIRA_TOUCH_XPT2046
+    help
+      Enable all display and touch drivers.
+      Includes: TFT (ILI9341, ST7789), OLED (SSD1306), touch (XPT2046).
+
+###############################################################################
+# NEW: One-Click Use Case Bundles  
+###############################################################################
+
+config AKIRA_PORTABLE_CONSOLE
+    bool "Portable gaming console"
+    default n
+    select AKIRA_WASM_GAMES
+    select AKIRA_DISPLAY_FULL
+    select AKIRA_POWER_MANAGER
+    select AKIRA_POWER_DEEP_SLEEP
+    help
+      Optimized for portable gaming handheld.
+      Includes: WASM games, displays, power mgmt, deep sleep.
+      ~500KB RAM needed.
+
+config AKIRA_IOT_SENSOR_HUB
+    bool "IoT sensor hub / edge gateway"
+    default n
+    select AKIRA_SENSOR_SUITE
+    select AKIRA_RF_SUITE
+    select AKIRA_IOT_CLIENT
+    select AKIRA_STORAGE
+    help
+      Optimized for IoT edge computing.
+      Includes: Sensors, RF radios, cloud connectivity, local storage.
+      Collects data, filters locally, sends to cloud.
+
+config AKIRA_WIRELESS_JAMMER
+    bool "RF analysis / wireless security device"
+    default n
+    select AKIRA_RF_SUITE
+    select AKIRA_DISPLAY_ILI9341
+    select AKIRA_INPUT
+    select DISPLAY
+    select GPIO
+    select SPI
+    help
+      Optimized for wireless penetration testing.
+      Includes: All RF modules, display, input, capture/analysis hooks.
+      Use for security research and RF monitoring.
+
+config AKIRA_WEB_ENABLED_DEVICE
+    bool "Web-enabled IoT device"
+    default n
+    select AKIRA_HTTP_FULL
+    select AKIRA_SENSOR_SUITE
+    select AKIRA_POWER_MANAGER
+    help
+      Device with web server and sensor readouts.
+      Includes: HTTP server, web UI, sensors, WiFi.
+      Access via browser: http://device-ip/
+
+config AKIRA_DEVELOPER_HACKER_KIT
+    bool "Developer hacker kit (all features)"
+    default n
+    select AKIRA_DEVICE_CONSOLE
+    select AKIRA_WASM_PLATFORM
+    select AKIRA_SENSOR_SUITE
+    select AKIRA_RF_SUITE
+    select AKIRA_DISPLAY_FULL
+    select AKIRA_OTA
+    select AKIRA_POWER_MANAGER
+    select AKIRA_CAPABILITY_SYSTEM
+    select AKIRA_APP_SIGNING
+    help
+      Complete developer kit with all features enabled.
+      Perfect for R&D, security research, full-featured apps.
+      WARNING: Uses lots of flash and RAM - for development only!
+
+###############################################################################
+# Individual Feature Flags (existing)
+###############################################################################
+
 config AKIRA_DISPLAY_ILI9341
     bool "Enable ILI9341 display driver"
     default y

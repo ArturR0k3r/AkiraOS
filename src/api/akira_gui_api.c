@@ -5,7 +5,7 @@
  * Wraps LVGL functions for WebAssembly applications.
  */
 
-#include "akira_gui_api.h"
+
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 

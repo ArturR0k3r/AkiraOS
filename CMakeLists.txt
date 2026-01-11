@@ -67,12 +67,9 @@ target_sources(app PRIVATE
 target_sources(app PRIVATE
     src/akira/akira_native_exports.c
     src/api/akira_display_api.c
-    src/api/akira_input_api.c
-    src/api/akira_rf_api.c
-    src/api/akira_sensor_api.c
+    src/api/akira_hid_api.c
     src/api/akira_storage_api.c
     src/api/akira_network_api.c
-    src/api/akira_system_api.c
 )
 
 # Security Layer

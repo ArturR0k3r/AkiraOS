@@ -132,3 +132,37 @@ int akira_mqtt_subscribe(const char *topic, akira_mqtt_callback_t callback)
 
 // TODO: Add MQTT connect/disconnect functions
 // TODO: Add MQTT message handler that dispatches to callbacks
+
+/*===========================================================================*/
+/* WASM Wrappers (exported to OCRE)                                          */
+/*===========================================================================*/
+
+#include <wasm_export.h>
+
+int akira_http_get_wasm(wasm_exec_env_t exec_env, uint32_t url_ptr, uint32_t buf_ptr, int max_len)
+{
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    if (!module_inst)
+        return -1;
+    
+    const char *url = (const char *)wasm_runtime_addr_app_to_native(module_inst, url_ptr);
+    void *buf = (void *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+    if (!url || !buf)
+        return -1;
+    
+    return akira_http_get(url, buf, (size_t)max_len);
+}
+
+int akira_http_post_wasm(wasm_exec_env_t exec_env, uint32_t url_ptr, uint32_t data_ptr, int len)
+{
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    if (!module_inst)
+        return -1;
+    
+    const char *url = (const char *)wasm_runtime_addr_app_to_native(module_inst, url_ptr);
+    const void *data = (const void *)wasm_runtime_addr_app_to_native(module_inst, data_ptr);
+    if (!url || !data)
+        return -1;
+    
+    return akira_http_post(url, data, (size_t)len);
+}

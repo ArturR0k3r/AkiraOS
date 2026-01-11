@@ -365,6 +365,12 @@ int bt_manager_start_advertising(void)
         return -EINVAL;
     }
 
+    /* Already advertising - not an error, just return success */
+    if (bt_mgr.state == BT_STATE_ADVERTISING)
+    {
+        return 0;
+    }
+
     if (bt_mgr.state == BT_STATE_CONNECTED)
     {
         return -EBUSY;
