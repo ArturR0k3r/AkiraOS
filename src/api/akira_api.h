@@ -85,6 +85,45 @@ int akira_mqtt_subscribe(const char *topic, akira_mqtt_callback_t callback);
 int akira_http_get_wasm(wasm_exec_env_t exec_env, uint32_t url_ptr, uint32_t buf_ptr, int max_len);
 int akira_http_post_wasm(wasm_exec_env_t exec_env, uint32_t url_ptr, uint32_t data_ptr, int len);
 
+/*===========================================================================*/
+/* RF API - Radio Frequency (v1.3.4: Optional module)                        */
+/*===========================================================================*/
+
+#ifdef CONFIG_AKIRA_RF_MODULE
+
+typedef enum {
+    AKIRA_RF_CHIP_NONE = 0,
+    AKIRA_RF_CHIP_NRF24L01 = 1,
+    AKIRA_RF_CHIP_LR1121 = 2,
+    AKIRA_RF_CHIP_CC1101 = 3,
+    AKIRA_RF_CHIP_SX1276 = 4,
+    AKIRA_RF_CHIP_RFM69 = 5,
+} akira_rf_chip_t;
+
+int akira_rf_init(akira_rf_chip_t chip);
+int akira_rf_deinit(void);
+int akira_rf_send(const uint8_t *data, size_t len);
+int akira_rf_receive(uint8_t *buffer, size_t max_len, uint32_t timeout_ms);
+int akira_rf_set_frequency(uint32_t freq_hz);
+int akira_rf_set_power(int8_t dbm);
+int akira_rf_get_rssi(int16_t *rssi);
+
+#endif /* CONFIG_AKIRA_RF_MODULE */
+
+/*===========================================================================*/
+/* System API - System Information (v1.3.4: Optional module)                 */
+/*===========================================================================*/
+
+#ifdef CONFIG_AKIRA_SYSTEM_MODULE
+
+uint64_t akira_system_uptime_ms(void);
+size_t akira_system_free_memory(void);
+const char *akira_system_platform(void);
+void akira_system_sleep(uint32_t ms);
+void akira_log(int level, const char *message);
+
+#endif /* CONFIG_AKIRA_SYSTEM_MODULE */
+
 #ifdef __cplusplus
 }
 #endif

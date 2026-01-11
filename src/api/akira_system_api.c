@@ -10,6 +10,8 @@
 
 LOG_MODULE_REGISTER(akira_system_api, LOG_LEVEL_INF);
 
+#ifdef CONFIG_AKIRA_SYSTEM_MODULE
+
 // TODO: Add capability check for sensitive operations
 // TODO: Add per-container resource tracking
 
@@ -69,3 +71,5 @@ void akira_log(int level, const char *message)
         break;
     }
 }
+
+#endif /* CONFIG_AKIRA_SYSTEM_MODULE */

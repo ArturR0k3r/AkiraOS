@@ -20,6 +20,59 @@ config AKIRA_LOG_LEVEL
       0=OFF, 1=ERR, 2=WRN, 3=INF, 4=DBG
 
 ###############################################################################
+# v1.3.4: Stack/Memory Profiles (per-board tuning)
+###############################################################################
+
+choice
+    prompt "AkiraOS Stack Profile"
+    default AKIRA_PROFILE_BALANCED
+    help
+      Select stack size profile for target board.
+      Different profiles trade off memory vs performance headroom.
+
+config AKIRA_PROFILE_MINIMAL
+    bool "MINIMAL: Max memory savings (tight RAM boards)"
+    help
+      Minimum safe stack sizes. For 192-256KB RAM devices.
+      - MAIN_STACK: 1536 bytes
+      - SHELL_STACK: 1536 bytes
+      - ISR_STACK: 1024 bytes
+      Use for: NRF54, STM32U585, ESP32-C3
+
+config AKIRA_PROFILE_BALANCED
+    bool "BALANCED: Default (mixed use boards)"
+    help
+      Balanced stack sizes. For 400KB+ RAM devices.
+      - MAIN_STACK: 2048 bytes
+      - SHELL_STACK: 2048 bytes
+      - ISR_STACK: 1536 bytes
+      Use for: ESP32-S3, ESP32 DevKitC (recommended)
+
+config AKIRA_PROFILE_FULL
+    bool "FULL: Max headroom (testing, high-RAM boards)"
+    help
+      Large stack sizes for development/testing.
+      - MAIN_STACK: 3072 bytes
+      - SHELL_STACK: 3072 bytes
+      - ISR_STACK: 2048 bytes
+      Use for: Native SIM, dev boards with unlimited RAM
+
+endchoice
+
+###############################################################################
+# v1.3.4: Memory & Heap Management Options
+###############################################################################
+
+config AKIRA_MEMORY_PROFILE
+    bool "Enable detailed memory profiling"
+    default n
+    help
+      Enable detailed memory profiling and heap statistics.
+      Shows allocation patterns per subsystem (BT, WiFi, etc).
+      Useful for optimization and debugging. Enables CONFIG_SYS_HEAP_RUNTIME_STATS.
+      Available via shell: kernel stats command for memory details.
+
+###############################################################################
 # One-Click Feature Enablers
 # These automatically select all required dependencies
 # Inspired by AKIRA_WIFI pattern - enables one feature = all sub-configs auto-set
@@ -399,6 +452,30 @@ config AKIRA_FRAMEBUFFER_IN_PSRAM
       When enabled, large framebuffer buffers used on hardware platforms
       will be allocated/placed in PSRAM if the underlying driver supports
       PSRAM placement. This is ignored on native_sim.
+
+endmenu
+
+###############################################################################
+# v1.3.4: Optional API Modules (conditional compilation)
+###############################################################################
+
+menu "Optional API Modules"
+
+config AKIRA_RF_MODULE
+    bool "Enable RF API module"
+    default y
+    help
+      Enable RF (radio frequency) native API module.
+      Provides WASM access to RF transceiver control.
+      Saves ~2KB code if disabled (module is optional).
+
+config AKIRA_SYSTEM_MODULE
+    bool "Enable System API module"
+    default y
+    help
+      Enable System API module with uptime, memory, platform info.
+      Provides WASM access to system information and utilities.
+      Saves ~1KB code if disabled (module is optional).
 
 endmenu
 

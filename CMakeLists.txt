@@ -72,6 +72,15 @@ target_sources(app PRIVATE
     src/api/akira_network_api.c
 )
 
+# v1.3.4: Optional API Modules (conditional compilation)
+if(CONFIG_AKIRA_RF_MODULE)
+    target_sources(app PRIVATE src/api/akira_rf_api.c)
+endif()
+
+if(CONFIG_AKIRA_SYSTEM_MODULE)
+    target_sources(app PRIVATE src/api/akira_system_api.c)
+endif()
+
 # Security Layer
 target_sources(app PRIVATE
     src/security/capability.c
