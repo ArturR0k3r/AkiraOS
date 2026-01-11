@@ -35,10 +35,11 @@ set(BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR}/boards)
 # endif()
 
 # OCRE Integration
-# Note: OCRE is now integrated as a Zephyr module and will be automatically
-# built through the module system. The zephyr/CMakeLists.txt handles all
-# OCRE library compilation (OcreCore, OcrePlatform, OcreRuntime, etc.)
-# No need to manually add sources here - Zephyr's module system handles it.
+# Note: OCRE is integrated as a Zephyr module and will be automatically
+# built through the module system. The ocre/ directory is registered as a
+# west project in west.yml and will be discovered and built by Zephyr.
+# The CONFIG_OCRE gate in modules/ocre/CMakeLists.txt prevents it from being
+# built during MCUBoot builds (via the mcuboot_disable_ocre.conf override).
 
 # Akira Module System (Core functionality, not third-party)
 if(CONFIG_AKIRA_MODULE)
@@ -283,6 +284,11 @@ target_sources(app PRIVATE
     src/services/akira_runtime.c
 )
 
+# OCRE integration (only for main app, not for MCUBoot bootloader)
+if(CONFIG_OCRE)
+    target_sources(app PRIVATE src/services/ocre_wasm_integration.c)
+endif()
+
 # Filesystem Manager (MUST be before App Manager)
 target_sources(app PRIVATE src/storage/fs_manager.c)
 
@@ -352,39 +358,50 @@ target_compile_definitions(app PRIVATE
 )
 
 # Link OCRE libraries if OCRE is enabled
-# The Zephyr module system should handle this, but we add explicit linking
-# to ensure the OCRE libraries are linked
 if(CONFIG_OCRE)
-    # Since Zephyr's module system isn't properly exporting OCRE targets,
-    # we need to directly link against the full library paths or object files
-    # Find the OCRE libraries that were built
-    find_library(OCRECORE_LIB NAMES libOcreCore OcreCore PATHS "${CMAKE_BINARY_DIR}/modules/ocre/ocre-core" NO_DEFAULT_PATH)
-    find_library(OCREPLATFORM_LIB NAMES libOcrePlatform OcrePlatform PATHS "${CMAKE_BINARY_DIR}/modules/ocre/ocre-zephyr" NO_DEFAULT_PATH)
-    find_library(OCRERUNTIMEWAMR_LIB NAMES libOcreRuntimeWamr OcreRuntimeWamr PATHS "${CMAKE_BINARY_DIR}/modules/ocre/ocre-runtime-wamr-wasip1" NO_DEFAULT_PATH)
-    find_library(OCRERUNTIMEAPI_LIB NAMES libOcreRuntimeAPI OcreRuntimeAPI PATHS "${CMAKE_BINARY_DIR}/modules/ocre/ocre-runtime-wamr-wasip1/ocre_api" NO_DEFAULT_PATH)
-    find_library(VMLIB_LIB NAMES libvmlib vmlib PATHS "${CMAKE_BINARY_DIR}/modules/ocre" NO_DEFAULT_PATH)
+    message(STATUS "[OCRE] Creating imported targets for OCRE libraries")
     
-    # Link them if found
-    if(OCRECORE_LIB)
-        target_link_libraries(app PRIVATE "${OCRECORE_LIB}")
-    endif()
-    if(OCREPLATFORM_LIB)
-        target_link_libraries(app PRIVATE "${OCREPLATFORM_LIB}")
-    endif()
-    if(OCRERUNTIMEWAMR_LIB)
-        target_link_libraries(app PRIVATE "${OCRERUNTIMEWAMR_LIB}")
-    endif()
-    if(OCRERUNTIMEAPI_LIB)
-        target_link_libraries(app PRIVATE "${OCRERUNTIMEAPI_LIB}")
-    endif()
-    if(VMLIB_LIB)
-        target_link_libraries(app PRIVATE "${VMLIB_LIB}")
-    endif()
+    set(OCRE_LIB_DIR "${CMAKE_BINARY_DIR}/modules/ocre")
+    
+    # Create IMPORTED targets for each OCRE library
+    # This allows CMake to treat them as proper targets even though they're external
+    add_library(OcreCore_imported STATIC IMPORTED)
+    set_target_properties(OcreCore_imported PROPERTIES
+        IMPORTED_LOCATION "${OCRE_LIB_DIR}/ocre-core/libOcreCore.a"
+    )
+    
+    add_library(OcrePlatform_imported STATIC IMPORTED)
+    set_target_properties(OcrePlatform_imported PROPERTIES
+        IMPORTED_LOCATION "${OCRE_LIB_DIR}/ocre-zephyr/libOcrePlatform.a"
+    )
+    
+    add_library(OcreRuntimeWamr_imported STATIC IMPORTED)
+    set_target_properties(OcreRuntimeWamr_imported PROPERTIES
+        IMPORTED_LOCATION "${OCRE_LIB_DIR}/ocre-runtime-wamr-wasip1/libOcreRuntimeWamr.a"
+    )
+    
+    add_library(OcreRuntimeAPI_imported STATIC IMPORTED)
+    set_target_properties(OcreRuntimeAPI_imported PROPERTIES
+        IMPORTED_LOCATION "${OCRE_LIB_DIR}/ocre-runtime-wamr-wasip1/ocre_api/libOcreRuntimeAPI.a"
+    )
+    
+    add_library(vmlib_imported STATIC IMPORTED)
+    set_target_properties(vmlib_imported PROPERTIES
+        IMPORTED_LOCATION "${OCRE_LIB_DIR}/libvmlib.a"
+    )
+    
+    # Now link them to app as proper targets
+    target_link_libraries(app PRIVATE
+        OcreCore_imported
+        OcrePlatform_imported
+        OcreRuntimeWamr_imported
+        OcreRuntimeAPI_imported
+        vmlib_imported
+    )
+    
+    message(STATUS "[OCRE] OCRE libraries linked successfully")
     
     if(CONFIG_OCRE_SHELL)
-        find_library(OCRESHELL_LIB NAMES libOcreShell OcreShell PATHS "${CMAKE_BINARY_DIR}/modules/ocre/ocre-shell" NO_DEFAULT_PATH)
-        if(OCRESHELL_LIB)
-            target_link_libraries(app PRIVATE "${OCRESHELL_LIB}")
-        endif()
+        # TODO: Add shell library linking if needed
     endif()
 endif()

@@ -11,6 +11,10 @@
 
 message(STATUS "[AkiraOS WAMR Override] Applying embedded system configuration")
 
+# Add compiler flags to ensure Zephyr filesystem headers are available
+# This fixes incomplete type errors in platform_internal.h
+add_compile_options(-include zephyr/fs/fs.h)
+
 # Detect target architecture from Kconfig
 if(CONFIG_XTENSA OR CONFIG_RISCV OR CONFIG_ARM OR CONFIG_ESP32)
     message(STATUS "[AkiraOS WAMR Override] Embedded target detected (XTENSA/RISC-V/ARM)")

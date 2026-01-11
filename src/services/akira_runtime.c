@@ -334,3 +334,26 @@ int akira_runtime_dump_status(void)
 
     return 0;
 }
+
+int akira_runtime_destroy(int container_id)
+{
+    if (!g_initialized)
+    {
+        LOG_ERR("Runtime not initialized");
+        return -ENODEV;
+    }
+
+    if (container_id < 0)
+    {
+        LOG_ERR("Invalid container ID: %d", container_id);
+        return -EINVAL;
+    }
+
+    LOG_INF("Destroying container %d...", container_id);
+
+    /* TODO: Implement container destruction with container ID mapping */
+    /* For now, this is a stub that logs the operation */
+    LOG_WRN("akira_runtime_destroy: container mapping not fully implemented");
+    
+    return 0;
+}
