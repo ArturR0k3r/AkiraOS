@@ -674,6 +674,21 @@ config OCRE_WAMR_HEAP_BUFFER_IN_PSRAM
       external PSRAM section (if supported by the board and MEMC
       driver). This frees internal DRAM for other runtime usage.
 
+config OCRE_LOG_LEVEL
+    int "OCRE log level"
+    default 3
+    range 0 4
+    help
+      Set the log level for OCRE modules.
+      0=OFF, 1=ERR, 2=WRN, 3=INF, 4=DBG
+
+config OCRE_WAMR_LOG_LEVEL
+    int "OCRE WAMR log level"
+    default 3
+    range 0 4
+    help
+      Set the log level for WAMR runtime specifically.
+      0=OFF, 1=ERR, 2=WRN, 3=INF, 4=DBG
 
 config OCRE_CONTAINER_DEFAULT_STACK_SIZE
     int "Default container stack size"

@@ -2,6 +2,17 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
+# ===== WAMR Configuration Override =====
+# Set WAMR libc configuration BEFORE find_package loads Zephyr modules.
+# For embedded targets (XTENSA, ARM, RISC-V), use builtin libc since WASI libc
+# requires sys/random.h which doesn't exist on embedded systems.
+# This must be done as a cache variable so it persists through module loading.
+
+# These will be overridden by our config in Zephyr module processing,
+# but we set them early to influence CMake's cache
+set(WAMR_BUILD_LIBC_BUILTIN 1 CACHE BOOL "" FORCE)
+set(WAMR_BUILD_LIBC_WASI 0 CACHE BOOL "" FORCE)
+
 # Force disable Kconfig warnings
 set(KCONFIG_WARN_UNDEF OFF CACHE BOOL "Disable Kconfig warnings" FORCE)
 set(KCONFIG_WERROR OFF CACHE BOOL "Disable Kconfig warnings as errors" FORCE)
@@ -9,6 +20,8 @@ set(KCONFIG_WERROR OFF CACHE BOOL "Disable Kconfig warnings as errors" FORCE)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(akira_os VERSION 1.2.3)
 
+# Add AkiraOS include directory to all targets for sys/random.h shim
+include_directories(BEFORE SYSTEM ${CMAKE_CURRENT_LIST_DIR}/include)
 
 # Set default board
 set(BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR}/boards)
@@ -22,20 +35,10 @@ set(BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR}/boards)
 # endif()
 
 # OCRE Integration
-set(OCRE_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/../ocre")
-
-if(EXISTS "${OCRE_ROOT_DIR}/src")
-    include("${CMAKE_CURRENT_LIST_DIR}/modules/ocre/ocre.cmake")
-    target_sources(app PRIVATE ${ocre_component_sources} ${ocre_lib_sources})
-    target_include_directories(app PRIVATE
-        ${OCRE_ROOT_DIR}/src/
-        ${OCRE_ROOT_DIR}/src/ocre
-        ${OCRE_ROOT_DIR}/src/shared/platform
-    )
-    target_compile_definitions(app PRIVATE CONFIG_OCRE_ENABLE=1)
-    # Enable OCRE logging (force INFO level since OCRE Kconfig isn't sourced)
-    target_compile_definitions(app PRIVATE CONFIG_OCRE_LOG_INF=1)
-endif()
+# Note: OCRE is now integrated as a Zephyr module and will be automatically
+# built through the module system. The zephyr/CMakeLists.txt handles all
+# OCRE library compilation (OcreCore, OcrePlatform, OcreRuntime, etc.)
+# No need to manually add sources here - Zephyr's module system handles it.
 
 # Akira Module System (Core functionality, not third-party)
 if(CONFIG_AKIRA_MODULE)
@@ -327,9 +330,12 @@ target_include_directories(app PRIVATE
     src/shell/
     src/storage/
     src/ui/
-    # REMOVED - OCRE provides WAMR includes
-    # ${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime/core/iwasm/include
-    # ${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime/core/shared/utils
+    # OCRE headers - use include subdirectory to get public headers
+    ../ocre/src/ocre/include
+    ../ocre/src/runtime/include
+    # WAMR headers needed for native exports
+    ../ocre/wasm-micro-runtime/core/iwasm/include
+    ../ocre/wasm-micro-runtime/core/shared/utils
 )
 
 # SDL2 simulator uses external viewer (tools/akira_viewer)
@@ -344,3 +350,41 @@ target_compile_definitions(app PRIVATE
     AKIRA_VERSION_MINOR=2
     AKIRA_VERSION_PATCH=3
 )
+
+# Link OCRE libraries if OCRE is enabled
+# The Zephyr module system should handle this, but we add explicit linking
+# to ensure the OCRE libraries are linked
+if(CONFIG_OCRE)
+    # Since Zephyr's module system isn't properly exporting OCRE targets,
+    # we need to directly link against the full library paths or object files
+    # Find the OCRE libraries that were built
+    find_library(OCRECORE_LIB NAMES libOcreCore OcreCore PATHS "${CMAKE_BINARY_DIR}/modules/ocre/ocre-core" NO_DEFAULT_PATH)
+    find_library(OCREPLATFORM_LIB NAMES libOcrePlatform OcrePlatform PATHS "${CMAKE_BINARY_DIR}/modules/ocre/ocre-zephyr" NO_DEFAULT_PATH)
+    find_library(OCRERUNTIMEWAMR_LIB NAMES libOcreRuntimeWamr OcreRuntimeWamr PATHS "${CMAKE_BINARY_DIR}/modules/ocre/ocre-runtime-wamr-wasip1" NO_DEFAULT_PATH)
+    find_library(OCRERUNTIMEAPI_LIB NAMES libOcreRuntimeAPI OcreRuntimeAPI PATHS "${CMAKE_BINARY_DIR}/modules/ocre/ocre-runtime-wamr-wasip1/ocre_api" NO_DEFAULT_PATH)
+    find_library(VMLIB_LIB NAMES libvmlib vmlib PATHS "${CMAKE_BINARY_DIR}/modules/ocre" NO_DEFAULT_PATH)
+    
+    # Link them if found
+    if(OCRECORE_LIB)
+        target_link_libraries(app PRIVATE "${OCRECORE_LIB}")
+    endif()
+    if(OCREPLATFORM_LIB)
+        target_link_libraries(app PRIVATE "${OCREPLATFORM_LIB}")
+    endif()
+    if(OCRERUNTIMEWAMR_LIB)
+        target_link_libraries(app PRIVATE "${OCRERUNTIMEWAMR_LIB}")
+    endif()
+    if(OCRERUNTIMEAPI_LIB)
+        target_link_libraries(app PRIVATE "${OCRERUNTIMEAPI_LIB}")
+    endif()
+    if(VMLIB_LIB)
+        target_link_libraries(app PRIVATE "${VMLIB_LIB}")
+    endif()
+    
+    if(CONFIG_OCRE_SHELL)
+        find_library(OCRESHELL_LIB NAMES libOcreShell OcreShell PATHS "${CMAKE_BINARY_DIR}/modules/ocre/ocre-shell" NO_DEFAULT_PATH)
+        if(OCRESHELL_LIB)
+            target_link_libraries(app PRIVATE "${OCRESHELL_LIB}")
+        endif()
+    endif()
+endif()
