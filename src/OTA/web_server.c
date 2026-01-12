@@ -1090,92 +1090,9 @@ static int handle_http_request(int client_fd)
         /* App upload endpoint - POST /api/apps/install */
         if (strncmp(path, "/api/apps/install", 17) == 0)
         {
-            size_t content_length = parse_content_length(buffer);
-            if (content_length == 0 || content_length > CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024)
-            {
-                return send_http_response(client_fd, 400, "text/plain",
-                                          "Invalid Content-Length", 0);
-            }
-
-            char *body_start = strstr(buffer, "\r\n\r\n");
-            if (!body_start)
-            {
-                return send_http_response(client_fd, 400, "text/plain",
-                                          "Invalid HTTP request", 0);
-            }
-            body_start += 4;
-
-            /* Get app name from query parameter */
-            char app_name[32] = "uploaded_app";
-            const char *name_param = strstr(buffer, "?name=");
-            if (name_param)
-            {
-                name_param += 6;
-                const char *end = strpbrk(name_param, " &\r\n");
-                size_t len = end ? (size_t)(end - name_param) : strlen(name_param);
-                if (len > 0 && len < sizeof(app_name))
-                {
-                    strncpy(app_name, name_param, len);
-                    app_name[len] = '\0';
-                }
-            }
-
-            /* Begin chunked install */
-            int session = app_manager_install_begin(app_name, content_length, APP_SOURCE_HTTP);
-            if (session < 0)
-            {
-                char resp[64];
-                snprintf(resp, sizeof(resp), "{\"error\":\"Install begin failed: %d\"}", session);
-                return send_http_response(client_fd, 500, "application/json", resp, 0);
-            }
-
-            /* Write first chunk */
-            size_t headers_len = body_start - buffer;
-            size_t body_already_read = received - headers_len;
-            if (body_already_read > 0)
-            {
-                int ret = app_manager_install_chunk(session, body_start, body_already_read);
-                if (ret < 0)
-                {
-                    app_manager_install_abort(session);
-                    return send_http_response(client_fd, 500, "text/plain", "Chunk write failed", 0);
-                }
-            }
-
-            /* Receive remaining data */
-            size_t total_received = body_already_read;
-            static char app_upload_buf[512];
-            while (total_received < content_length)
-            {
-                size_t chunk_size = MIN(sizeof(app_upload_buf), content_length - total_received);
-                ssize_t recvd = recv(client_fd, app_upload_buf, chunk_size, 0);
-                if (recvd <= 0)
-                {
-                    app_manager_install_abort(session);
-                    return send_http_response(client_fd, 500, "text/plain", "Upload failed", 0);
-                }
-                int ret = app_manager_install_chunk(session, app_upload_buf, recvd);
-                if (ret < 0)
-                {
-                    app_manager_install_abort(session);
-                    return send_http_response(client_fd, 500, "text/plain", "Chunk write failed", 0);
-                }
-                total_received += recvd;
-                k_yield();
-            }
-
-            /* Finalize install */
-            int app_id = app_manager_install_end(session, NULL);
-            if (app_id < 0)
-            {
-                char resp[64];
-                snprintf(resp, sizeof(resp), "{\"error\":\"Install failed: %d\"}", app_id);
-                return send_http_response(client_fd, 500, "application/json", resp, 0);
-            }
-
-            char resp[128];
-            snprintf(resp, sizeof(resp), "{\"status\":\"installed\",\"name\":\"%s\",\"id\":%d}", app_name, app_id);
-            return send_http_response(client_fd, 200, "application/json", resp, 0);
+            /* Return 501 Not Implemented for now - app upload will be implemented next */
+            return send_http_response(client_fd, 501, "application/json",
+                                      "{\"error\":\"App upload endpoint not yet implemented\"}", 0);
         }
 #endif /* CONFIG_AKIRA_APP_MANAGER */
 

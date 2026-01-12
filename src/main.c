@@ -65,6 +65,9 @@ LOG_MODULE_REGISTER(akira_main, CONFIG_AKIRA_LOG_LEVEL);
 
 int main(void)
 {
+      /* Try flushing output */
+    k_sleep(K_MSEC(100));
+   
     /* Early banner - should print immediately */
     printk("\n════════════════════════════════════════\n");
     printk("          AkiraOS v1.3.3\n");
@@ -72,16 +75,6 @@ int main(void)
     printk("════════════════════════════════════════\n");
     LOG_INF("Build: %s %s", __DATE__, __TIME__);
     LOG_INF("Starting initialization...\n");
-
-    /* Hardware initialization */
-    LOG_INF("Initializing HAL...");
-    if (akira_hal_init() < 0)
-    {
-        LOG_ERR("❌ HAL init failed - check platform_hal.c");
-        /* Don't return, try to continue */
-    } else {
-        LOG_INF("✅ HAL initialized");
-    }
 
     LOG_INF("Initializing driver registry...");
     if (driver_registry_init() < 0)
@@ -207,9 +200,11 @@ int main(void)
     /* App manager (optional) - includes runtime initialization */
 #ifdef CONFIG_AKIRA_APP_MANAGER
     LOG_INF("Initializing app manager...");
-    if (app_manager_init() < 0)
+    int app_mgr_ret = app_manager_init();
+    if (app_mgr_ret < 0)
     {
-        LOG_WRN("⚠️ App manager failed");
+        LOG_ERR("❌❌❌ FATAL: App manager init failed with %d", app_mgr_ret);
+        LOG_WRN("App manager unavailable - app install/start will fail");
     } else {
         LOG_INF("✅ App manager initialized");
     }

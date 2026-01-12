@@ -109,12 +109,14 @@ int app_manager_init(void)
     LOG_INF("Initializing App Manager");
 
     /* Initialize Akira runtime (OCRE + storage) */
+    LOG_INF("Calling akira_runtime_init...");
     int ret = akira_runtime_init();
     if (ret < 0)
     {
         LOG_ERR("Failed to initialize Akira runtime: %d", ret);
         return ret;
     }
+    LOG_INF("Akira runtime initialized OK");
 
     /* Ensure directories exist */
     ret = ensure_dirs_exist();
@@ -804,8 +806,20 @@ void app_manager_register_state_cb(app_state_change_cb_t callback, void *user_da
 
 int app_manager_install_begin(const char *name, size_t total_size, app_source_t source)
 {
-    if (!g_initialized || !name || total_size == 0)
+    LOG_DBG("install_begin: g_initialized=%d, name=%p, total_size=%zu", g_initialized, name, total_size);
+    if (!g_initialized)
     {
+        LOG_ERR("App manager not initialized");
+        return -EINVAL;
+    }
+    if (!name)
+    {
+        LOG_ERR("App name is null");
+        return -EINVAL;
+    }
+    if (total_size == 0)
+    {
+        LOG_ERR("Total size is 0");
         return -EINVAL;
     }
 

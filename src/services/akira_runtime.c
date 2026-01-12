@@ -71,9 +71,9 @@ int akira_runtime_init(void)
     g_ctx = ocre_create_context(OCRE_WORKDIR);
     if (g_ctx == NULL)
     {
-        LOG_ERR("Failed to create OCRE context");
-        ocre_deinitialize();
-        return -EIO;
+        LOG_WRN("Failed to create OCRE context at %s (filesystem may be unavailable)", OCRE_WORKDIR);
+        LOG_INF("Falling back to RAM-only operation");
+        /* Don't fail - app manager will use RAM storage as fallback */
     }
 
     /* Register Akira native exports with OCRE so WASM apps can call into
