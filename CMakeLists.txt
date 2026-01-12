@@ -18,7 +18,7 @@ set(KCONFIG_WARN_UNDEF OFF CACHE BOOL "Disable Kconfig warnings" FORCE)
 set(KCONFIG_WERROR OFF CACHE BOOL "Disable Kconfig warnings as errors" FORCE)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(akira_os VERSION 1.2.3)
+project(akira_os VERSION 1.3.4)
 
 # Add AkiraOS include directory to all targets for sys/random.h shim
 include_directories(BEFORE SYSTEM ${CMAKE_CURRENT_LIST_DIR}/include)
@@ -104,15 +104,12 @@ target_sources(app PRIVATE
     src/resource/scheduler.c
 )
 
-# UI Framework
-target_sources(app PRIVATE
-    src/ui/ui_framework.c
-)
+# UI Framework (optional - depends on display being available)
+if(CONFIG_AKIRA_UI)
+    target_sources(app PRIVATE src/ui/ui_framework.c)
+endif()
 
-# App Loader
-target_sources(app PRIVATE
-    src/apps/app_loader.c
-)
+# App Loader (merged into App Manager)
 
 # ===== Core Libraries =====
 # Shared utilities used across modules
@@ -359,8 +356,8 @@ target_include_directories(app PRIVATE
 # Compile definitions
 target_compile_definitions(app PRIVATE
     AKIRA_VERSION_MAJOR=1
-    AKIRA_VERSION_MINOR=2
-    AKIRA_VERSION_PATCH=3
+    AKIRA_VERSION_MINOR=3
+    AKIRA_VERSION_PATCH=4
 )
 
 # Link OCRE libraries if OCRE is enabled

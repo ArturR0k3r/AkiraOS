@@ -28,11 +28,24 @@ LOG_MODULE_REGISTER(akira_runtime, CONFIG_AKIRA_LOG_LEVEL);
 #define OCRE_IMAGE_PATH "/lfs/ocre/images"
 #define OCRE_WORKDIR "/lfs/ocre"
 #define MAX_PATH_LEN 64
+#define MAX_CONTAINERS 8
+
+/* ===== Container Registry ===== */
+
+typedef struct {
+    int id;
+    struct ocre_container *container;
+    char name[32];
+    bool in_use;
+} container_entry_t;
 
 /* ===== Static State ===== */
 
 static struct ocre_context *g_ctx = NULL;
 static bool g_initialized = false;
+static container_entry_t g_containers[MAX_CONTAINERS] = {0};
+static int g_container_counter = 0;
+static K_MUTEX_DEFINE(g_container_lock);
 
 /* ===== Initialization ===== */
 
@@ -82,7 +95,68 @@ bool akira_runtime_is_initialized(void)
     return g_initialized;
 }
 
-/* ===== Binary Management ===== */
+/* ===== Container Registry Helpers ===== */
+
+/**
+ * @brief Get container pointer from registry by ID
+ */
+static struct ocre_container *get_container(int id)
+{
+    if (id <= 0 || id > g_container_counter)
+        return NULL;
+    
+    container_entry_t *e = &g_containers[id % MAX_CONTAINERS];
+    if (e->id == id && e->in_use)
+        return e->container;
+    
+    return NULL;
+}
+
+/**
+ * @brief Register container in registry and return ID
+ */
+static int register_container(struct ocre_container *container, const char *name)
+{
+    if (!container || !name)
+        return -EINVAL;
+    
+    k_mutex_lock(&g_container_lock, K_FOREVER);
+    
+    int cid = ++g_container_counter;
+    container_entry_t *e = &g_containers[cid % MAX_CONTAINERS];
+    
+    e->id = cid;
+    e->container = container;
+    e->in_use = true;
+    strncpy(e->name, name, sizeof(e->name) - 1);
+    
+    k_mutex_unlock(&g_container_lock);
+    
+    LOG_DBG("Container %d registered: %s", cid, name);
+    return cid;
+}
+
+/**
+ * @brief Unregister container from registry
+ */
+static void unregister_container(int id)
+{
+    if (id <= 0 || id > g_container_counter)
+        return;
+    
+    k_mutex_lock(&g_container_lock, K_FOREVER);
+    
+    container_entry_t *e = &g_containers[id % MAX_CONTAINERS];
+    if (e->id == id && e->in_use) {
+        e->in_use = false;
+        e->container = NULL;
+        LOG_DBG("Container %d unregistered", id);
+    }
+    
+    k_mutex_unlock(&g_container_lock);
+}
+
+
 
 int akira_runtime_save_binary(const char *name, const void *binary, size_t size)
 {
@@ -218,60 +292,92 @@ int akira_runtime_install(const char *name, const void *binary, size_t size)
         return -EIO;
     }
 
-    LOG_INF("Container installed: %s", name);
-    return 0;
+    /* Register container in registry and return ID */
+    int container_id = register_container(container, name);
+    
+    LOG_INF("Container installed: %s (ID=%d)", name, container_id);
+    return container_id;
 }
 
 int akira_runtime_start(int container_id)
 {
-    (void)container_id;
-
     if (!g_initialized)
     {
         LOG_ERR("Runtime not initialized");
         return -ENODEV;
     }
 
-    /* This function would need the container pointer or ID mapping
-     * For now, returning stub
-     */
-    LOG_WRN("akira_runtime_start not fully implemented in new API");
-    return -ENOSYS;
+    struct ocre_container *container = get_container(container_id);
+    if (!container)
+    {
+        LOG_ERR("Container %d not found", container_id);
+        return -ENOENT;
+    }
+
+    int ret = ocre_container_start(container);
+    if (ret == 0) {
+        LOG_INF("Container %d started successfully", container_id);
+    } else {
+        LOG_ERR("Failed to start container %d: %d", container_id, ret);
+    }
+    
+    return ret;
 }
 
 int akira_runtime_stop(int container_id)
 {
-    (void)container_id;
-
     if (!g_initialized)
     {
         LOG_ERR("Runtime not initialized");
         return -ENODEV;
     }
 
-    /* This function would need the container pointer or ID mapping
-     * For now, returning stub
-     */
-    LOG_WRN("akira_runtime_stop not fully implemented in new API");
-    return -ENOSYS;
+    struct ocre_container *container = get_container(container_id);
+    if (!container)
+    {
+        LOG_ERR("Container %d not found", container_id);
+        return -ENOENT;
+    }
+
+    int ret = ocre_container_stop(container);
+    if (ret == 0) {
+        LOG_INF("Container %d stopped successfully", container_id);
+    } else {
+        LOG_ERR("Failed to stop container %d: %d", container_id, ret);
+    }
+    
+    return ret;
 }
 
 int akira_runtime_uninstall(const char *name, int container_id)
 {
-    (void)name;
-    (void)container_id;
-
     if (!g_initialized)
     {
         LOG_ERR("Runtime not initialized");
         return -ENODEV;
     }
 
-    /* This function would need the container pointer or ID mapping
-     * For now, returning stub
-     */
-    LOG_WRN("akira_runtime_uninstall not fully implemented in new API");
-    return -ENOSYS;
+    if (!name)
+    {
+        LOG_ERR("Invalid app name");
+        return -EINVAL;
+    }
+
+    /* Stop container if ID is valid */
+    if (container_id > 0) {
+        struct ocre_container *container = get_container(container_id);
+        if (container) {
+            ocre_container_kill(container);
+            unregister_container(container_id);
+            LOG_DBG("Container %d destroyed", container_id);
+        }
+    }
+
+    /* Delete binary */
+    int ret = akira_runtime_delete_binary(name);
+    
+    LOG_INF("App uninstalled: %s", name);
+    return ret;
 }
 
 int akira_runtime_get_app_count(void)
@@ -287,19 +393,21 @@ int akira_runtime_get_app_count(void)
 
 int akira_runtime_get_app_status(int container_id)
 {
-    (void)container_id;
-
     if (!g_initialized)
     {
         LOG_ERR("Runtime not initialized");
         return -ENODEV;
     }
 
-    /* This function would need the container pointer or ID mapping
-     * For now, returning stub
-     */
-    LOG_WRN("akira_runtime_get_app_status not fully implemented in new API");
-    return -ENOSYS;
+    struct ocre_container *container = get_container(container_id);
+    if (!container)
+    {
+        LOG_ERR("Container %d not found", container_id);
+        return -ENOENT;
+    }
+
+    ocre_container_status_t status = ocre_container_get_status(container);
+    return (int)status;
 }
 
 int akira_runtime_dump_status(void)
@@ -343,17 +451,24 @@ int akira_runtime_destroy(int container_id)
         return -ENODEV;
     }
 
-    if (container_id < 0)
+    struct ocre_container *container = get_container(container_id);
+    if (!container)
     {
-        LOG_ERR("Invalid container ID: %d", container_id);
-        return -EINVAL;
+        LOG_ERR("Container %d not found", container_id);
+        return -ENOENT;
     }
 
-    LOG_INF("Destroying container %d...", container_id);
+    /* Stop if running */
+    ocre_container_status_t status = ocre_container_get_status(container);
+    if (status == OCRE_CONTAINER_STATUS_RUNNING || 
+        status == OCRE_CONTAINER_STATUS_PAUSED) {
+        ocre_container_kill(container);
+        LOG_DBG("Killed running container %d", container_id);
+    }
 
-    /* TODO: Implement container destruction with container ID mapping */
-    /* For now, this is a stub that logs the operation */
-    LOG_WRN("akira_runtime_destroy: container mapping not fully implemented");
+    /* Unregister from our registry */
+    unregister_container(container_id);
     
+    LOG_INF("Container %d destroyed", container_id);
     return 0;
 }

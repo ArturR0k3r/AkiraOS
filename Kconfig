@@ -73,6 +73,20 @@ config AKIRA_MEMORY_PROFILE
       Available via shell: kernel stats command for memory details.
 
 ###############################################################################
+# v1.3.5: UI Framework (Optional)
+###############################################################################
+
+config AKIRA_UI
+    bool "Enable UI Framework"
+    default y
+    depends on DISPLAY
+    help
+      Enable AkiraOS UI Framework for display-based interfaces.
+      Provides widgets, layouts, rendering helpers for LVGL/display apps.
+      Requires display driver (CONFIG_DISPLAY=y).
+      Disable on headless boards to save 2-3KB.
+
+###############################################################################
 # One-Click Feature Enablers
 # These automatically select all required dependencies
 # Inspired by AKIRA_WIFI pattern - enables one feature = all sub-configs auto-set
