@@ -290,3 +290,63 @@ bool akira_storage_exists(const char *path)
     int rc = fs_stat(full_path, &entry);
     return (rc == 0);
 }
+
+/*===========================================================================*/
+/* WASM Wrappers (exported to OCRE)                                          */
+/*===========================================================================*/
+
+#include <wasm_export.h>
+
+int akira_storage_read_wasm(wasm_exec_env_t exec_env, uint32_t path_ptr, uint32_t buf_ptr, int len)
+{
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    if (!module_inst)
+        return -1;
+    
+    const char *path = (const char *)wasm_runtime_addr_app_to_native(module_inst, path_ptr);
+    void *buf = (void *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+    if (!path || !buf)
+        return -1;
+    
+    return akira_storage_read(path, buf, (size_t)len);
+}
+
+int akira_storage_write_wasm(wasm_exec_env_t exec_env, uint32_t path_ptr, uint32_t data_ptr, int len)
+{
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    if (!module_inst)
+        return -1;
+    
+    const char *path = (const char *)wasm_runtime_addr_app_to_native(module_inst, path_ptr);
+    const void *data = (const void *)wasm_runtime_addr_app_to_native(module_inst, data_ptr);
+    if (!path || !data)
+        return -1;
+    
+    return akira_storage_write(path, data, (size_t)len);
+}
+
+int akira_storage_delete_wasm(wasm_exec_env_t exec_env, uint32_t path_ptr)
+{
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    if (!module_inst)
+        return -1;
+    
+    const char *path = (const char *)wasm_runtime_addr_app_to_native(module_inst, path_ptr);
+    if (!path)
+        return -1;
+    
+    return akira_storage_delete(path);
+}
+
+int akira_storage_size_wasm(wasm_exec_env_t exec_env, uint32_t path_ptr)
+{
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    if (!module_inst)
+        return -1;
+    
+    const char *path = (const char *)wasm_runtime_addr_app_to_native(module_inst, path_ptr);
+    if (!path)
+        return -1;
+    
+    return akira_storage_size(path);
+}

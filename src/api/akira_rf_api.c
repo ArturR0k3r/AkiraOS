@@ -8,6 +8,8 @@
 
 LOG_MODULE_REGISTER(akira_rf_api, LOG_LEVEL_INF);
 
+#ifdef CONFIG_AKIRA_RF_MODULE
+
 static akira_rf_chip_t g_active_chip = AKIRA_RF_CHIP_NONE;
 
 // TODO: Add capability check before each API call
@@ -144,3 +146,5 @@ int akira_rf_get_rssi(int16_t *rssi)
     *rssi = -100; // Placeholder
     return -1;    // Not implemented
 }
+
+#endif /* CONFIG_AKIRA_RF_MODULE */

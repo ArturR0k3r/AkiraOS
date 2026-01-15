@@ -2,13 +2,26 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
+# ===== WAMR Configuration Override =====
+# Set WAMR libc configuration BEFORE find_package loads Zephyr modules.
+# For embedded targets (XTENSA, ARM, RISC-V), use builtin libc since WASI libc
+# requires sys/random.h which doesn't exist on embedded systems.
+# This must be done as a cache variable so it persists through module loading.
+
+# These will be overridden by our config in Zephyr module processing,
+# but we set them early to influence CMake's cache
+set(WAMR_BUILD_LIBC_BUILTIN 1 CACHE BOOL "" FORCE)
+set(WAMR_BUILD_LIBC_WASI 0 CACHE BOOL "" FORCE)
+
 # Force disable Kconfig warnings
 set(KCONFIG_WARN_UNDEF OFF CACHE BOOL "Disable Kconfig warnings" FORCE)
 set(KCONFIG_WERROR OFF CACHE BOOL "Disable Kconfig warnings as errors" FORCE)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(akira_os VERSION 1.2.3)
+project(akira_os VERSION 1.3.4)
 
+# Add AkiraOS include directory to all targets for sys/random.h shim
+include_directories(BEFORE SYSTEM ${CMAKE_CURRENT_LIST_DIR}/include)
 
 # Set default board
 set(BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR}/boards)
@@ -22,20 +35,11 @@ set(BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR}/boards)
 # endif()
 
 # OCRE Integration
-set(OCRE_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/../ocre")
-
-if(EXISTS "${OCRE_ROOT_DIR}/src")
-    include("${CMAKE_CURRENT_LIST_DIR}/modules/ocre/ocre.cmake")
-    target_sources(app PRIVATE ${ocre_component_sources} ${ocre_lib_sources})
-    target_include_directories(app PRIVATE
-        ${OCRE_ROOT_DIR}/src/
-        ${OCRE_ROOT_DIR}/src/ocre
-        ${OCRE_ROOT_DIR}/src/shared/platform
-    )
-    target_compile_definitions(app PRIVATE CONFIG_OCRE_ENABLE=1)
-    # Enable OCRE logging (force INFO level since OCRE Kconfig isn't sourced)
-    target_compile_definitions(app PRIVATE CONFIG_OCRE_LOG_INF=1)
-endif()
+# Note: OCRE is integrated as a Zephyr module and will be automatically
+# built through the module system. The ocre/ directory is registered as a
+# west project in west.yml and will be discovered and built by Zephyr.
+# The CONFIG_OCRE gate in modules/ocre/CMakeLists.txt prevents it from being
+# built during MCUBoot builds (via the mcuboot_disable_ocre.conf override).
 
 # Akira Module System (Core functionality, not third-party)
 if(CONFIG_AKIRA_MODULE)
@@ -63,13 +67,19 @@ target_sources(app PRIVATE
 target_sources(app PRIVATE
     src/akira/akira_native_exports.c
     src/api/akira_display_api.c
-    src/api/akira_input_api.c
-    src/api/akira_rf_api.c
-    src/api/akira_sensor_api.c
+    src/api/akira_hid_api.c
     src/api/akira_storage_api.c
     src/api/akira_network_api.c
-    src/api/akira_system_api.c
 )
+
+# v1.3.4: Optional API Modules (conditional compilation)
+if(CONFIG_AKIRA_RF_MODULE)
+    target_sources(app PRIVATE src/api/akira_rf_api.c)
+endif()
+
+if(CONFIG_AKIRA_SYSTEM_MODULE)
+    target_sources(app PRIVATE src/api/akira_system_api.c)
+endif()
 
 # Security Layer
 target_sources(app PRIVATE
@@ -94,15 +104,12 @@ target_sources(app PRIVATE
     src/resource/scheduler.c
 )
 
-# UI Framework
-target_sources(app PRIVATE
-    src/ui/ui_framework.c
-)
+# UI Framework (optional - depends on display being available)
+if(CONFIG_AKIRA_UI)
+    target_sources(app PRIVATE src/ui/ui_framework.c)
+endif()
 
-# App Loader
-target_sources(app PRIVATE
-    src/apps/app_loader.c
-)
+# App Loader (merged into App Manager)
 
 # ===== Core Libraries =====
 # Shared utilities used across modules
@@ -280,6 +287,11 @@ target_sources(app PRIVATE
     src/services/akira_runtime.c
 )
 
+# OCRE integration (only for main app, not for MCUBoot bootloader)
+if(CONFIG_OCRE)
+    target_sources(app PRIVATE src/services/ocre_wasm_integration.c)
+endif()
+
 # Filesystem Manager (MUST be before App Manager)
 target_sources(app PRIVATE src/storage/fs_manager.c)
 
@@ -327,9 +339,12 @@ target_include_directories(app PRIVATE
     src/shell/
     src/storage/
     src/ui/
-    # REMOVED - OCRE provides WAMR includes
-    # ${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime/core/iwasm/include
-    # ${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime/core/shared/utils
+    # OCRE headers - use include subdirectory to get public headers
+    ../ocre/src/ocre/include
+    ../ocre/src/runtime/include
+    # WAMR headers needed for native exports
+    ../ocre/wasm-micro-runtime/core/iwasm/include
+    ../ocre/wasm-micro-runtime/core/shared/utils
 )
 
 # SDL2 simulator uses external viewer (tools/akira_viewer)
@@ -341,6 +356,55 @@ target_include_directories(app PRIVATE
 # Compile definitions
 target_compile_definitions(app PRIVATE
     AKIRA_VERSION_MAJOR=1
-    AKIRA_VERSION_MINOR=2
-    AKIRA_VERSION_PATCH=3
+    AKIRA_VERSION_MINOR=3
+    AKIRA_VERSION_PATCH=4
 )
+
+# Link OCRE libraries if OCRE is enabled
+if(CONFIG_OCRE)
+    message(STATUS "[OCRE] Creating imported targets for OCRE libraries")
+    
+    set(OCRE_LIB_DIR "${CMAKE_BINARY_DIR}/modules/ocre")
+    
+    # Create IMPORTED targets for each OCRE library
+    # This allows CMake to treat them as proper targets even though they're external
+    add_library(OcreCore_imported STATIC IMPORTED)
+    set_target_properties(OcreCore_imported PROPERTIES
+        IMPORTED_LOCATION "${OCRE_LIB_DIR}/ocre-core/libOcreCore.a"
+    )
+    
+    add_library(OcrePlatform_imported STATIC IMPORTED)
+    set_target_properties(OcrePlatform_imported PROPERTIES
+        IMPORTED_LOCATION "${OCRE_LIB_DIR}/ocre-zephyr/libOcrePlatform.a"
+    )
+    
+    add_library(OcreRuntimeWamr_imported STATIC IMPORTED)
+    set_target_properties(OcreRuntimeWamr_imported PROPERTIES
+        IMPORTED_LOCATION "${OCRE_LIB_DIR}/ocre-runtime-wamr-wasip1/libOcreRuntimeWamr.a"
+    )
+    
+    add_library(OcreRuntimeAPI_imported STATIC IMPORTED)
+    set_target_properties(OcreRuntimeAPI_imported PROPERTIES
+        IMPORTED_LOCATION "${OCRE_LIB_DIR}/ocre-runtime-wamr-wasip1/ocre_api/libOcreRuntimeAPI.a"
+    )
+    
+    add_library(vmlib_imported STATIC IMPORTED)
+    set_target_properties(vmlib_imported PROPERTIES
+        IMPORTED_LOCATION "${OCRE_LIB_DIR}/libvmlib.a"
+    )
+    
+    # Now link them to app as proper targets
+    target_link_libraries(app PRIVATE
+        OcreCore_imported
+        OcrePlatform_imported
+        OcreRuntimeWamr_imported
+        OcreRuntimeAPI_imported
+        vmlib_imported
+    )
+    
+    message(STATUS "[OCRE] OCRE libraries linked successfully")
+    
+    if(CONFIG_OCRE_SHELL)
+        # TODO: Add shell library linking if needed
+    endif()
+endif()

@@ -10,8 +10,8 @@ manifest:
       
     # OCRE Runtime 
     - name: project-ocre
-      revision: main
-      url: https://github.com/project-ocre/ocre-runtime
+      revision: OCRE-NEW
+      url: https://github.com/ArturR0k3r/ocre-runtime
       path: ocre
       
   self:

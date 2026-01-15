@@ -327,6 +327,19 @@ extern "C"
     int app_manager_scan_dir(const char *path, char names[][APP_NAME_MAX_LEN],
                              int max_count);
 
+    /* ===== App Loading Functions (Merged from app_loader) ===== */
+
+    /**
+     * @brief Load and install app from file
+     *
+     * Merged from legacy app_loader.c - loads WASM from file path.
+     * This is equivalent to app_manager_install_from_path().
+     *
+     * @param path Path to .wasm file
+     * @return App ID (>= 0) on success, negative on error
+     */
+    int app_load_from_file(const char *path);
+
     /* ===== Callbacks ===== */
 
     /**
