@@ -1,0 +1,4 @@
+[submodule "modules/wasm-micro-runtime"]
+	path = modules/wasm-micro-runtime
+	url = https://github.com/project-ocre/wasm-micro-runtime.git
+	branch = main
