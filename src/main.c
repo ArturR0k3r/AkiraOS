@@ -14,8 +14,10 @@
 /* Connectivity */
 #ifdef CONFIG_WIFI
 #include <zephyr/net/wifi_mgmt.h>
+#if defined(CONFIG_NETWORKING)
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/net_mgmt.h>
+#endif
 #endif
 #ifdef CONFIG_BT
 #include "connectivity/bluetooth/bt_manager.h"
@@ -63,30 +65,25 @@ LOG_MODULE_REGISTER(akira_main, CONFIG_AKIRA_LOG_LEVEL);
 
 int main(void)
 {
+    k_sleep(K_MSEC(50));
     printk("\n════════════════════════════════════════\n");
-    printk("          AkiraOS v1.3.0\n");
+    printk("          AkiraOS v1.3.8\n");
     printk("   Modular Embedded Operating System\n");
-    printk("════════════════════════════════════════\n\n");
-    LOG_INF("Build: %s %s", __DATE__, __TIME__);
+    printk("════════════════════════════════════════\n");
+    LOG_INF("AkiraOS init start (build %s %s)", __DATE__, __TIME__);
 
-    /* Hardware initialization */
-    if (akira_hal_init() < 0)
-    {
-        LOG_ERR("HAL init failed");
-        return -1;
-    }
-
+    /* Driver registry */
     if (driver_registry_init() < 0)
     {
-        LOG_ERR("Driver registry failed");
-        return -1;
+        LOG_ERR("❌ Driver registry failed - check driver_registry.c");
+        /* Don't return, try to continue */
     }
 
     /* Storage (optional) */
 #ifdef CONFIG_FILE_SYSTEM
     if (fs_manager_init() < 0)
     {
-        LOG_WRN("Storage init failed");
+        LOG_WRN("⚠️ Storage init failed");
     }
 #endif
 
@@ -94,20 +91,16 @@ int main(void)
 #ifdef CONFIG_AKIRA_SETTINGS
     if (user_settings_init() < 0)
     {
-        LOG_WRN("Settings init failed");
+        LOG_WRN("⚠️ Settings init failed");
     }
 #endif
 
     /* WiFi (optional) */
-#ifdef CONFIG_WIFI
+#if defined(CONFIG_WIFI) && defined(CONFIG_NETWORKING)
     struct net_if *iface = net_if_get_default();
-    if (iface)
+    if (!iface)
     {
-        LOG_INF("WiFi interface ready");
-    }
-    else
-    {
-        LOG_WRN("No WiFi interface found");
+        LOG_WRN("⚠️ No WiFi interface found");
     }
 #endif
 
@@ -122,7 +115,7 @@ int main(void)
         .pairable = true};
     if (bt_manager_init(&bt_cfg) < 0)
     {
-        LOG_WRN("Bluetooth init failed");
+        LOG_WRN("⚠️ Bluetooth init failed");
     }
 
     /* HID subsystem initialization */
@@ -137,7 +130,7 @@ int main(void)
 
     if (hid_manager_init(&hid_cfg) < 0)
     {
-        LOG_WRN("HID manager init failed");
+        LOG_WRN("⚠️ HID manager init failed");
     }
 
 #ifdef CONFIG_AKIRA_HID_SIM
@@ -164,7 +157,11 @@ int main(void)
         .classes = USB_CLASS_ALL};
     if (usb_manager_init(&usb_cfg) < 0)
     {
-        LOG_WRN("USB init failed");
+        LOG_WRN("⚠️ USB init failed");
+    }
+    else
+    {
+        LOG_INF("✅ USB initialized");
     }
 #endif
 
@@ -172,15 +169,17 @@ int main(void)
 #ifdef CONFIG_AKIRA_OTA
     if (ota_manager_init() < 0)
     {
-        LOG_ERR("OTA manager init failed");
+        LOG_ERR("❌ OTA manager init failed");
     }
 #endif
 
     /* App manager (optional) - includes runtime initialization */
 #ifdef CONFIG_AKIRA_APP_MANAGER
-    if (app_manager_init() < 0)
+    int app_mgr_ret = app_manager_init();
+    if (app_mgr_ret < 0)
     {
-        LOG_WRN("App manager failed");
+        LOG_ERR("❌❌❌ FATAL: App manager init failed with %d", app_mgr_ret);
+        LOG_WRN("App manager unavailable - app install/start will fail");
     }
 #endif
 
@@ -188,7 +187,7 @@ int main(void)
 #ifdef CONFIG_AKIRA_SHELL
     if (akira_shell_init() < 0)
     {
-        LOG_WRN("Shell init failed");
+        LOG_WRN("⚠️ Shell init failed");
     }
 #endif
 
@@ -196,11 +195,11 @@ int main(void)
 #ifdef CONFIG_AKIRA_HTTP_SERVER
     if (web_server_start(NULL) < 0)
     {
-        LOG_WRN("Web server init failed");
+        LOG_WRN("⚠️ Web server init failed");
     }
 #endif
 
-    LOG_INF("✅ AkiraOS is ready");
+    LOG_INF("AkiraOS init complete");
 
     /* Main loop - just sleep */
     while (1)

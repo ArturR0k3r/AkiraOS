@@ -113,7 +113,7 @@ Ability to identify which WASM app is making a call.
 **Requirements:**
 - [ ] Get caller app ID from WASM runtime context
 - [ ] Thread-local storage for current app ID
-- [ ] Integration with OCRE/WAMR context APIs
+- [ ] Integration with WAMR context APIs
 - [ ] Helper function: `int wasm_get_current_app_id(void)`
 
 **Use Cases:**
@@ -123,7 +123,7 @@ Ability to identify which WASM app is making a call.
 - Resource quota enforcement (per-app limits)
 
 **Blocked By:**
-- OCRE library API research needed
+- WAMR library API research needed
 - May require WAMR native function enhancement
 
 ---

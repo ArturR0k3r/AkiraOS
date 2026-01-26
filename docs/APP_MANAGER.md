@@ -2,7 +2,7 @@
 
 ## Overview
 
-The App Manager is a lightweight WebAssembly application management system built on top of OCRE (Open Container Runtime for Embedded). It provides installation, lifecycle management, and resource control for WASM applications on resource-constrained devices.
+The App Manager is a lightweight WebAssembly application management system built on top of WASM Micro Runtime (WAMR). It provides installation, lifecycle management, and resource control for WASM applications on resource-constrained devices.
 
 ## Toolchain Setup
 
@@ -153,7 +153,7 @@ Compile with:
                                               │
                                               ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              OCRE RUNTIME                                    │
+│                              WAMR RUNTIME                                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
 │  │                    WAMR (WebAssembly Micro Runtime)                 │    │
@@ -523,10 +523,8 @@ CONFIG_AKIRA_WAMR_MINI_LOADER=y
 CONFIG_AKIRA_WAMR_MINIMAL=y
 
 # Reduced memory settings
-CONFIG_OCRE_WAMR_HEAP_BUFFER_SIZE=8192
-CONFIG_OCRE_CONTAINER_DEFAULT_STACK_SIZE=2048
-CONFIG_OCRE_CONTAINER_DEFAULT_HEAP_SIZE=8192
-CONFIG_MAX_CONTAINERS=2
+CONFIG_WAMR_HEAP_SIZE=8192
+CONFIG_WAMR_STACK_SIZE=2048
 ```
 
 | Platform | Flash | RAM | WAMR Mode | Max Containers | Status |

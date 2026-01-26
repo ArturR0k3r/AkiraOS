@@ -52,7 +52,7 @@ cd samples/wasm_apps/hello_world
 // Declare external env module functions
 extern int putchar(int c);
 
-// OR for OCRE APIs
+// OR for AkiraOS APIs
 #include "akira_api.h"
 
 int main(void) {
@@ -147,7 +147,7 @@ clean:
 | App | Location | Size | Features |
 |-----|----------|------|----------|
 | hello_world | `samples/wasm_apps/hello_world/` | ~382B | Minimal, putchar only |
-| sensor_demo | `samples/wasm_apps/sensor_demo/` | ~1-2KB | OCRE sensor API |
+| sensor_demo | `samples/wasm_apps/sensor_demo/` | ~1-2KB | WAMR sensor API |
 | blink_led | `samples/wasm_apps/blink_led/` | ~1-2KB | GPIO control |
 
 ## Common Issues

@@ -2,7 +2,17 @@
  * @file app_manager.c
  * @brief AkiraOS App Manager Implementation
  *
- * Core app management: registry, lifecycle, installation, crash handling.
+ * Unified app management: installation, lifecycle, registry, and loading.
+ *
+ * INTEGRATED COMPONENTS:
+ * - App installation and registry (persistent storage)
+ * - App lifecycle management (start/stop/restart)
+ * - App loading from files/buffers (merged from app_loader)
+ * - Metadata parsing and signature verification
+ * - OCRE runtime integration for execution
+ *
+ * NOTE: app_loader.c is deprecated and removed. All app loading
+ * functionality is now handled by this unified app_manager.
  */
 
 #include "app_manager.h"
@@ -19,9 +29,10 @@ LOG_MODULE_REGISTER(app_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 /* ===== Configuration ===== */
 
-#define REGISTRY_PATH "/lfs/apps/registry.bin"
-#define APPS_DIR "/lfs/apps"
-#define APP_DATA_DIR "/lfs/app_data"
+/* Store everything in WASM directory */
+#define REGISTRY_PATH "/lfs/wasm/registry.bin"
+#define APPS_DIR "/lfs/wasm/apps"
+#define APP_DATA_DIR "/lfs/wasm/app_data"
 #define REGISTRY_MAGIC 0x414B4150 /* "AKAP" */
 #define REGISTRY_VERSION 1
 #define MAX_WASM_MAGIC 8
@@ -77,7 +88,6 @@ static app_entry_t *find_app_by_name(const char *name);
 static app_entry_t *find_free_slot(void);
 static int validate_wasm(const void *binary, size_t size);
 static int save_app_binary(const char *name, const void *binary, size_t size);
-static int delete_app_binary(const char *name);
 static void set_app_state(app_entry_t *app, app_state_t new_state);
 static void restart_work_handler(struct k_work *work);
 static int ensure_dirs_exist(void);
@@ -92,9 +102,9 @@ int app_manager_init(void)
         return 0;
     }
 
-    LOG_INF("Initializing App Manager");
+    LOG_INF("App Manager init start");
 
-    /* Initialize Akira runtime (OCRE + storage) */
+    /* Initialize Akira runtime (WASM + storage) */
     int ret = akira_runtime_init();
     if (ret < 0)
     {
@@ -119,7 +129,7 @@ int app_manager_init(void)
     ret = registry_load();
     if (ret < 0)
     {
-        LOG_WRN("No registry found or load failed, starting fresh");
+        LOG_DBG("No registry found or load failed, starting fresh");
     }
     else
     {
@@ -130,7 +140,7 @@ int app_manager_init(void)
     k_work_init_delayable(&g_restart_work, restart_work_handler);
 
     g_initialized = true;
-    LOG_INF("App Manager initialized, %d/%d slots used",
+    LOG_INF("App Manager ready (%d/%d slots used)",
             g_app_count, CONFIG_AKIRA_APP_MAX_INSTALLED);
 
     return 0;
@@ -188,13 +198,6 @@ int app_manager_install(const char *name, const void *binary, size_t size,
     {
         LOG_ERR("Invalid WASM binary");
         return ret;
-    }
-
-    /* Check size limit */
-    if (size > CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024)
-    {
-        LOG_ERR("App too large: %zu > %dKB", size, CONFIG_AKIRA_APP_MAX_SIZE_KB);
-        return -EFBIG;
     }
 
     k_mutex_lock(&g_registry_mutex, K_FOREVER);
@@ -265,7 +268,7 @@ int app_manager_install(const char *name, const void *binary, size_t size,
         {
             g_app_count--;
         }
-        existing->name[0] = '\0';  /* Clear name on failure */
+        existing->name[0] = '\0'; /* Clear name on failure */
         k_mutex_unlock(&g_registry_mutex);
         return ret;
     }
@@ -322,12 +325,6 @@ int app_manager_install_from_path(const char *path)
     {
         LOG_ERR("Failed to get size of %s: %zd", path, size);
         return (int)size;
-    }
-
-    if (size > CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024)
-    {
-        LOG_ERR("App too large: %zd bytes", size);
-        return -EFBIG;
     }
 
     /* Allocate buffer */
@@ -790,8 +787,19 @@ void app_manager_register_state_cb(app_state_change_cb_t callback, void *user_da
 
 int app_manager_install_begin(const char *name, size_t total_size, app_source_t source)
 {
-    if (!g_initialized || !name || total_size == 0)
+    if (!g_initialized)
     {
+        LOG_ERR("App manager not initialized");
+        return -EINVAL;
+    }
+    if (!name)
+    {
+        LOG_ERR("App name is null");
+        return -EINVAL;
+    }
+    if (total_size == 0)
+    {
+        LOG_ERR("Total size is 0");
         return -EINVAL;
     }
 
@@ -1015,10 +1023,6 @@ int app_manifest_parse(const char *json, size_t json_len, app_manifest_t *out_ma
         }
     }
 
-    LOG_DBG("Parsed manifest: name=%s, version=%s, heap=%dKB, stack=%dKB",
-            out_manifest->name, out_manifest->version,
-            out_manifest->heap_kb, out_manifest->stack_kb);
-
     return 0;
 }
 
@@ -1068,20 +1072,9 @@ const char *app_source_to_str(app_source_t source)
 
 static int ensure_dirs_exist(void)
 {
-    /* Use fs_manager to create directories - it handles RAM fallback */
-    int ret = fs_manager_mkdir(APPS_DIR);
-    if (ret < 0 && ret != -EEXIST)
-    {
-        LOG_WRN("Failed to create %s: %d (using RAM fallback)", APPS_DIR, ret);
-        /* Continue anyway - fs_manager will use RAM if no persistent storage */
-    }
-
-    ret = fs_manager_mkdir(APP_DATA_DIR);
-    if (ret < 0 && ret != -EEXIST)
-    {
-        LOG_WRN("Failed to create %s: %d (using RAM fallback)", APP_DATA_DIR, ret);
-    }
-
+    /* NOTE: akira_runtime_init already creates /lfs/wasm and /lfs/wasm/apps.
+     * Directory creation is handled by the runtime initialization.
+     * LittleFS handles auto-format and recovery. */
     return 0;
 }
 
@@ -1089,11 +1082,10 @@ static int registry_load(void)
 {
     /* Try to read registry using fs_manager (handles RAM fallback) */
     uint8_t buffer[sizeof(registry_header_t) + CONFIG_AKIRA_APP_MAX_INSTALLED * sizeof(app_entry_t)];
-    
+
     ssize_t read = fs_manager_read_file(REGISTRY_PATH, buffer, sizeof(buffer));
     if (read < (ssize_t)sizeof(registry_header_t))
     {
-        LOG_DBG("No registry found or too small: %zd", read);
         return -ENOENT;
     }
 
@@ -1226,31 +1218,37 @@ static int save_app_binary(const char *name, const void *binary, size_t size)
     // LOG_INF("name: %s", name ? name : "NULL");
     // LOG_INF("binary ptr: %p", binary);
     // LOG_INF("size: %zu", size);
-    
-    if (!name) {
+
+    if (!name)
+    {
         LOG_ERR("INVALID: name is NULL");
         return -EINVAL;
     }
-    
-    if (!binary) {
+
+    if (!binary)
+    {
         LOG_ERR("INVALID: binary pointer is NULL");
         return -EINVAL;
     }
-    
-    if (size == 0) {
+
+    if (size == 0)
+    {
         LOG_ERR("INVALID: size is zero");
         return -EINVAL;
     }
-    
+
     /* Verify WASM magic bytes */
     const uint8_t *data = (const uint8_t *)binary;
     LOG_INF("First 4 bytes: 0x%02x 0x%02x 0x%02x 0x%02x", data[0], data[1], data[2], data[3]);
-    if (size >= 4 && data[0] == 0x00 && data[1] == 0x61 && data[2] == 0x73 && data[3] == 0x6D) {
+    if (size >= 4 && data[0] == 0x00 && data[1] == 0x61 && data[2] == 0x73 && data[3] == 0x6D)
+    {
         LOG_INF("✅ Valid WASM magic number");
-    } else {
+    }
+    else
+    {
         LOG_WRN("❌ Invalid WASM magic number");
     }
-    
+
     /* Find ID for this app */
     app_entry_t *app = find_app_by_name(name);
     uint8_t id = app ? app->id : (g_app_count + 1);
@@ -1274,32 +1272,6 @@ static int save_app_binary(const char *name, const void *binary, size_t size)
     }
 
     LOG_INF("Saved app binary: %s (%zu bytes)", path, size);
-    return 0;
-}
-
-static int delete_app_binary(const char *name)
-{
-    app_entry_t *app = find_app_by_name(name);
-    if (!app)
-    {
-        return -ENOENT;
-    }
-
-    char path[APP_PATH_MAX_LEN];
-    snprintf(path, sizeof(path), "%s/%03d_%s.wasm", APPS_DIR, app->id, name);
-
-    /* Use fs_manager to delete (handles RAM storage too) */
-    int ret = fs_manager_delete_file(path);
-    if (ret < 0 && ret != -ENOENT)
-    {
-        LOG_ERR("Failed to delete %s: %d", path, ret);
-        return ret;
-    }
-
-    /* Also delete app data directory */
-    snprintf(path, sizeof(path), "%s/%s", APP_DATA_DIR, name);
-    fs_manager_delete_file(path); /* Ignore error */
-
     return 0;
 }
 

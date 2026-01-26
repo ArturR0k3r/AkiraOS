@@ -14,27 +14,14 @@ project(akira_os VERSION 1.2.3)
 set(BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR}/boards)
 # set(DTC_OVERLAY_FILE ${CMAKE_CURRENT_LIST_DIR}/akira.overlay)  # Not needed, handled by board overlay
 
-# REMOVED - Using OCRE's WAMR instead
-# # Include WASM Micro Runtime if available
-# if(EXISTS ${CMAKE_CURRENT_LIST_DIR}/modules/wamr)
-#     add_subdirectory(modules/wamr/product/zephyr)
-#     target_compile_definitions(app PRIVATE CONFIG_WAMR_ENABLE=1)
-# endif()
+# WASM Micro Runtime Integration (as submodule)
+set(WAMR_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime")
 
-# OCRE Integration
-set(OCRE_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/../ocre")
-
-if(EXISTS "${OCRE_ROOT_DIR}/src")
-    include("${CMAKE_CURRENT_LIST_DIR}/modules/ocre/ocre.cmake")
-    target_sources(app PRIVATE ${ocre_component_sources} ${ocre_lib_sources})
-    target_include_directories(app PRIVATE
-        ${OCRE_ROOT_DIR}/src/
-        ${OCRE_ROOT_DIR}/src/ocre
-        ${OCRE_ROOT_DIR}/src/shared/platform
-    )
-    target_compile_definitions(app PRIVATE CONFIG_OCRE_ENABLE=1)
-    # Enable OCRE logging (force INFO level since OCRE Kconfig isn't sourced)
-    target_compile_definitions(app PRIVATE CONFIG_OCRE_LOG_INF=1)
+if(EXISTS "${WAMR_ROOT_DIR}/product/zephyr/CMakeLists.txt")
+    add_subdirectory(${WAMR_ROOT_DIR}/product/zephyr wasm-micro-runtime)
+    target_compile_definitions(app PRIVATE CONFIG_WAMR_ENABLE=1)
+else()
+    message(WARNING "WASM Micro Runtime not found at ${WAMR_ROOT_DIR}. WASM support will be disabled.")
 endif()
 
 # Akira Module System (Core functionality, not third-party)
@@ -275,7 +262,7 @@ if(CONFIG_AKIRA_CLOUD_CLIENT)
     endif()
 endif()
 
-# Services (OCRE/WASM runtime wrapper)
+# Services (WASM runtime wrapper)
 target_sources(app PRIVATE
     src/services/akira_runtime.c
 )

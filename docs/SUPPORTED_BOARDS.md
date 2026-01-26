@@ -163,7 +163,7 @@ west flash -d build-steval_stwinbx1
 - ❌ WiFi 802.11 b/g/n - **MXCHIP driver not available in Zephyr**
 - ❌ Bluetooth LE 5.0 - **MXCHIP driver required**
 - ❌ Web Server - **Requires WiFi/networking**
-- ❌ OCRE/WASM - **WAMR needs sockets (requires networking)**
+- ❌ WASM Support - **WAMR needs sockets (requires networking)**
 - ❌ OTA Updates - **Requires networking**
 
 ### Known Limitations & Blockers

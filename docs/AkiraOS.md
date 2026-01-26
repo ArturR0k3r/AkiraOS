@@ -4,9 +4,9 @@
 ┌─────────────────────────────┐
 │      AkiraOS WASM Apps      │ ← Games, Tools, Utilities, User Apps
 ├─────────────────────────────┤
-│      OCRE Runtime           │ ← Open Container Runtime (OCI/WASM), Security, Sandboxing
+│      Akira Runtime (WAMR)   │ ← WebAssembly execution, App sandbox
 ├─────────────────────────────┤
-│    WASM-Micro-RT            │ ← WASM Execution Environment for OCRE
+│    WASM-Micro-RT            │ ← WASM Execution Engine for embedded
 ├─────────────────────────────┤
 │      Akira Shell            │ ← Command-line, Debug Console, Scripting
 ├─────────────────────────────┤
