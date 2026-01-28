@@ -11,6 +11,10 @@
         rng0 = &rng_device;
         led0 = &green_led_1;
         led1 = &red_led_1;
+        /* Provide a generic gpio0 alias so code using DT_NODELABEL(gpio0)
+         * can find the appropriate GPIO controller on this board (gpioc)
+         */
+        gpio0 = &gpioc;
     };
 
     leds {

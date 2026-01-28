@@ -38,14 +38,9 @@ west update
 
 **What `west update` does:**
 - Fetches Zephyr RTOS v4.3.0
-- Fetches WASM Micro Runtime from [project-ocre/wasm-micro-runtime](https://github.com/project-ocre/wasm-micro-runtime)
-- Downloads all Zephyr modules and dependencies
+ Fetches WASM Micro Runtime from [wasm-micro-runtime]https://github.com/bytecodealliance/wasm-micro-runtime
+ 
 
-### Step 3: Fetch ESP32 Binary Blobs
-
-Required for ESP32/ESP32-S3/ESP32-C3 platforms:
-
-```bash
 west blobs fetch hal_espressif
 ```
 
@@ -129,7 +124,6 @@ use west commands directly or modify the script.
 │   ├── src/                    # Application source
 │   ├── boards/                 # Board-specific overlays
 │   ├── modules/                # Local modules
-│   │   ├── ocre/              # OCRE integration (CMake only)
 │   │   └── wasm-micro-runtime/ # WAMR module
 │   ├── build_*.sh              # Build scripts
 │   ├── flash.sh                # Flash script
@@ -139,8 +133,7 @@ use west commands directly or modify the script.
 ├── build_esp32/                # ESP32 build output
 ├── build_esp32c3/              # ESP32-C3 build output
 ├── zephyr/                     # Zephyr RTOS (fetched by west)
-├── ocre/                       # OCRE runtime (fetched by west)
-│   └── wasm-micro-runtime/    # WAMR submodule (in ocre)
+├── wasm-micro-runtime/         # WAMR submodule 
 ├── bootloader/                 # MCUboot (fetched by west)
 ├── modules/                    # Zephyr modules (fetched by west)
 └── tools/                      # Build tools (fetched by west)
@@ -238,7 +231,6 @@ After setup, check out:
 - **[README.md](README.md)** - Project overview
 - **[docs/api-reference.md](docs/api-reference.md)** - System APIs
 - **[docs/AkiraOS.md](docs/AkiraOS.md)** - Architecture details
-- **[src/services/ocre_runtime.c](src/services/ocre_runtime.c)** - OCRE integration example
 
 ---
 

@@ -111,7 +111,7 @@ show_banner() {
   / ___ \|   <| | | | (_| | |_| |___) |
  /_/   \_\_|\_\_|_|  \__,_|\___/|____/ 
                                        
-         Unified Build System v2.0
+         Unified Build System v1.4.x
 EOF
     echo -e "${NC}"
 }

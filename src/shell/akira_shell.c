@@ -17,7 +17,7 @@
 #include "shell_display.h"
 #include "../drivers/platform_hal.h"
 #include "../settings/settings.h"
-#include "../OTA/web_server.h"
+#include "../connectivity/ota/web_server.h"
 #if defined(CONFIG_BT)
 #include "connectivity/bluetooth/bt_manager.h"
 #if defined(CONFIG_AKIRA_BT_ECHO)
@@ -44,10 +44,10 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #include <ff.h>
-#include "akira/akira.h"
+#include "akira.h"
 #include "../storage/fs_manager.h"
 #ifdef CONFIG_AKIRA_APP_MANAGER
-#include "../services/app_manager.h"
+#include <runtime/app_manager/app_manager.h>
 #endif
 #if defined(CONFIG_AKIRA_APP_SOURCE_SD)
 #include "../connectivity/storage/sd_manager.h"
@@ -1266,7 +1266,7 @@ static int cmd_ble_shell(const struct shell *shell, size_t argc, char **argv)
 SHELL_CMD_REGISTER(ble_shell, NULL, "Send shell command to phone via BLE", cmd_ble_shell);
 #endif
 
-#if defined(CONFIG_BT)
+#if defined(CONFIG_BT) && defined(CONFIG_AKIRA_BT_HID)
 /* ===== Bluetooth commands ===== */
 static int cmd_bt_info(const struct shell *sh, size_t argc, char **argv)
 {
@@ -1730,44 +1730,45 @@ static int cmd_hwtest(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "  Akira-Micro Hardware Test");
     shell_print(sh, "===========================================\n");
 
-    const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
-    if (!device_is_ready(gpio_dev))
+    const struct device *gpio_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(gpio0));
+    if (!gpio_dev || !device_is_ready(gpio_dev))
     {
-        shell_error(sh, "GPIO device not ready");
-        return -ENODEV;
+        shell_warn(sh, "GPIO0 not present or not ready - skipping GPIO tests");
     }
-
-    /* Test 1: LED Blink */
-    shell_print(sh, "Test 1: Status LED (GPIO32)");
-    gpio_pin_configure(gpio_dev, 32, GPIO_OUTPUT_ACTIVE);
-
-    for (int i = 0; i < 5; i++)
+    else
     {
-        gpio_pin_set(gpio_dev, 32, 1);
-        k_msleep(200);
-        gpio_pin_set(gpio_dev, 32, 0);
-        k_msleep(200);
-    }
-    shell_print(sh, "  ✓ LED test complete\n");
+        /* Test 1: LED Blink */
+        shell_print(sh, "Test 1: Status LED (GPIO32)");
+        gpio_pin_configure(gpio_dev, 32, GPIO_OUTPUT_ACTIVE);
 
-    /* Test 2: Button States */
-    shell_print(sh, "Test 2: Button States");
-    const int button_pins[] = {35, 34, 39, 36, 14, 13};
-    const char *button_names[] = {"KEY1", "KEY2", "KEY3", "KEY4", "KEY5", "KEY6"};
+        for (int i = 0; i < 5; i++)
+        {
+            gpio_pin_set(gpio_dev, 32, 1);
+            k_msleep(200);
+            gpio_pin_set(gpio_dev, 32, 0);
+            k_msleep(200);
+        }
+        shell_print(sh, "  ✓ LED test complete\n");
 
-    for (int i = 0; i < 6; i++)
-    {
-        gpio_pin_configure(gpio_dev, button_pins[i], GPIO_INPUT | GPIO_PULL_UP);
-    }
+        /* Test 2: Button States */
+        shell_print(sh, "Test 2: Button States");
+        const int button_pins[] = {35, 34, 39, 36, 14, 13};
+        const char *button_names[] = {"KEY1", "KEY2", "KEY3", "KEY4", "KEY5", "KEY6"};
 
-    shell_print(sh, "  Reading button states (press buttons to test):");
-    for (int i = 0; i < 6; i++)
-    {
-        int val = gpio_pin_get(gpio_dev, button_pins[i]);
-        shell_print(sh, "    %s (GPIO%d): %s", button_names[i], button_pins[i],
-                    val ? "Released" : "PRESSED");
+        for (int i = 0; i < 6; i++)
+        {
+            gpio_pin_configure(gpio_dev, button_pins[i], GPIO_INPUT | GPIO_PULL_UP);
+        }
+
+        shell_print(sh, "  Reading button states (press buttons to test):");
+        for (int i = 0; i < 6; i++)
+        {
+            int val = gpio_pin_get(gpio_dev, button_pins[i]);
+            shell_print(sh, "    %s (GPIO%d): %s", button_names[i], button_pins[i],
+                        val ? "Released" : "PRESSED");
+        }
+        shell_print(sh, "  ✓ Button test complete\n");
     }
-    shell_print(sh, "  ✓ Button test complete\n");
 
     /* Test 3: SD Card */
     shell_print(sh, "Test 3: SD Card");

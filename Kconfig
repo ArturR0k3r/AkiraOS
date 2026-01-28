@@ -33,12 +33,39 @@ config AKIRA_TOUCH_XPT2046
     help
       Enable XPT2046 touch screen controller.
 
+
 config AKIRA_WASM_RUNTIME
-    bool "Enable WebAssembly runtime"
+    bool "Enable WebAssembly runtime (WAMR)"
     default n
-    depends on NEWLIB_LIBC
     help
-      Enable WebAssembly application runtime support.
+      Enable the unified Akira WAMR-based runtime. When enabled, Akira will
+      build and link the wasm-micro-runtime (WAMR) and register native APIs.
+      WAMR can use its builtin libc so this option is not constrained to a
+      particular Zephyr libc choice; ensure sufficient heap is available for
+      WAMR's global heap if using PSRAM or builtin heap.
+
+config AKIRA_RUNTIME_CUSTOM
+    bool "Enable Akira unified custom runtime (Minimalist)"
+    default y
+    help
+      Enable the unified Akira runtime implementation that is direct-to-WAMR.
+      This is the preferred Minimalist Architecture path and registers a
+      single native bridge for Display, Input, RF and Sensor APIs.
+
+config WAMR_HEAP_SIZE
+    int "WAMR global heap size (bytes)"
+    default 262144
+    help
+      Configure the default global heap size used by WAMR when
+      PSRAM is not available or not used. Boards may override this
+      via their board configuration (CONFIG_WAMR_HEAP_SIZE).
+
+config MAX_CONTAINERS
+    int "Maximum number of concurrently loaded WASM containers"
+    default 8
+    help
+      Maximum number of WASM instances that can be loaded concurrently.
+      Boards with more PSRAM can increase this value (CONFIG_MAX_CONTAINERS).
 
 config AKIRA_TERMINAL_MODE
     bool "Enable hacker terminal mode"  
@@ -47,6 +74,12 @@ config AKIRA_TERMINAL_MODE
     help
       Enable cyberpunk hacker terminal with network tools.
 
+config AKIRA_SELFTEST
+    bool "Enable Akira self-test (native_sim)"
+    default n
+    depends on NATIVE_BUILD || CONFIG_BOARD_NATIVE_SIM
+    help
+      Enable a small self-test that installs a dummy WASM and verifies install/start on native_sim.
 config AKIRA_CYBERPUNK_THEME
     bool "Enable cyberpunk UI theme"
     default n
@@ -122,11 +155,27 @@ config AKIRA_FRAMEBUFFER_IN_PSRAM
 
 endmenu
 
+config AKIRA_PSRAM
+    bool "Enable Akira PSRAM helper APIs"
+    default n
+    depends on MEMC
+    help
+      Enable Akira PSRAM helper APIs which provide a thin wrapper for allocating
+      large buffers in external PSRAM. This is used to place the WAMR heap and
+      other large runtime buffers in external memory when available.
+
 menu "RF Drivers"
+
+config AKIRA_MODULE_RF
+    bool "Enable Akira RF module"
+    default n
+    help
+      Enable RF module (compile RF framework and drivers). Useful to disable on constrained boards.
 
 config AKIRA_RF_FRAMEWORK
     bool "Enable unified RF framework"
     default n
+    depends on AKIRA_MODULE_RF
     help
       Enable the unified RF driver framework that provides
       a common API for multiple RF chips.
@@ -151,10 +200,16 @@ endmenu
 
 menu "Sensor Drivers"
 
+config AKIRA_MODULE_SENSORS
+    bool "Enable Akira Sensor module"
+    default n
+    help
+      Enable sensor module (compile sensor abstractions and drivers).
+
 config AKIRA_BME280
     bool "Enable BME280 environmental sensor"
     default n
-    depends on I2C
+    depends on I2C && AKIRA_MODULE_SENSORS
     help
       Enable Bosch BME280 temperature, humidity, and pressure sensor.
 
@@ -162,30 +217,37 @@ endmenu
 
 menu "Connectivity"
 
+config AKIRA_MODULE_WIFI
+    bool "Enable Akira Connectivity module (WiFi/BLE/Cloud)"
+    default n
+    help
+      Enable higher-level connectivity providers (WiFi, BLE, Cloud).
+
 config AKIRA_HID
     bool "Enable HID subsystem"
-    default y
+    default n
+    depends on AKIRA_MODULE_WIFI
     help
       Enable unified HID (Human Interface Device) subsystem.
       Allows AkiraOS to act as a keyboard, gamepad, or other HID device.
 
 config AKIRA_HID_KEYBOARD
     bool "Enable keyboard HID profile"
-    default y
+    default n
     depends on AKIRA_HID
     help
       Enable USB/BLE keyboard HID profile.
 
 config AKIRA_HID_GAMEPAD
     bool "Enable gamepad HID profile"
-    default y
+    default n
     depends on AKIRA_HID
     help
       Enable USB/BLE gamepad HID profile.
 
 config AKIRA_BT_HID
     bool "Enable Bluetooth HID"
-    default y
+    default n
     depends on AKIRA_HID && BT
     help
       Enable HID over Bluetooth Low Energy (BLE).
@@ -649,74 +711,7 @@ config FS_FATFS_VOLUME_COUNT
     help
       Maximum number of FAT volumes supported.
 
-config MAX_CONTAINERS
-    int "Maximum number of OCRE containers"
-    default 4
-    range 1 16
-    help
-      Maximum number of containers that can be managed by OCRE.
-
-config OCRE_WAMR_HEAP_BUFFER_SIZE
-    int "WAMR heap buffer size"
-    default 262144
-    help
-      Size of the heap buffer for WAMR runtime.
-      Must be large enough to hold WASM linear memory.
-      Default 256KB, OCRE recommends 512KB for production.
-
-config OCRE_WAMR_HEAP_BUFFER_IN_PSRAM
-    bool "Place WAMR heap buffer in PSRAM when available"
-    depends on MEMC
-    default n
-    help
-      When set, the global WAMR heap buffer (configured via
-      CONFIG_OCRE_WAMR_HEAP_BUFFER_SIZE) will be placed into the
-      external PSRAM section (if supported by the board and MEMC
-      driver). This frees internal DRAM for other runtime usage.
-
-
-config OCRE_CONTAINER_DEFAULT_STACK_SIZE
-    int "Default container stack size"
-    default 8192
-    help
-      Default stack size for OCRE containers.
-
-config OCRE_CONTAINER_DEFAULT_HEAP_SIZE
-    int "Default container heap size"
-    default 65536
-    help
-      Default heap size for OCRE containers.
-      This is the WASM linear memory size.
-
-config AKIRA_WAMR_MINI_LOADER
-    bool "Use WAMR mini loader"
-    default n
-    depends on AKIRA_APP_MANAGER
-    help
-      Use the WAMR mini loader to reduce code size.
-      This reduces flash usage but may limit some WASM features.
-
-config AKIRA_WAMR_MINIMAL
-    bool "Minimal WAMR build"
-    default n
-    depends on AKIRA_APP_MANAGER
-    help
-      Build WAMR with minimal features to save memory.
-      Disables: bulk_memory, ref_types, multi_module, tail_call, simd, logging.
-      Use this for memory-constrained devices like nRF54L15 or STM32.
-
-config AKIRA_OCRE_CS_THREAD_STACK_SIZE
-    int "OCRE Container Supervisor thread stack size"
-    default 16384 if SOC_SERIES_ESP32S3 || SOC_SERIES_ESP32
-    default 4096
-    depends on AKIRA_APP_MANAGER
-    help
-      Stack size for the OCRE Container Supervisor thread.
-      ESP32-S3 and ESP32 require larger stacks (16384) due to their architecture
-      and WAMR initialization overhead.
-      Other platforms can use the default (4096).
-
 # Akira Module System (Core AkiraOS functionality)
-rsource "src/akira_modules/Kconfig"
+# rsource "src/akira_modules/Kconfig"  # Removed: akira_modules are deprecated in minimalist architecture
 
 endmenu

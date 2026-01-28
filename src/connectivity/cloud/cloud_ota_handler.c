@@ -13,7 +13,7 @@
 #include <string.h>
 
 /* OTA manager for flash operations */
-#include "OTA/ota_manager.h"
+#include "connectivity/ota/ota_manager.h"
 
 LOG_MODULE_REGISTER(cloud_ota, CONFIG_AKIRA_LOG_LEVEL);
 
