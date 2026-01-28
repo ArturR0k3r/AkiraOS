@@ -21,12 +21,9 @@ git clone --recursive https://github.com/ArturR0k3r/AkiraOS.git
 cd AkiraOS
 ```
 
-**Note:** You can use any workspace directory name. The build system automatically detects 
-the workspace root and expects this structure: `<workspace>/AkiraOS` and `<workspace>/ocre`.
-
 ### Step 2: Initialize West Workspace
 
-This fetches Zephyr RTOS, OCRE runtime, and all dependencies:
+This fetches Zephyr RTOS, WASM Micro Runtime, and all dependencies:
 
 ```bash
 # Initialize west workspace
@@ -35,52 +32,15 @@ west init -l .
 # Move to workspace root
 cd ..
 
-# Update all dependencies (Zephyr, OCRE, modules)
+# Update all dependencies (Zephyr, WAMR, modules)
 west update
 ```
 
 **What `west update` does:**
-- Fetches Zephyr RTOS v4.2.1
-- Fetches OCRE runtime from [project-ocre/ocre-runtime](https://github.com/project-ocre/ocre-runtime)
-- Downloads all Zephyr modules and dependencies
+- Fetches Zephyr RTOS v4.3.0
+ Fetches WASM Micro Runtime from [wasm-micro-runtime]https://github.com/bytecodealliance/wasm-micro-runtime
+ 
 
-### Step 3: Clone WASM-Micro-Runtime
-
-WASM-Micro-Runtime is **not tracked** in the AkiraOS repository (it's in `.gitignore`). 
-Clone it from the official Bytecode Alliance repository:
-
-```bash
-cd AkiraOS/modules
-
-# Clone WASM-Micro-Runtime from official repository
-git clone https://github.com/bytecodealliance/wasm-micro-runtime.git
-cd wasm-micro-runtime
-git submodule update --init --recursive
-cd ../..
-```
-
-**Why?**
-- WAMR is a large external dependency
-- Keeping it separate makes AkiraOS repo cleaner
-- You can easily update WAMR independently
-- OCRE also uses WAMR (as a submodule in `<workspace>/ocre/`)
-
-### Step 4: Update OCRE Submodules
-
-OCRE has its own WASM-Micro-Runtime submodule that needs to be initialized:
-
-```bash
-# Update OCRE submodules (includes its own WAMR)
-cd ../ocre
-git submodule update --init --recursive
-cd ../AkiraOS
-```
-
-### Step 5: Fetch ESP32 Binary Blobs
-
-Required for ESP32/ESP32-S3/ESP32-C3 platforms:
-
-```bash
 west blobs fetch hal_espressif
 ```
 
@@ -164,7 +124,6 @@ use west commands directly or modify the script.
 │   ├── src/                    # Application source
 │   ├── boards/                 # Board-specific overlays
 │   ├── modules/                # Local modules
-│   │   ├── ocre/              # OCRE integration (CMake only)
 │   │   └── wasm-micro-runtime/ # WAMR module
 │   ├── build_*.sh              # Build scripts
 │   ├── flash.sh                # Flash script
@@ -174,8 +133,7 @@ use west commands directly or modify the script.
 ├── build_esp32/                # ESP32 build output
 ├── build_esp32c3/              # ESP32-C3 build output
 ├── zephyr/                     # Zephyr RTOS (fetched by west)
-├── ocre/                       # OCRE runtime (fetched by west)
-│   └── wasm-micro-runtime/    # WAMR submodule (in ocre)
+├── wasm-micro-runtime/         # WAMR submodule 
 ├── bootloader/                 # MCUboot (fetched by west)
 ├── modules/                    # Zephyr modules (fetched by west)
 └── tools/                      # Build tools (fetched by west)
@@ -194,20 +152,11 @@ cd <workspace>  # Your workspace directory
 west update
 ```
 
-### Update OCRE Submodules
+### Update WASM-Micro-Runtime Submodule
 
 ```bash
-cd <workspace>/ocre
-git pull origin main
-git submodule update --init --recursive
-```
-
-### Update WASM-Micro-Runtime
-
-```bash
-cd <workspace>/AkiraOS/modules/wasm-micro-runtime
-git pull origin main
-git submodule update --init --recursive
+cd <workspace>/AkiraOS
+git submodule update --remote modules/wasm-micro-runtime
 ```
 
 ---
@@ -241,10 +190,7 @@ pip3 install pyelftools
 
 ```bash
 # Re-initialize all submodules
-cd <workspace>/ocre
-git submodule update --init --recursive --force
-
-cd <workspace>/AkiraOS/modules/wasm-micro-runtime
+cd <workspace>/AkiraOS
 git submodule update --init --recursive --force
 ```
 
@@ -285,7 +231,6 @@ After setup, check out:
 - **[README.md](README.md)** - Project overview
 - **[docs/api-reference.md](docs/api-reference.md)** - System APIs
 - **[docs/AkiraOS.md](docs/AkiraOS.md)** - Architecture details
-- **[src/services/ocre_runtime.c](src/services/ocre_runtime.c)** - OCRE integration example
 
 ---
 

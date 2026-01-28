@@ -78,7 +78,7 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     LOG_INF("Connected: %s", addr);
 
     notify_event(BT_EVENT_CONNECTED, NULL);
-} 
+}
 
 static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
 {
@@ -251,7 +251,7 @@ int bt_manager_start_advertising(void)
     }
 
     struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
-        BT_LE_ADV_OPT_CONNECTABLE,
+        BT_LE_ADV_OPT_CONN,
         BT_GAP_ADV_FAST_INT_MIN_2,
         BT_GAP_ADV_FAST_INT_MAX_2,
         NULL);
