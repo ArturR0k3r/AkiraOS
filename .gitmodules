@@ -1,4 +1,4 @@
 [submodule "modules/wasm-micro-runtime"]
 	path = modules/wasm-micro-runtime
-	url = https://github.com/bytecodealliance/wasm-micro-runtime.git
-	branch = main
+	url = https://github.com/ArturR0k3r/wasm-micro-runtime
+	branch = AkiraOS_Patch
