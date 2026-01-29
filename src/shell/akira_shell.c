@@ -1511,30 +1511,26 @@ static int cmd_wifi_connect(const struct shell *sh, size_t argc, char **argv)
     }
 
     /* Get settings */
-    extern const struct user_settings *user_settings_get(void);
-    const struct user_settings *settings = user_settings_get();
+    char ssid[MAX_VALUE_LEN];
+    char psk[MAX_VALUE_LEN];
 
-    if (!settings->wifi_enabled)
-    {
-        shell_print(sh, "WiFi is disabled. Enable with: settings wifi_enable 1");
+    if(!akira_settings_get(AKIRA_SETTINGS_WIFI_SSID_KEY, ssid, MAX_VALUE_LEN) && !akira_settings_get(AKIRA_SETTINGS_WIFI_PSK_KEY, psk, MAX_VALUE_LEN)){
+        LOG_INF("Loaded ssid and psk succesfully fron NVS succesfully");
+    }
+    else{
+        LOG_INF("Failed to load ssid and psk fron NVS");
         return -EINVAL;
     }
 
-    if (strlen(settings->wifi_ssid) == 0)
-    {
-        shell_print(sh, "No WiFi SSID configured. Set with: settings set_wifi <ssid> <password>");
-        return -EINVAL;
-    }
-
-    shell_print(sh, "Connecting to WiFi: %s", settings->wifi_ssid);
+    shell_print(sh, "Connecting to WiFi: %s", ssid);
 
     struct wifi_connect_req_params wifi_params = {
-        .ssid = (uint8_t *)settings->wifi_ssid,
-        .ssid_length = strlen(settings->wifi_ssid),
-        .psk = (uint8_t *)settings->wifi_passcode,
-        .psk_length = strlen(settings->wifi_passcode),
+        .ssid = (uint8_t *)ssid,
+        .ssid_length = strlen(ssid),
+        .psk = (uint8_t *)psk,
+        .psk_length = strlen(psk),
         .channel = WIFI_CHANNEL_ANY,
-        .security = strlen(settings->wifi_passcode) > 0 ? WIFI_SECURITY_TYPE_PSK : WIFI_SECURITY_TYPE_NONE,
+        .security = strlen(psk) > 0 ? WIFI_SECURITY_TYPE_PSK : WIFI_SECURITY_TYPE_NONE,
         .mfp = WIFI_MFP_OPTIONAL,
     };
 

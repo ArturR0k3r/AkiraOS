@@ -121,6 +121,12 @@ int akira_runtime_init(void)
         {
             LOG_INF("Allocated WAMR heap in PSRAM: %zu bytes", g_wamr_heap_size);
         }
+        if(g_wamr_heap_buf==NULL){
+            LOG_WRN("PSRAM allocation for WAMR heap failed, falling back to internal RAM");
+        }
+        else{
+            LOG_INF("Using PSRAM for WAMR heap");
+        }
     }
 
     if (!g_wamr_heap_buf)
@@ -140,7 +146,8 @@ int akira_runtime_init(void)
          * dynamically to avoid reserving large static buffers in DRAM. This keeps
          * the binary small while still allowing large heaps when PSRAM is present.
          */
-        g_wamr_heap_buf = malloc(g_wamr_heap_size);
+        g_wamr_heap_size = (32 * 1024); /* fallback smaller size */
+        g_wamr_heap_buf = k_malloc(g_wamr_heap_size);
         if (g_wamr_heap_buf) {
             LOG_INF("Allocated WAMR heap dynamically: %zu bytes", g_wamr_heap_size);
         } else {
@@ -279,6 +286,12 @@ int akira_runtime_start(int instance_id)
         {
             LOG_ERR("WASM start exception: %s", wasm_runtime_get_exception(inst));
         }
+    }
+    else if(!fn){
+        LOG_WRN("No _start or main function found in WASM module");
+        wasm_runtime_deinstantiate(inst);
+        wasm_runtime_destroy_exec_env(exec_env);
+        return -ENOENT;
     }
 
     app->running = true;

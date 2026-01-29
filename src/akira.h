@@ -28,10 +28,10 @@ extern "C"
     /*===========================================================================*/
 
 #define AKIRA_VERSION_MAJOR 1
-#define AKIRA_VERSION_MINOR 2
-#define AKIRA_VERSION_PATCH 3
-#define AKIRA_VERSION_STRING "1.2.3"
-#define AKIRA_CODENAME "ONI"
+#define AKIRA_VERSION_MINOR 4
+#define AKIRA_VERSION_PATCH 0
+#define AKIRA_VERSION_STRING "1.4.x"
+#define AKIRA_CODENAME "ONYX"
 
     /* Simple version struct */
     typedef struct {

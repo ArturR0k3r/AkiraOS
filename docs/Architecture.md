@@ -1,4 +1,4 @@
-# Architecture of AkiraOS (v1.3.8 "Glitch")
+# Architecture of AkiraOS (v1.4.x)
 
 ## 1. Introduction
 

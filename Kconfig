@@ -715,3 +715,100 @@ config FS_FATFS_VOLUME_COUNT
 # rsource "src/akira_modules/Kconfig"  # Removed: akira_modules are deprecated in minimalist architecture
 
 endmenu
+
+menu "Akira Settings"
+
+config AKIRA_SETTINGS
+    bool "Enable Akira Settings Manager"
+    default y
+
+config AKIRA_SETTINGS_MAX_KEYS
+    int "Maximum number of keys"
+    default 100
+    range 1 500
+    help
+      Maximum number of key-value pairs that can be stored.
+      Each key entry uses approximately 256 bytes in registry.
+
+config AKIRA_SETTINGS_MAX_VALUE_LEN
+    int "Maximum value length (bytes)"
+    default 64
+    range 32 256
+    help
+      Maximum length of a single value in bytes.
+      This affects memory allocation for temporary buffers.
+
+config AKIRA_SETTINGS_MAX_KEY_LEN
+    int "Maximum key length (bytes)"
+    default 32
+    range 8 256
+    help
+      Maximum length of a single value in bytes.
+      This affects memory allocation for temporary buffers.
+
+choice AKIRA_SETTINGS_STORAGE_TYPE
+    prompt "Default storage type"
+    default AKIRA_SETTINGS_STORAGE_TYPE_FLASH
+    help
+      Select the default storage backend.
+
+config AKIRA_SETTINGS_STORAGE_TYPE_FLASH
+    bool "Flash (NVS)"
+    help
+      Store settings in internal flash memory using NVS.
+
+config AKIRA_SETTINGS_STORAGE_TYPE_SD
+    bool "SD Card"
+    help
+      Store settings on SD card (if available).
+
+config AKIRA_SETTINGS_STORAGE_TYPE_AUTO
+    bool "Auto (Flash)"
+    help
+      Automatically select storage: prefer Flash, fallback to SD.
+
+endchoice
+
+config AKIRA_SETTINGS_ENCRYPTION
+    bool "Enable transparent encryption"
+    default n
+    depends on MBEDTLS_BUILTIN 
+    select ENTROPY_GENERATOR
+    select BASE64
+    help
+      Transparently encrypt all settings data using AES-256-GCM.
+      Provides confidentiality and integrity protection.
+      Uses ESP32 hardware AES acceleration for fast encryption.
+      
+      All devices must use the same encryption key for SD card portability.
+      Data format: [2B magic][12B IV][encrypted data][16B auth tag]
+
+if AKIRA_SETTINGS_ENCRYPTION
+
+config AKIRA_SETTINGS_ENCRYPTION_KEY_HEX
+    string "Encryption key (64 hex characters for AES-256)"
+    default "c3c3a4e60f1991e85d7796890710e99338a4c5ac93bffc5c03dcf662bfcf9dee"
+    help
+      AES-256 encryption key in hexadecimal format (64 hex chars = 32 bytes).
+      
+      IMPORTANT: 
+      - All devices must use the SAME key for SD card portability
+
+config AKIRA_SETTINGS_ENCRYPTION_HW_ACCEL
+    bool "Use hardware AES acceleration"
+    default y if SOC_ESP32 || SOC_SERIES_ESP32S3
+    default n
+    select MBEDTLS_HARDWARE_ACCELERATION if SOC_ESP32 || SOC_SERIES_ESP32S3
+    help
+      Enable hardware AES acceleration for faster encryption/decryption.
+      
+      Supported platforms:
+      - ESP32, ESP32-S3, ESP32-C3 (xtensa-esp32-aes)
+      - STM32F4/F7/H7 (CRYP/HASH)
+      - nRF52/53 with CryptoCell
+      
+      Hardware acceleration provides 5-10x speedup over software AES.
+
+endif # AKIRA_SETTINGS_ENCRYPTION
+
+endmenu
