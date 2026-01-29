@@ -69,21 +69,21 @@ int main(void)
     app_manager_init();
 #endif
 
-/* Self-test (native_sim): install a dummy WASM and optional manifest */
-static const uint8_t dummy_wasm[] = {0x00, 'a', 's', 'm', 0x01, 0x00, 0x00, 0x00};
-const char *manifest = "{\"capabilities\":[\"display.write\",\"input.read\"]}";
-int sid = app_loader_install_with_manifest("selftest", dummy_wasm, sizeof(dummy_wasm), manifest, strlen(manifest));
-if (sid >= 0) {
-    LOG_INF("Selftest installed as slot %d", sid);
-    if (akira_runtime_start(sid) == 0) {
-        LOG_INF("Selftest started (slot %d)", sid);
-    } else {
-        LOG_WRN("Selftest start failed (slot %d)", sid);
-    }
-} else {
-    LOG_WRN("Selftest install failed: %d", sid);
-}
 #ifdef CONFIG_AKIRA_SELFTEST
+    /* Self-test (native_sim): install a dummy WASM and optional manifest */
+    static const uint8_t dummy_wasm[] = {0x00, 'a', 's', 'm', 0x01, 0x00, 0x00, 0x00};
+    const char *manifest = "{\"capabilities\":[\"display.write\",\"input.read\"]}";
+    int sid = app_loader_install_with_manifest("selftest", dummy_wasm, sizeof(dummy_wasm), manifest, strlen(manifest));
+    if (sid >= 0) {
+        LOG_INF("Selftest installed as slot %d", sid);
+        if (akira_runtime_start(sid) == 0) {
+            LOG_INF("Selftest started (slot %d)", sid);
+        } else {
+            LOG_WRN("Selftest start failed (slot %d)", sid);
+        }
+    } else {
+        LOG_WRN("Selftest install failed: %d", sid);
+    }
 #endif
 
     LOG_INF("AkiraOS init complete");
