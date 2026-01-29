@@ -7,8 +7,8 @@
  */
 
 #include "shell_display.h"
-#include "../drivers/display_ili9341.h"
-#include "../drivers/fonts.h"
+#include "../drivers/display/display_ili9341.h"
+#include "../drivers/display/fonts.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <string.h>

@@ -1,0 +1,75 @@
+/**
+ * @file akira_runtime.h
+ * @brief AkiraOS Runtime - WASM Micro Runtime Integration
+ *
+ * Provides a simplified interface to the WASM Micro Runtime (WAMR).
+
+ */
+
+#ifndef AKIRA_RUNTIME_H
+#define AKIRA_RUNTIME_H
+
+/* Minimal public header for the unified Akira runtime.
+ * Per Minimalist Architecture this header only includes Zephyr basics and
+ * the WAMR export header (no heavy dependencies here).
+ */
+
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
+
+/* Optional WAMR dependency - provide minimal typedefs if runtime is disabled */
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
+#include <wasm_export.h>
+#else
+typedef void *wasm_exec_env_t;
+typedef void *wasm_module_inst_t;
+#endif
+
+#include <stdint.h>
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifndef AKIRA_MAX_WASM_INSTANCES
+#ifdef CONFIG_MAX_CONTAINERS
+#define AKIRA_MAX_WASM_INSTANCES CONFIG_MAX_CONTAINERS
+#else
+#define AKIRA_MAX_WASM_INSTANCES 8
+#endif
+#endif
+
+/* Initialize the unified runtime (WAMR + storage + native API registration).
+ * Returns 0 on success.
+ */
+int akira_runtime_init(void);
+
+/* Load a WASM binary from memory into the runtime; returns an instance id
+ * (>=0) or negative on error.
+ */
+int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size);
+
+/* Start/stop a loaded instance by id */
+int akira_runtime_start(int instance_id);
+int akira_runtime_stop(int instance_id);
+
+/* Persistent installation: save binary and optional manifest to /lfs/wasm/apps
+ * If manifest_json is NULL, no manifest is saved. Returns instance id or negative on error.
+ */
+int akira_runtime_install_with_manifest(const char *name, const void *binary, size_t size, const char *manifest_json, size_t manifest_size);
+int akira_runtime_install(const char *name, const void *binary, size_t size);
+
+/* Destroy/uninstall helpers */
+int akira_runtime_destroy(int instance_id);
+int akira_runtime_uninstall(const char *name, int instance_id);
+
+/* Capability guard helpers */
+bool akira_security_check_exec(wasm_exec_env_t exec_env, const char *capability);
+bool akira_security_check_native(const char *capability);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* AKIRA_RUNTIME_H */

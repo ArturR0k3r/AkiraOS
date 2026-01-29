@@ -107,6 +107,18 @@ user_data_partition: &storage_partition {
     };
 };
 
+// Flash memory partition for NVS
+&flash0 {
+    partitions {
+        akira_settings_nvs_partition: partition@256000 {
+            label = "akira_settings_nvs";
+            reg = <0x00256000 0x8000>; // 32 KB
+        };
+    };
+};
+
+
+
 // ============================================================================
 // SD Card Support - CURRENTLY DISABLED
 // ============================================================================
