@@ -1,0 +1,154 @@
+# AkiraOS Documentation - GitHub Pages Configuration
+
+# Theme
+remote_theme: pages-themes/hacker@v0.2.0
+
+# Site settings
+title: AkiraOS Documentation
+description: High-Performance WebAssembly OS for Embedded Systems
+baseurl: ""
+url: "https://github.com/akiraos/AkiraOS"
+
+# Build settings
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+  syntax_highlighter_opts:
+    block:
+      line_numbers: false
+
+# Plugins
+plugins:
+  - jekyll-relative-links
+  - jekyll-optional-front-matter
+  - jekyll-readme-index
+  - jekyll-titles-from-headings
+  - jekyll-seo-tag
+
+# Relative links
+relative_links:
+  enabled: true
+  collections: false
+
+# Optional front matter
+optional_front_matter:
+  remove_originals: false
+
+# Titles from headings
+titles_from_headings:
+  enabled: true
+  strip_title: true
+  collections: false
+
+# Exclude from build
+exclude:
+  - README.md
+  - LICENSE
+  - CONTRIBUTING.md
+  - CODE_OF_CONDUCT.md
+  - "*.sh"
+  - "*.c"
+  - "*.h"
+  - "*.cpp"
+  - "*.cmake"
+  - CMakeLists.txt
+  - Kconfig
+  - prj.conf
+  - west.yml
+  - build/
+  - modules/
+  - src/
+  - tests/
+  - wasm_sample/
+  - boards/
+  - include/
+  - .vscode/
+  - .git/
+  - AkiraConsole/
+  - AkiraMicro/
+
+# Include
+include:
+  - _*.yml
+  - .htaccess
+
+# Collections
+collections:
+  architecture:
+    output: true
+    permalink: /architecture/:name/
+  getting-started:
+    output: true
+    permalink: /getting-started/:name/
+  api-reference:
+    output: true
+    permalink: /api-reference/:name/
+  platform:
+    output: true
+    permalink: /platform/:name/
+  development:
+    output: true
+    permalink: /development/:name/
+  hardware:
+    output: true
+    permalink: /hardware/:name/
+  resources:
+    output: true
+    permalink: /resources/:name/
+
+# Defaults
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+  - scope:
+      path: "architecture"
+    values:
+      layout: default
+      category: architecture
+  - scope:
+      path: "getting-started"
+    values:
+      layout: default
+      category: getting-started
+  - scope:
+      path: "api-reference"
+    values:
+      layout: default
+      category: api-reference
+  - scope:
+      path: "platform"
+    values:
+      layout: default
+      category: platform
+  - scope:
+      path: "development"
+    values:
+      layout: default
+      category: development
+  - scope:
+      path: "hardware"
+    values:
+      layout: default
+      category: hardware
+  - scope:
+      path: "resources"
+    values:
+      layout: default
+      category: resources
+
+# SEO
+twitter:
+  username: akiraos
+  card: summary
+
+social:
+  name: AkiraOS
+  links:
+    - https://github.com/akiraos/AkiraOS
+
+# GitHub metadata
+repository: akiraos/AkiraOS
+github_username: akiraos
