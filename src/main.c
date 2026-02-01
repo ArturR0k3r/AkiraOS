@@ -11,11 +11,18 @@
 #ifdef CONFIG_FILE_SYSTEM
 #include <storage/fs_manager.h>
 #endif
+#ifdef CONFIG_BT
+#include <connectivity/bluetooth/bt_manager.h>
+#endif
+#ifdef CONFIG_AKIRA_BT_HID
+#include <connectivity/hid/hid_manager.h>
+#endif
 #ifdef CONFIG_AKIRA_APP_MANAGER
 #include <runtime/app_manager/app_manager.h>
 #endif
 #ifdef CONFIG_AKIRA_HTTP_SERVER
 #include "ota/web_server.h"
+#include "ota/ota_manager.h"
 #endif
 #ifdef CONFIG_AKIRA_SETTINGS
 #include "settings/settings.h"
@@ -34,6 +41,25 @@ int main(void)
         return -ENODEV;
     }
 
+#ifdef CONFIG_BT
+    /* Initialize Bluetooth manager */
+    if (bt_manager_init(NULL) < 0) {
+        LOG_WRN("Bluetooth init failed - continuing without BT support");
+    }
+    else {
+        LOG_INF("Bluetooth initialized");
+    }
+#endif
+
+#ifdef CONFIG_AKIRA_BT_HID
+    /* Initialize HID manager */
+    if (hid_manager_init(NULL) < 0) {
+        LOG_WRN("HID manager init failed");
+    }
+    else {
+        LOG_INF("HID manager initialized");
+    }
+#endif
 
 #ifdef CONFIG_FILE_SYSTEM
     /* Ensure filesystem is initialized for storage/backing */
@@ -54,6 +80,14 @@ int main(void)
 
 
 #ifdef CONFIG_AKIRA_HTTP_SERVER
+    /* Initialize OTA manager before starting web server */
+    if (ota_manager_init() < 0) {
+        LOG_ERR("OTA manager init failed");
+    }
+    else {
+        LOG_INF("OTA manager initialized");
+    }
+
     if(web_server_start(NULL) < 0){
         LOG_WRN("Failed to start webserver thread!");
     }

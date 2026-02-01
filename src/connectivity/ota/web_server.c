@@ -833,9 +833,9 @@ static int handle_api_request(int client_fd, const char *path)
         uint32_t hours = uptime_ms / 3600000;
         uint32_t mins = (uptime_ms % 3600000) / 60000;
         uint32_t secs = (uptime_ms % 60000) / 1000;
-
+// TODO: memory usage properly calculation
         snprintf(response, sizeof(response),
-                 "{\"ip\":\"%s\",\"uptime\":\"%02u:%02u:%02u\",\"mem\":\"99%% used\"}",
+                 "{\"ip\":\"%s\",\"uptime\":\"%02u:%02u:%02u\",\"mem\":\"XX(WIP)%% used\"}", 
                  server_state.server_ip[0] ? server_state.server_ip : "0.0.0.0",
                  hours, mins, secs);
         return send_http_response(client_fd, 200, "application/json", response, 0);
