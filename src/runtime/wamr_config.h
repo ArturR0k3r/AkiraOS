@@ -45,8 +45,6 @@
 /** Maximum WASM app name length */
 #define MAX_APP_NAME_LEN 32
 
-/** WASM storage directory */
-#define WASM_APPS_PATH "/lfs/wasm/apps"
 
 /* ===== Execution Environment ===== */
 

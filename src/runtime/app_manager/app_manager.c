@@ -15,14 +15,13 @@
 #include <zephyr/sys/crc.h>
 #include <string.h>
 #include <stdlib.h>
-
+#include <stdio.h>
 LOG_MODULE_REGISTER(app_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 /* ===== Configuration ===== */
 
 #define REGISTRY_PATH "/lfs/apps/registry.bin"
 #define APPS_DIR "/lfs/apps"
-#define APP_DATA_DIR "/lfs/app_data"
 #define REGISTRY_MAGIC 0x414B4150 /* "AKAP" */
 #define REGISTRY_VERSION 1
 #define MAX_WASM_MAGIC 8
@@ -121,6 +120,7 @@ int app_manager_init(void)
     if (ret < 0)
     {
         LOG_WRN("No registry found or load failed, starting fresh");
+        registry_save();
     }
     else
     {
@@ -429,7 +429,12 @@ int app_manager_uninstall(const char *name)
         akira_runtime_stop(app->container_id);
     }
 
-    /* Destroy container and delete binary */
+    /* Delete app binary */
+    if(delete_app_binary(name) < 0){
+        LOG_WRN("Failed to delete app: %s",name);
+    }
+
+    /* Destroy container */
     akira_runtime_uninstall(app->name, app->container_id);
 
     /* Clear entry */
@@ -1016,17 +1021,13 @@ const char *app_source_to_str(app_source_t source)
 static int ensure_dirs_exist(void)
 {
     /* Use fs_manager to create directories - it handles RAM fallback */
-    int ret = fs_manager_mkdir(APPS_DIR);
-    if (ret < 0 && ret != -EEXIST)
-    {
-        LOG_WRN("Failed to create %s: %d (using RAM fallback)", APPS_DIR, ret);
-        /* Continue anyway - fs_manager will use RAM if no persistent storage */
-    }
-
-    ret = fs_manager_mkdir(APP_DATA_DIR);
-    if (ret < 0 && ret != -EEXIST)
-    {
-        LOG_WRN("Failed to create %s: %d (using RAM fallback)", APP_DATA_DIR, ret);
+    if(!fs_manager_exists(APPS_DIR)){
+        int ret = fs_manager_mkdir(APPS_DIR);
+        if (ret < 0 && ret != -EEXIST)
+        {
+            LOG_WRN("Failed to create %s: %d (using RAM fallback)", APPS_DIR, ret);
+            /* Continue anyway - fs_manager will use RAM if no persistent storage */
+        }
     }
 
     return 0;
@@ -1080,8 +1081,6 @@ static int registry_load(void)
             g_registry[i].state = APP_STATE_INSTALLED;
         }
     }
-
-    LOG_INF("Loaded %d apps from registry", count);
     return 0;
 }
 
@@ -1242,10 +1241,6 @@ static int delete_app_binary(const char *name)
         LOG_ERR("Failed to delete %s: %d", path, ret);
         return ret;
     }
-
-    /* Also delete app data directory */
-    snprintf(path, sizeof(path), "%s/%s", APP_DATA_DIR, name);
-    fs_manager_delete_file(path); /* Ignore error */
 
     return 0;
 }

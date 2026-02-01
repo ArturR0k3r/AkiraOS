@@ -226,7 +226,6 @@ config AKIRA_MODULE_WIFI
 config AKIRA_HID
     bool "Enable HID subsystem"
     default n
-    depends on AKIRA_MODULE_WIFI
     help
       Enable unified HID (Human Interface Device) subsystem.
       Allows AkiraOS to act as a keyboard, gamepad, or other HID device.

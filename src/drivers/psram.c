@@ -1,12 +1,16 @@
 #include "psram.h"
 #include <stdlib.h>
 #include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
 #include <zephyr/multi_heap/shared_multi_heap.h>
 #include <soc/soc_memory_layout.h> 
+
 
 static bool psram_initialized = false;
 
 #define PSRAM_TEST_SIZE 1024
+
+LOG_MODULE_REGISTER(akira_psram, CONFIG_AKIRA_LOG_LEVEL);
 
 int akira_init_psram_heap(void) {
     // Test PSRAM allocation to verify it's available
@@ -18,12 +22,12 @@ int akira_init_psram_heap(void) {
     
     // Verify it's actually in external RAM
     if (!esp_ptr_external_ram(test)) {
-        printk("ERROR: Allocated memory is not in PSRAM! (%p)\n", test);
+        LOG_ERR("ERROR: Allocated memory is not in PSRAM! (%p)\n", test);
         shared_multi_heap_free(test);
         return -1;
     }
     
-    printk("PSRAM initialized and available at %p\n", test);
+    LOG_INF("PSRAM initialized and available at %p\n", test);
     shared_multi_heap_free(test);
     psram_initialized = true;
     
@@ -43,7 +47,7 @@ void *akira_psram_alloc(size_t size)
 {
 #ifdef CONFIG_AKIRA_PSRAM
     if (!psram_initialized) {
-        printk("ERROR: PSRAM not initialized!\n");
+        LOG_ERR("ERROR: PSRAM not initialized!\n");
         return NULL;
     }
     
@@ -51,9 +55,9 @@ void *akira_psram_alloc(size_t size)
     void *ptr = shared_multi_heap_alloc(SMH_REG_ATTR_EXTERNAL, size);
     
     if (ptr == NULL) {
-        printk("ERROR: PSRAM allocation failed for size %zu\n", size);
+        LOG_ERR("ERROR: PSRAM allocation failed for size %zu\n", size);
     } else {
-        printk("Allocated %zu bytes from PSRAM at %p\n", size, ptr);
+        LOG_INF("Allocated %zu bytes from PSRAM at %p\n", size, ptr);
     }
     
     return ptr;
@@ -68,7 +72,7 @@ void akira_psram_free(void *ptr)
 #ifdef CONFIG_AKIRA_PSRAM
     if (ptr != NULL) {
         shared_multi_heap_free(ptr);
-        printk("Freed PSRAM pointer %p\n", ptr);
+        LOG_INF("Freed PSRAM pointer %p\n", ptr);
     }
 #else
     (void)ptr;

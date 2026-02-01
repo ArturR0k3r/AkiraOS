@@ -182,7 +182,7 @@ int akira_runtime_init(void)
         {"sensor_read", (void *)akira_native_sensor_read, "(i)i", NULL},
     };
 
-    wasm_runtime_register_natives("akira", native_syms, sizeof(native_syms) / sizeof(NativeSymbol));
+    wasm_runtime_register_natives("env", native_syms, sizeof(native_syms) / sizeof(NativeSymbol));
 
     /* Ensure WASM apps dir exists */
     if(fs_manager_exists("/lfs/apps") != 1){ // Not found
@@ -437,19 +437,6 @@ int akira_runtime_uninstall(const char *name, int instance_id)
     {
         akira_runtime_stop(instance_id);
         akira_runtime_destroy(instance_id);
-    }
-
-    /* Remove files */
-    char path[FILE_DIR_MAX_LEN];
-    snprintf(path, sizeof(path), "/lfs/apps/%s.wasm", name);
-    int ret = fs_manager_delete_file(path);
-    if(ret < 0){
-        LOG_WRN("Failed to delete %s", path);
-    }
-    snprintf(path, sizeof(path), "/lfs/apps/%s.manifest.json", name);
-    fs_manager_delete_file(path);
-    if(ret < 0){
-        LOG_WRN("Failed to delete %s", path);
     }
 
     return 0;

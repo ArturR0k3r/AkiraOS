@@ -12,7 +12,7 @@
 #include <string.h>
 
 /* Include app management */
-#include <runtime/app_loader/loader.h>
+#include <runtime/app_loader/app_loader.h>
 #include <runtime/app_manager/app_manager.h>
 #include <runtime/akira_runtime.h>
 

@@ -7,7 +7,7 @@
 #include <zephyr/logging/log.h>
 #include <drivers/platform_hal.h>
 #include <runtime/akira_runtime.h>
-#include <runtime/app_loader/loader.h>
+#include <runtime/app_loader/app_loader.h>
 #ifdef CONFIG_FILE_SYSTEM
 #include <storage/fs_manager.h>
 #endif
@@ -44,8 +44,7 @@ int main(void)
 
 #ifdef CONFIG_AKIRA_PSRAM
     /* Initialize PSRAM heap */
-    printk("PSRAM size: %d bytes\n", esp_psram_get_size());
-    if( akira_init_psram_heap() < 0 ){
+    if(akira_init_psram_heap() < 0 ){
         LOG_ERR("PSRAM heap init failed");
     }
     else{

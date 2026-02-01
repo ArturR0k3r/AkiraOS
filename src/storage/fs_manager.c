@@ -406,6 +406,10 @@ int fs_manager_mkdir(const char *path)
         return -EINVAL;
     }
 
+    if(fs_manager_exists(path)){
+        return 0;
+    }
+
     /* RAM paths don't need directories */
     if (is_ram_path(path))
     {
@@ -729,7 +733,7 @@ int fs_manager_alloc_app_storage(const char *app_name, size_t max_size, app_stor
     strncpy(ctx->app_name, app_name, sizeof(ctx->app_name) - 1);
     ctx->max_size = max_size;
 
-    /* Choose best available storage - WASM runtime handles /lfs/wasm directory creation */
+    /* Choose best available storage - WASM runtime handles /lfs/apps directory creation */
     if (fs_state.sd_available)
     {
         snprintf(ctx->storage_path, sizeof(ctx->storage_path), "/SD:/apps/%s", app_name);
@@ -738,7 +742,7 @@ int fs_manager_alloc_app_storage(const char *app_name, size_t max_size, app_stor
     else if (fs_state.internal_available)
     {
         /* Store in WASM directory which is already created by akira_runtime_init() */
-        snprintf(ctx->storage_path, sizeof(ctx->storage_path), "/lfs/wasm/apps/%s", app_name);
+        snprintf(ctx->storage_path, sizeof(ctx->storage_path), "/lfs/apps/%s", app_name);
         ctx->storage_type = FS_TYPE_INTERNAL;
     }
     else

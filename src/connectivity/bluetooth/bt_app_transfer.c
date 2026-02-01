@@ -4,7 +4,7 @@
  */
 
 #include "bt_app_transfer.h"
-#include <runtime/app_loader/loader.h>
+#include <runtime/app_loader/app_loader.h>
 #include <runtime/app_manager/app_manager.h>
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>

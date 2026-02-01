@@ -1098,7 +1098,6 @@ int akira_settings_init(void) {
     } else {
         LOG_WRN("Storage initialization failed!");
     }
-    LOG_INF("INIT RET: %d", ret);
     return ret;
 }
 
@@ -1135,7 +1134,6 @@ int akira_settings_set(const char *key, const char *value, uint8_t is_encrypted)
     
     int ret = submit_settings_work(work);
     if (ret != 0) {
-        LOG_INF("RETURNED RET %d",ret);
         return ret;
     }
     

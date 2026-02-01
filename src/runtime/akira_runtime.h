@@ -54,7 +54,7 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size);
 int akira_runtime_start(int instance_id);
 int akira_runtime_stop(int instance_id);
 
-/* Persistent installation: save binary and optional manifest to /lfs/wasm/apps
+/* Persistent installation: save binary and optional manifest to /lfs/apps
  * If manifest_json is NULL, no manifest is saved. Returns instance id or negative on error.
  */
 int akira_runtime_install_with_manifest(const char *name, const void *binary, size_t size, const char *manifest_json, size_t manifest_size);
