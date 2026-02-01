@@ -64,7 +64,7 @@ static void register_webserver_ota_transport(void)
 #include <runtime/app_manager/app_manager.h>
 #endif
 
-LOG_MODULE_REGISTER(web_server, AKIRA_LOG_LEVEL);
+LOG_MODULE_REGISTER(web_server, CONFIG_LOG_DEFAULT_LEVEL);
 
 /* TCP_NODELAY may not be defined on all platforms */
 #ifndef TCP_NODELAY
@@ -1335,11 +1335,8 @@ static void do_start_server(void)
     }
 
     server_state.state = WEB_SERVER_RUNNING;
-    LOG_INF("Web server started");
-
     /* This is a blocking call - runs until server is stopped */
     run_web_server();
-
     /* Server has stopped */
     server_state.state = WEB_SERVER_STOPPED;
     LOG_INF("Web server stopped");

@@ -14,7 +14,12 @@
 #ifdef CONFIG_AKIRA_APP_MANAGER
 #include <runtime/app_manager/app_manager.h>
 #endif
+#ifdef CONFIG_AKIRA_HTTP_SERVER
+#include "ota/web_server.h"
+#endif
+#ifdef CONFIG_AKIRA_SETTINGS
 #include "settings/settings.h"
+#endif
 #include "drivers/psram.h"
 
 LOG_MODULE_REGISTER(akira_main, CONFIG_AKIRA_LOG_LEVEL);
@@ -47,6 +52,16 @@ int main(void)
         LOG_INF("PSRAM heap initialized");
     }
 #endif  
+
+
+#ifdef CONFIG_AKIRA_HTTP_SERVER
+    if(web_server_start(NULL) < 0){
+        LOG_WRN("Failed to start webserver thread!");
+    }
+    else{
+        LOG_INF("Web server thread running!");
+    }
+#endif
 
 #ifdef CONFIG_AKIRA_SETTINGS
     /* Initialize settings subsystem */

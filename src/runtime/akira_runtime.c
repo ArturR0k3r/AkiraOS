@@ -14,6 +14,7 @@
 #include <zephyr/fs/fs.h>
 #include <drivers/psram.h>
 #include "platform_hal.h"
+#include "storage/fs_manager.h"
 
 #include <runtime/security.h>
 
@@ -26,6 +27,8 @@
 #include <stdlib.h>
 
 LOG_MODULE_REGISTER(akira_runtime, CONFIG_AKIRA_LOG_LEVEL);
+
+#define FILE_DIR_MAX_LEN 128
 
 /* Internal managed app structure */
 typedef struct {
@@ -55,6 +58,7 @@ static int akira_native_display_pixel(wasm_exec_env_t exec_env, int32_t x, int32
 static int akira_native_input_read_buttons(wasm_exec_env_t exec_env);
 static int akira_native_rf_send(wasm_exec_env_t exec_env, uint32_t payload_ptr, uint32_t len);
 static int akira_native_sensor_read(wasm_exec_env_t exec_env, int32_t type);
+static int akira_native_log(wasm_exec_env_t exec_env, uint32_t level, char* message);
 
 /* Capability checking is implemented in src/runtime/security.c */
 
@@ -170,6 +174,7 @@ int akira_runtime_init(void)
 
     /* Register native symbols (single registration point) */
     static NativeSymbol native_syms[] = {
+        {"log", (void *)akira_native_log, "(i$)i", NULL},
         {"display_clear", (void *)akira_native_display_clear, "(i)i", NULL},
         {"display_pixel", (void *)akira_native_display_pixel, "(iii)i", NULL},
         {"input_read_buttons", (void *)akira_native_input_read_buttons, "()i", NULL},
@@ -180,9 +185,8 @@ int akira_runtime_init(void)
     wasm_runtime_register_natives("akira", native_syms, sizeof(native_syms) / sizeof(NativeSymbol));
 
     /* Ensure WASM apps dir exists */
-    struct fs_dirent entry;
-    if (fs_stat("/lfs/wasm/apps", &entry) != 0) {
-        fs_mkdir("/lfs"); fs_mkdir("/lfs/wasm"); fs_mkdir("/lfs/wasm/apps");
+    if(fs_manager_exists("/lfs/apps") != 1){ // Not found
+        fs_manager_mkdir("/lfs/apps");
     }
 
     g_runtime_initialized = true;
@@ -282,7 +286,8 @@ int akira_runtime_start(int instance_id)
         fn = wasm_runtime_lookup_function(inst, "main");
     if (fn)
     {
-        if (!wasm_runtime_call_wasm(exec_env, fn, 0, NULL))
+        uint32_t argv[2]; // empty 
+        if (!wasm_runtime_call_wasm(exec_env, fn, 2, argv))
         {
             LOG_ERR("WASM start exception: %s", wasm_runtime_get_exception(inst));
         }
@@ -348,35 +353,12 @@ int akira_runtime_install_with_manifest(const char *name, const void *binary, si
 {
     if (!name || !binary || size == 0) return -EINVAL;
 
-    /* Persist binary to /lfs/wasm/apps/{name}.wasm */
-    char path[128];
-    int ret = snprintf(path, sizeof(path), "/lfs/wasm/apps/%s.wasm", name);
-    if (ret < 0 || ret >= (int)sizeof(path)) return -ENAMETOOLONG;
-
-    struct fs_file_t file;
-    fs_file_t_init(&file);
-    ret = fs_open(&file, path, FS_O_CREATE | FS_O_WRITE);
-    if (ret == 0) {
-        ssize_t written = fs_write(&file, binary, size);
-        fs_close(&file);
-        if (written != (ssize_t)size) {
-            LOG_ERR("Filesystem write failed: %zd/%zu", written, size);
-            fs_unlink(path);
-            return -EIO;
-        }
-        LOG_INF("Saved WASM binary to %s", path);
-    } else {
-        LOG_WRN("Filesystem not available (err %d) - install will still load into memory", ret);
-    }
-
     /* Save manifest if provided */
     if (manifest_json && manifest_size > 0) {
-        char mpath[128];
-        snprintf(mpath, sizeof(mpath), "/lfs/wasm/apps/%s.manifest.json", name);
-        fs_file_t_init(&file);
-        if (fs_open(&file, mpath, FS_O_CREATE | FS_O_WRITE) == 0) {
-            ssize_t mv = fs_write(&file, manifest_json, manifest_size);
-            fs_close(&file);
+        char mpath[FILE_DIR_MAX_LEN];
+        snprintf(mpath, sizeof(mpath), "/lfs/apps/%s.manifest.json", name);
+        if (fs_manager_exists(mpath) ) {
+            ssize_t mv = fs_manager_write_file(mpath, manifest_json, manifest_size);
             if (mv != (ssize_t)manifest_size) {
                 LOG_WRN("Failed to write manifest fully for %s", name);
             } else {
@@ -458,16 +440,50 @@ int akira_runtime_uninstall(const char *name, int instance_id)
     }
 
     /* Remove files */
-    char path[128];
-    snprintf(path, sizeof(path), "/lfs/wasm/apps/%s.wasm", name);
-    fs_unlink(path);
-    snprintf(path, sizeof(path), "/lfs/wasm/apps/%s.manifest.json", name);
-    fs_unlink(path);
+    char path[FILE_DIR_MAX_LEN];
+    snprintf(path, sizeof(path), "/lfs/apps/%s.wasm", name);
+    int ret = fs_manager_delete_file(path);
+    if(ret < 0){
+        LOG_WRN("Failed to delete %s", path);
+    }
+    snprintf(path, sizeof(path), "/lfs/apps/%s.manifest.json", name);
+    fs_manager_delete_file(path);
+    if(ret < 0){
+        LOG_WRN("Failed to delete %s", path);
+    }
 
     return 0;
 }
 
 /* ===== Native functions (WASM-exposed) ===== */
+
+//TODO: Change these into their respective api files
+
+static int akira_native_log(wasm_exec_env_t exec_env, uint32_t level, char* message){
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    if (!module_inst) return -1;
+
+    switch (level)
+    {
+    case LOG_LEVEL_ERR:
+        LOG_ERR("Logged from wasm app %s",message);
+        break;
+    case LOG_LEVEL_WRN:
+        LOG_WRN("Logged from wasm app %s",message);
+        break;
+    case LOG_LEVEL_INF:
+        LOG_INF("Logged from wasm app %s",message);
+        break;
+    case LOG_LEVEL_DBG:
+        LOG_DBG("Logged from wasm app %s",message);
+        break;
+    default:
+        LOG_INF("UNKOWN TYPE pushed from wasm app (%d)", level);
+        break;
+    }
+
+    return 0;
+}
 
 static int akira_native_display_clear(wasm_exec_env_t exec_env, uint32_t color)
 {

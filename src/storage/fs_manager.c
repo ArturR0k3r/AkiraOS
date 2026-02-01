@@ -13,6 +13,8 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/device.h>
 #include <zephyr/fs/fs.h>
+#include <zephyr/storage/flash_map.h>
+#include <zephyr/fs/littlefs.h>
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -203,8 +205,21 @@ static int init_internal_storage(void)
 
     fs_state.internal_available = false;
 
+    int ret;
+    
+    #define PARTITION_NODE DT_NODELABEL(lfs1)
+
+    FS_FSTAB_DECLARE_ENTRY(PARTITION_NODE);
+    
+    struct fs_mount_t* mp = &FS_FSTAB_ENTRY(PARTITION_NODE);
+
+    ret = fs_mount(mp);
+    if(ret < 0){
+        LOG_INF("Failed to mount lfs: (%d)",ret);
+    }
+
     struct fs_dirent entry;
-    int ret = fs_stat("/lfs", &entry);
+    ret = fs_stat("/lfs", &entry);
 
     if (ret == 0)
     {
@@ -219,7 +234,7 @@ static int init_internal_storage(void)
     }
     else
     {
-        LOG_DBG("LittleFS not available: %d", ret);
+        LOG_INF("LittleFS not available: %d", ret);
         fs_state.internal_available = false;
     }
 
