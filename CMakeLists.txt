@@ -170,6 +170,7 @@ target_sources(app PRIVATE
     src/lib/path_utils.c
     src/lib/error_codes.c
     src/lib/simple_json.c
+    src/lib/mem_helper.c
 )
 
 # ===== Akira Core (kernel, HAL) =====
@@ -183,6 +184,7 @@ target_sources(app PRIVATE
 target_sources(app PRIVATE
     src/runtime/akira_runtime.c
     src/runtime/security.c
+    src/runtime/manifest_parser.c
     src/runtime/app_loader/app_loader.c
     src/runtime/app_manager/app_manager.c
 )
