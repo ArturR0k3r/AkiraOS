@@ -10,6 +10,7 @@
 
 #include "web_server.h"
 #include "ota_manager.h"
+#include "../transport_interface.h"
 
 /* WebServer OTA transport implementation */
 static int webserver_ota_start(void *user_data)
@@ -88,9 +89,9 @@ LOG_MODULE_REGISTER(web_server, CONFIG_LOG_DEFAULT_LEVEL);
 #endif
 #endif
 
-/* Thread stack - tuned to fit DRAM budget. 6KB provides sufficient room
- * for socket handling while lowering internal RAM usage. */
-static K_THREAD_STACK_DEFINE(web_server_stack, 6144);
+/* Thread stack - reduced to 4KB for optimized memory usage.
+ * Uses transport_notify() for zero-copy data dispatch. */
+static K_THREAD_STACK_DEFINE(web_server_stack, 4096);
 static struct k_thread web_server_thread_data;
 static k_tid_t web_server_thread_id;
 
@@ -473,9 +474,11 @@ static int parse_http_request(const char *buffer, char *method, char *path, size
     return 0;
 }
 
-/* Handle firmware upload
+/* Handle firmware upload with optimized multipart parsing and transport_notify()
  * initial_body: body data already read during HTTP header parsing
  * initial_body_len: length of initial_body data
+ *
+ * Uses in-place boundary checking and zero-copy dispatch via transport layer.
  */
 static int handle_firmware_upload(int client_fd, const char *request_headers, size_t content_length,
                                   const char *initial_body, size_t initial_body_len)
@@ -490,7 +493,7 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
     struct timeval upload_timeout = {.tv_sec = 60, .tv_usec = 0};
     setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &upload_timeout, sizeof(upload_timeout));
 
-    /* Find multipart boundary from HTTP headers */
+    /* Find multipart boundary from HTTP headers - in-place check */
     char boundary[128];
     if (find_multipart_boundary(request_headers, boundary, sizeof(boundary)) != 0)
     {
@@ -498,16 +501,13 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
         return -1;
     }
 
-    LOG_INF("Using multipart boundary: %s", boundary);
-    LOG_INF("Starting firmware upload, content-length: %u bytes, initial body: %u bytes",
-            content_length, initial_body_len);
+    LOG_INF("Firmware upload: content-length=%zu, boundary=%s", content_length, boundary);
 
-    /* Buffer to accumulate data until we find the multipart header end.
-     * The initial_body contains the start of the multipart data. */
+    /* Buffer to accumulate data until we find the multipart header end */
     static char header_buffer[2048];
     size_t header_buffered = 0;
 
-    /* Copy initial body data to our header buffer */
+    /* Copy initial body data to header buffer */
     if (initial_body_len > 0)
     {
         size_t copy_len = MIN(initial_body_len, sizeof(header_buffer) - 1);
@@ -516,197 +516,179 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
         header_buffer[header_buffered] = '\0';
     }
 
-    /* Check if we already have the multipart header end */
+    /* In-place boundary checking for multipart header end */
     char *data_start = strstr(header_buffer, "\r\n\r\n");
 
-    /* If not found, keep receiving until we find it */
     while (!data_start && header_buffered < sizeof(header_buffer) - 1)
     {
         ssize_t received = recv(client_fd, header_buffer + header_buffered,
                                 sizeof(header_buffer) - 1 - header_buffered, 0);
         if (received <= 0)
         {
-            LOG_ERR("Failed to receive multipart header (got %u bytes)", header_buffered);
+            LOG_ERR("Failed to receive multipart header");
             send_http_response(client_fd, 400, "text/plain", "Failed to receive header", 0);
             return -1;
         }
         header_buffered += received;
         header_buffer[header_buffered] = '\0';
-
         data_start = strstr(header_buffer, "\r\n\r\n");
-        if (!data_start)
-        {
-            LOG_DBG("Header incomplete, received %u bytes total", header_buffered);
-        }
     }
 
     if (!data_start)
     {
-        LOG_ERR("Could not find end of multipart headers after %u bytes", header_buffered);
-        LOG_HEXDUMP_ERR(header_buffer, MIN(200, header_buffered), "Header start:");
+        LOG_ERR("Could not find multipart header end");
         send_http_response(client_fd, 400, "text/plain", "Invalid multipart format", 0);
         return -1;
     }
     data_start += 4; /* Skip \r\n\r\n */
 
-    /* Calculate how much of the buffer is actual file data */
     size_t header_size = data_start - header_buffer;
     size_t first_data_len = header_buffered - header_size;
-
-    /* Use content_length as the max expected size - actual firmware will be slightly less
-     * due to multipart boundaries, but we detect the closing boundary during upload.
-     * This prevents "write would exceed expected size" errors. */
     size_t expected_size = content_length;
-    LOG_INF("Header size: %u, first data chunk: %u, max expected: %u",
-            header_size, first_data_len, expected_size);
 
-    /* Start OTA update with expected size */
-    LOG_INF("=== OTA START DEBUG ===");
-    LOG_INF("Calling ota_start_update with size: %u", expected_size);
-    enum ota_result result = ota_start_update(expected_size);
-    LOG_INF("ota_start_update returned: %d (%s)", result, ota_result_to_string(result));
-    if (result != OTA_OK)
+    LOG_INF("Header=%zu, first_chunk=%zu, expected=%zu", header_size, first_data_len, expected_size);
+
+    /* Signal transfer start via transport layer */
+    int ret = transport_begin(TRANSPORT_DATA_FIRMWARE, expected_size, "firmware.bin");
+    if (ret != 0)
     {
-        send_http_response(client_fd, 500, "text/plain", ota_result_to_string(result), 0);
+        LOG_ERR("transport_begin failed: %d", ret);
+        send_http_response(client_fd, 500, "text/plain", "Failed to start OTA", 0);
         return -1;
     }
 
-    /* Write the first chunk of file data */
     size_t total_written = 0;
-    if (first_data_len > 0)
-    {
-        LOG_INF("Writing first chunk: %u bytes", first_data_len);
-        result = ota_write_chunk((uint8_t *)data_start, first_data_len);
-        LOG_INF("First chunk write returned: %d (%s)", result, ota_result_to_string(result));
-        if (result != OTA_OK)
-        {
-            LOG_ERR("OTA write failed: %s", ota_result_to_string(result));
-            ota_abort_update();
-            send_http_response(client_fd, 500, "text/plain", ota_result_to_string(result), 0);
-            return -1;
-        }
-        total_written = first_data_len;
-        LOG_INF("First chunk written successfully, total: %u bytes", total_written);
-    }
-
-    /* Now receive and write the rest of the file */
-    static char upload_buffer[1024];
-    /* total_received tracks how many body bytes we've received so far:
-     * - initial_body_len was received during HTTP header parsing
-     * - any extra we received while finding the multipart header end */
-    size_t total_received = initial_body_len + (header_buffered - MIN(initial_body_len, header_buffered));
-    /* Simpler: header_buffered contains everything we have from the body so far */
-    total_received = header_buffered;
+    size_t total_received = header_buffered;
     size_t boundary_len = strlen(boundary);
     int retry_count = 0;
     uint8_t last_progress = 0;
+    int result = 0;
 
-    LOG_INF("Starting receive loop: total_received=%u, content_length=%u",
-            total_received, content_length);
+    /* Chunk info for transport notifications */
+    struct transport_chunk_info chunk_info = {
+        .type = TRANSPORT_DATA_FIRMWARE,
+        .total_size = expected_size,
+        .offset = 0,
+        .flags = 0,
+        .name = "firmware.bin",
+    };
+
+    /* Write first chunk via transport_notify() */
+    if (first_data_len > 0)
+    {
+        chunk_info.offset = 0;
+        ret = transport_notify(TRANSPORT_DATA_FIRMWARE, (uint8_t *)data_start,
+                               first_data_len, &chunk_info);
+        if (ret != 0)
+        {
+            LOG_ERR("First chunk write failed: %d", ret);
+            transport_abort(TRANSPORT_DATA_FIRMWARE);
+            send_http_response(client_fd, 500, "text/plain", "OTA write failed", 0);
+            return -1;
+        }
+        total_written = first_data_len;
+        chunk_info.offset = total_written;
+    }
+
+    /* Receive and dispatch remaining data */
+    static char upload_buffer[1024];
 
     while (total_received < content_length)
     {
-        size_t chunk_size = MIN(1024, content_length - total_received);
-        LOG_DBG("Calling recv for %u bytes...", chunk_size);
+        size_t chunk_size = MIN(sizeof(upload_buffer), content_length - total_received);
         ssize_t received = recv(client_fd, upload_buffer, chunk_size, 0);
-        LOG_DBG("recv returned: %d", received);
 
         if (received < 0)
         {
             if (errno == EAGAIN || errno == EWOULDBLOCK)
             {
-                retry_count++;
-                if (retry_count > 300) /* 300 * 100ms = 30 seconds timeout */
+                if (++retry_count > 300) /* 30 second timeout */
                 {
-                    LOG_ERR("Upload timeout after %u bytes written", total_written);
-                    ota_abort_update();
+                    LOG_ERR("Upload timeout at %zu bytes", total_written);
+                    transport_abort(TRANSPORT_DATA_FIRMWARE);
                     send_http_response(client_fd, 408, "text/plain", "Upload timeout", 0);
                     return -1;
                 }
                 k_msleep(100);
                 continue;
             }
-            LOG_ERR("Receive failed: %d (written %u bytes)", errno, total_written);
-            ota_abort_update();
+            LOG_ERR("Receive failed: errno=%d", errno);
+            transport_abort(TRANSPORT_DATA_FIRMWARE);
             send_http_response(client_fd, 500, "text/plain", "Upload failed", 0);
             return -1;
         }
         else if (received == 0)
         {
-            LOG_WRN("Connection closed at %u/%u bytes", total_received, content_length);
+            LOG_WRN("Connection closed at %zu/%zu bytes", total_received, content_length);
             break;
         }
 
         retry_count = 0;
         total_received += received;
 
-        /* Check for closing boundary - it will be at the end */
+        /* In-place boundary check for closing boundary */
         char *end_boundary = memmem(upload_buffer, received, boundary, boundary_len);
         if (end_boundary)
         {
-            /* Only write data before the boundary */
             size_t data_len = end_boundary - upload_buffer;
-            /* Also remove the preceding \r\n */
-            if (data_len >= 2)
-            {
-                data_len -= 2;
-            }
+            if (data_len >= 2) data_len -= 2; /* Remove preceding \r\n */
+
             if (data_len > 0)
             {
-                result = ota_write_chunk((uint8_t *)upload_buffer, data_len);
-                if (result != OTA_OK)
+                ret = transport_notify(TRANSPORT_DATA_FIRMWARE, (uint8_t *)upload_buffer,
+                                       data_len, &chunk_info);
+                if (ret != 0)
                 {
-                    LOG_ERR("Final write failed: %s", ota_result_to_string(result));
-                    ota_abort_update();
-                    send_http_response(client_fd, 500, "text/plain", ota_result_to_string(result), 0);
+                    LOG_ERR("Final chunk write failed: %d", ret);
+                    transport_abort(TRANSPORT_DATA_FIRMWARE);
+                    send_http_response(client_fd, 500, "text/plain", "OTA write failed", 0);
                     return -1;
                 }
                 total_written += data_len;
             }
-            LOG_INF("Found closing boundary, upload complete");
+            LOG_INF("Closing boundary found, upload complete");
             break;
         }
 
-        /* Write chunk to OTA */
-        result = ota_write_chunk((uint8_t *)upload_buffer, received);
-        if (result != OTA_OK)
+        /* Dispatch chunk via transport layer - zero-copy */
+        ret = transport_notify(TRANSPORT_DATA_FIRMWARE, (uint8_t *)upload_buffer,
+                               received, &chunk_info);
+        if (ret != 0)
         {
-            LOG_ERR("OTA write failed at %u bytes: %s", total_written, ota_result_to_string(result));
-            ota_abort_update();
-            send_http_response(client_fd, 500, "text/plain", ota_result_to_string(result), 0);
+            LOG_ERR("Chunk write failed at %zu: %d", total_written, ret);
+            transport_abort(TRANSPORT_DATA_FIRMWARE);
+            send_http_response(client_fd, 500, "text/plain", "OTA write failed", 0);
             return -1;
         }
         total_written += received;
+        chunk_info.offset = total_written;
 
-        /* Log progress every 10% */
+        /* Progress report every 10% */
         uint8_t progress = (total_written * 100) / expected_size;
         if (progress >= last_progress + 10)
         {
-            LOG_INF("OTA write: %u%% (%u bytes)", progress, total_written);
+            LOG_INF("OTA: %u%% (%zu bytes)", progress, total_written);
             last_progress = progress;
         }
 
-        /* Yield to allow other tasks */
         k_yield();
     }
 
-    LOG_INF("Upload finished: wrote %u bytes to flash", total_written);
+    LOG_INF("Upload finished: wrote %zu bytes to flash", total_written);
 
     if (total_written == 0)
     {
-        LOG_ERR("No valid firmware data received");
-        ota_abort_update();
+        transport_abort(TRANSPORT_DATA_FIRMWARE);
         send_http_response(client_fd, 400, "text/plain", "No file data found", 0);
         return -1;
     }
 
-    LOG_INF("Finalizing OTA update...");
-
-    /* Finalize update */
-    result = ota_finalize_update();
-    if (result != OTA_OK)
+    /* Signal transfer end - this triggers finalization */
+    ret = transport_end(TRANSPORT_DATA_FIRMWARE, true);
+    if (ret != 0)
     {
-        send_http_response(client_fd, 500, "text/plain", ota_result_to_string(result), 0);
+        LOG_ERR("transport_end failed: %d", ret);
+        send_http_response(client_fd, 500, "text/plain", "OTA finalization failed", 0);
         return -1;
     }
 

@@ -250,7 +250,10 @@ endif()
 
 # Conditional OTA manager based on flash availability
 if(CONFIG_FLASH_MAP AND CONFIG_BOOTLOADER_MCUBOOT)
-    target_sources(app PRIVATE src/connectivity/ota/ota_manager.c)
+    target_sources(app PRIVATE 
+        src/connectivity/transport_interface.c
+        src/connectivity/ota/ota_manager.c
+    )
 endif()
 
 # Legacy embedded web UI (optional)

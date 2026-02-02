@@ -7,6 +7,7 @@
  */
 
 #include "ota_manager.h"
+#include "../transport_interface.h"
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/reboot.h>
 #include <zephyr/shell/shell.h>
@@ -31,14 +32,12 @@ LOG_MODULE_REGISTER(ota_manager, AKIRA_LOG_LEVEL);
 #define FLASH_AREA_IMAGE_SECONDARY FIXED_PARTITION_ID(slot1_partition)
 #endif
 
-/* Optimized buffer sizes */
+/* Optimized buffer sizes - 4KB aligned for flash page writes */
 #define OTA_WRITE_BUFFER_SIZE 4096        // Align with flash page size
-#define OTA_PROGRESS_REPORT_INTERVAL 8192 // Report every 8KB instead of calculating modulo
+#define OTA_PROGRESS_REPORT_INTERVAL 8192 // Report every 8KB
 
-/* Thread stack - reduced from default */
-static K_THREAD_STACK_DEFINE(ota_thread_stack, 3072); // Reduced to save memory
-static struct k_thread ota_thread_data;
-static k_tid_t ota_thread_id;
+/* Direct callback mode - no dedicated thread needed */
+static int ota_transport_handler_id = -1;
 
 /* Compact OTA state management */
 static struct
@@ -105,40 +104,9 @@ int ota_manager_unregister_transport(const char *name)
     return OTA_ERROR_NOT_INITIALIZED;
 }
 
-/* Reduced message queue size */
-#define OTA_MSG_QUEUE_SIZE 8
-
-enum ota_msg_type
-{
-    MSG_START_UPDATE = 1,
-    MSG_WRITE_CHUNK,
-    MSG_FINALIZE_UPDATE,
-    MSG_ABORT_UPDATE,
-    MSG_CONFIRM_FIRMWARE,
-    MSG_REQUEST_ROLLBACK,
-    MSG_REBOOT_REQUEST
-};
-
-/* Optimized message structure with union for space efficiency */
-struct ota_msg
-{
-    enum ota_msg_type type : 8;
-    uint8_t reserved[3];
-    union
-    {
-        uint32_t expected_size;
-        struct
-        {
-            const uint8_t *data;
-            uint16_t length;
-        } chunk;
-        uint32_t delay_ms;
-    } payload;
-    struct k_sem *completion_sem;
-    enum ota_result *result;
-} __packed;
-
-K_MSGQ_DEFINE(ota_msgq, sizeof(struct ota_msg), OTA_MSG_QUEUE_SIZE, 4);
+/* Forward declaration for transport callback */
+static int ota_data_callback(const uint8_t *data, size_t len,
+                             const struct transport_chunk_info *info);
 
 /* Optimized progress reporting */
 static inline void update_progress_fast(enum ota_state state)
@@ -487,126 +455,92 @@ static enum ota_result do_confirm_firmware(void)
     return (ret == 0) ? OTA_OK : OTA_ERROR_BOOT_REQUEST_FAILED;
 }
 
-/* Optimized thread main function */
-static void ota_thread_main(void *p1, void *p2, void *p3)
+/**
+ * @brief Transport callback for firmware data
+ *
+ * Called directly from the transport layer for zero-copy data dispatch.
+ * Handles flash writes synchronously with 4KB alignment buffer.
+ *
+ * @param data Pointer to chunk data
+ * @param len Length of data chunk
+ * @param info Chunk metadata
+ * @return 0 on success, negative errno on failure
+ */
+static int ota_data_callback(const uint8_t *data, size_t len,
+                             const struct transport_chunk_info *info)
 {
-    struct ota_msg msg;
-    enum ota_result result;
+    if (!info) {
+        return -EINVAL;
+    }
 
-    LOG_INF("OTA thread ready");
+    /* Handle transfer lifecycle events */
+    if (info->flags & TRANSPORT_FLAG_CHUNK_START) {
+        LOG_INF("OTA: Transfer started, size=%u", info->total_size);
+        enum ota_result result = do_start_update(info->total_size);
+        return (result == OTA_OK) ? 0 : -EIO;
+    }
 
-    while (1)
-    {
-        LOG_DBG("OTA thread: Waiting for message...");
-        if (k_msgq_get(&ota_msgq, &msg, K_FOREVER) == 0)
-        {
-            LOG_INF("=== OTA THREAD: Message received, type=%d ===", msg.type);
-            result = OTA_ERROR_INVALID_PARAM;
+    if (info->flags & TRANSPORT_FLAG_ABORT) {
+        LOG_WRN("OTA: Transfer aborted");
+        do_abort_update();
+        return 0;
+    }
 
-            switch (msg.type)
-            {
-            case MSG_START_UPDATE:
-                result = do_start_update(msg.payload.expected_size);
-                break;
-            case MSG_WRITE_CHUNK:
-                result = do_write_chunk(msg.payload.chunk.data, msg.payload.chunk.length);
-                break;
-            case MSG_FINALIZE_UPDATE:
-                result = do_finalize_update();
-                break;
-            case MSG_ABORT_UPDATE:
-                result = do_abort_update();
-                break;
-            case MSG_CONFIRM_FIRMWARE:
-                result = do_confirm_firmware();
-                break;
-            case MSG_REQUEST_ROLLBACK:
-                result = OTA_OK;
-                k_sleep(K_MSEC(1000));
-                sys_reboot(SYS_REBOOT_WARM);
-                break;
-            case MSG_REBOOT_REQUEST:
-                if (msg.payload.delay_ms > 0)
-                {
-                    k_sleep(K_MSEC(msg.payload.delay_ms));
-                }
-                sys_reboot(SYS_REBOOT_WARM);
-                break;
-            }
+    if (info->flags & TRANSPORT_FLAG_CHUNK_END) {
+        LOG_INF("OTA: Transfer complete, finalizing...");
+        enum ota_result result = do_finalize_update();
+        return (result == OTA_OK) ? 0 : -EIO;
+    }
 
-            /* Signal completion */
-            if (msg.result)
-            {
-                *msg.result = result;
-            }
-            if (msg.completion_sem)
-            {
-                k_sem_give(msg.completion_sem);
-            }
+    /* Handle data chunks */
+    if (data && len > 0) {
+        if (len > 65535) {
+            LOG_ERR("OTA: Chunk too large: %zu", len);
+            return -EINVAL;
+        }
 
-            /* Handle errors for non-write operations */
-            if (result != OTA_OK && msg.type != MSG_WRITE_CHUNK)
-            {
-                set_error(result, ota_result_to_string(result));
-            }
+        enum ota_result result = do_write_chunk(data, (uint16_t)len);
+        if (result != OTA_OK) {
+            LOG_ERR("OTA: Write failed: %s", ota_result_to_string(result));
+            return -EIO;
         }
     }
+
+    return 0;
 }
 
-/* Optimized message sending */
-static enum ota_result send_ota_message_sync(struct ota_msg *msg)
-{
-    enum ota_result result = OTA_ERROR_TIMEOUT;
-    struct k_sem completion_sem;
-
-    k_sem_init(&completion_sem, 0, 1);
-    msg->completion_sem = &completion_sem;
-    msg->result = &result;
-
-    if (k_msgq_put(&ota_msgq, msg, K_MSEC(1000)) != 0)
-    {
-        LOG_ERR("Failed to send OTA message (queue full)");
-        return OTA_ERROR_TIMEOUT;
-    }
-
-    /* Wait with timeout to prevent infinite blocking - 120s for large firmware */
-    LOG_INF("Waiting for OTA operation to complete (120s timeout)...");
-    if (k_sem_take(&completion_sem, K_MSEC(120000)) != 0)
-    {
-        LOG_ERR("OTA operation timed out after 120 seconds");
-        return OTA_ERROR_TIMEOUT;
-    }
-    LOG_INF("OTA operation completed, result: %d", result);
-
-    return result;
-}
-
-/* Public API */
+/* Public API - Direct callback mode (no message queue) */
 int ota_manager_init(void)
 {
     memset(&ota_status, 0, sizeof(ota_status));
     ota_status.state = OTA_STATE_IDLE;
     strcpy(ota_status.status_message, "Initialized");
 
-    ota_thread_id = k_thread_create(&ota_thread_data,
-                                    ota_thread_stack,
-                                    K_THREAD_STACK_SIZEOF(ota_thread_stack),
-                                    ota_thread_main,
-                                    NULL, NULL, NULL,
-                                    OTA_THREAD_PRIORITY,
-                                    0, K_NO_WAIT);
+    /* Initialize transport interface if not already done */
+    transport_init();
 
-    k_thread_name_set(ota_thread_id, "ota_mgr");
-    LOG_INF("OTA Manager ready");
+    /* Register as handler for FIRMWARE data type */
+    ota_transport_handler_id = transport_register_handler(
+        TRANSPORT_DATA_FIRMWARE,
+        ota_data_callback,
+        NULL,
+        0  /* Highest priority */
+    );
+
+    if (ota_transport_handler_id < 0) {
+        LOG_ERR("Failed to register OTA transport handler: %d",
+                ota_transport_handler_id);
+        /* Continue anyway - direct API still works */
+    }
+
+    LOG_INF("OTA Manager ready (callback mode)");
     return 0;
 }
 
+/* Direct API - synchronous operation, no thread needed */
 enum ota_result ota_start_update(size_t expected_size)
 {
-    struct ota_msg msg = {
-        .type = MSG_START_UPDATE,
-        .payload.expected_size = expected_size};
-    return send_ota_message_sync(&msg);
+    return do_start_update(expected_size);
 }
 
 enum ota_result ota_write_chunk(const uint8_t *data, size_t length)
@@ -615,25 +549,17 @@ enum ota_result ota_write_chunk(const uint8_t *data, size_t length)
     {
         return OTA_ERROR_INVALID_PARAM;
     }
-
-    /* For write operations, we need synchronous handling to detect errors */
-    struct ota_msg msg = {
-        .type = MSG_WRITE_CHUNK,
-        .payload.chunk = {.data = data, .length = (uint16_t)length}};
-
-    return send_ota_message_sync(&msg);
+    return do_write_chunk(data, (uint16_t)length);
 }
 
 enum ota_result ota_finalize_update(void)
 {
-    struct ota_msg msg = {.type = MSG_FINALIZE_UPDATE};
-    return send_ota_message_sync(&msg);
+    return do_finalize_update();
 }
 
 enum ota_result ota_abort_update(void)
 {
-    struct ota_msg msg = {.type = MSG_ABORT_UPDATE};
-    return send_ota_message_sync(&msg);
+    return do_abort_update();
 }
 
 const struct ota_progress *ota_get_progress(void)
@@ -655,8 +581,7 @@ const struct ota_progress *ota_get_progress(void)
 
 enum ota_result ota_confirm_firmware(void)
 {
-    struct ota_msg msg = {.type = MSG_CONFIRM_FIRMWARE};
-    return send_ota_message_sync(&msg);
+    return do_confirm_firmware();
 }
 
 enum ota_result ota_register_progress_callback(ota_progress_cb_t callback, void *user_data)
@@ -707,12 +632,11 @@ const char *ota_state_to_string(enum ota_state state)
 
 void ota_reboot_to_apply_update(uint32_t delay_ms)
 {
-    struct ota_msg msg = {
-        .type = MSG_REBOOT_REQUEST,
-        .payload.delay_ms = delay_ms,
-        .completion_sem = NULL,
-        .result = NULL};
-    k_msgq_put(&ota_msgq, &msg, K_NO_WAIT);
+    LOG_INF("Scheduling reboot in %u ms", delay_ms);
+    if (delay_ms > 0) {
+        k_sleep(K_MSEC(delay_ms));
+    }
+    sys_reboot(SYS_REBOOT_WARM);
 }
 
 /* Simplified shell commands */
