@@ -73,9 +73,9 @@ LOG_MODULE_REGISTER(web_server, CONFIG_LOG_DEFAULT_LEVEL);
 #define TCP_NODELAY 1
 #endif
 
-/* Optimized constants */
-#define HTTP_BUFFER_SIZE 768
-#define HTTP_RESPONSE_BUFFER_SIZE 1536
+/* Optimized constants - small stack buffers, large data uses akira_buf pool */
+#define HTTP_BUFFER_SIZE 512
+#define HTTP_RESPONSE_BUFFER_SIZE 256
 #undef UPLOAD_CHUNK_SIZE
 #define UPLOAD_CHUNK_SIZE 512
 /* Backwards compatible fallback for MAX_CONNECTIONS: if CONFIG_AKIRA_HTTP_MAX_CONNECTIONS
@@ -136,7 +136,7 @@ struct server_msg
 
 K_MSGQ_DEFINE(server_msgq, sizeof(struct server_msg), SERVER_MSG_QUEUE_SIZE, 4);
 
-#/* Log buffer for web terminal - compact size */
+/* Log buffer for web terminal - compact size */
 #define LOG_BUFFER_SIZE 1024
 #define MAX_LOG_LINES 30
 static char log_buffer[LOG_BUFFER_SIZE];
@@ -339,11 +339,11 @@ static int find_multipart_boundary(const char *request_data, char *boundary, siz
     return 0;
 }
 
-/* HTTP response helpers */
+/* HTTP response helpers - uses small stack buffer for headers only */
 static int send_http_response(int client_fd, int status_code, const char *content_type,
                               const char *body, size_t body_len)
 {
-    char response[HTTP_RESPONSE_BUFFER_SIZE];
+    char header[HTTP_RESPONSE_BUFFER_SIZE];
     int header_len;
 
     if (body_len == 0 && body)
@@ -351,9 +351,7 @@ static int send_http_response(int client_fd, int status_code, const char *conten
         body_len = strlen(body);
     }
 
-    LOG_DBG("Sending response: status=%d, len=%zu", status_code, body_len);
-
-    header_len = snprintf(response, sizeof(response),
+    header_len = snprintf(header, sizeof(header),
                           "HTTP/1.1 %d %s\r\n"
                           "Content-Type: %s\r\n"
                           "Content-Length: %zu\r\n"
@@ -364,82 +362,45 @@ static int send_http_response(int client_fd, int status_code, const char *conten
                           content_type,
                           body_len);
 
-    if (header_len >= sizeof(response))
+    if (header_len >= sizeof(header))
     {
         LOG_ERR("Header too large");
         return -1;
     }
 
     /* Send header */
-    ssize_t sent = send(client_fd, response, header_len, 0);
-    if (sent != header_len)
+    if (send(client_fd, header, header_len, 0) != header_len)
     {
-        LOG_ERR("Header send failed: sent=%zd, errno=%d", sent, errno);
+        LOG_ERR("Header send failed: errno=%d", errno);
         return -1;
     }
 
-    /* Send body in small chunks if present */
+    /* Send body - simple chunked send */
     if (body && body_len > 0)
     {
         const char *ptr = body;
         size_t remaining = body_len;
-        size_t chunk_size = 256; /* Start with smaller chunks for large payloads */
-        int retry_count = 0;
-
-        LOG_DBG("Sending body: %zu bytes total", body_len);
 
         while (remaining > 0)
         {
-            size_t to_send = (remaining > chunk_size) ? chunk_size : remaining;
-
-            sent = send(client_fd, ptr, to_send, 0);
-            if (sent > 0)
+            size_t to_send = (remaining > 512) ? 512 : remaining;
+            ssize_t sent = send(client_fd, ptr, to_send, 0);
+            
+            if (sent <= 0)
             {
-                ptr += sent;
-                remaining -= sent;
-                retry_count = 0;
-                LOG_DBG("Sent %zd bytes, %zu remaining", sent, remaining);
-                /* Give network stack time to process */
-                k_msleep(10);
-                k_yield();
-            }
-            else if (sent == 0)
-            {
-                /* Connection closed */
-                LOG_WRN("Connection closed by peer");
-                return -1;
-            }
-            else
-            {
-                /* Error */
-                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOMEM)
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
                 {
-                    /* Socket buffer full - wait and retry with exponential backoff */
-                    retry_count++;
-                    if (retry_count > 20)
-                    {
-                        LOG_ERR("Send retry limit exceeded: errno=%d, remaining=%zu", errno, remaining);
-                        return -1;
-                    }
-
-                    /* Reduce chunk size on memory pressure */
-                    if (errno == ENOMEM && chunk_size > 128)
-                    {
-                        chunk_size = 128;
-                        LOG_DBG("Reduced chunk size to %zu due to memory pressure", chunk_size);
-                    }
-
-                    /* Exponential backoff with cap at 200ms */
-                    int delay_ms = (retry_count * 20 < 200) ? (retry_count * 20) : 200;
-                    LOG_DBG("Send retry %d: errno=%d, waiting %dms", retry_count, errno, delay_ms);
-                    k_msleep(delay_ms);
+                    k_msleep(50);
                     continue;
                 }
-                LOG_ERR("Send error: errno=%d, remaining=%zu", errno, remaining);
+                LOG_ERR("Body send failed: errno=%d", errno);
                 return -1;
             }
+            
+            ptr += sent;
+            remaining -= sent;
+            k_yield();
         }
-        LOG_DBG("Body sent successfully");
     }
 
     return 0;
@@ -1260,6 +1221,8 @@ static int run_web_server(void)
     {
         if (listen(server_fd, MAX_CONNECTIONS) == 0)
         {
+            /* Successfully listening - now we're truly running */
+            server_state.state = WEB_SERVER_RUNNING;
             LOG_INF("HTTP server listening on port %d", HTTP_PORT);
             break;
         }
@@ -1360,17 +1323,30 @@ static int run_web_server(void)
 /* Server operations */
 static void do_start_server(void)
 {
-    if (server_state.state == WEB_SERVER_RUNNING)
+    if (server_state.state == WEB_SERVER_RUNNING || 
+        server_state.state == WEB_SERVER_STARTING)
     {
         return;
     }
 
-    server_state.state = WEB_SERVER_RUNNING;
+    server_state.state = WEB_SERVER_STARTING;
+    LOG_INF("Starting web server...");
+    
     /* This is a blocking call - runs until server is stopped */
-    run_web_server();
-    /* Server has stopped */
-    server_state.state = WEB_SERVER_STOPPED;
-    LOG_INF("Web server stopped");
+    int ret = run_web_server();
+    
+    if (ret < 0)
+    {
+        /* Server failed to start or encountered error */
+        server_state.state = WEB_SERVER_ERROR;
+        LOG_ERR("Web server failed with error: %d", ret);
+    }
+    else
+    {
+        /* Server stopped normally */
+        server_state.state = WEB_SERVER_STOPPED;
+        LOG_INF("Web server stopped");
+    }
 }
 
 static void do_stop_server(void)
