@@ -68,6 +68,47 @@ int akira_runtime_uninstall(const char *name, int instance_id);
 bool akira_security_check_exec(wasm_exec_env_t exec_env, const char *capability);
 bool akira_security_check_native(const char *capability);
 
+/*
+ * WASM Memory Allocation with Per-App Quota Enforcement
+ *
+ * These functions provide quota-aware memory allocation for WASM apps.
+ * Use PSRAM-preferred allocation and enforce per-app memory limits.
+ * Quota violations return NULL gracefully without crashing.
+ */
+
+/**
+ * @brief Allocate memory for a WASM app with quota enforcement
+ *
+ * @param exec_env  WAMR execution environment
+ * @param size      Number of bytes to allocate
+ * @return Pointer to allocated memory, or NULL on failure/quota exceeded
+ */
+void *akira_wasm_malloc(wasm_exec_env_t exec_env, size_t size);
+
+/**
+ * @brief Free memory allocated with akira_wasm_malloc
+ *
+ * @param exec_env  WAMR execution environment
+ * @param ptr       Pointer to memory
+ */
+void akira_wasm_free(wasm_exec_env_t exec_env, void *ptr);
+
+/**
+ * @brief Get current memory usage for an app
+ *
+ * @param instance_id  App instance ID
+ * @return Current memory usage in bytes
+ */
+uint32_t akira_runtime_get_memory_used(int instance_id);
+
+/**
+ * @brief Get memory quota for an app
+ *
+ * @param instance_id  App instance ID
+ * @return Memory quota in bytes (0 = unlimited)
+ */
+uint32_t akira_runtime_get_memory_quota(int instance_id);
+
 #ifdef __cplusplus
 }
 #endif

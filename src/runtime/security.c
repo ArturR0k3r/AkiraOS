@@ -28,13 +28,19 @@ bool akira_security_check(const char *capability)
 }
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
+/* Get capability mask for exec_env - for use with inline macros */
+uint32_t akira_security_get_cap_mask(wasm_exec_env_t exec_env)
+{
+    if (!exec_env) return 0;
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    return akira_runtime_get_cap_mask_for_module_inst(inst);
+}
+
 bool akira_security_check_exec(wasm_exec_env_t exec_env, const char *capability)
 {
     if (!exec_env || !capability) return false;
 
-    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    uint32_t mask = akira_runtime_get_cap_mask_for_module_inst(inst);
-
+    uint32_t mask = akira_security_get_cap_mask(exec_env);
     uint32_t req = akira_capability_str_to_mask(capability);
     if (req == 0) {
         LOG_WRN("Security: unknown capability requested: %s", capability);
@@ -43,6 +49,7 @@ bool akira_security_check_exec(wasm_exec_env_t exec_env, const char *capability)
 
     bool ok = (mask & req) != 0;
     if (!ok) {
+        wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
         char namebuf[32];
         if (akira_runtime_get_name_for_module_inst(inst, namebuf, sizeof(namebuf)) == 0)
             LOG_WRN("Security: capability denied for app %s: %s", namebuf, capability);
@@ -52,6 +59,12 @@ bool akira_security_check_exec(wasm_exec_env_t exec_env, const char *capability)
     return ok;
 }
 #else
+uint32_t akira_security_get_cap_mask(wasm_exec_env_t exec_env)
+{
+    (void)exec_env;
+    return 0;
+}
+
 bool akira_security_check_exec(wasm_exec_env_t exec_env, const char *capability)
 {
     (void)exec_env; (void)capability;
