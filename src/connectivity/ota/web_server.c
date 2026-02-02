@@ -11,6 +11,7 @@
 #include "web_server.h"
 #include "ota_manager.h"
 #include "../transport_interface.h"
+#include "../buf_pool.h"
 
 /* WebServer OTA transport implementation */
 static int webserver_ota_start(void *user_data)
@@ -503,47 +504,51 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
 
     LOG_INF("Firmware upload: content-length=%zu, boundary=%s", content_length, boundary);
 
-    /* Buffer to accumulate data until we find the multipart header end */
-    static char header_buffer[2048];
-    size_t header_buffered = 0;
+    /* Allocate buffer from shared pool for multipart header parsing */
+    struct net_buf *hdr_buf = akira_buf_alloc(K_MSEC(100));
+    if (!hdr_buf)
+    {
+        LOG_ERR("Failed to allocate header buffer from pool");
+        send_http_response(client_fd, 503, "text/plain", "Server busy", 0);
+        return -1;
+    }
 
     /* Copy initial body data to header buffer */
     if (initial_body_len > 0)
     {
-        size_t copy_len = MIN(initial_body_len, sizeof(header_buffer) - 1);
-        memcpy(header_buffer, initial_body, copy_len);
-        header_buffered = copy_len;
-        header_buffer[header_buffered] = '\0';
+        size_t copy_len = MIN(initial_body_len, net_buf_tailroom(hdr_buf));
+        net_buf_add_mem(hdr_buf, initial_body, copy_len);
     }
 
     /* In-place boundary checking for multipart header end */
-    char *data_start = strstr(header_buffer, "\r\n\r\n");
+    char *data_start = strstr((char *)hdr_buf->data, "\r\n\r\n");
 
-    while (!data_start && header_buffered < sizeof(header_buffer) - 1)
+    while (!data_start && net_buf_tailroom(hdr_buf) > 0)
     {
-        ssize_t received = recv(client_fd, header_buffer + header_buffered,
-                                sizeof(header_buffer) - 1 - header_buffered, 0);
+        ssize_t received = recv(client_fd, net_buf_tail(hdr_buf),
+                                net_buf_tailroom(hdr_buf), 0);
         if (received <= 0)
         {
             LOG_ERR("Failed to receive multipart header");
+            akira_buf_unref(hdr_buf);
             send_http_response(client_fd, 400, "text/plain", "Failed to receive header", 0);
             return -1;
         }
-        header_buffered += received;
-        header_buffer[header_buffered] = '\0';
-        data_start = strstr(header_buffer, "\r\n\r\n");
+        net_buf_add(hdr_buf, received);
+        data_start = strstr((char *)hdr_buf->data, "\r\n\r\n");
     }
 
     if (!data_start)
     {
         LOG_ERR("Could not find multipart header end");
+        akira_buf_unref(hdr_buf);
         send_http_response(client_fd, 400, "text/plain", "Invalid multipart format", 0);
         return -1;
     }
     data_start += 4; /* Skip \r\n\r\n */
 
-    size_t header_size = data_start - header_buffer;
-    size_t first_data_len = header_buffered - header_size;
+    size_t header_size = data_start - (char *)hdr_buf->data;
+    size_t first_data_len = hdr_buf->len - header_size;
     size_t expected_size = content_length;
 
     LOG_INF("Header=%zu, first_chunk=%zu, expected=%zu", header_size, first_data_len, expected_size);
@@ -553,16 +558,16 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
     if (ret != 0)
     {
         LOG_ERR("transport_begin failed: %d", ret);
+        akira_buf_unref(hdr_buf);
         send_http_response(client_fd, 500, "text/plain", "Failed to start OTA", 0);
         return -1;
     }
 
     size_t total_written = 0;
-    size_t total_received = header_buffered;
+    size_t total_received = hdr_buf->len;
     size_t boundary_len = strlen(boundary);
     int retry_count = 0;
     uint8_t last_progress = 0;
-    int result = 0;
 
     /* Chunk info for transport notifications */
     struct transport_chunk_info chunk_info = {
@@ -582,6 +587,7 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
         if (ret != 0)
         {
             LOG_ERR("First chunk write failed: %d", ret);
+            akira_buf_unref(hdr_buf);
             transport_abort(TRANSPORT_DATA_FIRMWARE);
             send_http_response(client_fd, 500, "text/plain", "OTA write failed", 0);
             return -1;
@@ -590,13 +596,27 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
         chunk_info.offset = total_written;
     }
 
-    /* Receive and dispatch remaining data */
-    static char upload_buffer[1024];
+    /* Release header buffer - no longer needed */
+    akira_buf_unref(hdr_buf);
+    hdr_buf = NULL;
+
+    /* Allocate upload buffer from shared pool for zero-copy receive */
+    struct net_buf *upload_buf = akira_buf_alloc(K_MSEC(100));
+    if (!upload_buf)
+    {
+        LOG_ERR("Failed to allocate upload buffer from pool");
+        transport_abort(TRANSPORT_DATA_FIRMWARE);
+        send_http_response(client_fd, 503, "text/plain", "Server busy", 0);
+        return -1;
+    }
 
     while (total_received < content_length)
     {
-        size_t chunk_size = MIN(sizeof(upload_buffer), content_length - total_received);
-        ssize_t received = recv(client_fd, upload_buffer, chunk_size, 0);
+        /* Reset buffer for new chunk */
+        akira_buf_reset(upload_buf);
+
+        size_t chunk_size = MIN(AKIRA_BUF_SIZE, content_length - total_received);
+        ssize_t received = recv(client_fd, upload_buf->data, chunk_size, 0);
 
         if (received < 0)
         {
@@ -605,6 +625,7 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
                 if (++retry_count > 300) /* 30 second timeout */
                 {
                     LOG_ERR("Upload timeout at %zu bytes", total_written);
+                    akira_buf_unref(upload_buf);
                     transport_abort(TRANSPORT_DATA_FIRMWARE);
                     send_http_response(client_fd, 408, "text/plain", "Upload timeout", 0);
                     return -1;
@@ -613,6 +634,7 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
                 continue;
             }
             LOG_ERR("Receive failed: errno=%d", errno);
+            akira_buf_unref(upload_buf);
             transport_abort(TRANSPORT_DATA_FIRMWARE);
             send_http_response(client_fd, 500, "text/plain", "Upload failed", 0);
             return -1;
@@ -623,23 +645,26 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
             break;
         }
 
+        /* Update buffer length after recv */
+        net_buf_add(upload_buf, received);
         retry_count = 0;
         total_received += received;
 
         /* In-place boundary check for closing boundary */
-        char *end_boundary = memmem(upload_buffer, received, boundary, boundary_len);
+        char *end_boundary = memmem(upload_buf->data, upload_buf->len, boundary, boundary_len);
         if (end_boundary)
         {
-            size_t data_len = end_boundary - upload_buffer;
+            size_t data_len = end_boundary - (char *)upload_buf->data;
             if (data_len >= 2) data_len -= 2; /* Remove preceding \r\n */
 
             if (data_len > 0)
             {
-                ret = transport_notify(TRANSPORT_DATA_FIRMWARE, (uint8_t *)upload_buffer,
+                ret = transport_notify(TRANSPORT_DATA_FIRMWARE, upload_buf->data,
                                        data_len, &chunk_info);
                 if (ret != 0)
                 {
                     LOG_ERR("Final chunk write failed: %d", ret);
+                    akira_buf_unref(upload_buf);
                     transport_abort(TRANSPORT_DATA_FIRMWARE);
                     send_http_response(client_fd, 500, "text/plain", "OTA write failed", 0);
                     return -1;
@@ -650,17 +675,18 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
             break;
         }
 
-        /* Dispatch chunk via transport layer - zero-copy */
-        ret = transport_notify(TRANSPORT_DATA_FIRMWARE, (uint8_t *)upload_buffer,
-                               received, &chunk_info);
+        /* Dispatch chunk via transport layer - zero-copy from net_buf */
+        ret = transport_notify(TRANSPORT_DATA_FIRMWARE, upload_buf->data,
+                               upload_buf->len, &chunk_info);
         if (ret != 0)
         {
             LOG_ERR("Chunk write failed at %zu: %d", total_written, ret);
+            akira_buf_unref(upload_buf);
             transport_abort(TRANSPORT_DATA_FIRMWARE);
             send_http_response(client_fd, 500, "text/plain", "OTA write failed", 0);
             return -1;
         }
-        total_written += received;
+        total_written += upload_buf->len;
         chunk_info.offset = total_written;
 
         /* Progress report every 10% */
@@ -673,6 +699,9 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
 
         k_yield();
     }
+
+    /* Release upload buffer */
+    akira_buf_unref(upload_buf);
 
     LOG_INF("Upload finished: wrote %zu bytes to flash", total_written);
 
@@ -737,14 +766,19 @@ static int handle_api_request(int client_fd, const char *path)
 
     if (strcmp(path, "/api/logs") == 0)
     {
-        /* Return logs with HTML formatting for colors */
+        /* Return logs with HTML formatting for colors - use shared buffer pool */
+        struct net_buf *log_buf = akira_buf_alloc(K_MSEC(50));
+        if (!log_buf)
+        {
+            return send_http_response(client_fd, 503, "text/plain", "Server busy", 0);
+        }
+
         k_mutex_lock(&log_mutex, K_FOREVER);
 
-        /* Format logs with color coding */
-        static char formatted_logs[LOG_BUFFER_SIZE + 512];
+        /* Format logs with color coding into net_buf */
         char *src = log_buffer;
-        char *dst = formatted_logs;
-        char *dst_end = formatted_logs + sizeof(formatted_logs) - 100;
+        char *dst = (char *)log_buf->data;
+        char *dst_end = dst + AKIRA_BUF_SIZE - 100;
 
         while (*src && dst < dst_end)
         {
@@ -805,7 +839,10 @@ static int handle_api_request(int client_fd, const char *path)
         *dst = '\0';
 
         k_mutex_unlock(&log_mutex);
-        return send_http_response(client_fd, 200, "text/html", formatted_logs, 0);
+
+        int result = send_http_response(client_fd, 200, "text/html", (char *)log_buf->data, 0);
+        akira_buf_unref(log_buf);
+        return result;
     }
 
     if (strcmp(path, "/api/status") == 0)
@@ -1124,27 +1161,39 @@ static int handle_http_request(int client_fd)
                 }
             }
 
-            /* Receive remaining data */
+            /* Receive remaining data using shared buffer pool */
             size_t total_received = body_already_read;
-            static char app_upload_buf[512];
+            struct net_buf *app_buf = akira_buf_alloc(K_MSEC(100));
+            if (!app_buf)
+            {
+                app_manager_install_abort(session);
+                return send_http_response(client_fd, 503, "text/plain", "Server busy", 0);
+            }
+
             while (total_received < content_length)
             {
-                size_t chunk_size = MIN(sizeof(app_upload_buf), content_length - total_received);
-                ssize_t recvd = recv(client_fd, app_upload_buf, chunk_size, 0);
+                akira_buf_reset(app_buf);
+                size_t chunk_size = MIN(AKIRA_BUF_SIZE, content_length - total_received);
+                ssize_t recvd = recv(client_fd, app_buf->data, chunk_size, 0);
                 if (recvd <= 0)
                 {
+                    akira_buf_unref(app_buf);
                     app_manager_install_abort(session);
                     return send_http_response(client_fd, 500, "text/plain", "Upload failed", 0);
                 }
-                int ret = app_manager_install_chunk(session, app_upload_buf, recvd);
+                net_buf_add(app_buf, recvd);
+                int ret = app_manager_install_chunk(session, (const char *)app_buf->data, app_buf->len);
                 if (ret < 0)
                 {
+                    akira_buf_unref(app_buf);
                     app_manager_install_abort(session);
                     return send_http_response(client_fd, 500, "text/plain", "Chunk write failed", 0);
                 }
                 total_received += recvd;
                 k_yield();
             }
+
+            akira_buf_unref(app_buf);
 
             /* Finalize install */
             int app_id = app_manager_install_end(session, NULL);

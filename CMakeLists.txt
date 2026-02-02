@@ -258,6 +258,11 @@ if(CONFIG_FLASH_MAP AND CONFIG_BOOTLOADER_MCUBOOT)
     )
 endif()
 
+# Shared buffer pool for connectivity (HTTP uploads, OTA, etc.)
+if(CONFIG_AKIRA_EMBEDDED_WEB OR CONFIG_AKIRA_OTA)
+    target_sources(app PRIVATE src/connectivity/buf_pool.c)
+endif()
+
 # Legacy embedded web UI (optional)
 if(CONFIG_AKIRA_EMBEDDED_WEB)
     target_sources(app PRIVATE src/connectivity/ota/web_server.c)
