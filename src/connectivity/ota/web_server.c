@@ -505,7 +505,7 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
     LOG_INF("Firmware upload: content-length=%zu, boundary=%s", content_length, boundary);
 
     /* Allocate buffer from shared pool for multipart header parsing */
-    struct net_buf *hdr_buf = akira_buf_alloc(K_MSEC(100));
+    struct akira_buf *hdr_buf = akira_buf_alloc(K_MSEC(100));
     if (!hdr_buf)
     {
         LOG_ERR("Failed to allocate header buffer from pool");
@@ -516,17 +516,17 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
     /* Copy initial body data to header buffer */
     if (initial_body_len > 0)
     {
-        size_t copy_len = MIN(initial_body_len, net_buf_tailroom(hdr_buf));
-        net_buf_add_mem(hdr_buf, initial_body, copy_len);
+        size_t copy_len = MIN(initial_body_len, akira_buf_tailroom(hdr_buf));
+        akira_buf_add_mem(hdr_buf, initial_body, copy_len);
     }
 
     /* In-place boundary checking for multipart header end */
     char *data_start = strstr((char *)hdr_buf->data, "\r\n\r\n");
 
-    while (!data_start && net_buf_tailroom(hdr_buf) > 0)
+    while (!data_start && akira_buf_tailroom(hdr_buf) > 0)
     {
-        ssize_t received = recv(client_fd, net_buf_tail(hdr_buf),
-                                net_buf_tailroom(hdr_buf), 0);
+        ssize_t received = recv(client_fd, akira_buf_tail(hdr_buf),
+                                akira_buf_tailroom(hdr_buf), 0);
         if (received <= 0)
         {
             LOG_ERR("Failed to receive multipart header");
@@ -534,7 +534,7 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
             send_http_response(client_fd, 400, "text/plain", "Failed to receive header", 0);
             return -1;
         }
-        net_buf_add(hdr_buf, received);
+        akira_buf_add_len(hdr_buf, received);
         data_start = strstr((char *)hdr_buf->data, "\r\n\r\n");
     }
 
@@ -601,7 +601,7 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
     hdr_buf = NULL;
 
     /* Allocate upload buffer from shared pool for zero-copy receive */
-    struct net_buf *upload_buf = akira_buf_alloc(K_MSEC(100));
+    struct akira_buf *upload_buf = akira_buf_alloc(K_MSEC(100));
     if (!upload_buf)
     {
         LOG_ERR("Failed to allocate upload buffer from pool");
@@ -646,7 +646,7 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
         }
 
         /* Update buffer length after recv */
-        net_buf_add(upload_buf, received);
+        akira_buf_add_len(upload_buf, received);
         retry_count = 0;
         total_received += received;
 
@@ -675,7 +675,7 @@ static int handle_firmware_upload(int client_fd, const char *request_headers, si
             break;
         }
 
-        /* Dispatch chunk via transport layer - zero-copy from net_buf */
+        /* Dispatch chunk via transport layer - zero-copy from akira_buf */
         ret = transport_notify(TRANSPORT_DATA_FIRMWARE, upload_buf->data,
                                upload_buf->len, &chunk_info);
         if (ret != 0)
@@ -767,7 +767,7 @@ static int handle_api_request(int client_fd, const char *path)
     if (strcmp(path, "/api/logs") == 0)
     {
         /* Return logs with HTML formatting for colors - use shared buffer pool */
-        struct net_buf *log_buf = akira_buf_alloc(K_MSEC(50));
+        struct akira_buf *log_buf = akira_buf_alloc(K_MSEC(50));
         if (!log_buf)
         {
             return send_http_response(client_fd, 503, "text/plain", "Server busy", 0);
@@ -775,7 +775,7 @@ static int handle_api_request(int client_fd, const char *path)
 
         k_mutex_lock(&log_mutex, K_FOREVER);
 
-        /* Format logs with color coding into net_buf */
+        /* Format logs with color coding into akira_buf */
         char *src = log_buffer;
         char *dst = (char *)log_buf->data;
         char *dst_end = dst + AKIRA_BUF_SIZE - 100;
@@ -1163,7 +1163,7 @@ static int handle_http_request(int client_fd)
 
             /* Receive remaining data using shared buffer pool */
             size_t total_received = body_already_read;
-            struct net_buf *app_buf = akira_buf_alloc(K_MSEC(100));
+            struct akira_buf *app_buf = akira_buf_alloc(K_MSEC(100));
             if (!app_buf)
             {
                 app_manager_install_abort(session);
@@ -1181,7 +1181,7 @@ static int handle_http_request(int client_fd)
                     app_manager_install_abort(session);
                     return send_http_response(client_fd, 500, "text/plain", "Upload failed", 0);
                 }
-                net_buf_add(app_buf, recvd);
+                akira_buf_add_len(app_buf, recvd);
                 int ret = app_manager_install_chunk(session, (const char *)app_buf->data, app_buf->len);
                 if (ret < 0)
                 {
