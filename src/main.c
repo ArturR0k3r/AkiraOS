@@ -68,16 +68,6 @@ int main(void)
     }
 #endif
 
-#ifdef CONFIG_AKIRA_PSRAM
-    /* Initialize PSRAM heap */
-    if(akira_init_psram_heap() < 0 ){
-        LOG_ERR("PSRAM heap init failed");
-    }
-    else{
-        LOG_INF("PSRAM heap initialized");
-    }
-#endif  
-
 
 #ifdef CONFIG_AKIRA_HTTP_SERVER
     /* Initialize OTA manager before starting web server */

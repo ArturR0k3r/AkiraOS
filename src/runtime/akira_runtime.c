@@ -14,7 +14,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <zephyr/fs/fs.h>
-#include <drivers/psram.h>
+#include <lib/mem_helper.h>
 #include "platform_hal.h"
 #include "storage/fs_manager.h"
 #include <lib/mem_helper.h>
@@ -307,19 +307,13 @@ int akira_runtime_init(void)
     g_wamr_heap_size = (256 * 1024); /* reasonable default */
 #endif
 
-    if (akira_psram_available())
+    g_wamr_heap_buf = akira_malloc_buffer(g_wamr_heap_size);
+    if (g_wamr_heap_buf)
     {
-        g_wamr_heap_buf = akira_psram_alloc(g_wamr_heap_size);
-        if (g_wamr_heap_buf)
-        {
-            LOG_INF("Allocated WAMR heap in PSRAM: %zu bytes", g_wamr_heap_size);
-        }
-        if(g_wamr_heap_buf==NULL){
-            LOG_WRN("PSRAM allocation for WAMR heap failed, falling back to internal RAM");
-        }
-        else{
-            LOG_INF("Using PSRAM for WAMR heap");
-        }
+        LOG_INF("Allocated WAMR heap in PSRAM: %zu bytes", g_wamr_heap_size);
+    }
+    else{
+        LOG_WRN("PSRAM allocation for WAMR heap failed, falling back to internal RAM");
     }
 
     if (!g_wamr_heap_buf)

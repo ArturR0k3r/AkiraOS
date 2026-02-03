@@ -262,7 +262,7 @@ int bt_manager_start_advertising(void)
     };
 
     int err = bt_le_adv_start(&adv_param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
-    if (err)
+    if (err && err != -EALREADY)
     {
         LOG_ERR("Advertising start failed (err %d)", err);
         return err;

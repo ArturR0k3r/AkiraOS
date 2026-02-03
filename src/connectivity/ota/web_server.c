@@ -90,9 +90,9 @@ LOG_MODULE_REGISTER(web_server, CONFIG_LOG_DEFAULT_LEVEL);
 #endif
 #endif
 
-/* Thread stack - reduced to 4KB for optimized memory usage.
+/* Thread stack - increased to 8KB.
  * Uses transport_notify() for zero-copy data dispatch. */
-static K_THREAD_STACK_DEFINE(web_server_stack, 4096);
+static K_THREAD_STACK_DEFINE(web_server_stack, 8192);
 static struct k_thread web_server_thread_data;
 static k_tid_t web_server_thread_id;
 
