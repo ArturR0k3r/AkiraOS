@@ -16,6 +16,7 @@
 #endif
 #ifdef CONFIG_AKIRA_BT_HID
 #include <connectivity/hid/hid_manager.h>
+#include <bt_hid.h>
 #endif
 #ifdef CONFIG_AKIRA_APP_MANAGER
 #include <runtime/app_manager/app_manager.h>
@@ -58,6 +59,13 @@ int main(void)
     }
     else {
         LOG_INF("HID manager initialized");
+    }
+
+    if(bt_hid_init() < 0){
+        LOG_WRN("Failed to init BT HID");
+    }
+    else{
+        LOG_INF("BT HID initialized succesfully!");
     }
 #endif
 

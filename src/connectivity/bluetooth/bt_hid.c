@@ -341,7 +341,12 @@ static int ble_hid_enable(void)
     bt_hid_state.enabled = true;
 
     /* Start advertising via BT manager */
-    return bt_manager_start_advertising();
+    int ret = bt_manager_start_advertising();
+    if(ret < 0 && ret != -EBUSY){
+        LOG_WRN("Failed to start advertising via BT Manager (%d)", ret);
+        return ret;
+    }
+    return 0;
 }
 
 static int ble_hid_disable(void)
