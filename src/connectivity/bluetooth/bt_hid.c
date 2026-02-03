@@ -342,7 +342,7 @@ static int ble_hid_enable(void)
 
     /* Start advertising via BT manager */
     int ret = bt_manager_start_advertising();
-    if(ret < 0 && ret != -EBUSY){
+    if(ret < 0 && ret != -EBUSY && ret != -EALREADY){
         LOG_WRN("Failed to start advertising via BT Manager (%d)", ret);
         return ret;
     }
