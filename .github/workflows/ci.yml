@@ -1,0 +1,52 @@
+name: Akira CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/zephyrproject-rtos/ci:latest
+      options: --user root
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: akira-os
+
+      - name: Initialize west workspace
+        run: |
+          cd akira-os
+          west init -l .
+          west update
+
+      - name: Zephyr env
+        run: |
+          cd akira-os
+          west zephyr-export
+
+      - name: Build native_sim
+        run: |
+          cd akira-os
+          west build -b native_sim . --pristine
+
+      - name: Install ESP-IDF
+        run: |
+          apt-get update && apt-get install -y git wget flex bison gperf python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+          git clone --depth 1 --branch v5.1.2 https://github.com/espressif/esp-idf.git /opt/esp-idf
+          cd /opt/esp-idf
+          ./install.sh esp32,esp32s3,esp32c3
+
+      - name: Build ESP32-S3_devkitm
+        run: |
+          cd akira-os
+          . /opt/esp-idf/export.sh
+          west build -b esp32s3_devkitm_esp32s3_procpu . --pristine
+
+      - name: Build b_u585i_iot02a
+        run: |
+          cd akira-os
+          west build -b b_u585i_iot02a . --pristine

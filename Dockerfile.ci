@@ -1,0 +1,23 @@
+FROM ghcr.io/zephyrproject-rtos/ci:latest
+
+# Install ESP-IDF dependencies
+RUN apt-get update && apt-get install -y \
+    git wget flex bison gperf \
+    python3-venv python3-pip cmake ninja-build ccache \
+    libffi-dev libssl-dev \
+    dfu-util libusb-1.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install ESP32 toolchain via esp-idf
+ENV IDF_PATH=/opt/esp-idf
+ENV IDF_TOOLS_PATH=/opt/esp-idf-tools
+
+RUN git clone --depth 1 --branch v5.1.2 https://github.com/espressif/esp-idf.git $IDF_PATH \
+    && cd $IDF_PATH \
+    && ./install.sh esp32,esp32s3,esp32c3
+
+# Set up environment variables for ESP-IDF
+# Note: export.sh still needs to be sourced in CI steps
+RUN echo '. /opt/esp-idf/export.sh' >> /root/.bashrc
+
+WORKDIR /workspaces
