@@ -62,7 +62,8 @@ jobs:
             apt-get update && apt-get install -y git wget flex bison gperf python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0;
             git clone --depth 1 --branch v5.1.2 https://github.com/espressif/esp-idf.git /opt/esp-idf;
             cd /opt/esp-idf;
-            ./install.sh esp32,esp32s3,esp32c3
+            pip3 install -r requirements.txt;
+            ./install.sh --enable-ci esp32,esp32s3,esp32c3
           '
 
       - name: Build ESP32-S3_devkitm
