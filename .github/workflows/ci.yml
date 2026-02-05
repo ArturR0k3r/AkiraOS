@@ -62,20 +62,15 @@ jobs:
             apt-get update && apt-get install -y git wget flex bison gperf python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0;
             git clone --depth 1 --branch v5.1.2 https://github.com/espressif/esp-idf.git /opt/esp-idf;
             cd /opt/esp-idf;
-            pip3 install -r requirements.txt;
+            deactivate 2>/dev/null || true;
             unset VIRTUAL_ENV;
             unset PYTHONHOME;
-            export IDF_PYTHON_ENV_PATH=/opt/python/venv;
-            ./install.sh --enable-ci --enable-gdbgui --enable-pytest esp32,esp32s3,esp32c3
+            ./install.sh esp32,esp32s3,esp32c3
           '
 
       - name: Build ESP32-S3_devkitm
         run: |
-          docker exec -w /workspace/akira-os zephyr-ci bash -c '
-            export VIRTUAL_ENV=/root/.espressif/python_env/idf5.1_py3.12_env
-            export PATH=$VIRTUAL_ENV/bin:$PATH
-            . /opt/esp-idf/export.sh && west build -b esp32s3_devkitm_esp32s3_procpu . --pristine
-          '
+          docker exec -w /workspace/akira-os zephyr-ci bash -c '. /opt/esp-idf/export.sh && west build -b esp32s3_devkitm_esp32s3_procpu . --pristine'
 
       - name: Build native_sim
         run: |
