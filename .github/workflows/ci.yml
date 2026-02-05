@@ -56,21 +56,13 @@ jobs:
         run: |
           docker exec -w /workspace/akira-os zephyr-ci west zephyr-export
 
-      - name: Install ESP-IDF
+      - name: Fetch ESP32 HAL blobs
         run: |
-          docker exec zephyr-ci bash -c '
-            apt-get update && apt-get install -y git wget flex bison gperf python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0;
-            git clone --depth 1 --branch v5.1.2 https://github.com/espressif/esp-idf.git /opt/esp-idf;
-            cd /opt/esp-idf;
-            deactivate 2>/dev/null || true;
-            unset VIRTUAL_ENV;
-            unset PYTHONHOME;
-            ./install.sh esp32,esp32s3,esp32c3
-          '
+          docker exec -w /workspace/akira-os zephyr-ci west blobs fetch hal_espressif
 
       - name: Build ESP32-S3_devkitm
         run: |
-          docker exec -w /workspace/akira-os zephyr-ci bash -c '. /opt/esp-idf/export.sh && west build -b esp32s3_devkitm_esp32s3_procpu . --pristine'
+          docker exec -w /workspace/akira-os zephyr-ci west build -b esp32s3_devkitm_esp32s3_procpu . --pristine
 
       - name: Build native_sim
         run: |
