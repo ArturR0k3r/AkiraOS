@@ -45,11 +45,6 @@ jobs:
           cd akira-os
           west zephyr-export
 
-      - name: Build native_sim
-        run: |
-          cd akira-os
-          west build -b native_sim . --pristine
-
       - name: Install ESP-IDF
         run: |
           apt-get update && apt-get install -y git wget flex bison gperf python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
@@ -62,6 +57,11 @@ jobs:
           cd akira-os
           . /opt/esp-idf/export.sh
           west build -b esp32s3_devkitm_esp32s3_procpu . --pristine
+
+      - name: Build native_sim
+        run: |
+          cd akira-os
+          west build -b native_sim . --pristine
 
       - name: Build b_u585i_iot02a
         run: |
