@@ -7,6 +7,21 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    name: Build AkiraOS (${{ matrix.name }})
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: esp32s3_devkitm/esp32s3/procpu
+            name: board-esp32s3_procpu
+            fetch_espressif_blobs: true
+          - board: b_u585i_iot02a
+            name: board-b_u585i_iot02a
+            fetch_espressif_blobs: false
+          - board: native_sim
+            name: native_sim
+            fetch_espressif_blobs: false
     
     env:
       ZEPHYR_TOOLCHAIN_VARIANT: zephyr
@@ -57,20 +72,13 @@ jobs:
           docker exec -w /workspace/akira-os zephyr-ci west zephyr-export
 
       - name: Fetch ESP32 HAL blobs
+        if: matrix.fetch_espressif_blobs
         run: |
           docker exec -w /workspace/akira-os zephyr-ci west blobs fetch hal_espressif
 
-      - name: Build ESP32-S3_devkitm
+      - name: Build ${{ matrix.name }}
         run: |
-          docker exec -w /workspace/akira-os zephyr-ci west build -b esp32s3_devkitm/esp32s3/procpu . --pristine
-
-      - name: Build native_sim
-        run: |
-          docker exec -w /workspace/akira-os zephyr-ci west build -b native_sim . --pristine
-
-      - name: Build b_u585i_iot02a
-        run: |
-          docker exec -w /workspace/akira-os zephyr-ci west build -b b_u585i_iot02a . --pristine
+          docker exec -w /workspace/akira-os zephyr-ci west build -b ${{ matrix.board }} . --pristine
       
       - name: Cleanup container
         if: always()
