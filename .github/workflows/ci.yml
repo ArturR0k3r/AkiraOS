@@ -63,7 +63,10 @@ jobs:
             git clone --depth 1 --branch v5.1.2 https://github.com/espressif/esp-idf.git /opt/esp-idf;
             cd /opt/esp-idf;
             pip3 install -r requirements.txt;
-            ./install.sh --enable-ci esp32,esp32s3,esp32c3
+            unset VIRTUAL_ENV;
+            unset PYTHONHOME;
+            export IDF_PYTHON_ENV_PATH=/opt/python/venv;
+            ./install.sh --enable-ci --enable-gdbgui --enable-pytest esp32,esp32s3,esp32c3
           '
 
       - name: Build ESP32-S3_devkitm
