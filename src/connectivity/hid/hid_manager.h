@@ -35,6 +35,13 @@ extern "C"
     /*===========================================================================*/
 
     /**
+     * @brief Convert transport enum to string
+     * @param transport Transport type
+     * @return String representation of transport
+     */
+    const char *transport_to_string(hid_transport_t transport);
+
+    /**
      * @brief Initialize HID manager
      * @param config Configuration options
      * @return 0 on success, negative error code on failure

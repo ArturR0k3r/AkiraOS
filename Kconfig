@@ -217,6 +217,14 @@ endmenu
 
 menu "Connectivity"
 
+config AKIRA_USB
+    bool "Enable Akira USB Manager"
+    default n
+    select USB_DEVICE_STACK_NEXT
+    select UDC_DRIVER
+    help
+      Enable Akira USB Manager for MASS and USB HID
+
 config AKIRA_MODULE_WIFI
     bool "Enable Akira Connectivity module (WiFi/BLE/Cloud)"
     default n
@@ -264,10 +272,9 @@ config AKIRA_BT_ECHO
 config AKIRA_USB_HID
     bool "Enable USB HID"
     default y
-    depends on AKIRA_HID && USB_DEVICE
+    depends on AKIRA_HID && AKIRA_USB
     help
       Enable HID over USB.
-      Requires USB device stack to be enabled.
 
 config AKIRA_HID_SIM
     bool "Enable HID simulation (for testing)"
@@ -516,7 +523,7 @@ config AKIRA_APP_SOURCE_BLE
 config AKIRA_APP_SOURCE_USB
     bool "Enable USB storage app install"
     default y
-    depends on AKIRA_APP_MANAGER && USB_DEVICE
+    depends on AKIRA_APP_MANAGER && AKIRA_USB
     help
       Allow app installation from USB mass storage.
 
@@ -591,7 +598,7 @@ config AKIRA_OTA_BLE
 config AKIRA_OTA_USB
     bool "Enable USB OTA transport"
     default y
-    depends on AKIRA_OTA && USB_DEVICE
+    depends on AKIRA_OTA && AKIRA_USB
     help
       Enable OTA updates via USB connection.
 

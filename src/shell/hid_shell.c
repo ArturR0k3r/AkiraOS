@@ -70,6 +70,13 @@ static int cmd_hid_transport(const struct shell *sh, size_t argc, char **argv)
         else
             shell_warn(sh, "Failed to set transport");
     }
+    else if (strcmp(argv[1], "usb") == 0)
+    {
+        if (hid_manager_set_transport(HID_TRANSPORT_USB) == 0)
+            shell_print(sh, "Transport: USB");
+        else
+            shell_warn(sh, "Failed to set transport");
+    }
     else
     {
         shell_print(sh, "Unknown transport: %s", argv[1]);
@@ -149,8 +156,8 @@ static int cmd_status(const struct shell *sh, size_t argc, char **argv)
         shell_print(sh, "HID: not initialized");
         return 0;
     }
-    shell_print(sh, "HID state: enabled=%d connected=%d transport=%d reports_sent=%u errors=%u",
-                s->enabled, s->connected, s->transport, s->reports_sent, s->errors);
+    shell_print(sh, "HID state: enabled=%d connected=%d transport=%s reports_sent=%u errors=%u",
+                s->enabled, s->connected, transport_to_string(s->transport), s->reports_sent, s->errors);
     return 0;
 }
 

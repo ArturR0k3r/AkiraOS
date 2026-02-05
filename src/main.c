@@ -14,8 +14,8 @@
 #ifdef CONFIG_BT
 #include <connectivity/bluetooth/bt_manager.h>
 #endif
-#ifdef CONFIG_AKIRA_BT_HID
 #include <connectivity/hid/hid_manager.h>
+#ifdef CONFIG_AKIRA_BT_HID
 #include <bt_hid.h>
 #endif
 #ifdef CONFIG_AKIRA_APP_MANAGER
@@ -28,7 +28,13 @@
 #ifdef CONFIG_AKIRA_SETTINGS
 #include "settings/settings.h"
 #endif
-#include "drivers/psram.h"
+#ifdef CONFIG_AKIRA_USB
+#include <connectivity/usb/usb_manager.h>
+#endif
+#ifdef CONFIG_AKIRA_USB_HID
+#include <connectivity/usb/usb_hid.h>
+#endif
+
 
 LOG_MODULE_REGISTER(akira_main, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -52,14 +58,35 @@ int main(void)
     }
 #endif
 
-#ifdef CONFIG_AKIRA_BT_HID
-    /* Initialize HID manager */
+#ifdef CONFIG_AKIRA_USB
+    if(usb_manager_init() < 0){
+        LOG_WRN("USB manager init failed");
+    }
+    else{
+        LOG_INF("USB manager initialized successfully");
+    }
+#endif
+
+#ifdef CONFIG_AKIRA_HID
     if (hid_manager_init(NULL) < 0) {
         LOG_WRN("HID manager init failed");
     }
     else {
         LOG_INF("HID manager initialized");
     }
+#endif
+
+#ifdef CONFIG_AKIRA_USB_HID
+    if(usb_hid_transport_init()<0){
+        LOG_WRN("USB HID transport init failed");
+    }
+    else{
+        LOG_INF("USB HID transport initialized successfully");
+    }
+#endif  
+
+#ifdef CONFIG_AKIRA_BT_HID
+    /* Initialize HID manager */
 
     if(bt_hid_init() < 0){
         LOG_WRN("Failed to init BT HID");

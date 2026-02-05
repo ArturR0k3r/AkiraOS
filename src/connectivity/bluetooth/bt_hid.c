@@ -461,7 +461,8 @@ static const hid_transport_ops_t ble_hid_transport = {
     .send_gamepad = ble_hid_send_gamepad,
     .register_event_cb = ble_hid_register_event_cb,
     .register_output_cb = ble_hid_register_output_cb,
-    .is_connected = ble_hid_is_connected};
+    .is_connected = ble_hid_is_connected
+};
 
 /*===========================================================================*/
 /* Public API                                                                */

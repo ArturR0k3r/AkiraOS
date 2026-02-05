@@ -87,15 +87,25 @@
     // - Battery management IC
 };
 
-// Chosen nodes for Zephyr configuration
+// USB Device Controller configuration
+&zephyr_udc0 {
+    status = "okay";
+    
+    hid_dev_0: hid_dev_0 {
+        compatible = "zephyr,hid-device";
+        protocol-code = "keyboard";
+        in-polling-period-us = <10000>;
+        out-polling-period-us = <10000>;
+        in-report-size = <64>;
+        out-report-size = <64>;
+    };
+};
+
 / {
     chosen {
         zephyr,console = &uart0;
         zephyr,shell-uart = &uart0;
     };
-};
-
-/ {
     fstab {
 		compatible = "zephyr,fstab";
 
@@ -122,7 +132,7 @@
 
         lfs1_partition: partition@25E000 {
 			label = "storage";
-			reg = <0x0025E000 DT_SIZE_K(1024)>;
+			reg = <0x0025F000 DT_SIZE_K(512)>;
 		};
     };
 };

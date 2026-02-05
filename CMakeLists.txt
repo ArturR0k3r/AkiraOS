@@ -319,10 +319,15 @@ if(CONFIG_AKIRA_BT_HID)
     endif()
 endif()
 
-# USB HID (conditional)
-if(CONFIG_AKIRA_USB_HID)
+if(CONFIG_AKIRA_USB)
     target_sources(app PRIVATE
         src/connectivity/usb/usb_manager.c
+        src/connectivity/usb/usb_manager_shell.c
+    )
+endif()
+
+if(CONFIG_AKIRA_USB_HID)
+    target_sources(app PRIVATE
         src/connectivity/usb/usb_hid.c
     )
 endif()
