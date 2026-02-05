@@ -9,9 +9,37 @@
         uart0 = &uart0;
         user-data-partition = &storage_partition;
     };
+
+    fstab {
+        compatible = "zephyr,fstab";
+        lfs1: lfs1 {
+            compatible = "zephyr,fstab,littlefs";
+            read-size = <1>;
+            prog-size = <1>;
+            cache-size = <64>;
+            lookahead-size = <32>;
+            block-cycles = <512>;
+            partition = <&storage_partition>;
+            mount-point = "/lfs";
+        };
+    };
 };
 
 // Change storage partition label to user_data_partition for LittleFS
 user_data_partition: &storage_partition {
     label = "user_data_partition";
+};
+
+// Flash partitions for native simulator
+&flash0 {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        akira_settings_nvs_partition: partition@100000 {
+            label = "akira_settings_nvs";
+            reg = <0x100000 0x8000>;
+        };
+    };
 };

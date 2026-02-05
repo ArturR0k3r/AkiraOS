@@ -17,6 +17,21 @@
         gpio0 = &gpioc;
     };
 
+    fstab {
+        compatible = "zephyr,fstab";
+
+        lfs1: lfs1 {
+            compatible = "zephyr,fstab,littlefs";
+            read-size = <1>;
+            prog-size = <8>;
+            cache-size = <256>;
+            lookahead-size = <32>;
+            block-cycles = <512>;
+            partition = <&storage_partition>;
+            mount-point = "/lfs";
+        };
+    };
+
     leds {
         compatible = "gpio-leds";
         green_led_1: led_1 {
@@ -56,7 +71,8 @@
  * 0x000000 - 0x00FFFF: MCUboot     (64KB)
  * 0x010000 - 0x0F1FFF: Primary     (904KB) 
  * 0x0F2000 - 0x1D1FFF: Secondary   (896KB)
- * 0x1D2000 - 0x201FFF: Storage     (192KB)
+ * 0x1D2000 - 0x1F1FFF: Storage     (128KB)
+ * 0x1F2000 - 0x1F9FFF: NVS Settings (32KB)
  */
 &flash0 {
     partitions {
@@ -87,8 +103,27 @@
         
         storage_partition: partition@1D2000 {
             label = "storage";
-            reg = <0x1D2000 0x30000>;
+            reg = <0x1D2000 0x20000>;
         };
+
+        akira_settings_nvs_partition: partition@1F2000 {
+            label = "akira_settings_nvs";
+            reg = <0x1F2000 0x8000>;
+        };
+    };
+};
+
+/* USB HID device configuration */
+&zephyr_udc0 {
+    status = "okay";
+    
+    hid_dev_0: hid_dev_0 {
+        compatible = "zephyr,hid-device";
+        protocol-code = "keyboard";
+        in-polling-period-us = <10000>;
+        out-polling-period-us = <10000>;
+        in-report-size = <64>;
+        out-report-size = <64>;
     };
 };
 

@@ -305,7 +305,10 @@ endif()
 
 # HTTP Server
 if(CONFIG_AKIRA_HTTP_SERVER)
-    target_sources(app PRIVATE src/connectivity/http/http_server.c)
+    target_sources(app PRIVATE 
+        src/connectivity/http/http_server.c
+        src/shell/shell_web.c
+    )
 endif()
 
 # Bluetooth HID (conditional - build when BT HID is enabled)
