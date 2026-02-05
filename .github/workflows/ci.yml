@@ -62,7 +62,7 @@ jobs:
 
       - name: Build ESP32-S3_devkitm
         run: |
-          docker exec -w /workspace/akira-os zephyr-ci west build -b esp32s3_devkitm_esp32s3_procpu . --pristine
+          docker exec -w /workspace/akira-os zephyr-ci west build -b esp32s3_devkitm/esp32s3/procpu . --pristine
 
       - name: Build native_sim
         run: |
