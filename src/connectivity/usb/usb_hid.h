@@ -1,46 +1,74 @@
 /**
  * @file usb_hid.h
- * @brief USB HID Device for AkiraOS
- *
- * USB HID device implementation supporting keyboard and gamepad profiles.
+ * @brief USB HID Transport Header for HID Manager
  */
 
-#ifndef AKIRA_USB_HID_H
-#define AKIRA_USB_HID_H
+#ifndef USB_HID_H
+#define USB_HID_H
 
-#include "../hid/hid_common.h"
+#include <zephyr/kernel.h>
+#include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 
-    /**
-     * @brief Initialize USB HID device
-     * @return 0 on success
-     */
-    int usb_hid_init(void);
+/*===========================================================================*/
+/* Public API                                                                */
+/*===========================================================================*/
 
-    /**
-     * @brief Get USB HID transport operations
-     * @return Transport operations pointer
-     */
-    const hid_transport_ops_t *usb_hid_get_transport(void);
+/**
+ * @brief Initialize and register USB HID transport with HID manager
+ * 
+ * This function should be called during system initialization to register
+ * the USB HID transport with the HID manager. It does not initialize the
+ * HID device itself - that happens when the HID manager calls the transport's
+ * init function.
+ * 
+ * @return 0 on success, negative error code on failure
+ * @retval -ENOMEM Failed to register (too many transports)
+ * @retval -EINVAL Invalid parameters
+ */
+int usb_hid_transport_init(void);
 
-    /**
-     * @brief Enable USB HID
-     * @return 0 on success
-     */
-    int usb_hid_enable(void);
+/**
+ * @brief Get the USB HID device
+ * 
+ * Returns the pointer to the USB HID device. This can be used for
+ * direct access to the HID device if needed.
+ * 
+ * @return Pointer to HID device, or NULL if not initialized
+ */
+const struct device *usb_hid_get_device(void);
 
-    /**
-     * @brief Disable USB HID
-     * @return 0 on success
-     */
-    int usb_hid_disable(void);
+/**
+ * @brief Check if USB HID is ready to send reports
+ * 
+ * Checks if the USB HID interface is configured and ready to send reports.
+ * This is a combination of:
+ * - Transport is initialized
+ * - Transport is enabled
+ * - USB is configured
+ * - HID interface is ready
+ * 
+ * @return true if ready to send reports, false otherwise
+ */
+bool usb_hid_is_ready(void);
+
+/**
+ * @brief Get current HID protocol
+ * 
+ * Returns the current HID protocol in use:
+ * - 0: Boot protocol (BIOS compatible)
+ * - 1: Report protocol (full featured)
+ * 
+ * @return Current protocol (0 or 1)
+ */
+uint8_t usb_hid_get_protocol(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* AKIRA_USB_HID_H */
+#endif /* USB_HID_H */

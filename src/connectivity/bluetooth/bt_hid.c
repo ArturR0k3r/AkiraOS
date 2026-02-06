@@ -341,7 +341,12 @@ static int ble_hid_enable(void)
     bt_hid_state.enabled = true;
 
     /* Start advertising via BT manager */
-    return bt_manager_start_advertising();
+    int ret = bt_manager_start_advertising();
+    if(ret < 0 && ret != -EBUSY && ret != -EALREADY){
+        LOG_WRN("Failed to start advertising via BT Manager (%d)", ret);
+        return ret;
+    }
+    return 0;
 }
 
 static int ble_hid_disable(void)
@@ -456,7 +461,8 @@ static const hid_transport_ops_t ble_hid_transport = {
     .send_gamepad = ble_hid_send_gamepad,
     .register_event_cb = ble_hid_register_event_cb,
     .register_output_cb = ble_hid_register_output_cb,
-    .is_connected = ble_hid_is_connected};
+    .is_connected = ble_hid_is_connected
+};
 
 /*===========================================================================*/
 /* Public API                                                                */

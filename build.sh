@@ -111,7 +111,7 @@ show_banner() {
   / ___ \|   <| | | | (_| | |_| |___) |
  /_/   \_\_|\_\_|_|  \__,_|\___/|____/ 
                                        
-         Unified Build System v2.0
+         Unified Build System v1.4.x
 EOF
     echo -e "${NC}"
 }
@@ -485,14 +485,13 @@ generate_sbom() {
         cat > "$sbom_file" << EOF
 {
     "name": "AkiraOS",
-    "version": "2.0.0",
+    "version": "1.4.x",
     "board": "$BOARD",
     "zephyr_board": "${BOARD_MAP[$BOARD]}",
     "build_date": "$(date -Iseconds)",
     "components": [
-        {"name": "Zephyr RTOS", "version": "4.2.0"},
-        {"name": "OCRE Runtime", "version": "1.0.0"},
-        {"name": "WAMR", "version": "2.0.0"},
+        {"name": "Zephyr RTOS", "version": "4.3.0"},
+        {"name": "WASM Micro Runtime", "version": "2.3.0"},
         {"name": "MCUboot", "version": "2.0.0"}
     ]
 }

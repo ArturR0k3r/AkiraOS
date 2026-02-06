@@ -4,15 +4,9 @@ manifest:
     # Zephyr RTOS
     - name: zephyr
       url: https://github.com/zephyrproject-rtos/zephyr
-      revision: v4.2.1
+      revision: v4.3.0
       west-commands: scripts/west-commands.yml
       import: true
-      
-    # OCRE Runtime 
-    - name: project-ocre
-      revision: main
-      url: https://github.com/project-ocre/ocre-runtime
-      path: ocre
       
   self:
     path: akira-os

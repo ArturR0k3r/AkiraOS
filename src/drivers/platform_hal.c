@@ -183,8 +183,15 @@ const struct device *akira_get_gpio_device(const char *label)
     static const struct device sim_gpio_dev;
     return &sim_gpio_dev;
 #elif AKIRA_PLATFORM_STM32
-    /* STM32 uses gpioa, gpiob, gpioc, etc. */
-    /* Return NULL - caller should use DT_ALIAS or specific GPIO port macros */
+    /* STM32 uses gpioa, gpiob, gpioc, etc. Try DT alias for generic gpio0 */
+    if (label && strcmp(label, "gpio0") == 0) {
+        const struct device *dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(gpio0));
+        if (dev && device_is_ready(dev)) {
+            return dev;
+        }
+        LOG_WRN("gpio0 alias not available on this board");
+        return NULL;
+    }
     ARG_UNUSED(label);
     return NULL;
 #elif AKIRA_PLATFORM_NORDIC

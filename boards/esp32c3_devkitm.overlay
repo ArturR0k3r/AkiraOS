@@ -66,9 +66,25 @@
     status = "okay";
 };
 
-/* Flash partitions for OTA */
+/* Flash partitions for OTA and NVS storage */
 &flash0 {
-    status = "okay";
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        /* NVS storage partition for AkiraOS settings (16KB at 0x9000) */
+        akira_settings_nvs_partition: partition@9000 {
+            label = "akira_settings_nvs";
+            reg = <0x00009000 DT_SIZE_K(16)>;
+        };
+
+        /* LittleFS storage partition (256KB at 0x110000) */
+        lfs1_partition: partition@110000 {
+            label = "storage";
+            reg = <0x00110000 DT_SIZE_K(256)>;
+        };
+    };
 };
 
 /* Aliases for application use */

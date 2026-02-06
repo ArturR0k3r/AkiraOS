@@ -211,12 +211,12 @@ int hid_manager_init(const hid_config_t *config)
     else
     {
         /* Default config */
-        hid_mgr.config.device_types = HID_DEVICE_COMBO;
-        hid_mgr.config.preferred_transport = HID_TRANSPORT_BLE;
+        hid_mgr.config.device_types = HID_DEVICE_KEYBOARD;
+        hid_mgr.config.preferred_transport = HID_TRANSPORT_USB;
         hid_mgr.config.device_name = "AkiraOS HID";
         hid_mgr.config.vendor_id = 0x1234;
         hid_mgr.config.product_id = 0x5678;
-        hid_mgr.state.device_type = HID_DEVICE_COMBO;
+        hid_mgr.state.device_type = HID_DEVICE_KEYBOARD;
     }
 
     hid_mgr.initialized = true;
@@ -254,7 +254,11 @@ int hid_manager_enable(void)
     k_mutex_lock(&hid_mgr.mutex, K_FOREVER);
 
     /* Find preferred transport */
-    hid_mgr.active_transport = find_transport(hid_mgr.config.preferred_transport);
+    if(!hid_mgr.active_transport){
+        LOG_INF("Selecting HID transport: %d", hid_mgr.config.preferred_transport);
+        hid_mgr.active_transport = find_transport(hid_mgr.config.preferred_transport);
+    }
+    
     if (!hid_mgr.active_transport && hid_mgr.transport_count > 0)
     {
         hid_mgr.active_transport = hid_mgr.transports[0];
@@ -380,6 +384,21 @@ const hid_state_t *hid_manager_get_state(void)
 /*===========================================================================*/
 /* Keyboard API Implementation                                               */
 /*===========================================================================*/
+
+const char *transport_to_string(hid_transport_t transport){
+    switch(transport){
+        case HID_TRANSPORT_NONE:
+            return "NONE";
+        case HID_TRANSPORT_BLE:
+            return "BLE";
+        case HID_TRANSPORT_USB:
+            return "USB";
+        case HID_TRANSPORT_SIMULATED:
+            return "SIMULATED";
+        default:
+            return "UNKNOWN";
+    }
+}
 
 int hid_keyboard_press(hid_key_code_t key)
 {

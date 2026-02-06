@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
-
+#include <zephyr/usb/class/usb_hid.h> // For HID_* definitons
 #ifdef __cplusplus
 extern "C"
 {
@@ -21,6 +21,7 @@ extern "C"
 /*===========================================================================*/
 /* HID Configuration                                                         */
 /*===========================================================================*/
+#define HID_KEY_NONE 0x0
 
 /** Maximum simultaneous key presses for keyboard */
 #define HID_MAX_KEYS 6
@@ -71,81 +72,7 @@ extern "C"
         HID_MOD_RIGHT_GUI = 0x80
     } hid_keyboard_mod_t;
 
-    /** Common keyboard key codes (USB HID Usage Page 0x07) */
-    typedef enum
-    {
-        HID_KEY_NONE = 0x00,
-        HID_KEY_A = 0x04,
-        HID_KEY_B = 0x05,
-        HID_KEY_C = 0x06,
-        HID_KEY_D = 0x07,
-        HID_KEY_E = 0x08,
-        HID_KEY_F = 0x09,
-        HID_KEY_G = 0x0A,
-        HID_KEY_H = 0x0B,
-        HID_KEY_I = 0x0C,
-        HID_KEY_J = 0x0D,
-        HID_KEY_K = 0x0E,
-        HID_KEY_L = 0x0F,
-        HID_KEY_M = 0x10,
-        HID_KEY_N = 0x11,
-        HID_KEY_O = 0x12,
-        HID_KEY_P = 0x13,
-        HID_KEY_Q = 0x14,
-        HID_KEY_R = 0x15,
-        HID_KEY_S = 0x16,
-        HID_KEY_T = 0x17,
-        HID_KEY_U = 0x18,
-        HID_KEY_V = 0x19,
-        HID_KEY_W = 0x1A,
-        HID_KEY_X = 0x1B,
-        HID_KEY_Y = 0x1C,
-        HID_KEY_Z = 0x1D,
-        HID_KEY_1 = 0x1E,
-        HID_KEY_2 = 0x1F,
-        HID_KEY_3 = 0x20,
-        HID_KEY_4 = 0x21,
-        HID_KEY_5 = 0x22,
-        HID_KEY_6 = 0x23,
-        HID_KEY_7 = 0x24,
-        HID_KEY_8 = 0x25,
-        HID_KEY_9 = 0x26,
-        HID_KEY_0 = 0x27,
-        HID_KEY_ENTER = 0x28,
-        HID_KEY_ESC = 0x29,
-        HID_KEY_BACKSPACE = 0x2A,
-        HID_KEY_TAB = 0x2B,
-        HID_KEY_SPACE = 0x2C,
-        HID_KEY_MINUS = 0x2D,
-        HID_KEY_EQUAL = 0x2E,
-        HID_KEY_LEFT_BRACE = 0x2F,
-        HID_KEY_RIGHT_BRACE = 0x30,
-        HID_KEY_BACKSLASH = 0x31,
-        HID_KEY_SEMICOLON = 0x33,
-        HID_KEY_QUOTE = 0x34,
-        HID_KEY_GRAVE = 0x35,
-        HID_KEY_COMMA = 0x36,
-        HID_KEY_DOT = 0x37,
-        HID_KEY_SLASH = 0x38,
-        HID_KEY_CAPS_LOCK = 0x39,
-        HID_KEY_F1 = 0x3A,
-        HID_KEY_F2 = 0x3B,
-        HID_KEY_F3 = 0x3C,
-        HID_KEY_F4 = 0x3D,
-        HID_KEY_F5 = 0x3E,
-        HID_KEY_F6 = 0x3F,
-        HID_KEY_F7 = 0x40,
-        HID_KEY_F8 = 0x41,
-        HID_KEY_F9 = 0x42,
-        HID_KEY_F10 = 0x43,
-        HID_KEY_F11 = 0x44,
-        HID_KEY_F12 = 0x45,
-        HID_KEY_UP = 0x52,
-        HID_KEY_DOWN = 0x51,
-        HID_KEY_LEFT = 0x50,
-        HID_KEY_RIGHT = 0x4F
-    } hid_key_code_t;
-
+    typedef uint8_t hid_key_code_t;
     /** Keyboard report structure */
     typedef struct
     {

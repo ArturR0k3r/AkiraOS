@@ -7,7 +7,7 @@
  */
 
 #include "usb_storage.h"
-#include "../../services/app_manager.h"
+#include <runtime/app_manager/app_manager.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/fs/fs.h>

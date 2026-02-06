@@ -12,7 +12,9 @@
 #include <string.h>
 
 /* Include app management */
-#include "../../services/app_manager.h"
+#include <runtime/app_loader/app_loader.h>
+#include <runtime/app_manager/app_manager.h>
+#include <runtime/akira_runtime.h>
 
 LOG_MODULE_REGISTER(cloud_app, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -121,22 +123,21 @@ static void complete_download(struct download_context *ctx, bool success, const 
                  ctx->version[0], ctx->version[1], ctx->version[2], ctx->version[3]);
 
         /* Use app_manager to install */
-        int ret = app_manager_install(ctx->name, ctx->buffer, ctx->received,
-                                     &manifest, APP_SOURCE_HTTP);
+        int id = app_loader_install_memory(ctx->name, ctx->buffer, ctx->received);
 
-        if (ret >= 0)
+        if (id >= 0)
         {
-            LOG_INF("App installed: %s (container %d)", ctx->app_id, ret);
+            LOG_INF("App loaded into slot %d", id);
 
             if (ctx->auto_start)
             {
-                LOG_INF("Auto-starting app: %s", ctx->name);
-                app_manager_start(ctx->name);
+                LOG_INF("Auto-starting app slot: %d", id);
+                akira_runtime_start(id);
             }
         }
         else
         {
-            LOG_ERR("Failed to install app: %d", ret);
+            LOG_ERR("Failed to load app into runtime: %d", id);
             success = false;
             error = "Installation failed";
         }
