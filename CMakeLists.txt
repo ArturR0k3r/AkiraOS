@@ -195,6 +195,10 @@ target_sources(app PRIVATE
     src/api/akira_input_api.c
     src/api/akira_rf_api.c
     src/api/akira_sensor_api.c
+    src/api/akira_memory_api.c
+    src/api/akira_common_api.c
+    src/api/akira_export_api.c
+    src/api/akira_bt_shell_api.c
 )
 
 # Keep connectivity and drivers as before (use module gating further below)

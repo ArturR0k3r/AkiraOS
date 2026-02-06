@@ -4,6 +4,7 @@
  */
 
 #include "akira_api.h"
+#include "akira_sensor_api.h"
 #include <runtime/security.h>
 #include <zephyr/logging/log.h>
 
@@ -11,9 +12,6 @@ LOG_MODULE_REGISTER(akira_sensor_api, LOG_LEVEL_INF);
 
 int akira_sensor_read(akira_sensor_type_t type, float *value)
 {
-    if (!akira_security_check("sensor.read"))
-        return -EPERM;
-
     if (!value)
         return -EINVAL;
 
@@ -42,9 +40,6 @@ int akira_sensor_read(akira_sensor_type_t type, float *value)
 
 int akira_sensor_read_imu(akira_imu_data_t *data)
 {
-    if (!akira_security_check("sensor.read"))
-        return -EPERM;
-
     if (!data)
         return -EINVAL;
 
@@ -59,9 +54,6 @@ int akira_sensor_read_imu(akira_imu_data_t *data)
 
 int akira_sensor_read_env(akira_env_data_t *data)
 {
-    if (!akira_security_check("sensor.read"))
-        return -EPERM;
-
     if (!data)
         return -EINVAL;
 
@@ -73,9 +65,6 @@ int akira_sensor_read_env(akira_env_data_t *data)
 
 int akira_sensor_read_power(akira_power_data_t *data)
 {
-    if (!akira_security_check("sensor.read"))
-        return -EPERM;
-
     if (!data)
         return -EINVAL;
 
@@ -84,3 +73,26 @@ int akira_sensor_read_power(akira_power_data_t *data)
     data->power = 0.555f;
     return 0;
 }
+
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
+/* WASM Native export api */
+
+int akira_native_sensor_read(wasm_exec_env_t exec_env, int32_t type)
+{
+    /* Use inline capability check for <60ns overhead */
+    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
+    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_SENSOR_READ, -EPERM);
+#ifdef CONFIG_AKIRA_BME280
+    {
+        float v = 0.0f;
+        if (akira_sensor_read((akira_sensor_type_t)type, &v) == 0)
+        {
+            return (int)(v * 1000.0f);
+        }
+    }
+#endif
+    (void)type;
+    return -ENOSYS;
+}
+
+#endif /* CONFIG_AKIRA_WASM_RUNTIME */

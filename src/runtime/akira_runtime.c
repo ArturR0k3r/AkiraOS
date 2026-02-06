@@ -18,8 +18,9 @@
 #include "platform_hal.h"
 #include "storage/fs_manager.h"
 #include <lib/mem_helper.h>
-
 #include <runtime/security.h>
+
+#include "akira_api.h"
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
@@ -36,37 +37,12 @@ LOG_MODULE_REGISTER(akira_runtime, CONFIG_AKIRA_LOG_LEVEL);
 /* Chunked loading configuration */
 #define CHUNK_BUFFER_SIZE   (16 * 1024)  /* 16KB chunks for WASM loading */
 
-/* Internal managed app structure */
-typedef struct {
-    bool used;
-    char name[32];
-    wasm_module_t module;
-    wasm_module_inst_t instance;
-    wasm_exec_env_t exec_env;
-    bool running;
-    uint32_t cap_mask;        /* capability bitmask from manifest */
-    uint32_t memory_quota;    /* memory quota from manifest (0 = unlimited) */
-    uint32_t memory_used;     /* current memory usage (bytes) */
-} akira_managed_app_t;
-
-static akira_managed_app_t g_apps[AKIRA_MAX_WASM_INSTANCES];
+akira_managed_app_t g_apps[AKIRA_MAX_WASM_INSTANCES];
 
 /* Use capability bits from security.h (AKIRA_CAP_*) */
 static bool g_runtime_initialized = false;
 static void *g_wamr_heap_buf = NULL;
 static size_t g_wamr_heap_size = 0;
-
-/* Forward native function prototypes (registered below) */
-static int akira_native_display_clear(wasm_exec_env_t exec_env, uint32_t color);
-static int akira_native_display_pixel(wasm_exec_env_t exec_env, int32_t x, int32_t y, uint32_t color);
-static int akira_native_input_read_buttons(wasm_exec_env_t exec_env);
-static int akira_native_rf_send(wasm_exec_env_t exec_env, uint32_t payload_ptr, uint32_t len);
-static int akira_native_sensor_read(wasm_exec_env_t exec_env, int32_t type);
-static int akira_native_log(wasm_exec_env_t exec_env, uint32_t level, char* message);
-
-/* Native memory allocation with quota enforcement (exposed to WASM) */
-static uint32_t akira_native_mem_alloc(wasm_exec_env_t exec_env, uint32_t size);
-static void akira_native_mem_free(wasm_exec_env_t exec_env, uint32_t ptr);
 
 /* Capability checking is implemented in src/runtime/security.c */
 
@@ -111,7 +87,7 @@ int akira_runtime_get_name_for_module_inst(wasm_module_inst_t inst, char *buf, s
 }
 
 /* Get app slot from module instance - used by quota enforcement */
-static int get_slot_for_module_inst(wasm_module_inst_t inst)
+int get_slot_for_module_inst(wasm_module_inst_t inst)
 {
     if (!inst) return -1;
     for (int i = 0; i < AKIRA_MAX_WASM_INSTANCES; i++) {
@@ -135,133 +111,7 @@ static int get_slot_for_module_inst(wasm_module_inst_t inst)
  * - Header stores size for deallocation tracking
  */
 
-/* Allocation header to track size for quota accounting */
-typedef struct {
-    uint32_t magic;      /* Magic number for validation: 0xAK1RA */
-    uint32_t size;       /* Allocated size (excluding header) */
-    int32_t  app_slot;   /* App slot index for quota tracking */
-} akira_alloc_header_t;
 
-#define AKIRA_ALLOC_MAGIC 0xAA4B5241  /* "AK1R" in hex-ish */
-
-/**
- * @brief Allocate memory for a WASM app with quota enforcement
- *
- * Attempts to allocate from PSRAM first, falls back to SRAM.
- * Enforces per-app memory quota. Returns NULL on quota violation
- * without crashing the system.
- *
- * @param exec_env  WAMR execution environment (identifies the app)
- * @param size      Number of bytes to allocate
- * @return Pointer to allocated memory, or NULL on failure/quota exceeded
- */
-void *akira_wasm_malloc(wasm_exec_env_t exec_env, size_t size)
-{
-    if (!exec_env || size == 0) {
-        return NULL;
-    }
-
-#ifdef CONFIG_AKIRA_WASM_RUNTIME
-    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    int slot = get_slot_for_module_inst(inst);
-    if (slot < 0) {
-        LOG_WRN("wasm_malloc: unknown app instance");
-        return NULL;
-    }
-
-    akira_managed_app_t *app = &g_apps[slot];
-
-    /* Calculate total allocation size including header */
-    size_t total_size = size + sizeof(akira_alloc_header_t);
-
-    /* Check quota before allocation (atomic-safe read) */
-    uint32_t quota = app->memory_quota;
-    if (quota > 0) {
-        uint32_t current = app->memory_used;
-        if (current + total_size > quota) {
-            LOG_WRN("wasm_malloc: quota exceeded for app %s (used=%u, req=%zu, quota=%u)",
-                    app->name, current, total_size, quota);
-            return NULL;  /* Graceful failure - no crash */
-        }
-    }
-
-    /* Allocate from PSRAM-preferred pool */
-    void *raw = akira_malloc_buffer(total_size);
-    if (!raw) {
-        LOG_WRN("wasm_malloc: allocation failed for %zu bytes", total_size);
-        return NULL;
-    }
-
-    /* Initialize header */
-    akira_alloc_header_t *hdr = (akira_alloc_header_t *)raw;
-    hdr->magic = AKIRA_ALLOC_MAGIC;
-    hdr->size = (uint32_t)size;
-    hdr->app_slot = slot;
-
-    /* Update quota tracking (simple increment - could use atomic for ISR safety) */
-    app->memory_used += total_size;
-
-    LOG_DBG("wasm_malloc: app %s allocated %zu bytes (total used: %u)",
-            app->name, size, app->memory_used);
-
-    /* Return pointer past header */
-    return (void *)(hdr + 1);
-#else
-    (void)exec_env;
-    return akira_malloc_buffer(size);
-#endif
-}
-
-/**
- * @brief Free memory allocated with akira_wasm_malloc
- *
- * Updates quota tracking and frees the underlying memory.
- * Safe to call with NULL pointer.
- *
- * @param exec_env  WAMR execution environment
- * @param ptr       Pointer to memory (from akira_wasm_malloc)
- */
-void akira_wasm_free(wasm_exec_env_t exec_env, void *ptr)
-{
-    if (!ptr) {
-        return;
-    }
-
-#ifdef CONFIG_AKIRA_WASM_RUNTIME
-    /* Retrieve header */
-    akira_alloc_header_t *hdr = ((akira_alloc_header_t *)ptr) - 1;
-
-    /* Validate magic */
-    if (hdr->magic != AKIRA_ALLOC_MAGIC) {
-        LOG_ERR("wasm_free: invalid pointer or corrupted header at %p", ptr);
-        return;  /* Don't crash - graceful failure */
-    }
-
-    int slot = hdr->app_slot;
-    size_t total_size = hdr->size + sizeof(akira_alloc_header_t);
-
-    /* Update quota tracking */
-    if (slot >= 0 && slot < AKIRA_MAX_WASM_INSTANCES && g_apps[slot].used) {
-        if (g_apps[slot].memory_used >= total_size) {
-            g_apps[slot].memory_used -= total_size;
-        } else {
-            LOG_WRN("wasm_free: memory accounting underflow for app %s", g_apps[slot].name);
-            g_apps[slot].memory_used = 0;
-        }
-        LOG_DBG("wasm_free: app %s freed %u bytes (remaining: %u)",
-                g_apps[slot].name, hdr->size, g_apps[slot].memory_used);
-    }
-
-    /* Clear magic to detect double-free */
-    hdr->magic = 0;
-
-    /* Free the underlying buffer */
-    akira_free_buffer(hdr);
-#else
-    (void)exec_env;
-    akira_free_buffer(ptr);
-#endif
-}
 
 /**
  * @brief Get current memory usage for an app
@@ -351,8 +201,6 @@ int akira_runtime_init(void)
      * module loading), but provide native malloc/free APIs for WASM apps
      * that need quota-enforced dynamic allocation.
      *
-     * The akira_wasm_malloc/free functions can be exposed as native APIs
-     * for apps requiring quota-aware allocation.
      */
     RuntimeInitArgs init_args = {0};
     init_args.mem_alloc_type = Alloc_With_Pool;
@@ -365,20 +213,14 @@ int akira_runtime_init(void)
         return -ENODEV;
     }
 
-    /* Register native symbols (single registration point) */
-    static NativeSymbol native_syms[] = {
-        {"log", (void *)akira_native_log, "(i$)i", NULL},
-        {"display_clear", (void *)akira_native_display_clear, "(i)i", NULL},
-        {"display_pixel", (void *)akira_native_display_pixel, "(iii)i", NULL},
-        {"input_read_buttons", (void *)akira_native_input_read_buttons, "()i", NULL},
-        {"rf_send", (void *)akira_native_rf_send, "(*i)i", NULL},
-        {"sensor_read", (void *)akira_native_sensor_read, "(i)i", NULL},
-        /* Quota-enforced memory allocation for WASM apps */
-        {"mem_alloc", (void *)akira_native_mem_alloc, "(i)i", NULL},
-        {"mem_free", (void *)akira_native_mem_free, "(i)", NULL},
-    };
-
-    wasm_runtime_register_natives("env", native_syms, sizeof(native_syms) / sizeof(NativeSymbol));
+    #ifdef CONFIG_AKIRA_WASM_API
+    if(!akira_register_native_apis()){
+        LOG_ERR("Failed to register native APIs");
+        return -EIO;
+    }
+    #else
+    LOG_WRN("Native API registration not included - no APIs enabled (CONFIG_AKIRA_WASM_API not set)");
+    #endif /* CONFIG_AKIRA_WASM_API */
 
     /* Ensure WASM apps dir exists */
     if(fs_manager_exists("/lfs/apps") != 1){ // Not found
@@ -716,254 +558,6 @@ int akira_runtime_uninstall(const char *name, int instance_id)
     }
 
     return 0;
-}
-
-/* ===== Native functions (WASM-exposed) ===== */
-
-//TODO: Change these into their respective api files
-
-static int akira_native_log(wasm_exec_env_t exec_env, uint32_t level, char* message){
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst) return -1;
-
-    switch (level)
-    {
-    case LOG_LEVEL_ERR:
-        LOG_ERR("Logged from wasm app %s",message);
-        break;
-    case LOG_LEVEL_WRN:
-        LOG_WRN("Logged from wasm app %s",message);
-        break;
-    case LOG_LEVEL_INF:
-        LOG_INF("Logged from wasm app %s",message);
-        break;
-    case LOG_LEVEL_DBG:
-        LOG_DBG("Logged from wasm app %s",message);
-        break;
-    default:
-        LOG_INF("UNKOWN TYPE pushed from wasm app (%d)", level);
-        break;
-    }
-
-    return 0;
-}
-
-static int akira_native_display_clear(wasm_exec_env_t exec_env, uint32_t color)
-{
-    /* Use inline capability check for <60ns overhead */
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-
-#if AKIRA_PLATFORM_NATIVE_SIM
-    /* On native_sim use sim helper */
-    for (int y = 0; y < 320; y++)
-        for (int x = 0; x < 240; x++)
-            akira_sim_draw_pixel(x, y, (uint16_t)color);
-    akira_sim_show_display();
-    return 0;
-#else
-    /* On hardware platforms try framebuffer when available */
-    uint16_t *fb = akira_framebuffer_get();
-    if (fb)
-    {
-        for (int i = 0; i < 240 * 320; i++)
-            fb[i] = (uint16_t)color;
-        return 0;
-    }
-    return 0; /* No-op if display unavailable */
-#endif
-}
-
-static int akira_native_display_pixel(wasm_exec_env_t exec_env, int32_t x, int32_t y, uint32_t color)
-{
-    /* Use inline capability check for <60ns overhead */
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-
-    if (x < 0 || x >= 240 || y < 0 || y >= 320)
-        return -1;
-
-#if AKIRA_PLATFORM_NATIVE_SIM
-    akira_sim_draw_pixel(x, y, (uint16_t)color);
-    return 0;
-#else
-    uint16_t *fb = akira_framebuffer_get();
-    if (fb)
-    {
-        fb[y * 240 + x] = (uint16_t)color;
-        return 0;
-    }
-    return -1;
-#endif
-}
-
-static int akira_native_input_read_buttons(wasm_exec_env_t exec_env)
-{
-    /* Use inline capability check for <60ns overhead */
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    if (!AKIRA_CHECK_CAP_INLINE(cap_mask, AKIRA_CAP_INPUT_READ))
-        return 0;  /* Return 0 (no buttons) on permission denied */
-
-#if AKIRA_PLATFORM_NATIVE_SIM
-    return (int)akira_sim_read_buttons();
-#else
-    /* No generic platform input API - return 0 by default */
-    return 0;
-#endif
-}
-
-static int akira_native_rf_send(wasm_exec_env_t exec_env, uint32_t payload_ptr, uint32_t len)
-{
-#ifdef CONFIG_AKIRA_WASM_RUNTIME
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst)
-        return -1;
-
-    /* Use inline capability check for <60ns overhead */
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
-
-    if (len == 0)
-        return -1;
-
-    uint8_t *ptr = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst, payload_ptr);
-    if (!ptr)
-        return -1;
-
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
-    /* The API layer will dispatch to the proper radio driver */
-    return akira_rf_send(ptr, len);
-#else
-    (void)ptr; (void)len;
-    return -ENOSYS;
-#endif
-#else
-    (void)exec_env; (void)payload_ptr; (void)len;
-    /* WAMR disabled, cannot map pointers nor enforce per-exec caps */
-    if (!akira_security_check_native("rf.transceive"))
-        return -1;
-    return -ENOSYS;
-#endif
-}
-
-static int akira_native_sensor_read(wasm_exec_env_t exec_env, int32_t type)
-{
-#ifdef CONFIG_AKIRA_WASM_RUNTIME
-    /* Use inline capability check for <60ns overhead */
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_SENSOR_READ, -EPERM);
-#else
-    if (!akira_security_check_native("sensor.read"))
-        return -1;
-    (void)exec_env;
-#endif
-
-#ifdef CONFIG_AKIRA_BME280
-    {
-        float v = 0.0f;
-        if (akira_sensor_read((akira_sensor_type_t)type, &v) == 0)
-        {
-            /* Convert float to int32 with simple scaling (milli-units) */
-            return (int)(v * 1000.0f);
-        }
-    }
-#endif
-    (void)type;
-    return -ENOSYS;
-}
-
-/*
- * Native memory allocation APIs exposed to WASM
- *
- * These provide quota-enforced memory allocation that WASM apps can use
- * for dynamic memory needs beyond the linear memory. Returns a WASM
- * pointer (offset in linear memory) or 0 on failure.
- */
-static uint32_t akira_native_mem_alloc(wasm_exec_env_t exec_env, uint32_t size)
-{
-#ifdef CONFIG_AKIRA_WASM_RUNTIME
-    if (size == 0 || size > (16 * 1024 * 1024)) {  /* Sanity limit: 16MB */
-        return 0;
-    }
-
-    /* Allocate from quota-enforced pool */
-    void *ptr = akira_wasm_malloc(exec_env, size);
-    if (!ptr) {
-        return 0;  /* Quota exceeded or allocation failed */
-    }
-
-    /* Convert native pointer to WASM address space */
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst) {
-        akira_wasm_free(exec_env, ptr);
-        return 0;
-    }
-
-    /* The allocated memory is outside WASM linear memory, so we need to
-     * use module heap allocation for WASM-accessible memory.
-     * For now, return 0 as this requires WAMR's module_malloc.
-     *
-     * TODO: Use wasm_runtime_module_malloc() for WASM-accessible allocation
-     */
-    akira_wasm_free(exec_env, ptr);
-
-    /* Use WAMR's module malloc for WASM-accessible memory with quota check */
-    int slot = get_slot_for_module_inst(module_inst);
-    if (slot < 0) {
-        return 0;
-    }
-
-    akira_managed_app_t *app = &g_apps[slot];
-
-    /* Check quota before WAMR allocation */
-    uint32_t quota = app->memory_quota;
-    if (quota > 0 && app->memory_used + size > quota) {
-        LOG_WRN("mem_alloc: quota exceeded for app %s", app->name);
-        return 0;
-    }
-
-    uint32_t wasm_ptr = (uint32_t)wasm_runtime_module_malloc(module_inst, size, NULL);
-    if (wasm_ptr == 0) {
-        LOG_WRN("mem_alloc: WAMR module malloc failed");
-        return 0;
-    }
-
-    /* Track allocation in quota */
-    app->memory_used += size;
-    LOG_DBG("mem_alloc: app %s allocated %u bytes (used: %u)", app->name, size, app->memory_used);
-
-    return wasm_ptr;
-#else
-    (void)exec_env; (void)size;
-    return 0;
-#endif
-}
-
-static void akira_native_mem_free(wasm_exec_env_t exec_env, uint32_t ptr)
-{
-#ifdef CONFIG_AKIRA_WASM_RUNTIME
-    if (ptr == 0) {
-        return;
-    }
-
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst) {
-        return;
-    }
-
-    int slot = get_slot_for_module_inst(module_inst);
-    if (slot >= 0) {
-        /* Note: We can't easily track size for WAMR module_free
-         * For accurate quota tracking, we'd need to store allocation sizes
-         * or use WAMR's internal tracking. For now, we just free.
-         */
-        LOG_DBG("mem_free: app %s freeing ptr 0x%08x", g_apps[slot].name, ptr);
-    }
-
-    wasm_runtime_module_free(module_inst, ptr);
-#else
-    (void)exec_env; (void)ptr;
-#endif
 }
 
 /* End of file */

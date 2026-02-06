@@ -4,7 +4,12 @@
 
 LOG_MODULE_REGISTER(akira_log_api, CONFIG_LOG_DEFAULT_LEVEL);
 
-void akira_log(int level, const char *message){
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
+int akira_native_log(wasm_exec_env_t exec_env, uint32_t level, char* message){
+    
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    if (!module_inst) return -1;
+
     switch (level)
     {
     case LOG_LEVEL_ERR:
@@ -23,4 +28,7 @@ void akira_log(int level, const char *message){
         LOG_INF("UNKOWN TYPE pushed from wasm app (%d)", level);
         break;
     }
+
+    return 0;
 }
+#endif

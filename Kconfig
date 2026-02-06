@@ -42,7 +42,7 @@ config AKIRA_WASM_RUNTIME
       build and link the wasm-micro-runtime (WAMR) and register native APIs.
       WAMR can use its builtin libc so this option is not constrained to a
       particular Zephyr libc choice; ensure sufficient heap is available for
-      WAMR's global heap if using PSRAM or builtin heap.
+      WAMRs global heap if using PSRAM or builtin heap.
 
 config AKIRA_RUNTIME_CUSTOM
     bool "Enable Akira unified custom runtime (Minimalist)"
@@ -330,7 +330,7 @@ config AKIRA_EMBEDDED_WEB
     help
       Enable the embedded HTML web UI server hosted directly on the device.
       Disabling this saves memory when the device connects to a centrally
-      hosted web server and doesn't need to serve pages locally.
+      hosted web server and doesnt need to serve pages locally.
 
 endmenu
 
@@ -727,8 +727,71 @@ config FS_FATFS_VOLUME_COUNT
     help
       Maximum number of FAT volumes supported.
 
-# Akira Module System (Core AkiraOS functionality)
-# rsource "src/akira_modules/Kconfig"  # Removed: akira_modules are deprecated in minimalist architecture
+
+menu "WASM API Exports"
+    depends on AKIRA_WASM_RUNTIME
+
+config AKIRA_WASM_API
+    bool "Enable WASM native API exports"
+    default y
+    depends on AKIRA_WASM_RUNTIME
+    help
+      Enable registration of native APIs for WASM applications.
+      This allows WASM apps to call native platform functions.
+
+config AKIRA_WASM_DISPLAY
+    bool "Export Display API to WASM"
+    default y
+    depends on AKIRA_WASM_API && AKIRA_DISPLAY
+    help
+      Export display drawing functions to WASM applications.
+      Provides pixel, rectangle, text, and clear operations.
+      Requires AKIRA_CAP_DISPLAY_WRITE capability.
+
+config AKIRA_WASM_INPUT
+    bool "Export Input API to WASM"
+    default y
+    depends on AKIRA_WASM_API && GPIO
+    help
+      Export input/button reading functions to WASM applications.
+      Provides button state reading and callback registration.
+      Requires AKIRA_CAP_INPUT_READ capability.
+
+config AKIRA_WASM_RF
+    bool "Export RF API to WASM"
+    default y
+    depends on AKIRA_WASM_API && AKIRA_MODULE_RF && AKIRA_RF_FRAMEWORK
+    help
+      Export RF transceiver functions to WASM applications.
+      Provides send, receive, frequency, and power control.
+      Requires AKIRA_CAP_RF_TRANSCEIVE capability.
+
+config AKIRA_WASM_SENSOR
+    bool "Export Sensor API to WASM"
+    default y
+    depends on AKIRA_WASM_API && AKIRA_MODULE_SENSORS
+    help
+      Export sensor reading functions to WASM applications.
+      Provides access to temperature, humidity, pressure, IMU, and power data.
+      Requires AKIRA_CAP_SENSOR_READ capability.
+
+config AKIRA_WASM_MEMORY
+    bool "Export Memory API to WASM"
+    default y
+    depends on AKIRA_WASM_API
+    help
+      Export memory allocation functions to WASM applications.
+      Provides quota-enforced malloc/free operations.
+      Memory usage is tracked per-app with configurable quotas.
+
+config AKIRA_WASM_BT_SHELL
+    bool "Export BT Shell API to WASM"
+    default n
+    depends on AKIRA_WASM_API && AKIRA_BT_SHELL
+    help
+      Export BT shell functions to WASM applications.
+      Allows apps to send shell commands via Bluetooth.
+      Requires AKIRA_CAP_BT_SHELL capability.
 
 endmenu
 
@@ -827,4 +890,7 @@ config AKIRA_SETTINGS_ENCRYPTION_HW_ACCEL
 
 endif # AKIRA_SETTINGS_ENCRYPTION
 
+endmenu
+
+# End of Kconfig
 endmenu

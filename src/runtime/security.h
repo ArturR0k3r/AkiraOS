@@ -21,9 +21,10 @@ extern "C" {
 /* Capability bits (shared) - use powers of 2 for efficient masking */
 #define AKIRA_CAP_DISPLAY_WRITE   (1U << 0)
 #define AKIRA_CAP_INPUT_READ      (1U << 1)
-#define AKIRA_CAP_SENSOR_READ     (1U << 2)
-#define AKIRA_CAP_RF_TRANSCEIVE   (1U << 3)
-
+#define AKIRA_CAP_INPUT_WRITE     (1U << 2)
+#define AKIRA_CAP_SENSOR_READ     (1U << 3)
+#define AKIRA_CAP_RF_TRANSCEIVE   (1U << 4)
+#define AKIRA_CAP_BT_SHELL       (1U << 5)
 /*
  * Performance-critical inline capability check macro.
  * Checks if a capability mask bit is set - avoids function call overhead.

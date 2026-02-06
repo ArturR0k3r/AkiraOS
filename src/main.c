@@ -58,6 +58,16 @@ int main(void)
     }
 #endif
 
+#ifdef CONFIG_AKIRA_BT_SHELL
+    /* Initialize Bluetooth shell commands */
+    if (bt_shell_init() < 0) {
+        LOG_WRN("Bluetooth shell init failed");
+    }
+    else {
+        LOG_INF("Bluetooth shell commands initialized");
+    }
+#endif
+
 #ifdef CONFIG_AKIRA_USB
     if(usb_manager_init() < 0){
         LOG_WRN("USB manager init failed");

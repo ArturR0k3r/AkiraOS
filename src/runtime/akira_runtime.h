@@ -40,6 +40,19 @@ extern "C" {
 #endif
 #endif
 
+/* Internal managed app structure */
+typedef struct {
+    bool used;
+    char name[32];
+    wasm_module_t module;
+    wasm_module_inst_t instance;
+    wasm_exec_env_t exec_env;
+    bool running;
+    uint32_t cap_mask;        /* capability bitmask from manifest */
+    uint32_t memory_quota;    /* memory quota from manifest (0 = unlimited) */
+    uint32_t memory_used;     /* current memory usage (bytes) */
+} akira_managed_app_t;
+
 /* Initialize the unified runtime (WAMR + storage + native API registration).
  * Returns 0 on success.
  */
