@@ -23,6 +23,10 @@
 #include "bt_echo.h"
 #endif
 
+#if defined(CONFIG_AKIRA_BT_SHELL)
+#include "bt_shell.h"
+#endif
+
 LOG_MODULE_REGISTER(bt_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 /*===========================================================================*/
@@ -386,8 +390,35 @@ int bt_manager_get_address(char *buffer, size_t len)
 
 void bluetooth_manager_receive_shell_command(const char *cmd)
 {
-    /* Stub for shell command reception via BLE
-     * TODO: Implement BLE shell command passthrough
-     */
-    LOG_DBG("BLE shell command received: %s", cmd);
+    if (!cmd || !bt_mgr.initialized)
+    {
+        LOG_WRN("Shell command ignored: %s",
+                !cmd ? "null command" : "BT not initialized");
+        return;
+    }
+
+    LOG_INF("Sending shell command via BLE: %s", cmd);
+
+#if defined(CONFIG_AKIRA_BT_SHELL)
+    int ret = bt_shell_send_command(cmd);
+    if (ret == 0)
+    {
+        LOG_DBG("Shell command sent successfully");
+        bt_mgr.stats.bytes_tx += strlen(cmd);
+    }
+    else if (ret == -ENOTCONN)
+    {
+        LOG_WRN("Shell command not sent: no BLE connection");
+    }
+    else if (ret == -EACCES)
+    {
+        LOG_WRN("Shell command not sent: peer has not enabled notifications");
+    }
+    else
+    {
+        LOG_ERR("Failed to send shell command: %d", ret);
+    }
+#else
+    LOG_WRN("BT Shell service not enabled (CONFIG_AKIRA_BT_SHELL)");
+#endif
 }

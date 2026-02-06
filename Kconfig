@@ -269,6 +269,16 @@ config AKIRA_BT_ECHO
       and echoes the payload back via notifications. Useful for testing and
       debugging BT connectivity. Can also be toggled at runtime via shell.
 
+config AKIRA_BT_SHELL
+    bool "Enable Bluetooth Shell service"
+    default y
+    depends on BT && AKIRA_BT_HID
+    help
+      Enable BLE Shell passthrough service. Allows sending shell commands
+      from the device to a connected phone/tablet via BLE notifications.
+      The companion app can subscribe to receive commands.
+      Service UUID: d5b1b7e2-7f5a-4eef-8fd0-1a2b3c4d5e71
+
 config AKIRA_USB_HID
     bool "Enable USB HID"
     default y
