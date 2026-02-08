@@ -1,13 +1,13 @@
 # AkiraOS Documentation - GitHub Pages Configuration
 
 # Theme
-remote_theme: pages-themes/midnight@v0.2.0
+remote_theme: just-the-docs/just-the-docs@v0.7.0
 
 # Site settings
 title: AkiraOS Documentation
 description: High-Performance WebAssembly OS for Embedded Systems
 baseurl: ""
-url: "https://github.com/akiraos/AkiraOS"
+url: "https://github.com/ArturR0k3r/AkiraOS"
 
 # Build settings
 markdown: kramdown
@@ -140,15 +140,12 @@ defaults:
       category: resources
 
 # SEO
-twitter:
-  username: akiraos
-  card: summary
-
+#WIP: Add more SEO settings as needed
 social:
   name: AkiraOS
   links:
-    - https://github.com/akiraos/AkiraOS
+    - https://github.com/ArturR0k3r/AkiraOS
 
 # GitHub metadata
-repository: akiraos/AkiraOS
-github_username: akiraos
+repository: ArturR0k3r/AkiraOS
+github_username: ArturR0k3r
