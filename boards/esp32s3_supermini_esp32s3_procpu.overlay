@@ -1,0 +1,84 @@
+// ESP32-S3 Super Mini Board Overlay for AkiraOS
+// ESP32-S3 Mini N4R2: 4MB Flash, 2MB PSRAM (Quad SPI)
+// This overlay extends the base board definition with AkiraOS-specific config
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/spi/spi.h>
+
+// ============================================================================
+// Display Configuration (ILI9341 - Optional)
+// ============================================================================
+// Connect display as follows:
+// - VCC   -> 3.3V
+// - GND   -> GND
+// - CS    -> GPIO10
+// - DC    -> GPIO21
+// - RST   -> GPIO18
+// - MOSI  -> GPIO11
+// - SCLK  -> GPIO12
+// - BL    -> GPIO6 (or 3.3V for always-on)
+
+&gpio0
+{
+    // ILI9341 Display Control Pins (optional)
+    ili9341_cs: ili9341_cs {
+        gpio-hog;
+        gpios = <10 GPIO_ACTIVE_LOW>;  // CS - GPIO10
+        output-high;                    // CS idle high
+    };
+
+    ili9341_dc: ili9341_dc {
+        gpio-hog;
+        gpios = <21 GPIO_ACTIVE_HIGH>; // DC - GPIO21
+        output-low;                     // DC starts low (command mode)
+    };
+
+    ili9341_reset: ili9341_reset {
+        gpio-hog;
+        gpios = <18 GPIO_ACTIVE_HIGH>; // RESET - GPIO18
+        output-high;                    // RESET idle high
+    };
+
+    ili9341_bl: ili9341_bl {
+        gpio-hog;
+        gpios = <6 GPIO_ACTIVE_HIGH>;  // Backlight - GPIO6
+        output-high;                    // Backlight on
+    };
+};
+
+// Enable USB OTG for device mode (CDC ACM console)
+&usb_otg {
+    status = "okay";
+};
+
+/ {
+    fstab {
+        compatible = "zephyr,fstab";
+
+        lfs1: lfs1 {
+            compatible = "zephyr,fstab,littlefs";
+            read-size = <1>;
+            prog-size = <16>;
+            cache-size = <256>;
+            lookahead-size = <32>;
+            block-cycles = <512>;
+            partition = <&lfs1_partition>;
+            mount-point = "/lfs";
+        };
+    };
+};
+
+// Flash memory partitions (4MB flash)
+&flash0 {
+    partitions {
+        akira_settings_nvs_partition: partition@256000 {
+            label = "akira_settings_nvs";
+            reg = <0x00256000 DT_SIZE_K(32)>;
+        };
+
+        lfs1_partition: partition@25F000 {
+            label = "akira_storage";
+            reg = <0x0025F000 DT_SIZE_K(256)>;
+        };
+    };
+};

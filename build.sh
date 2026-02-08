@@ -18,12 +18,13 @@
 #   -h, --help      Show this help message
 #
 # Boards:
-#   native_sim                    Native simulator (default)
-#   esp32s3_devkitm_esp32s3_procpu  ESP32-S3 DevKitM (Akira Console)
-#   esp32_devkitc_procpu          ESP32 DevKitC (Akira Micro)
-#   nrf54l15dk_nrf54l15_cpuapp    nRF54L15 DK (Nordic)
-#   steval_stwinbx1               STM32 STWIN.box
-#   b_u585i_iot02a                STM32U5 IoT Discovery Kit
+#   native_sim                         Native simulator (default)
+#   esp32s3_devkitm_esp32s3_procpu     ESP32-S3 DevKitM (Akira Console)
+#   esp32s3_supermini_esp32s3_procpu   ESP32-S3 Super Mini (compact)
+#   esp32_devkitc_procpu               ESP32 DevKitC (Akira Micro)
+#   nrf54l15dk_nrf54l15_cpuapp         nRF54L15 DK (Nordic)
+#   steval_stwinbx1                    STM32 STWIN.box
+#   b_u585i_iot02a                     STM32U5 IoT Discovery Kit
 #
 # Examples:
 #   ./build.sh                              # Build and run native_sim
@@ -66,6 +67,7 @@ NC='\033[0m'
 declare -A BOARD_MAP=(
     ["native_sim"]="native_sim"
     ["esp32s3_devkitm_esp32s3_procpu"]="esp32s3_devkitm/esp32s3/procpu"
+    ["esp32s3_supermini_esp32s3_procpu"]="esp32s3_supermini/esp32s3/procpu"
     ["esp32c3_devkitm"]="esp32c3_devkitm"
     ["esp32_devkitc_procpu"]="esp32_devkitc/esp32/procpu"
     ["nrf54l15dk_nrf54l15_cpuapp"]="nrf54l15dk/nrf54l15/cpuapp"
@@ -76,6 +78,7 @@ declare -A BOARD_MAP=(
 declare -A BOARD_CHIP=(
     ["native_sim"]="native"
     ["esp32s3_devkitm_esp32s3_procpu"]="esp32s3"
+    ["esp32s3_supermini_esp32s3_procpu"]="esp32s3"
     ["esp32c3_devkitm"]="esp32c3"
     ["esp32_devkitc_procpu"]="esp32"
     ["nrf54l15dk_nrf54l15_cpuapp"]="nrf54l15"
@@ -86,6 +89,7 @@ declare -A BOARD_CHIP=(
 declare -A BOARD_DESC=(
     ["native_sim"]="Native Simulator"
     ["esp32s3_devkitm_esp32s3_procpu"]="ESP32-S3 DevKitM (Akira Console)"
+    ["esp32s3_supermini_esp32s3_procpu"]="ESP32-S3 Super Mini"
     ["esp32c3_devkitm"]="ESP32-C3 DevKitM (RISC-V)"
     ["esp32_devkitc_procpu"]="ESP32 DevKitC (Akira Micro)"
     ["nrf54l15dk_nrf54l15_cpuapp"]="Nordic nRF54L15 DK"
@@ -138,12 +142,13 @@ ${BOLD}OPTIONS:${NC}
     -h, --help      Show this help message
 
 ${BOLD}BOARDS:${NC}
-    native_sim                       Native simulator (default)
-    esp32s3_devkitm_esp32s3_procpu   ESP32-S3 DevKitM (Akira Console)
-    esp32c3_devkitm                  ESP32-C3 DevKitM (RISC-V)
-    esp32_devkitc_procpu             ESP32 DevKitC (Legacy)
-    nrf54l15dk_nrf54l15_cpuapp       Nordic nRF54L15 DK
-    steval_stwinbx1                  ST STEVAL-STWINBX1
+    native_sim                         Native simulator (default)
+    esp32s3_devkitm_esp32s3_procpu     ESP32-S3 DevKitM (Akira Console)
+    esp32s3_supermini_esp32s3_procpu   ESP32-S3 Super Mini (compact)
+    esp32c3_devkitm                    ESP32-C3 DevKitM (RISC-V)
+    esp32_devkitc_procpu               ESP32 DevKitC (Legacy)
+    nrf54l15dk_nrf54l15_cpuapp         Nordic nRF54L15 DK
+    steval_stwinbx1                    ST STEVAL-STWINBX1
 
 ${BOLD}EXAMPLES:${NC}
     ./build.sh
@@ -257,7 +262,9 @@ build_mcuboot() {
     
     cd "$WORKSPACE_ROOT"
     
-    if west build -b "$zephyr_board" bootloader/mcuboot/boot/zephyr -d "$build_dir"; then
+    # Include custom board root for boards defined in AkiraOS/boards
+    if west build -b "$zephyr_board" bootloader/mcuboot/boot/zephyr -d "$build_dir" \
+        -- -DBOARD_ROOT="$SCRIPT_DIR"; then
         print_success "MCUboot build complete!"
         print_info "Binary: $build_dir/zephyr/zephyr.bin"
     else

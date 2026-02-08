@@ -6,13 +6,12 @@ cmake_minimum_required(VERSION 3.20.0)
 set(KCONFIG_WARN_UNDEF OFF CACHE BOOL "Disable Kconfig warnings" FORCE)
 set(KCONFIG_WERROR OFF CACHE BOOL "Disable Kconfig warnings as errors" FORCE)
 
+# Set custom board root - MUST be before find_package(Zephyr)
+# BOARD_ROOT should point to directory that CONTAINS a 'boards' subdirectory
+list(APPEND BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR})
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(akira_os VERSION 1.2.3)
-
-
-# Set default board
-set(BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR}/boards)
-# set(DTC_OVERLAY_FILE ${CMAKE_CURRENT_LIST_DIR}/akira.overlay)  # Not needed, handled by board overlay
 
 
 
@@ -192,14 +191,25 @@ target_sources(app PRIVATE
 # Core API wrappers (must be stateless, call akira_security_check first)
 target_sources(app PRIVATE
     src/api/akira_display_api.c
-    src/api/akira_input_api.c
-    src/api/akira_rf_api.c
-    src/api/akira_sensor_api.c
     src/api/akira_memory_api.c
     src/api/akira_common_api.c
-    src/api/akira_export_api.c
-    src/api/akira_bt_shell_api.c
 )
+
+# WASM-dependent API wrappers (need wasm_export.h)
+if(CONFIG_AKIRA_WASM_RUNTIME)
+    target_sources(app PRIVATE
+        src/api/akira_input_api.c
+        src/api/akira_rf_api.c
+        src/api/akira_sensor_api.c
+        src/api/akira_export_api.c
+    )
+endif()
+
+if(CONFIG_BT)
+    target_sources(app PRIVATE
+        src/api/akira_bt_shell_api.c
+    )
+endif()
 
 # Keep connectivity and drivers as before (use module gating further below)
 
