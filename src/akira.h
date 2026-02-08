@@ -6,7 +6,7 @@
  * Include this file to access all core OS features.
  *
  * @author Artur R0K3R
- * @version 2.0.0
+ * @version 1.4.8
  */
 
 #ifndef AKIRA_CORE_H
@@ -29,9 +29,9 @@ extern "C"
 
 #define AKIRA_VERSION_MAJOR 1
 #define AKIRA_VERSION_MINOR 4
-#define AKIRA_VERSION_PATCH 0
+#define AKIRA_VERSION_PATCH 8
 #define AKIRA_VERSION_STRING "1.4.x"
-#define AKIRA_CODENAME "ONYX"
+#define AKIRA_CODENAME "GL1TCH"
 
     /* Simple version struct */
     typedef struct {

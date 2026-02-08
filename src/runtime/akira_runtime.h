@@ -27,6 +27,9 @@ typedef void *wasm_module_inst_t;
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <runtime/security/sandbox.h>
+#include <runtime/runtime_cache.h>
+#include <runtime/security/trust_levels.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,6 +54,17 @@ typedef struct {
     uint32_t cap_mask;        /* capability bitmask from manifest */
     uint32_t memory_quota;    /* memory quota from manifest (0 = unlimited) */
     uint32_t memory_used;     /* current memory usage (bytes) */
+
+    /* Security: sandbox context for syscall filtering + rate limiting */
+    sandbox_ctx_t sandbox;
+    akira_trust_level_t trust_level;
+
+    /* Performance: per-instance execution statistics */
+    runtime_perf_stats_t perf;
+
+    /* Cache: SHA-256 hash of loaded binary for module cache */
+    uint8_t binary_hash[32];
+    bool hash_valid;
 } akira_managed_app_t;
 
 /* Initialize the unified runtime (WAMR + storage + native API registration).
@@ -121,6 +135,43 @@ uint32_t akira_runtime_get_memory_used(int instance_id);
  * @return Memory quota in bytes (0 = unlimited)
  */
 uint32_t akira_runtime_get_memory_quota(int instance_id);
+
+/**
+ * @brief Get sandbox context for an app (for API-level syscall checks)
+ *
+ * @param instance_id  App instance ID
+ * @return Pointer to sandbox context, or NULL if invalid
+ */
+sandbox_ctx_t *akira_runtime_get_sandbox(int instance_id);
+
+/**
+ * @brief Get performance statistics for an app
+ *
+ * @param instance_id  App instance ID
+ * @return Pointer to perf stats, or NULL if invalid
+ */
+runtime_perf_stats_t *akira_runtime_get_perf_stats(int instance_id);
+
+/**
+ * @brief Verify WASM binary integrity before loading
+ *
+ * Performs structural integrity check and optional signature verification.
+ * Should be called before akira_runtime_load_wasm() for untrusted binaries.
+ *
+ * @param binary    WASM binary data
+ * @param size      Binary size
+ * @param hash_out  Output: SHA-256 hash (32 bytes), can be NULL
+ * @return 0 on success, negative on error
+ */
+int akira_runtime_verify_binary(const uint8_t *binary, uint32_t size,
+                                uint8_t *hash_out);
+
+/**
+ * @brief Get module cache statistics
+ *
+ * @param stats  Output statistics struct
+ */
+void akira_runtime_get_cache_stats(module_cache_stats_t *stats);
 
 #ifdef __cplusplus
 }

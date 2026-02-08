@@ -9,6 +9,7 @@
 
 #include "akira_runtime.h"
 #include "manifest_parser.h"
+#include "runtime_cache.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
@@ -19,6 +20,8 @@
 #include "storage/fs_manager.h"
 #include <lib/mem_helper.h>
 #include <runtime/security.h>
+#include <runtime/security/sandbox.h>
+#include <runtime/security/app_signing.h>
 
 #include "akira_api.h"
 
@@ -86,12 +89,20 @@ int akira_runtime_get_name_for_module_inst(wasm_module_inst_t inst, char *buf, s
     return -ENOENT;
 }
 
-/* Get app slot from module instance - used by quota enforcement */
+/* Get app slot from module instance - uses O(1) hash map with linear fallback */
 int get_slot_for_module_inst(wasm_module_inst_t inst)
 {
     if (!inst) return -1;
+
+    /* Fast path: O(1) hash map lookup */
+    int slot = instance_map_get(inst);
+    if (slot >= 0) return slot;
+
+    /* Slow path fallback: linear scan (shouldn't normally reach here) */
     for (int i = 0; i < AKIRA_MAX_WASM_INSTANCES; i++) {
         if (g_apps[i].used && g_apps[i].instance == inst) {
+            /* Repair the map for next lookup */
+            instance_map_put(inst, i);
             return i;
         }
     }
@@ -147,7 +158,13 @@ int akira_runtime_init(void)
     if (g_runtime_initialized)
         return 0;
 
-    LOG_INF("Initializing Akira unified runtime...");
+    LOG_INF("Initializing Akira unified runtime v2...");
+
+    /* Initialize performance & security subsystems */
+    module_cache_init();
+    instance_map_init();
+    sandbox_init();
+    app_signing_init();
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
     /* Prefer PSRAM for WAMR heap if available */
@@ -265,7 +282,18 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
     }
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
-    /* Parse manifest from WASM custom section before loading */
+    /* ===== Step 1: Integrity verification ===== */
+    uint8_t binary_hash[32];
+    int integrity_ret = app_verify_wasm_integrity(buffer, size, binary_hash);
+    if (integrity_ret != 0) {
+        LOG_ERR("WASM binary integrity check failed: %d", integrity_ret);
+        sandbox_audit_log(AUDIT_EVENT_INTEGRITY_FAIL, "load", (uint32_t)size);
+        return integrity_ret;
+    }
+
+    /* ===== Step 2: Parse manifest from WASM custom section ===== */
+    int64_t load_start_ms = k_uptime_get();
+
     akira_manifest_t manifest;
     manifest_init_defaults(&manifest);
     int manifest_ret = manifest_parse_wasm_section(buffer, size, &manifest);
@@ -274,6 +302,7 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
                 manifest.cap_mask, manifest.memory_quota);
     }
 
+    /* ===== Step 4: Load WASM module ===== */
     /* Allocate chunk buffer from PSRAM if available, else SRAM */
     mem_source_t chunk_src;
     uint8_t *chunk_buffer = akira_malloc_buffer_ex(CHUNK_BUFFER_SIZE, &chunk_src);
@@ -347,17 +376,31 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
         return -EIO;
     }
 
+    /* Measure load time for profiling */
+    uint32_t load_time_ms = (uint32_t)(k_uptime_get() - load_start_ms);
+
     g_apps[slot].used = true;
     g_apps[slot].module = module;
     g_apps[slot].running = false;
     g_apps[slot].cap_mask = manifest.valid ? manifest.cap_mask : 0;
     g_apps[slot].memory_quota = manifest.valid ? manifest.memory_quota : 0;
-    g_apps[slot].memory_used = 0;  /* Reset memory usage for new app */
+    g_apps[slot].memory_used = 0;
+    memcpy(g_apps[slot].binary_hash, binary_hash, 32);
+    g_apps[slot].hash_valid = true;
+    g_apps[slot].trust_level = TRUST_LEVEL_USER;
     snprintf(g_apps[slot].name, sizeof(g_apps[slot].name),
              manifest.valid && manifest.name[0] ? manifest.name : "app%d", slot);
 
-    LOG_INF("WASM module loaded into slot %d (cap_mask=0x%08x, quota=%u)",
-            slot, g_apps[slot].cap_mask, g_apps[slot].memory_quota);
+    /* Initialize sandbox and performance tracking */
+    sandbox_ctx_init(&g_apps[slot].sandbox, TRUST_LEVEL_USER, g_apps[slot].cap_mask);
+    memset(&g_apps[slot].perf, 0, sizeof(runtime_perf_stats_t));
+
+    /* Store in module cache for future reuse */
+    module_cache_store(binary_hash, module, size, load_time_ms);
+
+    sandbox_audit_log(AUDIT_EVENT_APP_LOADED, g_apps[slot].name, (uint32_t)size);
+    LOG_INF("WASM module loaded into slot %d (cap=0x%08x, quota=%u, load=%ums)",
+            slot, g_apps[slot].cap_mask, g_apps[slot].memory_quota, load_time_ms);
     return slot;
 #else
     (void)buffer; (void)size;
@@ -400,27 +443,43 @@ int akira_runtime_start(int instance_id)
     app->instance = inst;
     app->exec_env = exec_env;
 
+    /* Register in instance map for O(1) lookups */
+    instance_map_put(inst, instance_id);
+
+    /* Begin sandbox execution tracking */
+    sandbox_exec_begin(&app->sandbox);
+    perf_exec_begin(&app->perf);
+
     /* Call _start or main if present */
     wasm_function_inst_t fn = wasm_runtime_lookup_function(inst, "_start");
     if (!fn)
         fn = wasm_runtime_lookup_function(inst, "main");
     if (fn)
     {
-        uint32_t argv[2]; // empty 
-        if (!wasm_runtime_call_wasm(exec_env, fn, 2, argv))
+        /* Ask WAMR how many params the function actually expects */
+        uint32_t argc = wasm_func_get_param_count(fn, inst);
+        uint32_t argv[2] = {0, 0};
+        if (!wasm_runtime_call_wasm(exec_env, fn, argc, argv))
         {
-            LOG_ERR("WASM start exception: %s", wasm_runtime_get_exception(inst));
+            const char *exception = wasm_runtime_get_exception(inst);
+            if (exception) {
+                LOG_ERR("WASM start exception: %s", exception);
+                app->perf.trap_count++;
+            }
         }
     }
-    else if(!fn){
-        LOG_WRN("No _start or main function found in WASM module");
-        wasm_runtime_deinstantiate(inst);
-        wasm_runtime_destroy_exec_env(exec_env);
-        return -ENOENT;
+    else {
+        LOG_INF("No _start or main - reactive module (event-driven)");
     }
 
+    /* End execution tracking */
+    perf_exec_end(&app->perf);
+
     app->running = true;
-    LOG_INF("Started instance %d", instance_id);
+    sandbox_audit_log(AUDIT_EVENT_APP_STARTED, app->name, (uint32_t)instance_id);
+    LOG_INF("Started instance %d (calls=%u, time=%lluus)",
+            instance_id, app->perf.call_count,
+            (unsigned long long)app->perf.total_exec_time_us);
     return 0;
 #else
     (void)instance_id;
@@ -439,20 +498,28 @@ int akira_runtime_stop(int instance_id)
         return 0;
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
-    if (app->instance)
-    {
-        wasm_runtime_deinstantiate(app->instance);
-        app->instance = NULL;
-    }
+    /* End sandbox execution */
+    sandbox_exec_end(&app->sandbox);
 
+    /* Destroy exec_env BEFORE instance (exec_env references instance) */
     if (app->exec_env)
     {
         wasm_runtime_destroy_exec_env(app->exec_env);
         app->exec_env = NULL;
     }
 
+    if (app->instance)
+    {
+        /* Remove from instance map before deinstantiation */
+        instance_map_remove(app->instance);
+        wasm_runtime_deinstantiate(app->instance);
+        app->instance = NULL;
+    }
+
     app->running = false;
-    LOG_INF("Stopped instance %d", instance_id);
+    sandbox_audit_log(AUDIT_EVENT_APP_STOPPED, app->name, (uint32_t)instance_id);
+    LOG_INF("Stopped instance %d (total_calls=%u, traps=%u)",
+            instance_id, app->perf.call_count, app->perf.trap_count);
     return 0;
 #else
     (void)instance_id;
@@ -519,16 +586,23 @@ int akira_runtime_destroy(int instance_id)
     akira_managed_app_t *app = &g_apps[instance_id];
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
-    if (app->instance)
-    {
-        wasm_runtime_deinstantiate(app->instance);
-        app->instance = NULL;
-    }
-
+    /* Destroy exec_env BEFORE instance (exec_env references instance) */
     if (app->exec_env)
     {
         wasm_runtime_destroy_exec_env(app->exec_env);
         app->exec_env = NULL;
+    }
+
+    if (app->instance)
+    {
+        instance_map_remove(app->instance);
+        wasm_runtime_deinstantiate(app->instance);
+        app->instance = NULL;
+    }
+
+    /* Release module cache reference */
+    if (app->hash_valid) {
+        module_cache_release(app->binary_hash);
     }
 
     if (app->module)
@@ -541,7 +615,10 @@ int akira_runtime_destroy(int instance_id)
     app->used = false;
     app->running = false;
     app->cap_mask = 0;
+    app->hash_valid = false;
     app->name[0] = '\0';
+    memset(&app->sandbox, 0, sizeof(sandbox_ctx_t));
+    memset(&app->perf, 0, sizeof(runtime_perf_stats_t));
     return 0;
 }
 
@@ -561,3 +638,28 @@ int akira_runtime_uninstall(const char *name, int instance_id)
 }
 
 /* End of file */
+
+/* ===== New API Functions (v2) ===== */
+
+sandbox_ctx_t *akira_runtime_get_sandbox(int instance_id)
+{
+    if (!slot_valid(instance_id)) return NULL;
+    return &g_apps[instance_id].sandbox;
+}
+
+runtime_perf_stats_t *akira_runtime_get_perf_stats(int instance_id)
+{
+    if (!slot_valid(instance_id)) return NULL;
+    return &g_apps[instance_id].perf;
+}
+
+int akira_runtime_verify_binary(const uint8_t *binary, uint32_t size,
+                                uint8_t *hash_out)
+{
+    return app_verify_wasm_integrity(binary, size, hash_out);
+}
+
+void akira_runtime_get_cache_stats(module_cache_stats_t *stats)
+{
+    module_cache_get_stats(stats);
+}

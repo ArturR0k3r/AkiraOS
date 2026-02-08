@@ -137,10 +137,12 @@ target_sources(app PRIVATE
 # API Layer (WASM exports) - now modular, see modules above
 
 # Security Layer
-# Capability and signing implementations live under src/runtime/security
+# Capability, signing, sandbox, and runtime cache implementations
 target_sources(app PRIVATE
     src/runtime/security/capability.c
-    src/runtime/security/app_signing.c
+    src/runtime/security/app_signing_v2.c
+    src/runtime/security/sandbox.c
+    src/runtime/runtime_cache.c
 )
 
 # Power Management
@@ -428,6 +430,7 @@ target_include_directories(app PRIVATE
     src/resource/
     src/runtime/
     src/security/
+    src/runtime/security/
     src/services/
     src/settings/
     src/shell/

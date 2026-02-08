@@ -93,6 +93,19 @@ extern "C"
      */
     int app_compute_hash(const void *data, size_t len, uint8_t *hash);
 
+    /**
+     * @brief Verify WASM binary structural integrity
+     *
+     * Checks magic bytes, version, section structure, and computes SHA-256.
+     *
+     * @param binary    WASM binary data
+     * @param size      Binary size
+     * @param hash_out  Output: SHA-256 hash (32 bytes), can be NULL
+     * @return 0 on success, negative on error
+     */
+    int app_verify_wasm_integrity(const void *binary, size_t size,
+                                  uint8_t *hash_out);
+
 #ifdef __cplusplus
 }
 #endif

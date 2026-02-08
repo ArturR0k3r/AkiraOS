@@ -659,9 +659,77 @@ config AKIRA_CAPABILITY_SYSTEM
 config AKIRA_APP_SIGNING
     bool "Enable app signature verification"
     default n
-    depends on AKIRA_CAPABILITY_SYSTEM
+    depends on AKIRA_CAPABILITY_SYSTEM && MBEDTLS
     help
       Require cryptographic signature verification for apps.
+      Uses mbedTLS SHA-256 + RSA-2048 or Ed25519.
+
+config AKIRA_SANDBOX
+    bool "Enable runtime sandbox"
+    default y
+    depends on AKIRA_CAPABILITY_SYSTEM
+    help
+      Enable runtime sandboxing with syscall filtering, rate limiting,
+      and execution watchdog for WASM applications.
+
+config AKIRA_SANDBOX_EXEC_TIMEOUT_MS
+    int "WASM execution timeout (ms)"
+    default 5000
+    range 1000 30000
+    depends on AKIRA_SANDBOX
+    help
+      Maximum execution time for a single WASM function call before
+      the watchdog kills the app. Set higher for compute-heavy apps.
+
+config AKIRA_SANDBOX_RATE_LIMITING
+    bool "Enable syscall rate limiting"
+    default y
+    depends on AKIRA_SANDBOX
+    help
+      Enable per-category rate limiting for syscalls.
+      Prevents apps from hogging hardware resources.
+
+config AKIRA_SECURITY_AUDIT
+    bool "Enable security audit logging"
+    default y
+    depends on AKIRA_CAPABILITY_SYSTEM
+    help
+      Enable ring buffer security audit log that records
+      denied capabilities, rate limits, and watchdog kills.
+
+config AKIRA_AUDIT_LOG_SIZE
+    int "Audit log entries"
+    default 32
+    range 16 128
+    depends on AKIRA_SECURITY_AUDIT
+    help
+      Number of audit log entries in the ring buffer.
+      Each entry uses ~68 bytes of RAM.
+
+config AKIRA_WASM_INTEGRITY_CHECK
+    bool "Enable WASM binary integrity verification"
+    default y
+    depends on AKIRA_CAPABILITY_SYSTEM
+    help
+      Verify WASM binary structural integrity (magic, version,
+      section layout) before loading. Catches corrupted binaries.
+
+config AKIRA_MODULE_CACHE
+    bool "Enable WASM module cache"
+    default y
+    depends on AKIRA_WASM_RUNTIME
+    help
+      Cache loaded WASM modules by SHA-256 hash to avoid
+      reloading identical binaries. Trades RAM for performance.
+
+config AKIRA_MODULE_CACHE_SIZE
+    int "Module cache entries"
+    default 4
+    range 2 8
+    depends on AKIRA_MODULE_CACHE
+    help
+      Maximum number of cached WASM modules.
+      Each cached module retains the parsed WAMR module in memory.
 
 endmenu
 

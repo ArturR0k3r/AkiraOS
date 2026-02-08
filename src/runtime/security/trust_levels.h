@@ -6,6 +6,8 @@
 #ifndef AKIRA_TRUST_LEVELS_H
 #define AKIRA_TRUST_LEVELS_H
 
+#include <stdbool.h>
+
 /**
  * @brief Trust levels for apps and system components
  *

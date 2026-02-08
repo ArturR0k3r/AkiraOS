@@ -8,6 +8,8 @@
 #include <drivers/platform_hal.h>
 #include <runtime/akira_runtime.h>
 #include <runtime/app_loader/app_loader.h>
+#include <runtime/security/sandbox.h>
+#include <runtime/runtime_cache.h>
 #ifdef CONFIG_FILE_SYSTEM
 #include <storage/fs_manager.h>
 #endif
@@ -40,7 +42,7 @@ LOG_MODULE_REGISTER(akira_main, CONFIG_AKIRA_LOG_LEVEL);
 
 int main(void)
 {
-    LOG_INF("AkiraOS booting (Minimalist v1.4.x)");
+    LOG_INF("AkiraOS booting (Minimalist v1.4.8 - Hardened Runtime)");
 
     /* Initialize hardware HAL */
     if (akira_hal_init() < 0) {
@@ -147,6 +149,30 @@ int main(void)
         LOG_ERR("Runtime init failed");
         return -EIO;
     }
+
+    /* Log security status */
+    LOG_INF("Security: sandbox=%s, signing=%s, integrity=%s, cache=%s",
+#ifdef CONFIG_AKIRA_SANDBOX
+            "enabled",
+#else
+            "disabled",
+#endif
+#ifdef CONFIG_AKIRA_APP_SIGNING
+            "enforced",
+#else
+            "permissive",
+#endif
+#ifdef CONFIG_AKIRA_WASM_INTEGRITY_CHECK
+            "enabled",
+#else
+            "disabled",
+#endif
+#ifdef CONFIG_AKIRA_MODULE_CACHE
+            "enabled"
+#else
+            "disabled"
+#endif
+    );
 
 #ifdef CONFIG_AKIRA_APP_MANAGER
     app_manager_init();
