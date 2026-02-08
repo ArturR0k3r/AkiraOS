@@ -1,3 +1,11 @@
+---
+layout: default
+title: Getting Started
+nav_order: 2
+has_children: true
+permalink: /getting-started
+---
+
 # Getting Started with AkiraOS
 
 **From zero to running WASM apps in under 30 minutes.**

@@ -1,3 +1,11 @@
+---
+layout: default
+title: Development
+nav_order: 6
+has_children: true
+permalink: /development
+---
+
 # Development Guide
 
 Advanced topics for AkiraOS WASM app development.

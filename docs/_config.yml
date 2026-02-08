@@ -3,11 +3,18 @@
 # Theme
 remote_theme: just-the-docs/just-the-docs@v0.7.0
 
+# Color scheme (dark theme)
+color_scheme: dark
+
+# Enable mermaid
+mermaid:
+  version: "10.6.1"
+
 # Site settings
 title: AkiraOS Documentation
 description: High-Performance WebAssembly OS for Embedded Systems
 baseurl: ""
-url: "https://github.com/ArturR0k3r/AkiraOS"
+url: "https://akiraos.pen.engineering"
 
 # Build settings
 markdown: kramdown
@@ -73,29 +80,24 @@ include:
   - _*.yml
   - .htaccess
 
-# Collections
-collections:
-  architecture:
-    output: true
-    permalink: /architecture/:name/
-  getting-started:
-    output: true
-    permalink: /getting-started/:name/
-  api-reference:
-    output: true
-    permalink: /api-reference/:name/
-  platform:
-    output: true
-    permalink: /platform/:name/
-  development:
-    output: true
-    permalink: /development/:name/
-  hardware:
-    output: true
-    permalink: /hardware/:name/
-  resources:
-    output: true
-    permalink: /resources/:name/
+# Just the Docs Configuration
+aux_links:
+  "AkiraOS on GitHub":
+    - "//github.com/ArturR0k3r/AkiraOS"
+
+# Footer content
+footer_content: "Copyright &copy; 2025-2026 AkiraOS Project. Distributed under the Apache 2.0 License."
+
+# Enable search
+search_enabled: true
+search:
+  heading_level: 2
+  previews: 3
+  preview_words_before: 5
+  preview_words_after: 10
+  tokenizer_separator: /[\s/]+/
+  rel_url: true
+  button: false
 
 # Defaults
 defaults:
@@ -107,37 +109,37 @@ defaults:
       path: "architecture"
     values:
       layout: default
-      category: architecture
+      parent: Architecture
   - scope:
       path: "getting-started"
     values:
       layout: default
-      category: getting-started
+      parent: Getting Started
   - scope:
       path: "api-reference"
     values:
       layout: default
-      category: api-reference
+      parent: API Reference
   - scope:
       path: "platform"
     values:
       layout: default
-      category: platform
+      parent: Platform Support
   - scope:
       path: "development"
     values:
       layout: default
-      category: development
+      parent: Development
   - scope:
       path: "hardware"
     values:
       layout: default
-      category: hardware
+      parent: Hardware
   - scope:
       path: "resources"
     values:
       layout: default
-      category: resources
+      parent: Resources
 
 # SEO
 #WIP: Add more SEO settings as needed

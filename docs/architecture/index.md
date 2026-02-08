@@ -1,3 +1,11 @@
+---
+layout: default
+title: Architecture
+nav_order: 3
+has_children: true
+permalink: /architecture
+---
+
 # Architecture Overview
 
 AkiraOS employs a **layered modular architecture** designed for secure, high-performance WebAssembly execution on embedded systems.

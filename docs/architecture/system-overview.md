@@ -1,3 +1,10 @@
+---
+layout: default
+title: System Overview
+parent: Architecture
+nav_order: 1
+---
+
 # System Overview
 
 AkiraOS is a high-performance embedded operating system combining **Zephyr RTOS** with **WebAssembly sandboxed execution** for secure, dynamic application deployment on resource-constrained devices.

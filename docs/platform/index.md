@@ -1,3 +1,11 @@
+---
+layout: default
+title: Platform Support
+nav_order: 5
+has_children: true
+permalink: /platform
+---
+
 # Platform Support
 
 AkiraOS supports multiple embedded platforms with varying feature sets.

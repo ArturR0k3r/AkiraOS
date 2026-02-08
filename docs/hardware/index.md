@@ -1,3 +1,11 @@
+---
+layout: default
+title: Hardware
+nav_order: 7
+has_children: true
+permalink: /hardware
+---
+
 # Hardware
 
 AkiraOS custom hardware designs and specifications.
