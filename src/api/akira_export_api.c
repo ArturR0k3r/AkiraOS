@@ -22,11 +22,8 @@ bool akira_register_native_apis()
         #endif
 
         #ifdef CONFIG_AKIRA_WASM_INPUT
-        {"input_read_buttons", (void *)akira_native_input_read_buttons, "()i", NULL},
-        {"input_button_pressed", (void *)akira_native_input_button_pressed, "(i)i", NULL},
-        {"input_set_callback", (void *)akira_native_input_set_callback, "(i)i", NULL},
-        {"input_notify", (void *)akira_native_input_notify, "(i)", NULL},
-        {"input_read_buttons", (void *)akira_native_input_read_buttons, "()i", NULL},
+        // we should create another version of this API so it is more generic and can be used for other types of input (buttons, touch, etc)
+        // and we can make this in sdk based on GPIO API or here as separate API        
         #endif
 
         #ifdef CONFIG_AKIRA_WASM_RF
