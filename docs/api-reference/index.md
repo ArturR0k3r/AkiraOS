@@ -2,6 +2,8 @@
 
 Complete reference for AkiraOS WASM application APIs.
 
+> **Looking for the high-level SDK API?** See the [SDK API Reference](../development/sdk-api-reference.md) for event system, display, input, sensors, RF, storage, network, and system functions with full examples.
+
 ## Available APIs
 
 AkiraOS provides a custom native API for WASM applications. This is **not** WASI—it's optimized for embedded systems and real-time constraints.

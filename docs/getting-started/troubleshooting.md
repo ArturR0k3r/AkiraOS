@@ -455,6 +455,8 @@ log enable <module> 4         # Debug logging
 
 ## Still Stuck?
 
+- Check [SDK Troubleshooting](../development/sdk-troubleshooting.md) for app-level issues
+- Read [Best Practices](../development/best-practices.md) to avoid common pitfalls
 - Check [GitHub Issues](https://github.com/akiraos/AkiraOS/issues)
 - Ask in [Discussions](https://github.com/akiraos/AkiraOS/discussions)
 - Review [Architecture Docs](../architecture/)

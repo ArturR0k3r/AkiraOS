@@ -4,7 +4,7 @@
 
 **High-Performance WebAssembly OS for Embedded Systems**
 
-[![Version](https://img.shields.io/badge/version-1.4.7-blue.svg)](../VERSION)
+[![Version](https://img.shields.io/badge/version-1.4.8-blue.svg)](../VERSION)
 [![Zephyr](https://img.shields.io/badge/Zephyr-4.3.0-green.svg)](https://github.com/zephyrproject-rtos/zephyr)
 [![WAMR](https://img.shields.io/badge/WAMR-2.0-purple.svg)](https://github.com/bytecodealliance/wasm-micro-runtime)
 
@@ -20,11 +20,13 @@
 
 1. **[Installation Guide](getting-started/installation.md)** - Set up development environment
 2. **[Build Your First App](getting-started/first-app.md)** - Hello World in WASM
-3. **[Troubleshooting](getting-started/troubleshooting.md)** - Common issues and fixes
+3. **[SDK Best Practices](development/best-practices.md)** - Write better apps from day one
+4. **[Troubleshooting](getting-started/troubleshooting.md)** - Common issues and fixes
 
 **Already familiar?** Jump to:
 - [Architecture Documentation](architecture/) - System design deep dive
 - [API Reference](api-reference/) - Complete WASM API docs
+- [SDK API Reference](development/sdk-api-reference.md) - Full Akira SDK function reference
 - [Platform Guides](platform/) - Board-specific setup
 
 ---
@@ -40,6 +42,7 @@ AkiraOS is a production-ready embedded operating system that enables **secure, d
 ✅ **OTA Updates** - MCUboot secure firmware updates with rollback  
 ✅ **Multi-Platform** - ESP32, nRF54, STM32, native simulation  
 ✅ **Modular Connectivity** - WiFi, Bluetooth, USB, mesh (future)  
+✅ **Rich SDK** - Display, input, sensors, RF, storage, networking, and system APIs  
 
 ### Key Metrics
 
@@ -87,6 +90,15 @@ AkiraOS is a production-ready embedded operating system that enables **secure, d
 
 ---
 
+### [SDK Developer Guide](development/)
+**Complete Akira SDK documentation for WASM app development.**
+
+- [SDK API Reference](development/sdk-api-reference.md) - All SDK functions with examples
+- [Best Practices](development/best-practices.md) - Patterns for efficient, maintainable code
+- [SDK Troubleshooting](development/sdk-troubleshooting.md) - Debug common app issues
+
+---
+
 ### [Platform Guides](platform/)
 **Board-specific setup and configuration.**
 
@@ -102,6 +114,9 @@ AkiraOS is a production-ready embedded operating system that enables **secure, d
 **Advanced development topics and workflows.**
 
 - [Building WASM Apps](development/building-apps.md) - Complete workflow
+- [SDK API Reference](development/sdk-api-reference.md) - Full function reference
+- [Best Practices](development/best-practices.md) - Write efficient apps
+- [SDK Troubleshooting](development/sdk-troubleshooting.md) - Debug app issues
 - [OTA Updates](development/ota-updates.md) - Firmware deployment
 - [Debugging](development/debugging.md) - Debug techniques
 
@@ -178,7 +193,7 @@ AkiraOS is licensed under the [Apache License 2.0](../LICENSE).
 
 ## 🗺️ Project Roadmap
 
-Current version: **v1.4.7**
+Current version: **v1.4.8 "GL1TCH"**
 
 **Planned Improvements:**
 - Transport interface for zero-copy networking

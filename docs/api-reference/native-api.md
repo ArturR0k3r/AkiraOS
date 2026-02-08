@@ -533,6 +533,8 @@ Standard POSIX error codes (negative values):
 
 ## Related Documentation
 
+- [SDK API Reference](../development/sdk-api-reference.md) - High-level SDK functions with examples
+- [Best Practices](../development/best-practices.md) - Write efficient apps
 - [API Overview](index.md) - Quick reference
 - [Manifest Format](manifest-format.md) - Capability declarations
 - [Security Model](../architecture/security.md) - Permission system
