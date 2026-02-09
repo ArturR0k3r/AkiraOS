@@ -2,7 +2,7 @@
  * @file manifest_parser.c
  * @brief WASM manifest parser implementation
  *
- * Parses akira-manifest custom section from WASM binaries and
+ * Parses akira.manifest custom section from WASM binaries and
  * extracts capability masks and memory quotas.
  *
  * WASM binary format reference:
@@ -17,6 +17,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <stdint.h>
+#include "runtime/security.h"
 
 LOG_MODULE_REGISTER(manifest_parser, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -35,17 +37,7 @@ LOG_MODULE_REGISTER(manifest_parser, CONFIG_LOG_DEFAULT_LEVEL);
 #define WASM_SECTION_DATA       11
 
 /* Custom section name we're looking for */
-#define AKIRA_MANIFEST_SECTION  "akira-manifest"
-
-/* Capability mapping - keep in sync with akira_runtime.c */
-#define CAP_DISPLAY_WRITE   (1U << 0)
-#define CAP_INPUT_READ      (1U << 1)
-#define CAP_SENSOR_READ     (1U << 2)
-#define CAP_RF_TRANSCEIVE   (1U << 3)
-#define CAP_STORAGE_READ    (1U << 4)
-#define CAP_STORAGE_WRITE   (1U << 5)
-#define CAP_NETWORK         (1U << 6)
-#define CAP_SYSTEM          (1U << 7)
+#define AKIRA_MANIFEST_SECTION  ".akira.manifest"
 
 /**
  * @brief Read LEB128 unsigned integer from WASM binary
@@ -130,46 +122,6 @@ static const char *json_parse_int(const char *p, const char *end, uint32_t *out)
     if (!found) return NULL;
     *out = value;
     return p;
-}
-
-uint32_t manifest_capability_to_mask(const char *capability)
-{
-    if (!capability) return 0;
-
-    /* Exact matches */
-    if (strcmp(capability, "display.write") == 0) return CAP_DISPLAY_WRITE;
-    if (strcmp(capability, "input.read") == 0) return CAP_INPUT_READ;
-    if (strcmp(capability, "sensor.read") == 0) return CAP_SENSOR_READ;
-    if (strcmp(capability, "rf.transceive") == 0) return CAP_RF_TRANSCEIVE;
-    if (strcmp(capability, "storage.read") == 0) return CAP_STORAGE_READ;
-    if (strcmp(capability, "storage.write") == 0) return CAP_STORAGE_WRITE;
-    if (strcmp(capability, "network") == 0) return CAP_NETWORK;
-    if (strcmp(capability, "system") == 0) return CAP_SYSTEM;
-
-    /* Wildcard patterns */
-    if (strcmp(capability, "display.*") == 0) return CAP_DISPLAY_WRITE;
-    if (strcmp(capability, "input.*") == 0) return CAP_INPUT_READ;
-    if (strcmp(capability, "sensor.*") == 0) return CAP_SENSOR_READ;
-    if (strcmp(capability, "rf.*") == 0) return CAP_RF_TRANSCEIVE;
-    if (strcmp(capability, "storage.*") == 0) return CAP_STORAGE_READ | CAP_STORAGE_WRITE;
-    if (strcmp(capability, "*") == 0) return 0xFFFFFFFF;  /* All capabilities */
-
-    return 0;
-}
-
-const char *manifest_mask_to_capability(uint32_t mask)
-{
-    switch (mask) {
-        case CAP_DISPLAY_WRITE: return "display.write";
-        case CAP_INPUT_READ: return "input.read";
-        case CAP_SENSOR_READ: return "sensor.read";
-        case CAP_RF_TRANSCEIVE: return "rf.transceive";
-        case CAP_STORAGE_READ: return "storage.read";
-        case CAP_STORAGE_WRITE: return "storage.write";
-        case CAP_NETWORK: return "network";
-        case CAP_SYSTEM: return "system";
-        default: return NULL;
-    }
 }
 
 void manifest_init_defaults(akira_manifest_t *manifest)
@@ -276,7 +228,7 @@ int manifest_parse_json(const char *json, size_t json_len, akira_manifest_t *man
                     return -EINVAL;
                 }
 
-                uint32_t cap = manifest_capability_to_mask(str_val);
+                uint32_t cap = akira_capability_str_to_mask(str_val);
                 manifest->cap_mask |= cap;
                 LOG_DBG("Parsed capability: %s -> 0x%08x", str_val, cap);
             }
@@ -364,7 +316,7 @@ int manifest_parse_wasm_section(const uint8_t *wasm_data, size_t wasm_size,
 
             section_data += leb_len;
             section_remaining -= leb_len;
-
+            
             /* Check if this is our manifest section */
             if (name_len == strlen(AKIRA_MANIFEST_SECTION) &&
                 memcmp(section_data, AKIRA_MANIFEST_SECTION, name_len) == 0) {
@@ -372,7 +324,7 @@ int manifest_parse_wasm_section(const uint8_t *wasm_data, size_t wasm_size,
                 section_data += name_len;
                 section_remaining -= name_len;
 
-                LOG_INF("Found akira-manifest section (%zu bytes)", section_remaining);
+                LOG_INF("Found akira.manifest section (%zu bytes)", section_remaining);
 
                 /* Parse the JSON content */
                 int ret = manifest_parse_json((const char *)section_data,
@@ -389,7 +341,7 @@ int manifest_parse_wasm_section(const uint8_t *wasm_data, size_t wasm_size,
         pos += section_size;
     }
 
-    LOG_DBG("akira-manifest section not found");
+    LOG_INF("akira.manifest section not found");
     return -ENOENT;
 }
 

@@ -111,9 +111,7 @@ int akira_native_rf_send(wasm_exec_env_t exec_env, uint32_t payload_ptr, uint32_
     if (!module_inst)
         return -1;
 
-    /* Use inline capability check for <60ns overhead */
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
     if (len == 0)
         return -1;
@@ -137,9 +135,7 @@ int akira_native_rf_receive(wasm_exec_env_t exec_env, uint32_t buffer_ptr, uint3
     if (!module_inst)
         return -1;
 
-    /* Use inline capability check for <60ns overhead */
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
     if (max_len == 0)
         return -1;
@@ -159,9 +155,8 @@ int akira_native_rf_receive(wasm_exec_env_t exec_env, uint32_t buffer_ptr, uint3
 
 int akira_native_rf_set_frequency(wasm_exec_env_t exec_env, uint32_t freq_hz)
 {
-    /* Use inline capability check for <60ns overhead */
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
 #ifdef CONFIG_AKIRA_RF_FRAMEWORK
     return akira_rf_set_frequency(freq_hz);
@@ -173,9 +168,8 @@ int akira_native_rf_set_frequency(wasm_exec_env_t exec_env, uint32_t freq_hz)
 
 int akira_native_rf_get_rssi(wasm_exec_env_t exec_env, int16_t *rssi)
 {
-    /* Use inline capability check for <60ns overhead */
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
 #ifdef CONFIG_AKIRA_RF_FRAMEWORK
     return akira_rf_get_rssi(rssi);
@@ -187,9 +181,8 @@ int akira_native_rf_get_rssi(wasm_exec_env_t exec_env, int16_t *rssi)
 
 int akira_native_rf_set_power(wasm_exec_env_t exec_env, int8_t dbm)
 {
-    /* Use inline capability check for <60ns overhead */
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
 #ifdef CONFIG_AKIRA_RF_FRAMEWORK
     return akira_rf_set_power(dbm);

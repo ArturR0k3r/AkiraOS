@@ -47,29 +47,25 @@ void akira_input_notify(uint32_t buttons)
 /* WASM Native export api */
 int akira_native_input_read_buttons(wasm_exec_env_t exec_env)
 {
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_INPUT_READ, -EPERM);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_INPUT_READ, -EPERM);
     return (int)akira_input_read_buttons();
 }
 
 int akira_native_input_button_pressed(wasm_exec_env_t exec_env, uint32_t button)
 {
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_INPUT_READ, -EPERM);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_INPUT_READ, -EPERM);
     return (int)akira_input_button_pressed(button);
 }
 
 int akira_native_input_set_callback(wasm_exec_env_t exec_env, akira_input_callback_t callback)
 {
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_INPUT_WRITE, -EPERM);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_INPUT_WRITE, -EPERM);
     return akira_input_set_callback(callback);
 }
 
 int akira_native_input_notify(wasm_exec_env_t exec_env, uint32_t buttons)
 {
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_INPUT_WRITE, -EPERM);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_INPUT_WRITE, -EPERM);
     akira_input_notify(buttons);
     return 0;
 }

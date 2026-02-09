@@ -92,8 +92,8 @@ int akira_runtime_destroy(int instance_id);
 int akira_runtime_uninstall(const char *name, int instance_id);
 
 /* Capability guard helpers */
-bool akira_security_check_exec(wasm_exec_env_t exec_env, const char *capability);
-bool akira_security_check_native(const char *capability);
+bool akira_security_check_exec(wasm_exec_env_t exec_env, uint32_t capability);
+bool akira_security_check_native(uint32_t capability);
 
 /*
  * WASM Memory Allocation with Per-App Quota Enforcement
