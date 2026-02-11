@@ -1,0 +1,42 @@
+/*
+ * Akira Console pin control configuration
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/pinctrl/esp-pinctrl-common.h>
+#include <dt-bindings/pinctrl/esp32s3-pinctrl.h>
+#include <zephyr/dt-bindings/pinctrl/esp32s3-gpio-sigmap.h>
+
+&pinctrl {
+    uart0_default: uart0_default {
+        group1 {
+            /* Use USB CDC UART pins so GPIO1/GPIO3 remain free for keys/LEDs */
+            pinmux = <UART0_TX_GPIO43>;
+            output-high;
+        };
+
+        group2 {
+            pinmux = <UART0_RX_GPIO44>;
+            bias-pull-up;
+        };
+    };
+
+    spim2_default: spim2_default {
+        group1 {
+            /* SPI2 for TFT and SD (MISO/SCLK/MOSI) */
+            pinmux = <SPIM2_MISO_GPIO13>, /* MISO */
+                     <SPIM2_MOSI_GPIO11>, /* MOSI */
+                     <SPIM2_SCLK_GPIO12>; /* SCK  */
+        };
+    };
+
+    i2c0_default: i2c0_default {
+        group1 {
+            pinmux = <I2C0_SDA_GPIO8>,  /* SDA */
+                     <I2C0_SCL_GPIO18>; /* SCL */
+            bias-pull-up;
+            drive-open-drain;
+            output-high;
+        };
+    };
+};

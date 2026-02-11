@@ -67,6 +67,7 @@ NC='\033[0m'
 declare -A BOARD_MAP=(
     ["native_sim"]="native_sim"
     ["esp32s3_devkitm_esp32s3_procpu"]="esp32s3_devkitm/esp32s3/procpu"
+    ["akiraconsole_esp32s3_procpu"]="akiraconsole/esp32s3/procpu"
     ["esp32s3_supermini_esp32s3_procpu"]="esp32s3_supermini/esp32s3/procpu"
     ["esp32c3_devkitm"]="esp32c3_devkitm"
     ["esp32_devkitc_procpu"]="esp32_devkitc/esp32/procpu"
@@ -78,6 +79,7 @@ declare -A BOARD_MAP=(
 declare -A BOARD_CHIP=(
     ["native_sim"]="native"
     ["esp32s3_devkitm_esp32s3_procpu"]="esp32s3"
+    ["akiraconsole_esp32s3_procpu"]="esp32s3"
     ["esp32s3_supermini_esp32s3_procpu"]="esp32s3"
     ["esp32c3_devkitm"]="esp32c3"
     ["esp32_devkitc_procpu"]="esp32"
@@ -89,6 +91,7 @@ declare -A BOARD_CHIP=(
 declare -A BOARD_DESC=(
     ["native_sim"]="Native Simulator"
     ["esp32s3_devkitm_esp32s3_procpu"]="ESP32-S3 DevKitM (Akira Console)"
+    ["akiraconsole_esp32s3_procpu"]="Akira Console (ESP32-S3 DevKitM)"
     ["esp32s3_supermini_esp32s3_procpu"]="ESP32-S3 Super Mini"
     ["esp32c3_devkitm"]="ESP32-C3 DevKitM (RISC-V)"
     ["esp32_devkitc_procpu"]="ESP32 DevKitC (Akira Micro)"
@@ -144,6 +147,7 @@ ${BOLD}OPTIONS:${NC}
 ${BOLD}BOARDS:${NC}
     native_sim                         Native simulator (default)
     esp32s3_devkitm_esp32s3_procpu     ESP32-S3 DevKitM (Akira Console)
+    akiraconsole_esp32s3_procpu        Akira Console (ESP32-S3 DevKitM)
     esp32s3_supermini_esp32s3_procpu   ESP32-S3 Super Mini (compact)
     esp32c3_devkitm                    ESP32-C3 DevKitM (RISC-V)
     esp32_devkitc_procpu               ESP32 DevKitC (Legacy)

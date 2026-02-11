@@ -124,7 +124,7 @@
 };
 
 &wifi {
-	status = "disabled";
+	status = "okay";
 };
 
 &psram0 {

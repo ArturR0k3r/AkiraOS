@@ -1,0 +1,6 @@
+board:
+  name: akiraconsole
+  full_name: Akira Console (ESP32-S3 DevKitM ProCPU)
+  vendor: akira
+  socs:
+  - name: esp32s3
