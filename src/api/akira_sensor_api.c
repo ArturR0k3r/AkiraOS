@@ -79,9 +79,7 @@ int akira_sensor_read_power(akira_power_data_t *data)
 
 int akira_native_sensor_read(wasm_exec_env_t exec_env, int32_t type)
 {
-    /* Use inline capability check for <60ns overhead */
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_SENSOR_READ, -EPERM);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_SENSOR_READ, -EPERM);
 #ifdef CONFIG_AKIRA_BME280
     {
         float v = 0.0f;

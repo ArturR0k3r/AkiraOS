@@ -93,7 +93,7 @@ void manifest_init_defaults(akira_manifest_t *manifest);
  * @param capability Capability string (e.g., "display.write")
  * @return Capability mask bit, or 0 if unknown
  */
-uint32_t manifest_capability_to_mask(const char *capability);
+uint32_t akira_capability_str_to_mask(const char *cap);
 
 /**
  * @brief Get capability name from mask bit

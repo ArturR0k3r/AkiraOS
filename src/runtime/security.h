@@ -18,34 +18,39 @@ typedef void *wasm_module_t;
 extern "C" {
 #endif
 
-/* Capability bits (shared) - use powers of 2 for efficient masking */
-#define AKIRA_CAP_DISPLAY_WRITE   (1U << 0)
-#define AKIRA_CAP_INPUT_READ      (1U << 1)
-#define AKIRA_CAP_INPUT_WRITE     (1U << 2)
-#define AKIRA_CAP_SENSOR_READ     (1U << 3)
-#define AKIRA_CAP_RF_TRANSCEIVE   (1U << 4)
-#define AKIRA_CAP_BT_SHELL       (1U << 5)
+
+#define AKIRA_CAP_DISPLAY_WRITE (1U << 0)
+#define AKIRA_CAP_INPUT_READ (1U << 1)
+#define AKIRA_CAP_INPUT_WRITE (1U << 2)
+#define AKIRA_CAP_SENSOR_READ (1U << 3)
+#define AKIRA_CAP_RF_TRANSCEIVE (1U << 4)
+#define AKIRA_CAP_BT_SHELL (1U << 5)
+#define AKIRA_CAP_STORAGE_READ (1U << 6)
+#define AKIRA_CAP_STORAGE_WRITE (1U << 7)
+#define AKIRA_CAP_NETWORK (1U << 8)
+
 /*
- * Performance-critical inline capability check macro.
- * Checks if a capability mask bit is set - avoids function call overhead.
- * For native API use with pre-computed mask values.
+ * Capability check macro using security subsystem.
+ * Delegates to akira_security_check_exec() for centralized permission validation.
+ * For WASM API use with string-based capability names.
  *
- * @param cap_mask  The app's capability bitmask (uint32_t)
- * @param cap_bit   The capability bit to check (e.g., AKIRA_CAP_DISPLAY_WRITE)
- * @return          true if capability is granted, false otherwise
+ * @param exec_env     The WASM execution environment
+ * @param capability   The capability name to check (e.g., AKIRA_CAP_DISPLAY_WRITE)
+ * @return             true if capability is granted, false otherwise
  *
- * Target: <60ns overhead per check (single bitwise AND + branch)
+ * Note: Involves function call overhead. For performance-critical paths,
+ * consider caching capability check results when possible.
  */
-#define AKIRA_CHECK_CAP_INLINE(cap_mask, cap_bit) \
-    (((cap_mask) & (cap_bit)) != 0)
+#define AKIRA_CHECK_CAP_INLINE(exec_env, capability) \
+    akira_security_check_exec(exec_env, capability)
 
 /*
  * Inline capability check with early return for functions returning int.
- * Usage: AKIRA_CHECK_CAP_OR_RETURN(app_cap_mask, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+ * Usage: AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_<CAPABILITY>, -EPERM);
  */
-#define AKIRA_CHECK_CAP_OR_RETURN(cap_mask, cap_bit, retval) \
+#define AKIRA_CHECK_CAP_OR_RETURN(exec_env, capability, retval) \
     do { \
-        if (!AKIRA_CHECK_CAP_INLINE(cap_mask, cap_bit)) { \
+        if (!akira_security_check_exec(exec_env, capability)) { \
             return (retval); \
         } \
     } while (0)
@@ -53,19 +58,19 @@ extern "C" {
 /*
  * Inline capability check with early return for void functions.
  */
-#define AKIRA_CHECK_CAP_OR_RETURN_VOID(cap_mask, cap_bit) \
+#define AKIRA_CHECK_CAP_OR_RETURN_VOID(exec_env, capability) \
     do { \
-        if (!AKIRA_CHECK_CAP_INLINE(cap_mask, cap_bit)) { \
+        if (!akira_security_check_exec(exec_env, capability)) { \
             return; \
         } \
     } while (0)
 
 /* Central capability guard used by native APIs and runtime */
-bool akira_security_check_exec(wasm_exec_env_t exec_env, const char *capability);
-bool akira_security_check_native(const char *capability);
+bool akira_security_check_exec(wasm_exec_env_t exec_env, uint32_t capability);
+bool akira_security_check_native(uint32_t capability);
 
 /* Convenience wrapper used by native API implementations (non-wasm callers) */
-bool akira_security_check(const char *capability);
+bool akira_security_check(uint32_t capability);
 
 /* Get the current app's capability mask from exec_env - for use with inline macros */
 uint32_t akira_security_get_cap_mask(wasm_exec_env_t exec_env);
@@ -73,7 +78,9 @@ uint32_t akira_security_get_cap_mask(wasm_exec_env_t exec_env);
 /* Capability string to mask helper (public so runtime can parse manifests).
  * This maps capability strings like "display.write" -> AKIRA_CAP_DISPLAY_WRITE
  */
-uint32_t akira_capability_str_to_mask(const char *capability);
+uint32_t akira_capability_str_to_mask(const char *cap);
+/* Mask to string helper for logging (returns first matching capability string) */
+char* akira_capability_mask_to_str(uint32_t cap);
 
 /* Runtime helpers used by security implementation */
 #include <stddef.h>

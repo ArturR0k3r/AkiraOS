@@ -15,6 +15,7 @@
 #include <zephyr/logging/log.h>
 #include <string.h>
 #include <stdio.h>
+#include "runtime/security.h"
 
 LOG_MODULE_REGISTER(akira_sandbox, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -135,15 +136,15 @@ void sandbox_ctx_init(sandbox_ctx_t *ctx, akira_trust_level_t trust,
      * If the app has specific capabilities granted via manifest,
      * expand the allowed syscalls accordingly.
      */
-    if (cap_mask & (1U << 0)) /* DISPLAY_WRITE */
+    if (cap_mask & AKIRA_CAP_DISPLAY_WRITE) /* DISPLAY_WRITE */
         ctx->allowed_syscalls |= SYSCALL_CAT_DISPLAY;
-    if (cap_mask & (1U << 1)) /* INPUT_READ */
+    if (cap_mask & AKIRA_CAP_INPUT_READ) /* INPUT_READ */
         ctx->allowed_syscalls |= SYSCALL_CAT_INPUT;
-    if (cap_mask & (1U << 3)) /* SENSOR_READ */
+    if (cap_mask & AKIRA_CAP_SENSOR_READ) /* SENSOR_READ */
         ctx->allowed_syscalls |= SYSCALL_CAT_SENSOR;
-    if (cap_mask & (1U << 4)) /* RF_TRANSCEIVE */
+    if (cap_mask & AKIRA_CAP_RF_TRANSCEIVE) /* RF_TRANSCEIVE */
         ctx->allowed_syscalls |= SYSCALL_CAT_RF;
-    if (cap_mask & (1U << 5)) /* BT_SHELL */
+    if (cap_mask & AKIRA_CAP_BT_SHELL) /* BT_SHELL */
         ctx->allowed_syscalls |= SYSCALL_CAT_BLUETOOTH;
 
     /* Initialize rate limit buckets */

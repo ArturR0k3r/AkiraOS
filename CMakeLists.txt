@@ -139,7 +139,6 @@ target_sources(app PRIVATE
 # Security Layer
 # Capability, signing, sandbox, and runtime cache implementations
 target_sources(app PRIVATE
-    src/runtime/security/capability.c
     src/runtime/security/app_signing_v2.c
     src/runtime/security/sandbox.c
     src/runtime/runtime_cache.c

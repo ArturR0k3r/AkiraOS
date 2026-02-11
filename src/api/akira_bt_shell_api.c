@@ -63,8 +63,7 @@ int akira_bt_shell_is_ready(void)
 int akira_native_bt_shell_send(wasm_exec_env_t exec_env, const char *message)
 {
     /* Use inline capability check for <60ns overhead */
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_BT_SHELL, -EPERM);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BT_SHELL, -EPERM);
 
     return akira_bt_shell_send(message);
 }
@@ -75,9 +74,7 @@ int akira_native_bt_shell_send_data(wasm_exec_env_t exec_env, uint32_t data_ptr,
     if (!module_inst)
         return -1;
 
-    /* Use inline capability check for <60ns overhead */
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_BT_SHELL, -EPERM);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BT_SHELL, -EPERM);
 
     if (len == 0)
         return -EINVAL;
@@ -91,9 +88,7 @@ int akira_native_bt_shell_send_data(wasm_exec_env_t exec_env, uint32_t data_ptr,
 
 int akira_native_bt_shell_is_ready(wasm_exec_env_t exec_env)
 {
-    /* Use inline capability check for <60ns overhead */
-    uint32_t cap_mask = akira_security_get_cap_mask(exec_env);
-    AKIRA_CHECK_CAP_OR_RETURN(cap_mask, AKIRA_CAP_BT_SHELL, -EPERM);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BT_SHELL, -EPERM);
 
     return akira_bt_shell_is_ready();
 }
