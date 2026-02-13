@@ -17,7 +17,6 @@
 #include "shell_display.h"
 #include "../drivers/platform_hal.h"
 #include "../settings/settings.h"
-#include "../OTA/web_server.h"
 #if defined(CONFIG_BT)
 #include "connectivity/bluetooth/bt_manager.h"
 #if defined(CONFIG_AKIRA_BT_ECHO)
@@ -44,10 +43,10 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #include <ff.h>
-#include "akira/akira.h"
+#include "akira.h"
 #include "../storage/fs_manager.h"
 #ifdef CONFIG_AKIRA_APP_MANAGER
-#include "../services/app_manager.h"
+#include <runtime/app_manager/app_manager.h>
 #endif
 #if defined(CONFIG_AKIRA_APP_SOURCE_SD)
 #include "../connectivity/storage/sd_manager.h"
@@ -65,31 +64,37 @@ static bool shell_display_enabled = IS_ENABLED(CONFIG_ILI9341);
 static void akira_shell_print_internal(const struct shell *sh, const char *text, bool is_error)
 {
     /* Print to UART/console (normal behavior) */
-    if (is_error) {
+    if (is_error)
+    {
         shell_fprintf(sh, SHELL_ERROR, "%s\n", text);
-    } else {
+    }
+    else
+    {
         shell_fprintf(sh, SHELL_NORMAL, "%s\n", text);
     }
-    
+
     /* Also display on screen if enabled */
-    if (shell_display_enabled && shell_display_is_enabled()) {
+    if (shell_display_enabled && shell_display_is_enabled())
+    {
         shell_display_print(text, is_error ? SHELL_TEXT_ERROR : SHELL_TEXT_NORMAL);
     }
 }
 
 /* Wrapper macros for intercepting shell output */
-#define AKIRA_SHELL_PRINT(sh, fmt, ...) \
-    do { \
-        char _buf[256]; \
+#define AKIRA_SHELL_PRINT(sh, fmt, ...)                   \
+    do                                                    \
+    {                                                     \
+        char _buf[256];                                   \
         snprintf(_buf, sizeof(_buf), fmt, ##__VA_ARGS__); \
-        akira_shell_print_internal(sh, _buf, false); \
+        akira_shell_print_internal(sh, _buf, false);      \
     } while (0)
 
-#define AKIRA_SHELL_ERROR(sh, fmt, ...) \
-    do { \
-        char _buf[256]; \
+#define AKIRA_SHELL_ERROR(sh, fmt, ...)                   \
+    do                                                    \
+    {                                                     \
+        char _buf[256];                                   \
         snprintf(_buf, sizeof(_buf), fmt, ##__VA_ARGS__); \
-        akira_shell_print_internal(sh, _buf, true); \
+        akira_shell_print_internal(sh, _buf, true);       \
     } while (0)
 
 #ifdef CONFIG_AKIRA_APP_MANAGER
@@ -107,8 +112,8 @@ static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
     for (int i = 0; i < count; i++)
     {
         AKIRA_SHELL_PRINT(sh, "%2d: %-16s %-8s %s %u bytes%s", apps[i].id, apps[i].name, apps[i].version,
-                    app_state_to_str(apps[i].state), apps[i].size,
-                    apps[i].auto_restart ? " [auto-restart]" : "");
+                          app_state_to_str(apps[i].state), apps[i].size,
+                          apps[i].auto_restart ? " [auto-restart]" : "");
     }
     AKIRA_SHELL_PRINT(sh, "Total: %d", count);
     return 0;
@@ -458,10 +463,11 @@ static void stats_update_work_handler(struct k_work *work)
 /* Status bar update work */
 static void status_bar_update_work_handler(struct k_work *work)
 {
-    if (shell_display_enabled && shell_display_is_enabled()) {
+    if (shell_display_enabled && shell_display_is_enabled())
+    {
         shell_display_update_status();
     }
-    
+
     /* Reschedule for next update */
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
     k_work_reschedule_for_queue(&shell_workq, dwork, K_SECONDS(1));
@@ -493,22 +499,26 @@ int akira_shell_init(void)
     update_system_stats();
 
     /* Initialize shell display if available */
-    if (shell_display_enabled) {
+    if (shell_display_enabled)
+    {
         ret = shell_display_init();
-        if (ret < 0) {
+        if (ret < 0)
+        {
             LOG_WRN("Shell display init failed: %d", ret);
             shell_display_enabled = false;
-        } else {
+        }
+        else
+        {
             /* Start status bar updates */
             k_work_schedule_for_queue(&shell_workq, &status_bar_work, K_SECONDS(1));
-            
+
             /* Welcome message */
             shell_display_print("", SHELL_TEXT_NORMAL);
             shell_display_print("=== AkiraOS Shell ===", SHELL_TEXT_PROMPT);
             char version[32];
-        snprintf(version, sizeof(version), "%d.%d.%d", 
-                 AKIRA_VERSION_MAJOR, AKIRA_VERSION_MINOR, AKIRA_VERSION_PATCH);
-        shell_display_printf(SHELL_TEXT_NORMAL, "Version: %s", version);
+            snprintf(version, sizeof(version), "%d.%d.%d",
+                     AKIRA_VERSION_MAJOR, AKIRA_VERSION_MINOR, AKIRA_VERSION_PATCH);
+            shell_display_printf(SHELL_TEXT_NORMAL, "Version: %s", version);
             shell_display_print("Type 'help' for commands", SHELL_TEXT_NORMAL);
             shell_display_print("", SHELL_TEXT_NORMAL);
         }
@@ -1237,17 +1247,46 @@ static int cmd_ble_shell(const struct shell *shell, size_t argc, char **argv)
     if (argc < 2)
     {
         shell_print(shell, "Usage: ble_shell <command>");
+        shell_print(shell, "Send a shell command to the connected phone via BLE.");
+        shell_print(shell, "");
+        shell_print(shell, "Prerequisites:");
+        shell_print(shell, "  1. Device must be connected to a phone via BLE");
+        shell_print(shell, "  2. Phone app must subscribe to Shell TX notifications");
+        shell_print(shell, "");
+        shell_print(shell, "Service UUID: d5b1b7e2-7f5a-4eef-8fd0-1a2b3c4d5e71");
+        shell_print(shell, "TX Char UUID: d5b1b7e3-7f5a-4eef-8fd0-1a2b3c4d5e72");
         return -EINVAL;
     }
-    // Concatenate command arguments
-    char cmd_buf[128] = {0};
-    for (size_t i = 1; i < argc; ++i)
+
+    /* Check BLE connection status first */
+    if (!bt_manager_is_connected())
     {
-        strcat(cmd_buf, argv[i]);
-        if (i < argc - 1)
-            strcat(cmd_buf, " ");
+        shell_error(shell, "Error: Not connected to any BLE device");
+        shell_print(shell, "Hint: Pair with a phone first using 'bt adv start'");
+        return -ENOTCONN;
     }
-    bluetooth_manager_receive_shell_command(cmd_buf); /* Defined in bt_manager.c */
+
+    /* Concatenate command arguments */
+    char cmd_buf[128] = {0};
+    size_t pos = 0;
+    for (size_t i = 1; i < argc && pos < sizeof(cmd_buf) - 1; ++i)
+    {
+        size_t arg_len = strlen(argv[i]);
+        if (pos + arg_len + 1 >= sizeof(cmd_buf))
+        {
+            shell_error(shell, "Command too long (max 127 chars)");
+            return -EINVAL;
+        }
+        memcpy(cmd_buf + pos, argv[i], arg_len);
+        pos += arg_len;
+        if (i < argc - 1)
+        {
+            cmd_buf[pos++] = ' ';
+        }
+    }
+    cmd_buf[pos] = '\0';
+
+    bluetooth_manager_receive_shell_command(cmd_buf);
     shell_print(shell, "Sent shell command to phone via BLE: %s", cmd_buf);
     return 0;
 }
@@ -1255,7 +1294,7 @@ static int cmd_ble_shell(const struct shell *shell, size_t argc, char **argv)
 SHELL_CMD_REGISTER(ble_shell, NULL, "Send shell command to phone via BLE", cmd_ble_shell);
 #endif
 
-#if defined(CONFIG_BT)
+#if defined(CONFIG_BT) && defined(CONFIG_AKIRA_BT_HID)
 /* ===== Bluetooth commands ===== */
 static int cmd_bt_info(const struct shell *sh, size_t argc, char **argv)
 {
@@ -1500,30 +1539,26 @@ static int cmd_wifi_connect(const struct shell *sh, size_t argc, char **argv)
     }
 
     /* Get settings */
-    extern const struct user_settings *user_settings_get(void);
-    const struct user_settings *settings = user_settings_get();
+    char ssid[MAX_VALUE_LEN];
+    char psk[MAX_VALUE_LEN];
 
-    if (!settings->wifi_enabled)
-    {
-        shell_print(sh, "WiFi is disabled. Enable with: settings wifi_enable 1");
+    if(!akira_settings_get(AKIRA_SETTINGS_WIFI_SSID_KEY, ssid, MAX_VALUE_LEN) && !akira_settings_get(AKIRA_SETTINGS_WIFI_PSK_KEY, psk, MAX_VALUE_LEN)){
+        LOG_INF("Loaded ssid and psk succesfully fron NVS succesfully");
+    }
+    else{
+        LOG_INF("Failed to load ssid and psk fron NVS");
         return -EINVAL;
     }
 
-    if (strlen(settings->wifi_ssid) == 0)
-    {
-        shell_print(sh, "No WiFi SSID configured. Set with: settings set_wifi <ssid> <password>");
-        return -EINVAL;
-    }
-
-    shell_print(sh, "Connecting to WiFi: %s", settings->wifi_ssid);
+    shell_print(sh, "Connecting to WiFi: %s", ssid);
 
     struct wifi_connect_req_params wifi_params = {
-        .ssid = (uint8_t *)settings->wifi_ssid,
-        .ssid_length = strlen(settings->wifi_ssid),
-        .psk = (uint8_t *)settings->wifi_passcode,
-        .psk_length = strlen(settings->wifi_passcode),
+        .ssid = (uint8_t *)ssid,
+        .ssid_length = strlen(ssid),
+        .psk = (uint8_t *)psk,
+        .psk_length = strlen(psk),
         .channel = WIFI_CHANNEL_ANY,
-        .security = strlen(settings->wifi_passcode) > 0 ? WIFI_SECURITY_TYPE_PSK : WIFI_SECURITY_TYPE_NONE,
+        .security = strlen(psk) > 0 ? WIFI_SECURITY_TYPE_PSK : WIFI_SECURITY_TYPE_NONE,
         .mfp = WIFI_MFP_OPTIONAL,
     };
 
@@ -1563,80 +1598,6 @@ static int cmd_wifi_scan(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "Scan started. Results will appear in the logs.");
     return 0;
 }
-
-/* Web server status command */
-static int cmd_web_status(const struct shell *sh, size_t argc, char **argv)
-{
-    ARG_UNUSED(argc);
-    ARG_UNUSED(argv);
-
-    enum web_server_state state = web_server_get_state();
-    const char *state_str;
-
-    switch (state)
-    {
-    case WEB_SERVER_STOPPED:
-        state_str = "Stopped";
-        break;
-    case WEB_SERVER_STARTING:
-        state_str = "Starting";
-        break;
-    case WEB_SERVER_RUNNING:
-        state_str = "Running";
-        break;
-    case WEB_SERVER_ERROR:
-        state_str = "Error";
-        break;
-    default:
-        state_str = "Unknown";
-    }
-
-    shell_print(sh, "\n=== Web Server Status ===");
-    shell_print(sh, "State: %s", state_str);
-
-    /* Get IP address to show URL */
-    struct net_if *iface = net_if_get_default();
-    if (iface)
-    {
-        char addr_str[NET_IPV4_ADDR_LEN];
-        struct in_addr *addr = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
-        if (addr)
-        {
-            net_addr_ntop(AF_INET, addr, addr_str, sizeof(addr_str));
-            shell_print(sh, "URL: http://%s:%d/", addr_str, HTTP_PORT);
-        }
-    }
-
-    return 0;
-}
-
-static int cmd_web_start(const struct shell *sh, size_t argc, char **argv)
-{
-    ARG_UNUSED(argc);
-    ARG_UNUSED(argv);
-
-    struct net_if *iface = net_if_get_default();
-    if (!iface)
-    {
-        shell_print(sh, "No network interface");
-        return -ENODEV;
-    }
-
-    char addr_str[NET_IPV4_ADDR_LEN];
-    struct in_addr *addr = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
-    if (!addr)
-    {
-        shell_print(sh, "No IP address - connect to WiFi first");
-        return -ENOTCONN;
-    }
-
-    net_addr_ntop(AF_INET, addr, addr_str, sizeof(addr_str));
-    shell_print(sh, "Starting web server at http://%s:%d/", addr_str, HTTP_PORT);
-
-    web_server_notify_network_status(true, addr_str);
-
-    return 0;
-}
 #endif /* CONFIG_NETWORKING */
 
 /* RAM Storage Shell Commands */
@@ -1644,27 +1605,30 @@ static int cmd_ram_ls(const struct shell *sh, size_t argc, char **argv)
 {
     ram_file_info_t files[16];
     int count = fs_manager_list_ram_files(files, 16);
-    
-    if (count < 0) {
+
+    if (count < 0)
+    {
         shell_error(sh, "Failed to list RAM files: %d", count);
         return count;
     }
-    
-    if (count == 0) {
+
+    if (count == 0)
+    {
         shell_print(sh, "No files in RAM storage");
         return 0;
     }
-    
+
     shell_print(sh, "\n=== RAM Storage ===");
     shell_print(sh, "%-40s %10s", "Path", "Size");
     shell_print(sh, "---------------------------------------- ----------");
-    
+
     size_t total = 0;
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < count; i++)
+    {
         shell_print(sh, "%-40s %10zu", files[i].path, files[i].size);
         total += files[i].size;
     }
-    
+
     shell_print(sh, "---------------------------------------- ----------");
     shell_print(sh, "Total: %d files, %zu bytes", count, total);
     return 0;
@@ -1672,27 +1636,31 @@ static int cmd_ram_ls(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_ram_cat(const struct shell *sh, size_t argc, char **argv)
 {
-    if (argc < 2) {
+    if (argc < 2)
+    {
         shell_error(sh, "Usage: ram cat <path>");
         return -EINVAL;
     }
-    
+
     uint8_t buffer[256];
     ssize_t size = fs_manager_read_file(argv[1], buffer, sizeof(buffer) - 1);
-    
-    if (size < 0) {
+
+    if (size < 0)
+    {
         shell_error(sh, "Failed to read file: %zd", size);
         return size;
     }
-    
+
     /* Print as hex dump for binary files */
     shell_print(sh, "File: %s (%zd bytes)", argv[1], size);
-    for (int i = 0; i < size; i += 16) {
+    for (int i = 0; i < size; i += 16)
+    {
         char hex[50] = {0};
         char ascii[18] = {0};
         int len = 0;
-        
-        for (int j = 0; j < 16 && (i + j) < size; j++) {
+
+        for (int j = 0; j < 16 && (i + j) < size; j++)
+        {
             len += snprintf(hex + len, sizeof(hex) - len, "%02x ", buffer[i + j]);
             ascii[j] = (buffer[i + j] >= 32 && buffer[i + j] < 127) ? buffer[i + j] : '.';
         }
@@ -1701,6 +1669,7 @@ static int cmd_ram_cat(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+#ifndef CONFIG_ARCH_POSIX
 /**
  * @brief Hardware test command for Akira-Micro
  * Tests buttons, SD card, and LED
@@ -1711,40 +1680,45 @@ static int cmd_hwtest(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "  Akira-Micro Hardware Test");
     shell_print(sh, "===========================================\n");
 
-    const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
-    if (!device_is_ready(gpio_dev)) {
-        shell_error(sh, "GPIO device not ready");
-        return -ENODEV;
+    const struct device *gpio_dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(gpio0));
+    if (!gpio_dev || !device_is_ready(gpio_dev))
+    {
+        shell_warn(sh, "GPIO0 not present or not ready - skipping GPIO tests");
     }
+    else
+    {
+        /* Test 1: LED Blink */
+        shell_print(sh, "Test 1: Status LED (GPIO32)");
+        gpio_pin_configure(gpio_dev, 32, GPIO_OUTPUT_ACTIVE);
 
-    /* Test 1: LED Blink */
-    shell_print(sh, "Test 1: Status LED (GPIO32)");
-    gpio_pin_configure(gpio_dev, 32, GPIO_OUTPUT_ACTIVE);
-    
-    for (int i = 0; i < 5; i++) {
-        gpio_pin_set(gpio_dev, 32, 1);
-        k_msleep(200);
-        gpio_pin_set(gpio_dev, 32, 0);
-        k_msleep(200);
-    }
-    shell_print(sh, "  ✓ LED test complete\n");
+        for (int i = 0; i < 5; i++)
+        {
+            gpio_pin_set(gpio_dev, 32, 1);
+            k_msleep(200);
+            gpio_pin_set(gpio_dev, 32, 0);
+            k_msleep(200);
+        }
+        shell_print(sh, "  ✓ LED test complete\n");
 
-    /* Test 2: Button States */
-    shell_print(sh, "Test 2: Button States");
-    const int button_pins[] = {35, 34, 39, 36, 14, 13};
-    const char *button_names[] = {"KEY1", "KEY2", "KEY3", "KEY4", "KEY5", "KEY6"};
-    
-    for (int i = 0; i < 6; i++) {
-        gpio_pin_configure(gpio_dev, button_pins[i], GPIO_INPUT | GPIO_PULL_UP);
+        /* Test 2: Button States */
+        shell_print(sh, "Test 2: Button States");
+        const int button_pins[] = {35, 34, 39, 36, 14, 13};
+        const char *button_names[] = {"KEY1", "KEY2", "KEY3", "KEY4", "KEY5", "KEY6"};
+
+        for (int i = 0; i < 6; i++)
+        {
+            gpio_pin_configure(gpio_dev, button_pins[i], GPIO_INPUT | GPIO_PULL_UP);
+        }
+
+        shell_print(sh, "  Reading button states (press buttons to test):");
+        for (int i = 0; i < 6; i++)
+        {
+            int val = gpio_pin_get(gpio_dev, button_pins[i]);
+            shell_print(sh, "    %s (GPIO%d): %s", button_names[i], button_pins[i],
+                        val ? "Released" : "PRESSED");
+        }
+        shell_print(sh, "  ✓ Button test complete\n");
     }
-    
-    shell_print(sh, "  Reading button states (press buttons to test):");
-    for (int i = 0; i < 6; i++) {
-        int val = gpio_pin_get(gpio_dev, button_pins[i]);
-        shell_print(sh, "    %s (GPIO%d): %s", button_names[i], button_pins[i], 
-                    val ? "Released" : "PRESSED");
-    }
-    shell_print(sh, "  ✓ Button test complete\n");
 
     /* Test 3: SD Card */
     shell_print(sh, "Test 3: SD Card");
@@ -1756,21 +1730,30 @@ static int cmd_hwtest(const struct shell *sh, size_t argc, char **argv)
     const char *test_data = "Akira-Micro Hardware Test\n";
 
     res = f_mount(&fat_fs, "/SD:", 1);
-    if (res != FR_OK) {
+    if (res != FR_OK)
+    {
         shell_error(sh, "  ✗ Failed to mount SD card: %d", res);
-    } else {
+    }
+    else
+    {
         shell_print(sh, "  ✓ SD card mounted");
 
         res = f_open(&file, test_file, FA_CREATE_ALWAYS | FA_WRITE);
-        if (res != FR_OK) {
+        if (res != FR_OK)
+        {
             shell_error(sh, "  ✗ Failed to create test file: %d", res);
-        } else {
+        }
+        else
+        {
             res = f_write(&file, test_data, strlen(test_data), &bytes_written);
             f_close(&file);
-            
-            if (res == FR_OK) {
+
+            if (res == FR_OK)
+            {
                 shell_print(sh, "  ✓ Wrote %u bytes to %s", bytes_written, test_file);
-            } else {
+            }
+            else
+            {
                 shell_error(sh, "  ✗ Write failed: %d", res);
             }
         }
@@ -1780,9 +1763,19 @@ static int cmd_hwtest(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "\n===========================================");
     shell_print(sh, "Hardware test complete!");
     shell_print(sh, "===========================================");
-    
+
     return 0;
 }
+#else
+/**
+ * @brief Hardware test command stub for native_sim (no GPIO devices)
+ */
+static int cmd_hwtest(const struct shell *sh, size_t argc, char **argv)
+{
+    shell_print(sh, "Hardware test not available on this platform");
+    return -ENOSYS;
+}
+#endif
 
 SHELL_STATIC_SUBCMD_SET_CREATE(ram_cmds,
                                SHELL_CMD(ls, NULL, "List files in RAM storage", cmd_ram_ls),
@@ -1795,8 +1788,6 @@ SHELL_CMD_REGISTER(ram, &ram_cmds, "RAM storage commands", NULL);
 SHELL_CMD_REGISTER(wifi_status, NULL, "Show WiFi connection status", cmd_wifi_status);
 SHELL_CMD_REGISTER(wifi_connect, NULL, "Connect to configured WiFi network", cmd_wifi_connect);
 SHELL_CMD_REGISTER(wifi_scan, NULL, "Scan for WiFi networks", cmd_wifi_scan);
-SHELL_CMD_REGISTER(web_status, NULL, "Show web server status", cmd_web_status);
-SHELL_CMD_REGISTER(web_start, NULL, "Start web server", cmd_web_start);
 #endif
 
 #ifdef CONFIG_AKIRA_APP_MANAGER

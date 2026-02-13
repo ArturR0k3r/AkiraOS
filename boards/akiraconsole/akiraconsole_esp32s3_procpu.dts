@@ -1,0 +1,235 @@
+/dts-v1/;
+
+#include <espressif/esp32s3/esp32s3_mini_n4r2.dtsi>
+#include "akiraconsole-pinctrl.dtsi"
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <espressif/partitions_0x0_amp.dtsi>
+
+/ {
+    model = "Akira Console";
+    compatible = "akira,akiraconsole", "generic,esp32s3";
+
+    chosen {
+        zephyr,sram = &sram1;
+        /* Use CDC ACM UART over USB OTG for console to keep GPIO1/3 free */
+        zephyr,console = &cdc_acm_uart0;
+        zephyr,shell-uart = &cdc_acm_uart0;
+        zephyr,flash = &flash0;
+        zephyr,code-partition = &slot0_partition;
+    };
+
+    aliases {
+        i2c-0 = &i2c0;
+        spi-2 = &spi2;
+    };
+
+    leds {
+        compatible = "gpio-leds";
+
+        tft_led: tft_led {
+            gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;
+            label = "TFT LED";
+        };
+    };
+
+    gpio_keys {
+        compatible = "gpio-keys";
+
+        key_onoff: key_onoff {
+            gpios = <&gpio0 1 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key On/Off";
+            zephyr,code = <INPUT_KEY_POWER>;
+        };
+
+        key_settings: key_settings {
+            gpios = <&gpio0 2 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key Settings";
+            zephyr,code = <INPUT_KEY_MENU>;
+        };
+
+        key_y: key_y {
+            gpios = <&gpio0 41 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key Y";
+            zephyr,code = <INPUT_KEY_Y>;
+        };
+
+        key_x: key_x {
+            gpios = <&gpio0 17 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key X";
+            zephyr,code = <INPUT_KEY_X>;
+        };
+
+        key_b: key_b {
+            gpios = <&gpio0 16 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key B";
+            zephyr,code = <INPUT_KEY_B>;
+        };
+
+        key_a: key_a {
+            gpios = <&gpio0 15 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key A";
+            zephyr,code = <INPUT_KEY_A>;
+        };
+
+        key_right: key_right {
+            gpios = <&gpio0 7 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key Right";
+            zephyr,code = <INPUT_KEY_RIGHT>;
+        };
+
+        key_left: key_left {
+            gpios = <&gpio0 6 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key Left";
+            zephyr,code = <INPUT_KEY_LEFT>;
+        };
+
+        key_down: key_down {
+            gpios = <&gpio0 5 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key Down";
+            zephyr,code = <INPUT_KEY_DOWN>;
+        };
+
+        key_up: key_up {
+            gpios = <&gpio0 4 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+            label = "Key Up";
+            zephyr,code = <INPUT_KEY_UP>;
+        };
+    };
+};
+
+&uart0 {
+    status = "okay";
+    current-speed = <115200>;
+    pinctrl-0 = <&uart0_default>;
+    pinctrl-names = "default";
+};
+
+&i2c0 {
+    status = "okay";
+    clock-frequency = <I2C_BITRATE_STANDARD>;
+    pinctrl-0 = <&i2c0_default>;
+    pinctrl-names = "default";
+};
+
+&spi2 {
+    #address-cells = <1>;
+    #size-cells = <0>;
+    status = "okay";
+    pinctrl-0 = <&spim2_default>;
+    pinctrl-names = "default";
+};
+
+&gpio0 {
+    status = "okay";
+
+    /* Display / SPI chip selects and control pins */
+    tft_cs: tft_cs {
+        compatible = "gpio-leds"; /* single gpio label */
+        gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;
+        label = "TFT_CS (GPIO10)";
+    };
+
+    tft_dc: tft_dc {
+        gpio-hog;
+        gpios = <9 GPIO_ACTIVE_HIGH>;
+        output-low;
+        line-name = "tft-dc";
+    };
+
+    tft_reset: tft_reset {
+        gpio-hog;
+        gpios = <45 GPIO_ACTIVE_HIGH>;
+        output-high;
+        line-name = "tft-reset";
+    };
+
+    tft_led_hog: tft_led_hog {
+        gpio-hog;
+        gpios = <3 GPIO_ACTIVE_HIGH>;
+        output-high;
+        line-name = "tft-led";
+    };
+
+    /* SD card CS (SPI) */
+    sd_cs: sd_cs {
+        gpio-hog;
+        gpios = <14 GPIO_ACTIVE_LOW>;
+        output-high;
+        line-name = "sd-cs";
+    };
+
+    /* NRF2 (external radio) pins */
+    nrf2_ce: nrf2_ce {
+        gpio-hog;
+        gpios = <39 GPIO_ACTIVE_HIGH>;
+        output-low;
+        line-name = "nrf2-ce";
+    };
+
+    nrf2_csn: nrf2_csn {
+        gpio-hog;
+        gpios = <38 GPIO_ACTIVE_HIGH>;
+        output-high;
+        line-name = "nrf2-csn";
+    };
+
+    /* NRF1 */
+    nrf1_ce: nrf1_ce {
+        gpio-hog;
+        gpios = <47 GPIO_ACTIVE_HIGH>;
+        output-low;
+        line-name = "nrf1-ce";
+    };
+
+    nrf1_csn: nrf1_csn {
+        gpio-hog;
+        gpios = <21 GPIO_ACTIVE_HIGH>;
+        output-high;
+        line-name = "nrf1-csn";
+    };
+
+    /* LR1121 LoRa chip pins */
+    lr1121_nss: lr1121_nss {
+        gpio-hog;
+        gpios = <37 GPIO_ACTIVE_HIGH>;
+        output-high;
+        line-name = "lr1121-nss";
+    };
+
+    lr1121_busy: lr1121_busy {
+        gpio-hog;
+        gpios = <36 GPIO_ACTIVE_HIGH>;
+        input;
+        line-name = "lr1121-busy";
+    };
+
+    lr1121_rst: lr1121_rst {
+        gpio-hog;
+        gpios = <0 GPIO_ACTIVE_HIGH>;
+        output-low;
+        line-name = "lr1121-rst";
+    };
+};
+
+&trng0 {
+    status = "okay";
+};
+
+&wifi {
+    status = "okay";
+};
+
+&psram0 {
+    size = <DT_SIZE_M(8)>;
+    status = "okay";
+};
+
+/* USB OTG / CDC ACM for console */
+zephyr_udc0: &usb_otg {
+    status = "okay";
+
+    cdc_acm_uart0: cdc_acm_uart0 {
+        compatible = "zephyr,cdc-acm-uart";
+    };
+};

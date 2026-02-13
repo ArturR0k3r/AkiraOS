@@ -1,0 +1,153 @@
+# AkiraOS Documentation - GitHub Pages Configuration
+
+# Theme
+remote_theme: just-the-docs/just-the-docs@v0.7.0
+
+# Color scheme (dark theme)
+color_scheme: dark
+
+# Enable mermaid
+mermaid:
+  version: "10.6.1"
+
+# Site settings
+title: AkiraOS Documentation
+description: High-Performance WebAssembly OS for Embedded Systems
+baseurl: ""
+url: "https://akiraos.pen.engineering"
+
+# Build settings
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+  syntax_highlighter_opts:
+    block:
+      line_numbers: false
+
+# Plugins
+plugins:
+  - jekyll-relative-links
+  - jekyll-optional-front-matter
+  - jekyll-readme-index
+  - jekyll-titles-from-headings
+  - jekyll-seo-tag
+
+# Relative links
+relative_links:
+  enabled: true
+  collections: false
+
+# Optional front matter
+optional_front_matter:
+  remove_originals: false
+
+# Titles from headings
+titles_from_headings:
+  enabled: true
+  strip_title: true
+  collections: false
+
+# Exclude from build
+exclude:
+  - README.md
+  - LICENSE
+  - CONTRIBUTING.md
+  - CODE_OF_CONDUCT.md
+  - "*.sh"
+  - "*.c"
+  - "*.h"
+  - "*.cpp"
+  - "*.cmake"
+  - CMakeLists.txt
+  - Kconfig
+  - prj.conf
+  - west.yml
+  - build/
+  - modules/
+  - src/
+  - tests/
+  - wasm_sample/
+  - boards/
+  - include/
+  - .vscode/
+  - .git/
+  - AkiraConsole/
+  - AkiraMicro/
+
+# Include
+include:
+  - _*.yml
+  - .htaccess
+
+# Just the Docs Configuration
+aux_links:
+  "AkiraOS on GitHub":
+    - "//github.com/ArturR0k3r/AkiraOS"
+
+# Footer content
+footer_content: "Copyright &copy; 2025-2026 AkiraOS Project. Distributed under the Apache 2.0 License."
+
+# Enable search
+search_enabled: true
+search:
+  heading_level: 2
+  previews: 3
+  preview_words_before: 5
+  preview_words_after: 10
+  tokenizer_separator: /[\s/]+/
+  rel_url: true
+  button: false
+
+# Defaults
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+  - scope:
+      path: "architecture"
+    values:
+      layout: default
+      parent: Architecture
+  - scope:
+      path: "getting-started"
+    values:
+      layout: default
+      parent: Getting Started
+  - scope:
+      path: "api-reference"
+    values:
+      layout: default
+      parent: API Reference
+  - scope:
+      path: "platform"
+    values:
+      layout: default
+      parent: Platform Support
+  - scope:
+      path: "development"
+    values:
+      layout: default
+      parent: Development
+  - scope:
+      path: "hardware"
+    values:
+      layout: default
+      parent: Hardware
+  - scope:
+      path: "resources"
+    values:
+      layout: default
+      parent: Resources
+
+# SEO
+#WIP: Add more SEO settings as needed
+social:
+  name: AkiraOS
+  links:
+    - https://github.com/ArturR0k3r/AkiraOS
+
+# GitHub metadata
+repository: ArturR0k3r/AkiraOS
+github_username: ArturR0k3r

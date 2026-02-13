@@ -1,0 +1,146 @@
+/*
+ * Copyright (c) 2026 AkiraOS
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * ESP32-S3 Super Mini Board Device Tree
+ * 
+ * Hardware Specifications:
+ * - ESP32-S3 Mini N4R2 Module
+ * - 4MB Flash
+ * - 2MB PSRAM (Quad SPI)
+ * - Native USB-C port
+ * - Built-in blue LED on GPIO8 (active low)
+ * - Boot button on GPIO0
+ * - Reset button
+ * - 27 GPIO pins available
+ */
+
+/dts-v1/;
+
+#include <espressif/esp32s3/esp32s3_mini_n4r2.dtsi>
+#include "esp32s3_supermini-pinctrl.dtsi"
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <espressif/partitions_0x0_amp.dtsi>
+
+/ {
+	model = "ESP32-S3 Super Mini";
+	compatible = "generic,esp32s3-supermini";
+
+	chosen {
+		zephyr,sram = &sram1;
+		/* Use CDC ACM UART over USB OTG for console.
+		 * The ESP32-S3 has one internal USB PHY shared between USB Serial/JTAG
+		 * and USB OTG (DWC2). When the USB OTG stack initializes, it switches
+		 * the PHY mux away from Serial/JTAG, so usb_serial cannot be used for
+		 * console when USB OTG (HID, etc.) is active. CDC ACM provides a
+		 * virtual serial port over the same USB OTG controller. */
+		zephyr,console = &cdc_acm_uart0;
+		zephyr,shell-uart = &cdc_acm_uart0;
+		zephyr,flash = &flash0;
+		zephyr,code-partition = &slot0_partition;
+	};
+
+	aliases {
+		i2c-0 = &i2c0;
+		watchdog0 = &wdt0;
+		led0 = &blue_led;
+		sw0 = &boot_button;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		blue_led: led_0 {
+			gpios = <&gpio0 8 GPIO_ACTIVE_LOW>;
+			label = "Blue LED";
+		};
+	};
+
+	gpio_keys {
+		compatible = "gpio-keys";
+
+		boot_button: button_0 {
+			gpios = <&gpio0 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "Boot Button";
+			zephyr,code = <INPUT_KEY_0>;
+		};
+	};
+};
+
+&uart0 {
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&uart0_default>;
+	pinctrl-names = "default";
+};
+
+&i2c0 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+	pinctrl-0 = <&i2c0_default>;
+	pinctrl-names = "default";
+};
+
+&trng0 {
+	status = "okay";
+};
+
+&spi2 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+	pinctrl-0 = <&spim2_default>;
+	pinctrl-names = "default";
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&gpio1 {
+	status = "okay";
+};
+
+&wdt0 {
+	status = "okay";
+};
+
+&twai {
+	pinctrl-0 = <&twai_default>;
+	pinctrl-names = "default";
+};
+
+&timer0 {
+	status = "okay";
+};
+
+&timer1 {
+	status = "okay";
+};
+
+&esp32_bt_hci {
+	status = "disabled";
+};
+
+&wifi {
+	status = "okay";
+};
+
+&psram0 {
+	size = <DT_SIZE_M(2)>;
+	status = "okay";
+};
+
+// USB OTG Controller - aliased as zephyr_udc0 for USB device stack
+// This is the only USB controller that should be active on the Super Mini.
+// The internal USB PHY mux is switched to OTG mode when this initializes,
+// so usb_serial (Serial/JTAG) is disconnected from the physical USB pins.
+zephyr_udc0: &usb_otg {
+	status = "okay";
+
+	/* CDC ACM UART - virtual serial port for console and shell */
+	cdc_acm_uart0: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};

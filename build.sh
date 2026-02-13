@@ -18,17 +18,20 @@
 #   -h, --help      Show this help message
 #
 # Boards:
-#   native_sim                    Native simulator (default)
-#   esp32s3_devkitm_esp32s3_procpu  ESP32-S3 DevKitM (Akira Console)
-#   esp32_devkitc_procpu          ESP32 DevKitC (Akira Micro)
-#   nrf54l15dk_nrf54l15_cpuapp    nRF54L15 DK (Nordic)
-#   steval_stwinbx1               STM32 STWIN.box
-#   b_u585i_iot02a                STM32U5 IoT Discovery Kit
+#   native_sim                         Native simulator (default)
+#   esp32s3_devkitm_esp32s3_procpu     ESP32-S3 DevKitM (Akira Console)
+#   akiraconsole                       Akira Console (ESP32-S3 DevKitM) - short alias
+#   akiraconsole_esp32s3_procpu        Akira Console (ESP32-S3 DevKitM) - full name
+#   esp32s3_supermini_esp32s3_procpu   ESP32-S3 Super Mini (compact)
+#   esp32_devkitc_procpu               ESP32 DevKitC (Akira Micro)
+#   nrf54l15dk_nrf54l15_cpuapp         nRF54L15 DK (Nordic)
+#   steval_stwinbx1                    STM32 STWIN.box
+#   b_u585i_iot02a                     STM32U5 IoT Discovery Kit
 #
 # Examples:
 #   ./build.sh                              # Build and run native_sim
-#   ./build.sh -b esp32s3_devkitm_esp32s3_procpu -bl y -r all
-#   ./build.sh -b esp32s3_devkitm_esp32s3_procpu -r a
+#   ./build.sh -b akiraconsole -bl y -r all # Build MCUboot + AkiraOS and flash
+#   ./build.sh -b akiraconsole -r a         # Flash application only
 #   ./build.sh -c                           # Clean all builds
 # =============================================================================
 
@@ -66,6 +69,9 @@ NC='\033[0m'
 declare -A BOARD_MAP=(
     ["native_sim"]="native_sim"
     ["esp32s3_devkitm_esp32s3_procpu"]="esp32s3_devkitm/esp32s3/procpu"
+    ["akiraconsole"]="akiraconsole/esp32s3/procpu"
+    ["akiraconsole_esp32s3_procpu"]="akiraconsole/esp32s3/procpu"
+    ["esp32s3_supermini_esp32s3_procpu"]="esp32s3_supermini/esp32s3/procpu"
     ["esp32c3_devkitm"]="esp32c3_devkitm"
     ["esp32_devkitc_procpu"]="esp32_devkitc/esp32/procpu"
     ["nrf54l15dk_nrf54l15_cpuapp"]="nrf54l15dk/nrf54l15/cpuapp"
@@ -76,6 +82,9 @@ declare -A BOARD_MAP=(
 declare -A BOARD_CHIP=(
     ["native_sim"]="native"
     ["esp32s3_devkitm_esp32s3_procpu"]="esp32s3"
+    ["akiraconsole"]="esp32s3"
+    ["akiraconsole_esp32s3_procpu"]="esp32s3"
+    ["esp32s3_supermini_esp32s3_procpu"]="esp32s3"
     ["esp32c3_devkitm"]="esp32c3"
     ["esp32_devkitc_procpu"]="esp32"
     ["nrf54l15dk_nrf54l15_cpuapp"]="nrf54l15"
@@ -85,9 +94,12 @@ declare -A BOARD_CHIP=(
 
 declare -A BOARD_DESC=(
     ["native_sim"]="Native Simulator"
-    ["esp32s3_devkitm_esp32s3_procpu"]="ESP32-S3 DevKitM (Akira Console)"
+    ["esp32s3_devkitm_esp32s3_procpu"]="ESP32-S3 DevKitM "
+    ["akiraconsole"]="Akira Console (ESP32-S3 DevKitM)"
+    ["akiraconsole_esp32s3_procpu"]="Akira Console (ESP32-S3 DevKitM)"
+    ["esp32s3_supermini_esp32s3_procpu"]="ESP32-S3 Super Mini"
     ["esp32c3_devkitm"]="ESP32-C3 DevKitM (RISC-V)"
-    ["esp32_devkitc_procpu"]="ESP32 DevKitC (Akira Micro)"
+    ["esp32_devkitc_procpu"]="ESP32 DevKitC "
     ["nrf54l15dk_nrf54l15_cpuapp"]="Nordic nRF54L15 DK"
     ["steval_stwinbx1"]="ST STEVAL-STWINBX1"
     ["b_u585i_iot02a"]="ST B-U585I-IOT02A Discovery Kit"
@@ -111,7 +123,7 @@ show_banner() {
   / ___ \|   <| | | | (_| | |_| |___) |
  /_/   \_\_|\_\_|_|  \__,_|\___/|____/ 
                                        
-         Unified Build System v2.0
+         Unified Build System v1.4.x
 EOF
     echo -e "${NC}"
 }
@@ -138,30 +150,33 @@ ${BOLD}OPTIONS:${NC}
     -h, --help      Show this help message
 
 ${BOLD}BOARDS:${NC}
-    native_sim                       Native simulator (default)
-    esp32s3_devkitm_esp32s3_procpu   ESP32-S3 DevKitM (Akira Console)
-    esp32c3_devkitm                  ESP32-C3 DevKitM (RISC-V)
-    esp32_devkitc_procpu             ESP32 DevKitC (Legacy)
-    nrf54l15dk_nrf54l15_cpuapp       Nordic nRF54L15 DK
-    steval_stwinbx1                  ST STEVAL-STWINBX1
+    native_sim                         Native simulator (default)
+    esp32s3_devkitm_esp32s3_procpu     ESP32-S3 DevKitM (Akira Console)
+    akiraconsole                       Akira Console - short alias
+    akiraconsole_esp32s3_procpu        Akira Console - full name
+    esp32s3_supermini_esp32s3_procpu   ESP32-S3 Super Mini (compact)
+    esp32c3_devkitm                    ESP32-C3 DevKitM (RISC-V)
+    esp32_devkitc_procpu               ESP32 DevKitC (Legacy)
+    nrf54l15dk_nrf54l15_cpuapp         Nordic nRF54L15 DK
+    steval_stwinbx1                    ST STEVAL-STWINBX1
 
 ${BOLD}EXAMPLES:${NC}
     ./build.sh
         Build and run native_sim (default)
 
-    ./build.sh -b esp32s3_devkitm_esp32s3_procpu
-        Build AkiraOS for ESP32-S3
+    ./build.sh -b akiraconsole
+        Build AkiraOS for Akira Console (ESP32-S3)
 
-    ./build.sh -b esp32s3_devkitm_esp32s3_procpu -bl y
-        Build MCUboot + AkiraOS for ESP32-S3
+    ./build.sh -b akiraconsole -bl y
+        Build MCUboot + AkiraOS for Akira Console
 
-    ./build.sh -b esp32s3_devkitm_esp32s3_procpu -bl y -r all
+    ./build.sh -b akiraconsole -bl y -r all
         Build MCUboot + AkiraOS and flash both
 
-    ./build.sh -b esp32s3_devkitm_esp32s3_procpu -r a
+    ./build.sh -b akiraconsole -r a
         Flash application only (no build)
 
-    ./build.sh -b esp32s3_devkitm_esp32s3_procpu -e -r all
+    ./build.sh -b akiraconsole -e -r all
         Erase flash, then flash bootloader + app
 
     ./build.sh -c
@@ -257,7 +272,9 @@ build_mcuboot() {
     
     cd "$WORKSPACE_ROOT"
     
-    if west build -b "$zephyr_board" bootloader/mcuboot/boot/zephyr -d "$build_dir"; then
+    # Include custom board root for boards defined in AkiraOS/boards
+    if west build -b "$zephyr_board" bootloader/mcuboot/boot/zephyr -d "$build_dir" \
+        -- -DBOARD_ROOT="$SCRIPT_DIR"; then
         print_success "MCUboot build complete!"
         print_info "Binary: $build_dir/zephyr/zephyr.bin"
     else
@@ -485,14 +502,13 @@ generate_sbom() {
         cat > "$sbom_file" << EOF
 {
     "name": "AkiraOS",
-    "version": "2.0.0",
+    "version": "1.4.x",
     "board": "$BOARD",
     "zephyr_board": "${BOARD_MAP[$BOARD]}",
     "build_date": "$(date -Iseconds)",
     "components": [
-        {"name": "Zephyr RTOS", "version": "4.2.0"},
-        {"name": "OCRE Runtime", "version": "1.0.0"},
-        {"name": "WAMR", "version": "2.0.0"},
+        {"name": "Zephyr RTOS", "version": "4.3.0"},
+        {"name": "WASM Micro Runtime", "version": "2.3.0"},
         {"name": "MCUboot", "version": "2.0.0"}
     ]
 }

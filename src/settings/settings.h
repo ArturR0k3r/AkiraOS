@@ -1,149 +1,140 @@
 /**
- * @file settings.h
- * @brief User settings management module for Akira Board
- *
- * This module provides persistent configuration storage and management
- * running on a dedicated thread for non-blocking operations.
- */
+* @file settings.h
+* @brief Key-value settings storage with NVS backend
+*
+*
+*/
 
-#ifndef USER_SETTINGS_H
-#define USER_SETTINGS_H
+#ifndef AKIRA_SETTINGS_H
+#define AKIRA_SETTINGS_H
 
-#include <zephyr/kernel.h>
+#include <stddef.h>
 #include <stdint.h>
-#include <stdbool.h>
 
-/* Configuration constants */
-#define MAX_DEVICE_ID_LEN 32
-#define MAX_WIFI_SSID_LEN 32
-#define MAX_WIFI_PASSCODE_LEN 64
-#define SETTINGS_THREAD_STACK_SIZE 2048
-#define SETTINGS_THREAD_PRIORITY 7
+// Special keys for wifi
+#define AKIRA_SETTINGS_WIFI_SSID_KEY "wifi/ssid"
+#define AKIRA_SETTINGS_WIFI_PSK_KEY "wifi/psk"
 
-/* Settings keys */
-#define SETTING_KEY(suffix) "user/" suffix
-#define DEVICE_ID_KEY SETTING_KEY("device_id")
-#define WIFI_SSID_KEY SETTING_KEY("wifi_ssid")
-#define WIFI_PASSCODE_KEY SETTING_KEY("wifi_passcode")
-#define WIFI_ENABLED_KEY SETTING_KEY("wifi_enabled")
 
-/**
- * @brief User settings structure
- */
-struct user_settings
-{
-    char device_id[MAX_DEVICE_ID_LEN];
-    char wifi_ssid[MAX_WIFI_SSID_LEN];
-    char wifi_passcode[MAX_WIFI_PASSCODE_LEN];
-    bool wifi_enabled;
-    /* Add more settings here as needed */
-};
+#define SETTINGS_COUNTER_ID 0 // Position in NVS to store count of settings
+#define SETTINGS_START_ID 1 // Starting ID for settings entries in NVS
 
-/**
- * @brief Settings operation result codes
- */
-enum settings_result
-{
-    SETTINGS_OK = 0,
-    SETTINGS_ERROR = -1,
-    SETTINGS_NOT_FOUND = -2,
-    SETTINGS_INVALID_PARAM = -3,
-    SETTINGS_BUFFER_TOO_SMALL = -4,
-    SETTINGS_SAVE_FAILED = -5
-};
+#define MAX_KEYS CONFIG_AKIRA_SETTINGS_MAX_KEYS
+#define MAX_KEY_LEN CONFIG_AKIRA_SETTINGS_MAX_KEY_LEN
+#define MAX_VALUE_LEN CONFIG_AKIRA_SETTINGS_MAX_VALUE_LEN
 
-/**
- * @brief Settings change callback function type
- *
- * @param key Setting key that changed
- * @param value New value (can be NULL for deletions)
- * @param user_data User-provided callback data
- */
-typedef void (*settings_change_cb_t)(const char *key, const void *value, void *user_data);
+#define MAX_NAMESPACE_LEN 48
+#define MAX_FILEPATH_LEN 96
 
-/**
- * @brief Initialize the settings module
- *
- * Starts the settings thread and initializes the storage subsystem.
- *
- * @return 0 on success, negative error code on failure
- */
-int user_settings_init(void);
+#define MINIMUM_ENCRYPTED_LEN 32
+
+/* Helper macro to convert hex string to byte array */
+#define HEX_TO_BYTE(h1, h2) \
+    ((((h1) >= '0' && (h1) <= '9') ? ((h1) - '0') : \
+      ((h1) >= 'a' && (h1) <= 'f') ? ((h1) - 'a' + 10) : \
+      ((h1) >= 'A' && (h1) <= 'F') ? ((h1) - 'A' + 10) : 0) << 4 | \
+     (((h2) >= '0' && (h2) <= '9') ? ((h2) - '0') : \
+      ((h2) >= 'a' && (h2) <= 'f') ? ((h2) - 'a' + 10) : \
+      ((h2) >= 'A' && (h2) <= 'F') ? ((h2) - 'A' + 10) : 0))
+
+// Iterator for listing all keys
+typedef struct {
+    uint16_t index;  
+    uint16_t count;
+    char* key;   
+    char* value; 
+} settings_iterator_t;
+
+typedef enum{
+    AKIRA_SETTINGS_STORAGE_FLASH = 0,
+    AKIRA_SETTINGS_STORAGE_SD,
+    AKIRA_SETTINGS_STORAGE_AUTO
+} settings_storage_type_t;
+
+typedef enum {
+    AKIRA_SETTINGS_OP_SET = 0,
+    AKIRA_SETTINGS_OP_GET,
+    AKIRA_SETTINGS_OP_DELETE,
+    AKIRA_SETTINGS_OP_CLEAR
+} settings_op_type_t;
+
+typedef struct{
+    char key[MAX_KEY_LEN];
+    char value[MAX_VALUE_LEN];
+    uint8_t encrypted;
+} settings_entry_t;
+
+
+typedef void (*settings_wq_callback_t)(int result, void *user_data);
 
 /**
- * @brief Get current settings structure
- *
- * @return Pointer to current settings (read-only)
- */
-const struct user_settings *user_settings_get(void);
+ * Initialze settings
+ * 
+ * @return 0 on success, negative on failure
+*/
+int akira_settings_init(void);
 
 /**
- * @brief Set device ID
- *
- * @param device_id Device ID string (max MAX_DEVICE_ID_LEN-1 characters)
- * @return settings_result code
+ *  Get value from Key
+ * 
+ * @param key - Key form which to get value
+ * @param value - Output buffer for value
+ * @param max_len - Size of output buffer
+ * @return 0 on success, negative on error
  */
-enum settings_result user_settings_set_device_id(const char *device_id);
+int akira_settings_get(const char *key, char *value, size_t max_len);
+
 
 /**
- * @brief Set WiFi credentials
- *
- * @param ssid WiFi SSID (max MAX_WIFI_SSID_LEN-1 characters)
- * @param passcode WiFi passcode (max MAX_WIFI_PASSCODE_LEN-1 characters)
- * @return settings_result code
+ * Set Key to Value
+ * 
+ * @param key - Key
+ * @param value - Value to store
+ * @param is_encrypted - Encryption flag
+ * @return 0 on success, negative on error
  */
-enum settings_result user_settings_set_wifi_credentials(const char *ssid, const char *passcode);
+int akira_settings_set(const char *key, const char *value, uint8_t is_encrypted);
 
 /**
- * @brief Enable/disable WiFi
- *
- * @param enabled WiFi enabled state
- * @return settings_result code
+ * Remove the key and the value associated
+ * 
+ * @param key - Key to remove
+ * @return 0 on success, negative on error
  */
-enum settings_result user_settings_set_wifi_enabled(bool enabled);
+int akira_settings_delete(const char *key);
 
 /**
- * @brief Save all settings to persistent storage
- *
- * @return settings_result code
+ * List all settings
+ * 
+ * @param iter - Iterator buffer to get Keys and Values
+ * @return 0 on success, 1 when done, negative on error
  */
-enum settings_result user_settings_save(void);
+int akira_settings_list(settings_iterator_t *iter);
+
 
 /**
- * @brief Load settings from persistent storage
- *
- * @return settings_result code
+ * Async set Key to Value
+ * 
+ * @param key - Key
+ * @param value - Value to store
+ * @param callback - Callback function when operation is done
+ * @param user_data - User data for callback
+ * @return 0 on success, negative on error
  */
-enum settings_result user_settings_load(void);
+int akira_settings_set_async(const char *key, const char *value, settings_wq_callback_t callback, void *user_data, uint8_t is_encrypted);
 
 /**
- * @brief Reset all settings to defaults
- *
- * @return settings_result code
+ * Async delete Key
+ * 
+ * @param key - Key to remove
+ * @param callback - Callback function when operation is done
+ * @param user_data - User data for callback
+ * @return 0 on success, negative on error
  */
-enum settings_result user_settings_reset(void);
+int akira_settings_delete_async(const char *key,  settings_wq_callback_t callback, void *user_data);
 
-/**
- * @brief Register callback for settings changes
- *
- * @param callback Callback function to call when settings change
- * @param user_data User data to pass to callback
- * @return settings_result code
- */
-enum settings_result user_settings_register_callback(settings_change_cb_t callback, void *user_data);
+#ifdef __cplusplus
+}
+#endif
 
-/**
- * @brief Print current settings (for debugging)
- */
-void user_settings_print(void);
-
-/**
- * @brief Get settings as JSON string
- *
- * @param buffer Output buffer for JSON string
- * @param buffer_size Size of output buffer
- * @return Length of JSON string on success, negative error code on failure
- */
-int user_settings_to_json(char *buffer, size_t buffer_size);
-
-#endif /* USER_SETTINGS_H */
+#endif //AKIRA_SETTINGS_H

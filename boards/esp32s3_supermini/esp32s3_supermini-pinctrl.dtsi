@@ -1,0 +1,81 @@
+/*
+ * Copyright (c) 2026 AkiraOS
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * ESP32-S3 Super Mini Pin Control Configuration
+ * 
+ * ESP32-S3 Super Mini Pinout:
+ * - GPIO0:  Boot button (active low)
+ * - GPIO1:  TX0 / ADC1_CH0
+ * - GPIO2:  ADC1_CH1
+ * - GPIO3:  ADC1_CH2 / TOUCH3
+ * - GPIO4:  ADC1_CH3 / TOUCH4
+ * - GPIO5:  ADC1_CH4 / TOUCH5
+ * - GPIO6:  ADC1_CH5 / TOUCH6
+ * - GPIO7:  ADC1_CH6 / TOUCH7
+ * - GPIO8:  Built-in LED (active low, blue)
+ * - GPIO9:  ADC1_CH8 / TOUCH9
+ * - GPIO10: ADC1_CH9 / TOUCH10
+ * - GPIO11-14: SPI
+ * - GPIO15-21: General GPIO
+ * - GPIO35-37: Reserved for PSRAM (Quad SPI)
+ * - GPIO43: TX / USB D-
+ * - GPIO44: RX / USB D+
+ */
+
+#include <zephyr/dt-bindings/pinctrl/esp-pinctrl-common.h>
+#include <dt-bindings/pinctrl/esp32s3-pinctrl.h>
+#include <zephyr/dt-bindings/pinctrl/esp32s3-gpio-sigmap.h>
+
+&pinctrl {
+	uart0_default: uart0_default {
+		group1 {
+			pinmux = <UART0_TX_GPIO43>;
+			output-high;
+		};
+
+		group2 {
+			pinmux = <UART0_RX_GPIO44>;
+			bias-pull-up;
+		};
+	};
+
+	spim2_default: spim2_default {
+		group1 {
+			pinmux = <SPIM2_MISO_GPIO13>,
+				 <SPIM2_SCLK_GPIO12>;
+		};
+
+		group2 {
+			pinmux = <SPIM2_MOSI_GPIO11>;
+			output-low;
+		};
+	};
+
+	i2c0_default: i2c0_default {
+		group1 {
+			pinmux = <I2C0_SDA_GPIO5>,
+				 <I2C0_SCL_GPIO6>;
+			bias-pull-up;
+			drive-open-drain;
+			output-high;
+		};
+	};
+
+	i2c1_default: i2c1_default {
+		group1 {
+			pinmux = <I2C1_SDA_GPIO3>,
+				 <I2C1_SCL_GPIO4>;
+			bias-pull-up;
+			drive-open-drain;
+			output-high;
+		};
+	};
+
+	twai_default: twai_default {
+		group1 {
+			pinmux = <TWAI_TX_GPIO1>,
+				 <TWAI_RX_GPIO2>;
+		};
+	};
+};

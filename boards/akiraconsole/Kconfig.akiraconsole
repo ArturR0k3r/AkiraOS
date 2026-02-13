@@ -1,0 +1,8 @@
+# Akira Console board configuration
+# Copyright (c) 2026 AkiraOS
+# SPDX-License-Identifier: Apache-2.0
+
+config BOARD_AKIRACONSOLE
+	select SOC_ESP32S3_MINI_N4R2
+	select SOC_ESP32S3_PROCPU if BOARD_AKIRACONSOLE_ESP32S3_PROCPU
+	select SOC_ESP32S3_APPCPU if BOARD_AKIRACONSOLE_ESP32S3_APPCPU

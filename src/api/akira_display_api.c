@@ -2,125 +2,135 @@
  * @file akira_display_api.c
  * @brief Display API implementation for WASM exports
  */
-
 #include "akira_api.h"
-#include "../drivers/display_ili9341.h"
-#include "../drivers/fonts.h"
-#include "../drivers/platform_hal.h"
+#include <runtime/security.h>
+#include <drivers/platform_hal.h>
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(akira_display_api, LOG_LEVEL_INF);
 
-// TODO: Add capability check before each API call 
-// TODO: Add framebuffer double-buffering support
-// TODO: Add display rotation support
-// TODO: Add clipping rectangle support
+/* Platform-agnostic display primitives. All hardware calls go through
+ * platform_hal.h. No security checks here - only in native exports.
+ */
 
 void akira_display_clear(uint16_t color)
 {
-    // TODO: Check CAP_DISPLAY_WRITE capability 
-    
-#ifdef CONFIG_ILI9341_DISPLAY
-    ili9341_fill_color(color);
+#if AKIRA_PLATFORM_NATIVE_SIM
+    for (int y = 0; y < 320; y++)
+        for (int x = 0; x < 240; x++)
+            akira_sim_draw_pixel(x, y, color);
+    akira_sim_show_display();
 #else
-    LOG_WRN("No display driver configured");
+    uint16_t *fb = akira_framebuffer_get();
+    if (fb)
+    {
+        for (int i = 0; i < 240 * 320; i++)
+            fb[i] = color;
+    }
+    else
+    {
+        LOG_WRN("No display framebuffer available");
+    }
 #endif
 }
 
 void akira_display_pixel(int x, int y, uint16_t color)
 {
-    // TODO: Check CAP_DISPLAY_WRITE capability 
-    
-    // Bounds checking
-    if (x < 0 || x >= ILI9341_DISPLAY_WIDTH || y < 0 || y >= ILI9341_DISPLAY_HEIGHT) {
+    if (x < 0 || x >= 240 || y < 0 || y >= 320)
         return;
-    }
-    
-#ifdef CONFIG_ILI9341_DISPLAY
-    ili9341_draw_pixel(x, y, color);
+
+#if AKIRA_PLATFORM_NATIVE_SIM
+    akira_sim_draw_pixel(x, y, color);
 #else
-    LOG_WRN("No display driver configured");
+    uint16_t *fb = akira_framebuffer_get();
+    if (fb)
+        fb[y * 240 + x] = color;
 #endif
 }
 
 void akira_display_rect(int x, int y, int w, int h, uint16_t color)
 {
-    // TODO: Check CAP_DISPLAY_WRITE capability 
-    
-    // Bounds validation
-    if (x < 0 || y < 0 || w <= 0 || h <= 0) {
+    if (w <= 0 || h <= 0)
         return;
-    }
     
-    // Clip to display bounds
-    if (x >= ILI9341_DISPLAY_WIDTH || y >= ILI9341_DISPLAY_HEIGHT) {
-        return;
-    }
-    
-    int x_end = (x + w > ILI9341_DISPLAY_WIDTH) ? ILI9341_DISPLAY_WIDTH : x + w;
-    int y_end = (y + h > ILI9341_DISPLAY_HEIGHT) ? ILI9341_DISPLAY_HEIGHT : y + h;
-    
-#ifdef CONFIG_ILI9341_DISPLAY
-    // Draw filled rectangle pixel by pixel
-    // TODO: Optimize with DMA transfer for large rects
-    for (int py = y; py < y_end; py++) {
-        for (int px = x; px < x_end; px++) {
-            ili9341_draw_pixel(px, py, color);
+    int x_end = x + w;
+    int y_end = y + h;
+    for (int py = y; py < y_end; py++)
+    {
+        for (int px = x; px < x_end; px++)
+        {
+            akira_display_pixel(px, py, color);
         }
     }
-#else
-    LOG_WRN("No display driver configured");
-#endif
 }
 
 void akira_display_text(int x, int y, const char *text, uint16_t color)
 {
-    // TODO: Check CAP_DISPLAY_WRITE capability 
-    
-    if (!text) {
-        return;
-    }
-    
-#ifdef CONFIG_ILI9341_DISPLAY
-    // Use 7x10 font by default
-    ili9341_draw_text(x, y, text, color, FONT_7X10);
-#else
-    LOG_WRN("No display driver configured");
-#endif
+    (void)x; (void)y; (void)text; (void)color;
+    LOG_WRN("akira_display_text: not implemented in minimal API");
 }
 
 void akira_display_text_large(int x, int y, const char *text, uint16_t color)
 {
-    // TODO: Check CAP_DISPLAY_WRITE capability 
-    
-    if (!text) {
-        return;
-    }
-    
-#ifdef CONFIG_ILI9341_DISPLAY
-    // Use 11x18 font for large text
-    ili9341_draw_text(x, y, text, color, FONT_11X18);
-#else
-    LOG_WRN("No display driver configured");
-#endif
+    (void)x; (void)y; (void)text; (void)color;
+    LOG_WRN("akira_display_text_large: not implemented in minimal API");
 }
 
 void akira_display_flush(void)
 {
-    // TODO: Check CAP_DISPLAY_WRITE capability 
-    // TODO: Flush framebuffer to physical display if double-buffering enabled
-    // TODO: Implement vsync if supported
-    
-    // Currently no-op as ILI9341 updates are immediate
-    // This is a placeholder for future framebuffer implementation
+#if AKIRA_PLATFORM_NATIVE_SIM
+    akira_sim_show_display();
+#endif
 }
 
 void akira_display_get_size(int *width, int *height)
 {
-    if (width) {
-        *width = ILI9341_DISPLAY_WIDTH;
-    }
-    if (height) {
-        *height = ILI9341_DISPLAY_HEIGHT;
-    }
+    if (width) *width = 240;
+    if (height) *height = 320;
 }
+
+/* WASM Native export API */
+
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
+
+int akira_native_display_rect(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
+    
+    akira_display_rect(x, y, w, h, (uint16_t)color);
+    return 0;
+}
+
+int akira_native_display_text(wasm_exec_env_t exec_env, int32_t x, int32_t y, const char *text, uint32_t color)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
+    
+    akira_display_text(x, y, text, (uint16_t)color);
+    return 0;
+}
+
+int akira_native_display_text_large(wasm_exec_env_t exec_env, int x, int y, const char *text, uint16_t color)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
+    
+    akira_display_text_large(x, y, text, color);
+    return 0;
+}
+
+int akira_native_display_clear(wasm_exec_env_t exec_env, uint32_t color)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
+    
+    akira_display_clear((uint16_t)color);
+    return 0;
+}
+
+int akira_native_display_pixel(wasm_exec_env_t exec_env, int32_t x, int32_t y, uint32_t color)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
+    
+    akira_display_pixel(x, y, (uint16_t)color);
+    return 0;
+}
+
+#endif

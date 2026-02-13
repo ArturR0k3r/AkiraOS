@@ -1,7 +1,7 @@
 {
 	"folders": [
 		{
-			"path": "../"
+			"path": "."
 		}
 	],
 	"settings": {
@@ -80,7 +80,6 @@
 			"blockwise",
 			"COAP",
 			"hexdump",
-			"OCRE",
 			"WASI",
 			"ZCBOR",
 			"zsock"

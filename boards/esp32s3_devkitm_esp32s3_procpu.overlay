@@ -87,26 +87,58 @@
     // - Battery management IC
 };
 
-// Chosen nodes for Zephyr configuration
+// USB Device Controller configuration
+&zephyr_udc0 {
+    status = "okay";
+    
+    hid_dev_0: hid_dev_0 {
+        compatible = "zephyr,hid-device";
+        protocol-code = "keyboard";
+        in-polling-period-us = <10000>;
+        out-polling-period-us = <10000>;
+        in-report-size = <64>;
+        out-report-size = <64>;
+    };
+};
+
 / {
     chosen {
         zephyr,console = &uart0;
         zephyr,shell-uart = &uart0;
     };
+    fstab {
+		compatible = "zephyr,fstab";
+
+		lfs1: lfs1 {
+			compatible = "zephyr,fstab,littlefs";
+			read-size = <1>;
+			prog-size = <16>;
+			cache-size = <256>;
+			lookahead-size = <32>;
+			block-cycles = <512>;
+			partition = <&lfs1_partition>;
+			mount-point = "/lfs";
+		};
+	};
 };
 
-// Change storage partition label to user_data_partition for LittleFS
-user_data_partition: &storage_partition {
-    label = "user_data_partition";
-};
+// Flash memory partitions
+&flash0 {
+    partitions {
+        akira_settings_nvs_partition: partition@256000 {
+            label = "akira_settings_nvs";
+            reg = <0x00256000 DT_SIZE_K(32)>;
+        };
 
-// Add alias for user_data_partition
-/ {
-    aliases {
-        user-data-partition = &storage_partition;
+        lfs1_partition: partition@25E000 {
+			label = "storage";
+			reg = <0x0025F000 DT_SIZE_K(512)>;
+		};
     };
 };
 
+
+ 
 // ============================================================================
 // SD Card Support - CURRENTLY DISABLED
 // ============================================================================

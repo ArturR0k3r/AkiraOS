@@ -5,206 +5,200 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/sys/printk.h>
-
-/* Hardware */
-#include "drivers/platform_hal.h"
-#include "drivers/driver_registry.h"
-
-/* Connectivity */
-#ifdef CONFIG_WIFI
-#include <zephyr/net/wifi_mgmt.h>
-#include <zephyr/net/net_if.h>
-#include <zephyr/net/net_mgmt.h>
+#include <drivers/platform_hal.h>
+#include <runtime/akira_runtime.h>
+#include <runtime/app_loader/app_loader.h>
+#include <runtime/security/sandbox.h>
+#include <runtime/runtime_cache.h>
+#ifdef CONFIG_FILE_SYSTEM
+#include <storage/fs_manager.h>
 #endif
 #ifdef CONFIG_BT
-#include "connectivity/bluetooth/bt_manager.h"
+#include <connectivity/bluetooth/bt_manager.h>
 #endif
-#ifdef CONFIG_USB_DEVICE_STACK
-#include "connectivity/usb/usb_manager.h"
-#endif
-
-/* HID */
-#ifdef CONFIG_AKIRA_HID
-#include "connectivity/hid/hid_manager.h"
-#endif
-#ifdef CONFIG_AKIRA_HID_SIM
-#include "connectivity/hid/hid_sim.h"
-#endif
+#include <connectivity/hid/hid_manager.h>
 #ifdef CONFIG_AKIRA_BT_HID
-#include "connectivity/bluetooth/bt_hid.h"
+#include <bt_hid.h>
 #endif
-
-/* Storage & Settings */
-#ifdef CONFIG_FILE_SYSTEM
-#include "storage/fs_manager.h"
+#ifdef CONFIG_AKIRA_APP_MANAGER
+#include <runtime/app_manager/app_manager.h>
+#endif
+#ifdef CONFIG_AKIRA_HTTP_SERVER
+#include "ota/web_server.h"
+#include "ota/ota_manager.h"
 #endif
 #ifdef CONFIG_AKIRA_SETTINGS
 #include "settings/settings.h"
 #endif
-
-/* Services */
-#ifdef CONFIG_AKIRA_APP_MANAGER
-#include "services/app_manager.h"
+#ifdef CONFIG_AKIRA_USB
+#include <connectivity/usb/usb_manager.h>
 #endif
-#ifdef CONFIG_AKIRA_SHELL
-#include "shell/akira_shell.h"
-#endif
-#ifdef CONFIG_AKIRA_HTTP_SERVER
-#include "OTA/web_server.h"
+#ifdef CONFIG_AKIRA_USB_HID
+#include <connectivity/usb/usb_hid.h>
 #endif
 
-/* OTA Manager */
-#ifdef CONFIG_AKIRA_OTA
-#include "OTA/ota_manager.h"
-#endif
 
 LOG_MODULE_REGISTER(akira_main, CONFIG_AKIRA_LOG_LEVEL);
 
 int main(void)
 {
-    printk("\n════════════════════════════════════════\n");
-    printk("          AkiraOS v1.3.0\n");
-    printk("   Modular Embedded Operating System\n");
-    printk("════════════════════════════════════════\n\n");
-    LOG_INF("Build: %s %s", __DATE__, __TIME__);
+    LOG_INF("AkiraOS booting (Minimalist v1.4.8 - Hardened Runtime)");
 
-    /* Hardware initialization */
-    if (akira_hal_init() < 0)
-    {
+    /* Initialize hardware HAL */
+    if (akira_hal_init() < 0) {
         LOG_ERR("HAL init failed");
-        return -1;
+        return -ENODEV;
     }
 
-    if (driver_registry_init() < 0)
-    {
-        LOG_ERR("Driver registry failed");
-        return -1;
-    }
-
-    /* Storage (optional) */
-#ifdef CONFIG_FILE_SYSTEM
-    if (fs_manager_init() < 0)
-    {
-        LOG_WRN("Storage init failed");
-    }
-#endif
-
-    /* Settings (optional) */
-#ifdef CONFIG_AKIRA_SETTINGS
-    if (user_settings_init() < 0)
-    {
-        LOG_WRN("Settings init failed");
-    }
-#endif
-
-    /* WiFi (optional) */
-#ifdef CONFIG_WIFI
-    struct net_if *iface = net_if_get_default();
-    if (iface)
-    {
-        LOG_INF("WiFi interface ready");
-    }
-    else
-    {
-        LOG_WRN("No WiFi interface found");
-    }
-#endif
-
-    /* Bluetooth (optional) */
 #ifdef CONFIG_BT
-    bt_config_t bt_cfg = {
-        .device_name = "AkiraOS",
-        .vendor_id = 0xFFFF,
-        .product_id = 0x0001,
-        .services = BT_SERVICE_ALL,
-        .auto_advertise = true,
-        .pairable = true};
-    if (bt_manager_init(&bt_cfg) < 0)
-    {
-        LOG_WRN("Bluetooth init failed");
+    /* Initialize Bluetooth manager */
+    if (bt_manager_init(NULL) < 0) {
+        LOG_WRN("Bluetooth init failed - continuing without BT support");
     }
+    else {
+        LOG_INF("Bluetooth initialized");
+    }
+#endif
 
-    /* HID subsystem initialization */
+#ifdef CONFIG_AKIRA_BT_SHELL
+    /* Initialize Bluetooth shell commands */
+    if (bt_shell_init() < 0) {
+        LOG_WRN("Bluetooth shell init failed");
+    }
+    else {
+        LOG_INF("Bluetooth shell commands initialized");
+    }
+#endif
+
+#ifdef CONFIG_AKIRA_USB
+    if(usb_manager_init() < 0){
+        LOG_WRN("USB manager init failed");
+    }
+    else{
+        LOG_INF("USB manager initialized successfully");
+    }
+#endif
+
 #ifdef CONFIG_AKIRA_HID
-    hid_config_t hid_cfg = {
-        .device_types = HID_DEVICE_KEYBOARD | HID_DEVICE_GAMEPAD,
-        .preferred_transport = HID_TRANSPORT_BLE,
-        .device_name = "AkiraOS HID",
-        .vendor_id = 0x1234,
-        .product_id = 0x5678,
-    };
-
-    if (hid_manager_init(&hid_cfg) < 0)
-    {
+    if (hid_manager_init(NULL) < 0) {
         LOG_WRN("HID manager init failed");
     }
+    else {
+        LOG_INF("HID manager initialized");
+    }
+#endif
 
-#ifdef CONFIG_AKIRA_HID_SIM
-    hid_sim_init();
-#endif /* CONFIG_AKIRA_HID_SIM */
-#endif /* CONFIG_AKIRA_HID */
+#ifdef CONFIG_AKIRA_USB_HID
+    if(usb_hid_transport_init()<0){
+        LOG_WRN("USB HID transport init failed");
+    }
+    else{
+        LOG_INF("USB HID transport initialized successfully");
+    }
+#endif  
 
 #ifdef CONFIG_AKIRA_BT_HID
-    bt_hid_init();
-    /* Default to BLE transport and enable HID so device advertises */
-    hid_manager_set_transport(HID_TRANSPORT_BLE);
-    hid_manager_enable();
-#endif
-#endif /* CONFIG_BT */
+    /* Initialize HID manager */
 
-    /* USB (optional) */
-#ifdef CONFIG_USB_DEVICE_STACK
-    usb_config_t usb_cfg = {
-        .manufacturer = "AkiraOS",
-        .product = "AkiraOS Device",
-        .serial = "123456",
-        .vendor_id = 0xFFFF,
-        .product_id = 0x0001,
-        .classes = USB_CLASS_ALL};
-    if (usb_manager_init(&usb_cfg) < 0)
-    {
-        LOG_WRN("USB init failed");
+    if(bt_hid_init() < 0){
+        LOG_WRN("Failed to init BT HID");
+    }
+    else{
+        LOG_INF("BT HID initialized succesfully!");
     }
 #endif
 
-    /* OTA Manager - initialize before app manager and web server */
-#ifdef CONFIG_AKIRA_OTA
-    if (ota_manager_init() < 0)
-    {
+#ifdef CONFIG_FILE_SYSTEM
+    /* Ensure filesystem is initialized for storage/backing */
+    if (fs_manager_init() < 0) {
+        LOG_WRN("Filesystem init failed - continuing without persistent storage");
+    }
+#endif
+
+
+#ifdef CONFIG_AKIRA_HTTP_SERVER
+    /* Initialize OTA manager before starting web server */
+    if (ota_manager_init() < 0) {
         LOG_ERR("OTA manager init failed");
     }
+    else {
+        LOG_INF("OTA manager initialized");
+    }
+
+    if(web_server_start(NULL) < 0){
+        LOG_WRN("Failed to start webserver thread!");
+    }
+    else{
+        LOG_INF("Web server thread running!");
+    }
 #endif
 
-    /* App manager (optional) - includes runtime initialization */
+#ifdef CONFIG_AKIRA_SETTINGS
+    /* Initialize settings subsystem */
+    if (akira_settings_init() < 0) {
+        LOG_WRN("Settings init failed - continuing without settings support");
+    }
+    else{
+        LOG_INF("Settings subsystem initialized");
+    }
+    
+#endif
+
+    /* Initialize runtime */
+    if (akira_runtime_init() < 0) {
+        LOG_ERR("Runtime init failed");
+        return -EIO;
+    }
+
+    /* Log security status */
+    LOG_INF("Security: sandbox=%s, signing=%s, integrity=%s, cache=%s",
+#ifdef CONFIG_AKIRA_SANDBOX
+            "enabled",
+#else
+            "disabled",
+#endif
+#ifdef CONFIG_AKIRA_APP_SIGNING
+            "enforced",
+#else
+            "permissive",
+#endif
+#ifdef CONFIG_AKIRA_WASM_INTEGRITY_CHECK
+            "enabled",
+#else
+            "disabled",
+#endif
+#ifdef CONFIG_AKIRA_MODULE_CACHE
+            "enabled"
+#else
+            "disabled"
+#endif
+    );
+
 #ifdef CONFIG_AKIRA_APP_MANAGER
-    if (app_manager_init() < 0)
-    {
-        LOG_WRN("App manager failed");
+    app_manager_init();
+#endif
+
+#ifdef CONFIG_AKIRA_SELFTEST
+    /* Self-test (native_sim): install a dummy WASM and optional manifest */
+    static const uint8_t dummy_wasm[] = {0x00, 'a', 's', 'm', 0x01, 0x00, 0x00, 0x00};
+    const char *manifest = "{\"capabilities\":[\"display.write\",\"input.read\"]}";
+    int sid = app_loader_install_with_manifest("selftest", dummy_wasm, sizeof(dummy_wasm), manifest, strlen(manifest));
+    if (sid >= 0) {
+        LOG_INF("Selftest installed as slot %d", sid);
+        if (akira_runtime_start(sid) == 0) {
+            LOG_INF("Selftest started (slot %d)", sid);
+        } else {
+            LOG_WRN("Selftest start failed (slot %d)", sid);
+        }
+    } else {
+        LOG_WRN("Selftest install failed: %d", sid);
     }
 #endif
 
-    /* Shell (optional) */
-#ifdef CONFIG_AKIRA_SHELL
-    if (akira_shell_init() < 0)
-    {
-        LOG_WRN("Shell init failed");
-    }
-#endif
+    LOG_INF("AkiraOS init complete");
 
-    /* Web server (optional) */
-#ifdef CONFIG_AKIRA_HTTP_SERVER
-    if (web_server_start(NULL) < 0)
-    {
-        LOG_WRN("Web server init failed");
-    }
-#endif
-
-    LOG_INF("✅ AkiraOS is ready");
-
-    /* Main loop - just sleep */
-    while (1)
-    {
+    /* Idle loop */
+    while (1) {
         k_sleep(K_SECONDS(10));
     }
 
