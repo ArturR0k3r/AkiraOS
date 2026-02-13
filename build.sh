@@ -20,6 +20,8 @@
 # Boards:
 #   native_sim                         Native simulator (default)
 #   esp32s3_devkitm_esp32s3_procpu     ESP32-S3 DevKitM (Akira Console)
+#   akiraconsole                       Akira Console (ESP32-S3 DevKitM) - short alias
+#   akiraconsole_esp32s3_procpu        Akira Console (ESP32-S3 DevKitM) - full name
 #   esp32s3_supermini_esp32s3_procpu   ESP32-S3 Super Mini (compact)
 #   esp32_devkitc_procpu               ESP32 DevKitC (Akira Micro)
 #   nrf54l15dk_nrf54l15_cpuapp         nRF54L15 DK (Nordic)
@@ -28,8 +30,8 @@
 #
 # Examples:
 #   ./build.sh                              # Build and run native_sim
-#   ./build.sh -b esp32s3_devkitm_esp32s3_procpu -bl y -r all
-#   ./build.sh -b esp32s3_devkitm_esp32s3_procpu -r a
+#   ./build.sh -b akiraconsole -bl y -r all # Build MCUboot + AkiraOS and flash
+#   ./build.sh -b akiraconsole -r a         # Flash application only
 #   ./build.sh -c                           # Clean all builds
 # =============================================================================
 
@@ -67,6 +69,7 @@ NC='\033[0m'
 declare -A BOARD_MAP=(
     ["native_sim"]="native_sim"
     ["esp32s3_devkitm_esp32s3_procpu"]="esp32s3_devkitm/esp32s3/procpu"
+    ["akiraconsole"]="akiraconsole/esp32s3/procpu"
     ["akiraconsole_esp32s3_procpu"]="akiraconsole/esp32s3/procpu"
     ["esp32s3_supermini_esp32s3_procpu"]="esp32s3_supermini/esp32s3/procpu"
     ["esp32c3_devkitm"]="esp32c3_devkitm"
@@ -79,6 +82,7 @@ declare -A BOARD_MAP=(
 declare -A BOARD_CHIP=(
     ["native_sim"]="native"
     ["esp32s3_devkitm_esp32s3_procpu"]="esp32s3"
+    ["akiraconsole"]="esp32s3"
     ["akiraconsole_esp32s3_procpu"]="esp32s3"
     ["esp32s3_supermini_esp32s3_procpu"]="esp32s3"
     ["esp32c3_devkitm"]="esp32c3"
@@ -90,11 +94,12 @@ declare -A BOARD_CHIP=(
 
 declare -A BOARD_DESC=(
     ["native_sim"]="Native Simulator"
-    ["esp32s3_devkitm_esp32s3_procpu"]="ESP32-S3 DevKitM (Akira Console)"
+    ["esp32s3_devkitm_esp32s3_procpu"]="ESP32-S3 DevKitM "
+    ["akiraconsole"]="Akira Console (ESP32-S3 DevKitM)"
     ["akiraconsole_esp32s3_procpu"]="Akira Console (ESP32-S3 DevKitM)"
     ["esp32s3_supermini_esp32s3_procpu"]="ESP32-S3 Super Mini"
     ["esp32c3_devkitm"]="ESP32-C3 DevKitM (RISC-V)"
-    ["esp32_devkitc_procpu"]="ESP32 DevKitC (Akira Micro)"
+    ["esp32_devkitc_procpu"]="ESP32 DevKitC "
     ["nrf54l15dk_nrf54l15_cpuapp"]="Nordic nRF54L15 DK"
     ["steval_stwinbx1"]="ST STEVAL-STWINBX1"
     ["b_u585i_iot02a"]="ST B-U585I-IOT02A Discovery Kit"
@@ -147,7 +152,8 @@ ${BOLD}OPTIONS:${NC}
 ${BOLD}BOARDS:${NC}
     native_sim                         Native simulator (default)
     esp32s3_devkitm_esp32s3_procpu     ESP32-S3 DevKitM (Akira Console)
-    akiraconsole_esp32s3_procpu        Akira Console (ESP32-S3 DevKitM)
+    akiraconsole                       Akira Console - short alias
+    akiraconsole_esp32s3_procpu        Akira Console - full name
     esp32s3_supermini_esp32s3_procpu   ESP32-S3 Super Mini (compact)
     esp32c3_devkitm                    ESP32-C3 DevKitM (RISC-V)
     esp32_devkitc_procpu               ESP32 DevKitC (Legacy)
@@ -158,19 +164,19 @@ ${BOLD}EXAMPLES:${NC}
     ./build.sh
         Build and run native_sim (default)
 
-    ./build.sh -b esp32s3_devkitm_esp32s3_procpu
-        Build AkiraOS for ESP32-S3
+    ./build.sh -b akiraconsole
+        Build AkiraOS for Akira Console (ESP32-S3)
 
-    ./build.sh -b esp32s3_devkitm_esp32s3_procpu -bl y
-        Build MCUboot + AkiraOS for ESP32-S3
+    ./build.sh -b akiraconsole -bl y
+        Build MCUboot + AkiraOS for Akira Console
 
-    ./build.sh -b esp32s3_devkitm_esp32s3_procpu -bl y -r all
+    ./build.sh -b akiraconsole -bl y -r all
         Build MCUboot + AkiraOS and flash both
 
-    ./build.sh -b esp32s3_devkitm_esp32s3_procpu -r a
+    ./build.sh -b akiraconsole -r a
         Flash application only (no build)
 
-    ./build.sh -b esp32s3_devkitm_esp32s3_procpu -e -r all
+    ./build.sh -b akiraconsole -e -r all
         Erase flash, then flash bootloader + app
 
     ./build.sh -c

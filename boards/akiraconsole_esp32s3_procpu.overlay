@@ -1,0 +1,144 @@
+// Akira Console (ESP32-S3 DevKitM ProCPU) Board Overlay
+// Include required headers
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/spi/spi.h>
+
+// ============================================================================
+// PSRAM Configuration - ESP32-S3 N4R2 (2MB OPI PSRAM)
+// ============================================================================
+// The ESP32-S3 MINI N4R2 module has 2MB external OPI PSRAM
+&psram0 {
+    size = <DT_SIZE_M(2)>;
+    status = "okay";
+};
+
+// ============================================================================
+// Console Configuration
+// ============================================================================
+/ {
+    chosen {
+        // Console is defined in main DTS as CDC ACM over USB
+        // zephyr,console = &cdc_acm_uart0;
+        // zephyr,shell-uart = &cdc_acm_uart0;
+        zephyr,bt-hci = &esp32_bt_hci;
+    };
+
+    // ========================================================================
+    // Filesystem Configuration
+    // ========================================================================
+    fstab {
+        compatible = "zephyr,fstab";
+
+        lfs1: lfs1 {
+            compatible = "zephyr,fstab,littlefs";
+            read-size = <1>;
+            prog-size = <16>;
+            cache-size = <256>;
+            lookahead-size = <32>;
+            block-cycles = <512>;
+            partition = <&lfs1_partition>;
+            mount-point = "/lfs";
+        };
+    };
+};
+
+// ============================================================================
+// Flash Partitions
+// ============================================================================
+&flash0 {
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        // NVS partition for AkiraOS settings
+        akira_settings_nvs_partition: partition@256000 {
+            label = "akira_settings_nvs";
+            reg = <0x00256000 DT_SIZE_K(32)>;
+        };
+
+        // LittleFS partition for general storage
+        lfs1_partition: partition@25E000 {
+            label = "lfs_storage";
+            reg = <0x0025E000 DT_SIZE_K(512)>;
+        };
+    };
+};
+
+// ============================================================================
+// GPIO Configuration
+// ============================================================================
+&gpio0 {
+    status = "okay";
+};
+
+// ============================================================================
+// WiFi Configuration
+// ============================================================================
+&wifi {
+    status = "okay";
+};
+
+// ============================================================================
+// Bluetooth Configuration
+// ============================================================================
+&esp32_bt_hci {
+    status = "okay";
+};
+
+// ============================================================================
+// UART Configuration
+// ============================================================================
+&uart0 {
+    status = "okay";
+    current-speed = <115200>;
+};
+
+// ============================================================================
+// I2C Configuration
+// ============================================================================
+&i2c0 {
+    status = "okay";
+    clock-frequency = <I2C_BITRATE_STANDARD>;
+};
+
+// ============================================================================
+// SPI Configuration
+// ============================================================================
+&spi2 {
+    status = "okay";
+    #address-cells = <1>;
+    #size-cells = <0>;
+    cs-gpios = <&gpio0 10 GPIO_ACTIVE_LOW>; // Manual CS control for TFT
+};
+
+// ============================================================================
+// USB OTG / CDC ACM for Console
+// ============================================================================
+// Already configured in main DTS file
+// zephyr_udc0: &usb_otg {
+//     status = "okay";
+//     cdc_acm_uart0: cdc_acm_uart0 {
+//         compatible = "zephyr,cdc-acm-uart";
+//     };
+// };
+
+&zephyr_udc0 {
+    status = "okay";
+    
+    hid_dev_0: hid_dev_0 {
+        compatible = "zephyr,hid-device";
+        protocol-code = "keyboard";
+        in-polling-period-us = <10000>;
+        out-polling-period-us = <10000>;
+        in-report-size = <64>;
+        out-report-size = <64>;
+    };
+};
+
+// ============================================================================
+// TRNG (True Random Number Generator)
+// ============================================================================
+&trng0 {
+    status = "okay";
+};

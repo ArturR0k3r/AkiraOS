@@ -131,65 +131,84 @@
     };
 
     tft_dc: tft_dc {
-        gpios = <&gpio0 9 GPIO_ACTIVE_HIGH>;
-        label = "TFT_DC (GPIO9)";
+        gpio-hog;
+        gpios = <9 GPIO_ACTIVE_HIGH>;
+        output-low;
+        line-name = "tft-dc";
     };
 
     tft_reset: tft_reset {
-        gpios = <&gpio0 45 GPIO_ACTIVE_HIGH>;
-        label = "TFT_RST (GPIO45)";
+        gpio-hog;
+        gpios = <45 GPIO_ACTIVE_HIGH>;
         output-high;
+        line-name = "tft-reset";
     };
 
     tft_led_hog: tft_led_hog {
         gpio-hog;
-        gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;
+        gpios = <3 GPIO_ACTIVE_HIGH>;
         output-high;
         line-name = "tft-led";
     };
 
     /* SD card CS (SPI) */
     sd_cs: sd_cs {
-        gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
-        label = "SD_CS (GPIO14)";
+        gpio-hog;
+        gpios = <14 GPIO_ACTIVE_LOW>;
+        output-high;
+        line-name = "sd-cs";
     };
 
     /* NRF2 (external radio) pins */
     nrf2_ce: nrf2_ce {
-        gpios = <&gpio0 39 GPIO_ACTIVE_HIGH>;
-        label = "NRF2_CE (GPIO39)";
+        gpio-hog;
+        gpios = <39 GPIO_ACTIVE_HIGH>;
+        output-low;
+        line-name = "nrf2-ce";
     };
 
     nrf2_csn: nrf2_csn {
-        gpios = <&gpio0 38 GPIO_ACTIVE_HIGH>;
-        label = "NRF2_CSN (GPIO38)";
+        gpio-hog;
+        gpios = <38 GPIO_ACTIVE_HIGH>;
+        output-high;
+        line-name = "nrf2-csn";
     };
 
     /* NRF1 */
     nrf1_ce: nrf1_ce {
-        gpios = <&gpio0 47 GPIO_ACTIVE_HIGH>;
-        label = "NRF1_CE (GPIO47)";
+        gpio-hog;
+        gpios = <47 GPIO_ACTIVE_HIGH>;
+        output-low;
+        line-name = "nrf1-ce";
     };
 
     nrf1_csn: nrf1_csn {
-        gpios = <&gpio0 21 GPIO_ACTIVE_HIGH>;
-        label = "NRF1_CSN (GPIO21)";
+        gpio-hog;
+        gpios = <21 GPIO_ACTIVE_HIGH>;
+        output-high;
+        line-name = "nrf1-csn";
     };
 
     /* LR1121 LoRa chip pins */
     lr1121_nss: lr1121_nss {
-        gpios = <&gpio0 37 GPIO_ACTIVE_HIGH>;
-        label = "LR1121_NSS (GPIO37)";
+        gpio-hog;
+        gpios = <37 GPIO_ACTIVE_HIGH>;
+        output-high;
+        line-name = "lr1121-nss";
     };
 
     lr1121_busy: lr1121_busy {
-        gpios = <&gpio0 36 GPIO_ACTIVE_HIGH>;
-        label = "LR1121_BUSY (GPIO36)";
+        gpio-hog;
+        gpios = <36 GPIO_ACTIVE_HIGH>;
+        input;
+        line-name = "lr1121-busy";
     };
 
     lr1121_rst: lr1121_rst {
-        gpios = <&gpio0 0 GPIO_ACTIVE_HIGH>;
-        label = "LR1121_RST (GPIO0)";
+        gpio-hog;
+        gpios = <0 GPIO_ACTIVE_HIGH>;
+        output-low;
+        line-name = "lr1121-rst";
     };
 };
 
