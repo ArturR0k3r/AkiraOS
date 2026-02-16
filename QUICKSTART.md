@@ -7,6 +7,7 @@
 - **Git**
 - **West** (Zephyr's meta-tool): `pip install west`
 - **Zephyr SDK** (will be installed with west)
+- **SDL2** (optional, for native simulator): See [Native Simulation](#native-simulation) section
 
 ## 🚀 First Time Setup
 
@@ -142,6 +143,23 @@ use west commands directly or modify the script.
 
 ### Native Simulation
 
+The native simulator includes a **full SDL2 visual simulator** showing the Akira Console display and buttons.
+
+#### SDL2 Requirements
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install libsdl2-dev
+
+# Fedora
+sudo dnf install SDL2-devel
+
+# macOS
+brew install sdl2
+```
+
+#### Build and Run
+
 ```bash
 # Build and run in one command
 ./build_and_run.sh
@@ -151,7 +169,15 @@ use west commands directly or modify the script.
 ./build_native_sim/zephyr/zephyr.exe
 ```
 
-**Note:** The build creates a `build_native_sim` directory at the workspace root 
+**Simulator Features:**
+- ✨ Visual 240x320 display window
+- 🎮 Interactive buttons (mouse + keyboard)
+- ⌨️ WASD for D-Pad, IJKL for action buttons
+- 🔄 Real-time updates at 60 FPS
+
+For detailed controls, see the [README SDL2 Simulator section](README.md#-native-simulator-with-sdl2).
+
+**Note:** The build creates a `build_native_sim` directory at the workspace root
 (`<workspace>/build_native_sim`), not inside the AkiraOS directory.
 
 ---
