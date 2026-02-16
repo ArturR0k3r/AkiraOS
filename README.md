@@ -66,6 +66,62 @@ cd ~/Akira/AkiraOS
 ./build_and_run.sh
 ```
 
+### 🎮 Native Simulator with SDL2
+
+AkiraOS includes a **fully-featured SDL2 visual simulator** for native_sim builds, allowing you to develop and test firmware without hardware.
+
+#### Requirements
+
+Install SDL2 development libraries:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install libsdl2-dev
+
+# Fedora
+sudo dnf install SDL2-devel
+
+# macOS
+brew install sdl2
+```
+
+#### Quick Start - Simulator
+
+```bash
+# Build and run simulator in one command
+./build_and_run.sh
+
+# Or manually
+./build.sh -b native_sim
+./build-native-sim/zephyr/zephyr.exe
+```
+
+#### Simulator Features
+
+- **✨ Visual Display**: Hardware-accurate 240x320 ILI9341 TFT display simulation
+- **🎮 Interactive Controls**: 10 buttons (D-Pad, ABXY, Power, Settings)
+- **⌨️ Keyboard Mapping**: Full keyboard control support
+- **🖱️ Mouse Support**: Click buttons directly in the window
+- **🔄 Real-time Updates**: Display and input at 60 FPS
+- **📊 Hardware-identical**: Behaves exactly like real hardware
+
+#### Keyboard Controls
+
+| Key(s) | Button | Description |
+|--------|--------|-------------|
+| `W` | UP | D-Pad Up |
+| `S` | DOWN | D-Pad Down |
+| `A` | LEFT | D-Pad Left |
+| `D` | RIGHT | D-Pad Right |
+| `I` | X | Action button X (top) |
+| `K` | B | Action button B (bottom) |
+| `J` | Y | Action button Y (left) |
+| `L` | A | Action button A (right) |
+| `ESC` | POWER | Power/ON-OFF |
+| `ENTER` | SETTINGS | Settings button |
+
+For more details, see **[src/drivers/sim/README.md](src/drivers/sim/README.md)**
+
 ### OCRE & WASM Integration
 
 AkiraOS integrates **OCRE** (Open Container Runtime Environment) and **WASM-Micro-Runtime** as Zephyr modules:

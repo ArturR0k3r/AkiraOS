@@ -332,11 +332,10 @@ target_include_directories(app PRIVATE
     # ${CMAKE_CURRENT_LIST_DIR}/modules/wasm-micro-runtime/core/shared/utils
 )
 
-# SDL2 simulator uses external viewer (tools/akira_viewer)
-# No need to build SDL2 code within Zephyr build system
-# if(CONFIG_BOARD_NATIVE_SIM)
-#     add_subdirectory(src/drivers/sim)
-# endif()
+# SDL2 simulator for native_sim platform
+if(CONFIG_BOARD_NATIVE_SIM)
+    add_subdirectory(src/drivers/sim)
+endif()
 
 # Compile definitions
 target_compile_definitions(app PRIVATE

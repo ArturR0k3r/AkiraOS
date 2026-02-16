@@ -22,6 +22,11 @@
 /* Logging module set at source level */
 LOG_MODULE_REGISTER(akira_hal, CONFIG_AKIRA_LOG_LEVEL);
 
+/* SDL2 Simulator support */
+#if AKIRA_PLATFORM_NATIVE_SIM && defined(AKIRA_SIM_ENABLED)
+#include "sim/akira_sim.h"
+#endif
+
 #if AKIRA_PLATFORM_NATIVE_SIM
 /* Simulated display framebuffer (240x320 RGB565) */
 /* For native simulation we keep the static framebuffer in normal RAM. */
@@ -115,6 +120,18 @@ int akira_hal_init(void)
 
     LOG_INF("Simulated 240x320 display framebuffer initialized");
     LOG_INF("Simulated buttons active");
+
+#if defined(AKIRA_SIM_ENABLED)
+    /* Initialize SDL2 visual simulator */
+    if (akira_sim_init() == 0)
+    {
+        LOG_INF("✅ SDL2 Visual Simulator initialized");
+    }
+    else
+    {
+        LOG_WRN("⚠️  SDL2 Visual Simulator init failed - fallback to shared memory mode");
+    }
+#endif
 
 #elif AKIRA_PLATFORM_ESP32S3
     LOG_INF("Running on ESP32-S3 - full hardware support");
@@ -303,11 +320,16 @@ int akira_spi_write(const struct device *dev, const struct spi_config *config,
 
 uint32_t akira_sim_read_buttons(void)
 {
+#if defined(AKIRA_SIM_ENABLED)
+    /* Read button state from SDL2 visual simulator */
+    sim_button_state = akira_sim_get_button_state();
+#else
     /* Read button state from shared memory (written by SDL2 viewer) */
     if (shared_buttons)
     {
         sim_button_state = *shared_buttons;
     }
+#endif
     return sim_button_state;
 }
 
@@ -339,6 +361,11 @@ void akira_sim_show_display(void)
     {
         LOG_DBG("Display updated (%u frames)", update_count);
     }
+
+#if defined(AKIRA_SIM_ENABLED)
+    /* Update SDL2 visual simulator */
+    akira_sim_update_display(sim_framebuffer);
+#endif
 
     sim_display_dirty = false;
 }
