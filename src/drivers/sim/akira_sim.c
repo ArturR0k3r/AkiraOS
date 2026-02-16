@@ -101,9 +101,20 @@ static void *simulator_thread(void *arg)
         /* Render frame */
         pthread_mutex_lock(&sim_mutex);
 
-        /* Clear background to gray */
-        SDL_SetRenderDrawColor(renderer, 80, 80, 80, 255);
+        /* Clear background to dark (black for space around console) */
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
+
+        /* Draw console body/case (cyberpunk dark gray with red accents) */
+        SDL_SetRenderDrawColor(renderer, 30, 30, 35, 255);
+        SDL_Rect console_body = {5, 5, SIM_WINDOW_WIDTH - 10, SIM_WINDOW_HEIGHT - 10};
+        SDL_RenderFillRect(renderer, &console_body);
+
+        /* Draw console border with red accent */
+        SDL_SetRenderDrawColor(renderer, 180, 20, 20, 255);
+        SDL_RenderDrawRect(renderer, &console_body);
+        SDL_Rect inner_border = {7, 7, SIM_WINDOW_WIDTH - 14, SIM_WINDOW_HEIGHT - 14};
+        SDL_RenderDrawRect(renderer, &inner_border);
 
         /* Update display if framebuffer changed */
         if (framebuffer_updated && current_framebuffer)
@@ -116,10 +127,13 @@ static void *simulator_thread(void *arg)
         akira_sim_display_render(renderer);
         akira_sim_buttons_render(renderer);
 
-        /* Draw window title area */
-        SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
-        SDL_Rect title_bar = {0, 0, SIM_WINDOW_WIDTH, 40};
-        SDL_RenderFillRect(renderer, &title_bar);
+        /* Draw AKIRA logo text at top */
+        SDL_SetRenderDrawColor(renderer, 220, 30, 30, 255);
+        SDL_Rect logo_bg = {SIM_WINDOW_WIDTH/2 - 60, 15, 120, 30};
+        SDL_RenderFillRect(renderer, &logo_bg);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        SDL_Rect logo_border = {SIM_WINDOW_WIDTH/2 - 60, 15, 120, 30};
+        SDL_RenderDrawRect(renderer, &logo_border);
 
         /* Present frame */
         SDL_RenderPresent(renderer);

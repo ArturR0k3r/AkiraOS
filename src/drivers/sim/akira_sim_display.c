@@ -105,15 +105,58 @@ void akira_sim_display_render(SDL_Renderer *renderer)
         return;
     }
 
-    /* Draw red display frame (matching the hardware) */
-    SDL_SetRenderDrawColor(renderer, 220, 50, 50, 255);
+    /* Draw outer bezel frame (dark with red accent) */
+    SDL_SetRenderDrawColor(renderer, 15, 15, 20, 255);
+    SDL_Rect outer_bezel = {
+        display_rect.x - 15,
+        display_rect.y - 15,
+        display_rect.w + 30,
+        display_rect.h + 30};
+    SDL_RenderFillRect(renderer, &outer_bezel);
+
+    /* Draw red accent border around bezel */
+    SDL_SetRenderDrawColor(renderer, 200, 30, 30, 255);
+    SDL_RenderDrawRect(renderer, &outer_bezel);
+    SDL_Rect outer_border2 = {
+        display_rect.x - 14,
+        display_rect.y - 14,
+        display_rect.w + 28,
+        display_rect.h + 28};
+    SDL_RenderDrawRect(renderer, &outer_border2);
+
+    /* Draw inner bezel (slightly lighter) */
+    SDL_SetRenderDrawColor(renderer, 25, 25, 30, 255);
+    SDL_Rect inner_bezel = {
+        display_rect.x - 8,
+        display_rect.y - 8,
+        display_rect.w + 16,
+        display_rect.h + 16};
+    SDL_RenderFillRect(renderer, &inner_bezel);
+
+    /* Draw display frame border */
+    SDL_SetRenderDrawColor(renderer, 40, 40, 45, 255);
     SDL_Rect frame = {
-        display_rect.x - 5,
-        display_rect.y - 5,
-        display_rect.w + 10,
-        display_rect.h + 10};
+        display_rect.x - 2,
+        display_rect.y - 2,
+        display_rect.w + 4,
+        display_rect.h + 4};
     SDL_RenderFillRect(renderer, &frame);
 
     /* Draw the display content */
     SDL_RenderCopy(renderer, display_texture, NULL, &display_rect);
+
+    /* Add screen glare effect (subtle white gradient on top-left) */
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 15);
+    for (int y = 0; y < 80; y++)
+    {
+        for (int x = 0; x < 80; x++)
+        {
+            if (x + y < 80)
+            {
+                SDL_RenderDrawPoint(renderer,
+                    display_rect.x + x,
+                    display_rect.y + y);
+            }
+        }
+    }
 }
