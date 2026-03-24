@@ -262,6 +262,126 @@ int manifest_parse_json(const char *json, size_t json_len, akira_manifest_t *man
     return 0;
 }
 
+/**
+ * @brief Parse manifest from a WASM binary custom section.
+ *
+ * WASM sections: 1-byte section_id + LEB128 size + body.
+ * Custom sections (id 0): LEB128 name_len + name + content.
+ */
+static int manifest_parse_wasm_binary(const uint8_t *data, size_t size,
+                                      akira_manifest_t *manifest)
+{
+    size_t pos = 8; /* skip magic + version */
+
+    while (pos < size) {
+        uint8_t section_id = data[pos++];
+        if (pos >= size) break;
+
+        uint32_t section_size;
+        size_t leb_len = read_leb128_u32(data + pos, size - pos, &section_size);
+        if (leb_len == 0) {
+            LOG_ERR("Invalid section size LEB128");
+            return -EINVAL;
+        }
+        pos += leb_len;
+
+        if (pos + section_size > size) {
+            LOG_ERR("Section extends past end of file");
+            return -EINVAL;
+        }
+
+        if (section_id == WASM_SECTION_CUSTOM) {
+            const uint8_t *sd = data + pos;
+            size_t sr = section_size;
+
+            uint32_t name_len;
+            leb_len = read_leb128_u32(sd, sr, &name_len);
+            if (leb_len == 0 || leb_len + name_len > sr) {
+                pos += section_size;
+                continue;
+            }
+            sd += leb_len;
+            sr -= leb_len;
+
+            if (name_len == strlen(AKIRA_MANIFEST_SECTION) &&
+                memcmp(sd, AKIRA_MANIFEST_SECTION, name_len) == 0) {
+                sd += name_len;
+                sr -= name_len;
+                LOG_INF("Found akira.manifest section (%zu bytes)", sr);
+                return manifest_parse_json((const char *)sd, sr, manifest);
+            }
+        }
+        pos += section_size;
+    }
+
+    LOG_INF("akira.manifest section not found in WASM");
+    return -ENOENT;
+}
+
+/* AOT section types (from WAMR aot_runtime.h) */
+#define AOT_SECTION_TYPE_CUSTOM  100
+
+/**
+ * @brief Parse manifest from an AOT binary custom section.
+ *
+ * AOT sections: uint32 type + uint32 size + body (4-byte aligned).
+ * Custom sections (type 100) with sub_type 0 (RAW):
+ *   uint32 sub_type + uint16 name_len + name (NUL-terminated) + content.
+ */
+static int manifest_parse_aot_binary(const uint8_t *data, size_t size,
+                                     akira_manifest_t *manifest)
+{
+    size_t pos = 8; /* skip magic + version */
+
+    while (pos + 8 <= size) {
+        /* AOT loader aligns to 4 bytes before each uint32 read */
+        pos = (pos + 3) & ~(size_t)3;
+        if (pos + 8 > size) break;
+
+        uint32_t sec_type, sec_size;
+        memcpy(&sec_type, data + pos, 4);
+        memcpy(&sec_size, data + pos + 4, 4);
+        pos += 8; /* body starts here */
+
+        if (pos + sec_size > size) break;
+
+        if (sec_type == AOT_SECTION_TYPE_CUSTOM && sec_size > 8) {
+            const uint8_t *body = data + pos;
+
+            /* sub_section_type: uint32 at offset 0 */
+            uint32_t sub_type;
+            memcpy(&sub_type, body, 4);
+
+            if (sub_type == 0) { /* AOT_CUSTOM_SECTION_RAW */
+                /* name_len: uint16 at offset 4, then name bytes */
+                uint16_t name_len;
+                memcpy(&name_len, body + 4, 2);
+
+                if (6 + name_len <= sec_size) {
+                    const char *name = (const char *)(body + 6);
+                    size_t manifest_name_len = strlen(AKIRA_MANIFEST_SECTION);
+
+                    /* name may be NUL-terminated; compare without trailing NUL */
+                    if (name_len >= manifest_name_len &&
+                        memcmp(name, AKIRA_MANIFEST_SECTION,
+                               manifest_name_len) == 0) {
+                        const uint8_t *json = body + 6 + name_len;
+                        size_t json_len = sec_size - 6 - name_len;
+                        LOG_INF("Found akira.manifest in AOT (%zu bytes)",
+                                json_len);
+                        return manifest_parse_json((const char *)json,
+                                                   json_len, manifest);
+                    }
+                }
+            }
+        }
+        pos += sec_size;
+    }
+
+    LOG_INF("akira.manifest section not found in AOT");
+    return -ENOENT;
+}
+
 int manifest_parse_wasm_section(const uint8_t *wasm_data, size_t wasm_size,
                                 akira_manifest_t *manifest)
 {
@@ -271,78 +391,16 @@ int manifest_parse_wasm_section(const uint8_t *wasm_data, size_t wasm_size,
 
     manifest_init_defaults(manifest);
 
-    /* Verify WASM magic and version */
-    if (memcmp(wasm_data, "\0asm", 4) != 0) {
-        LOG_ERR("Invalid WASM magic");
-        return -EINVAL;
+    if (memcmp(wasm_data, "\0aot", 4) == 0) {
+        return manifest_parse_aot_binary(wasm_data, wasm_size, manifest);
     }
 
-    /* Skip magic (4 bytes) and version (4 bytes) */
-    size_t pos = 8;
-
-    /* Iterate through sections */
-    while (pos < wasm_size) {
-        /* Read section ID */
-        uint8_t section_id = wasm_data[pos++];
-        if (pos >= wasm_size) break;
-
-        /* Read section size (LEB128) */
-        uint32_t section_size;
-        size_t leb_len = read_leb128_u32(wasm_data + pos, wasm_size - pos, &section_size);
-        if (leb_len == 0) {
-            LOG_ERR("Invalid section size LEB128");
-            return -EINVAL;
-        }
-        pos += leb_len;
-
-        if (pos + section_size > wasm_size) {
-            LOG_ERR("Section extends past end of file");
-            return -EINVAL;
-        }
-
-        /* Only process custom sections (id = 0) */
-        if (section_id == WASM_SECTION_CUSTOM) {
-            const uint8_t *section_data = wasm_data + pos;
-            size_t section_remaining = section_size;
-
-            /* Read custom section name length (LEB128) */
-            uint32_t name_len;
-            leb_len = read_leb128_u32(section_data, section_remaining, &name_len);
-            if (leb_len == 0 || leb_len + name_len > section_remaining) {
-                /* Skip malformed custom section */
-                pos += section_size;
-                continue;
-            }
-
-            section_data += leb_len;
-            section_remaining -= leb_len;
-            
-            /* Check if this is our manifest section */
-            if (name_len == strlen(AKIRA_MANIFEST_SECTION) &&
-                memcmp(section_data, AKIRA_MANIFEST_SECTION, name_len) == 0) {
-                
-                section_data += name_len;
-                section_remaining -= name_len;
-
-                LOG_INF("Found akira.manifest section (%zu bytes)", section_remaining);
-
-                /* Parse the JSON content */
-                int ret = manifest_parse_json((const char *)section_data,
-                                              section_remaining, manifest);
-                if (ret == 0) {
-                    return 0;  /* Success! */
-                }
-                
-                LOG_WRN("Failed to parse manifest JSON: %d", ret);
-                return ret;
-            }
-        }
-
-        pos += section_size;
+    if (memcmp(wasm_data, "\0asm", 4) == 0) {
+        return manifest_parse_wasm_binary(wasm_data, wasm_size, manifest);
     }
 
-    LOG_INF("akira.manifest section not found");
-    return -ENOENT;
+    LOG_ERR("Invalid WASM/AOT magic");
+    return -EINVAL;
 }
 
 int manifest_parse_with_fallback(const uint8_t *wasm_data, size_t wasm_size,

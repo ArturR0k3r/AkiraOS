@@ -33,6 +33,19 @@ LOG_MODULE_REGISTER(akira_app_signing, CONFIG_AKIRA_LOG_LEVEL);
 
 /* WASM magic bytes */
 static const uint8_t WASM_MAGIC[] = {0x00, 0x61, 0x73, 0x6D};
+/* AOT magic bytes */
+static const uint8_t AOT_MAGIC[]  = {0x00, 0x61, 0x6F, 0x74};
+
+static inline bool is_wasm_or_aot(const uint8_t *data)
+{
+    return memcmp(data, WASM_MAGIC, 4) == 0 ||
+           memcmp(data, AOT_MAGIC, 4) == 0;
+}
+
+static inline bool is_aot(const uint8_t *data)
+{
+    return memcmp(data, AOT_MAGIC, 4) == 0;
+}
 
 static struct {
     bool initialized;
@@ -321,66 +334,72 @@ int app_verify_wasm_integrity(const void *binary, size_t size,
 
     const uint8_t *data = (const uint8_t *)binary;
 
-    /* Check WASM magic */
-    if (memcmp(data, WASM_MAGIC, 4) != 0) {
-        LOG_ERR("Invalid WASM magic bytes");
+    /* Check WASM or AOT magic */
+    if (!is_wasm_or_aot(data)) {
+        LOG_ERR("Invalid WASM/AOT magic bytes");
         sandbox_audit_log(AUDIT_EVENT_INTEGRITY_FAIL, "bad_magic", 0);
         return -EINVAL;
     }
 
-    /* Check version (must be 1) */
-    uint32_t version = data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24);
-    if (version != 1) {
-        LOG_ERR("Unsupported WASM version: %u", version);
-        sandbox_audit_log(AUDIT_EVENT_INTEGRITY_FAIL, "bad_version", version);
-        return -EINVAL;
-    }
-
-    /* Validate section structure */
-    size_t pos = 8;
-    int section_count = 0;
-    uint8_t last_section_id = 0;
-
-    while (pos < size) {
-        if (pos + 1 > size) break;
-
-        uint8_t section_id = data[pos++];
-
-        /* Non-custom sections must be in order */
-        if (section_id != 0 && section_id <= last_section_id && section_count > 0) {
-            LOG_WRN("WASM sections out of order: %d after %d", section_id, last_section_id);
-            /* Warning only - some compilers emit out-of-order sections */
-        }
-
-        if (section_id != 0) {
-            last_section_id = section_id;
-        }
-
-        /* Read section size (simplified LEB128) */
-        uint32_t section_size = 0;
-        int shift = 0;
-        int leb_bytes = 0;
-        while (pos < size && leb_bytes < 5) {
-            uint8_t byte = data[pos++];
-            section_size |= (uint32_t)(byte & 0x7F) << shift;
-            leb_bytes++;
-            if ((byte & 0x80) == 0) break;
-            shift += 7;
-        }
-
-        if (pos + section_size > size) {
-            LOG_ERR("WASM section %d extends past EOF (offset=%zu, size=%u, total=%zu)",
-                    section_id, pos, section_size, size);
-            sandbox_audit_log(AUDIT_EVENT_INTEGRITY_FAIL, "truncated",
-                              (uint32_t)section_id);
+    if (is_aot(data)) {
+        /* AOT binaries have a different internal layout;
+         * skip version and section-structure checks. */
+        LOG_DBG("AOT integrity check passed: %zu bytes", size);
+    } else {
+        /* Check version (must be 1) */
+        uint32_t version = data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24);
+        if (version != 1) {
+            LOG_ERR("Unsupported WASM version: %u", version);
+            sandbox_audit_log(AUDIT_EVENT_INTEGRITY_FAIL, "bad_version", version);
             return -EINVAL;
         }
 
-        pos += section_size;
-        section_count++;
-    }
+        /* Validate section structure */
+        size_t pos = 8;
+        int section_count = 0;
+        uint8_t last_section_id = 0;
 
-    LOG_DBG("WASM integrity check passed: %d sections, %zu bytes", section_count, size);
+        while (pos < size) {
+            if (pos + 1 > size) break;
+
+            uint8_t section_id = data[pos++];
+
+            /* Non-custom sections must be in order */
+            if (section_id != 0 && section_id <= last_section_id && section_count > 0) {
+                LOG_WRN("WASM sections out of order: %d after %d", section_id, last_section_id);
+                /* Warning only - some compilers emit out-of-order sections */
+            }
+
+            if (section_id != 0) {
+                last_section_id = section_id;
+            }
+
+            /* Read section size (simplified LEB128) */
+            uint32_t section_size = 0;
+            int shift = 0;
+            int leb_bytes = 0;
+            while (pos < size && leb_bytes < 5) {
+                uint8_t byte = data[pos++];
+                section_size |= (uint32_t)(byte & 0x7F) << shift;
+                leb_bytes++;
+                if ((byte & 0x80) == 0) break;
+                shift += 7;
+            }
+
+            if (pos + section_size > size) {
+                LOG_ERR("WASM section %d extends past EOF (offset=%zu, size=%u, total=%zu)",
+                        section_id, pos, section_size, size);
+                sandbox_audit_log(AUDIT_EVENT_INTEGRITY_FAIL, "truncated",
+                                  (uint32_t)section_id);
+                return -EINVAL;
+            }
+
+            pos += section_size;
+            section_count++;
+        }
+
+        LOG_DBG("WASM integrity check passed: %d sections, %zu bytes", section_count, size);
+    }
 
     /* Compute hash if requested */
     if (hash_out) {

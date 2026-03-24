@@ -42,6 +42,25 @@ typedef struct { char name[32]; int state; } akira_lc_evt_t;
 
 /* WASM magic bytes: \0asm */
 static const uint8_t WASM_MAGIC[] = {0x00, 0x61, 0x73, 0x6D};
+/* AOT magic bytes: \0aot */
+static const uint8_t AOT_MAGIC[] = {0x00, 0x61, 0x6F, 0x74};
+
+static inline bool is_valid_wasm_or_aot(const void *binary, size_t size)
+{
+    if (size < 4) return false;
+    return memcmp(binary, WASM_MAGIC, 4) == 0 ||
+           memcmp(binary, AOT_MAGIC, 4) == 0;
+}
+
+static inline bool is_aot_binary(const void *binary, size_t size)
+{
+    return size >= 4 && memcmp(binary, AOT_MAGIC, 4) == 0;
+}
+
+static inline const char *binary_ext(const void *binary, size_t size)
+{
+    return is_aot_binary(binary, size) ? ".aot" : ".wasm";
+}
 
 /* ===== Internal Types ===== */
 
@@ -378,8 +397,9 @@ int app_manager_install_from_path(const char *path)
     strncpy(name, filename, APP_NAME_MAX_LEN - 1);
     name[APP_NAME_MAX_LEN - 1] = '\0';
 
-    /* Remove .wasm extension */
+    /* Remove .wasm or .aot extension */
     char *ext = strstr(name, ".wasm");
+    if (!ext) ext = strstr(name, ".aot");
     if (ext)
     {
         *ext = '\0';
@@ -530,10 +550,15 @@ int app_manager_start(const char *name)
     /* Load app binary if not loaded */
     if (app->container_id < 0)
     {
-        /* Read binary from storage (flash or RAM fallback) */
+        /* Read binary from storage (flash or RAM fallback)
+         * Try .aot first (faster), fall back to .wasm */
         char path[APP_PATH_MAX_LEN];
-        snprintf(path, sizeof(path), "%s/%03d_%s.wasm",
+        snprintf(path, sizeof(path), "%s/%03d_%s.aot",
                  APPS_DIR, app->id, app->name);
+        if (!fs_manager_exists(path)) {
+            snprintf(path, sizeof(path), "%s/%03d_%s.wasm",
+                     APPS_DIR, app->id, app->name);
+        }
 
         /* Use PSRAM-preferred allocator — app binaries can be 100+ KB */
         uint8_t *buffer = akira_malloc_buffer(app->size);
@@ -906,12 +931,14 @@ int app_manager_scan_dir(const char *path, char names[][APP_NAME_MAX_LEN], int m
             break; /* End of directory */
         }
 
-        /* Check for .wasm extension */
+        /* Check for .wasm or .aot extension */
         size_t len = strlen(entry.name);
-        if (len > 5 && strcmp(&entry.name[len - 5], ".wasm") == 0)
+        if ((len > 5 && strcmp(&entry.name[len - 5], ".wasm") == 0) ||
+            (len > 4 && strcmp(&entry.name[len - 4], ".aot") == 0))
         {
             /* Extract name without extension */
-            size_t name_len = len - 5;
+            const char *dot = strrchr(entry.name, '.');
+            size_t name_len = dot ? (size_t)(dot - entry.name) : len;
             if (name_len >= APP_NAME_MAX_LEN)
             {
                 name_len = APP_NAME_MAX_LEN - 1;
@@ -1294,14 +1321,14 @@ static app_entry_t *find_free_slot(void)
 
 static int validate_wasm(const void *binary, size_t size)
 {
-    if (size < sizeof(WASM_MAGIC))
+    if (size < 4)
     {
         return -EINVAL;
     }
 
-    if (memcmp(binary, WASM_MAGIC, sizeof(WASM_MAGIC)) != 0)
+    if (!is_valid_wasm_or_aot(binary, size))
     {
-        LOG_ERR("Invalid WASM magic");
+        LOG_ERR("Invalid WASM/AOT magic");
         return -EINVAL;
     }
 
@@ -1334,10 +1361,10 @@ static int save_app_binary(const char *name, const void *binary, size_t size)
     /* Verify WASM magic bytes */
     const uint8_t *data = (const uint8_t *)binary;
     LOG_INF("First 4 bytes: 0x%02x 0x%02x 0x%02x 0x%02x", data[0], data[1], data[2], data[3]);
-    if (size >= 4 && data[0] == 0x00 && data[1] == 0x61 && data[2] == 0x73 && data[3] == 0x6D) {
-        LOG_INF("✅ Valid WASM magic number");
+    if (is_valid_wasm_or_aot(data, size)) {
+        LOG_INF("Valid %s magic", is_aot_binary(data, size) ? "AOT" : "WASM");
     } else {
-        LOG_WRN("❌ Invalid WASM magic number");
+        LOG_WRN("Invalid WASM/AOT magic number");
     }
     
     /* Find ID for this app */
@@ -1345,7 +1372,8 @@ static int save_app_binary(const char *name, const void *binary, size_t size)
     uint8_t id = app ? app->id : (g_app_count + 1);
 
     char path[APP_PATH_MAX_LEN];
-    snprintf(path, sizeof(path), "%s/%03d_%s.wasm", APPS_DIR, id, name);
+    snprintf(path, sizeof(path), "%s/%03d_%s%s", APPS_DIR, id, name,
+             binary_ext(binary, size));
     // LOG_INF("Constructed path: %s", path);
 
     /* Use fs_manager to save (handles RAM fallback) */
@@ -1374,15 +1402,17 @@ static int delete_app_binary(const char *name)
         return -ENOENT;
     }
 
+    /* Delete both .wasm and .aot variants if they exist */
     char path[APP_PATH_MAX_LEN];
-    snprintf(path, sizeof(path), "%s/%03d_%s.wasm", APPS_DIR, app->id, name);
-
-    /* Use fs_manager to delete (handles RAM storage too) */
-    int ret = fs_manager_delete_file(path);
-    if (ret < 0 && ret != -ENOENT)
-    {
-        LOG_ERR("Failed to delete %s: %d", path, ret);
-        return ret;
+    static const char *exts[] = {".wasm", ".aot"};
+    for (int i = 0; i < 2; i++) {
+        snprintf(path, sizeof(path), "%s/%03d_%s%s", APPS_DIR, app->id, name, exts[i]);
+        int ret = fs_manager_delete_file(path);
+        if (ret < 0 && ret != -ENOENT)
+        {
+            LOG_ERR("Failed to delete %s: %d", path, ret);
+            return ret;
+        }
     }
 
     return 0;

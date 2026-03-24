@@ -401,9 +401,10 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
         return -ENODEV;
     }
 
-    if (!buffer || size < 8 || memcmp(buffer, "\0asm", 4) != 0)
+    if (!buffer || size < 8 ||
+        (memcmp(buffer, "\0asm", 4) != 0 && memcmp(buffer, "\0aot", 4) != 0))
     {
-        LOG_ERR("Invalid WASM binary");
+        LOG_ERR("Invalid WASM/AOT binary");
         return -EINVAL;
     }
 
