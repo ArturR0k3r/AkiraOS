@@ -10,7 +10,12 @@
 
 LOG_MODULE_REGISTER(buf_pool, CONFIG_AKIRA_LOG_LEVEL);
 
+#if defined(CONFIG_AKIRA_PSRAM)
+static struct akira_buf g_buf_pool[AKIRA_BUF_POOL_COUNT] __aligned(4)
+	__attribute__((section(".ext_ram.bss")));
+#else
 static struct akira_buf g_buf_pool[AKIRA_BUF_POOL_COUNT] __aligned(4);
+#endif
 static K_MUTEX_DEFINE(pool_mutex);
 static K_SEM_DEFINE(pool_sem, AKIRA_BUF_POOL_COUNT, AKIRA_BUF_POOL_COUNT);
 
