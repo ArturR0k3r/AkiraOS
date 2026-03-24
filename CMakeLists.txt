@@ -77,6 +77,13 @@ if(CONFIG_AKIRA_WASM_RUNTIME)
     if(CONFIG_WAMR_AOT_SUPPORT)
         set(WAMR_BUILD_AOT 1)
         message(STATUS "WAMR AOT support: ENABLED (via CONFIG_WAMR_AOT_SUPPORT)")
+        # ESP32-S3 with PSRAM: AOT code lives in PSRAM and is executed
+        # through the instruction-bus alias.  The loader must write via
+        # the data-bus mirror and flush caches before execution.
+        if(CONFIG_SOC_SERIES_ESP32S3 AND CONFIG_ESP_SPIRAM)
+            add_definitions(-DWASM_MEM_DUAL_BUS_MIRROR=1)
+            message(STATUS "WAMR dual-bus mirror: ENABLED (PSRAM instruction cache)")
+        endif()
     else()
         set(WAMR_BUILD_AOT 0)
         message(STATUS "WAMR AOT support: DISABLED (via CONFIG_WAMR_AOT_SUPPORT)")
