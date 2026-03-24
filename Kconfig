@@ -60,25 +60,6 @@ config WAMR_AOT_SUPPORT
       - Enable for ESP32-S3 (XTENSA) and native_sim (powerful targets)
       - Disable for ARM Cortex-M targets (limited resources)
 
-config WAMR_AOT_EXEC_HEAP_SIZE
-    int "AOT executable heap size in IRAM (bytes)"
-    default 81920
-    depends on WAMR_AOT_SUPPORT
-    help
-      Size of the IRAM buffer used to hold AOT-compiled WASM code on
-      ESP32-S3.  This buffer is placed in .iram.bss and must be large
-      enough to fit the .text section of the biggest AOT module you
-      intend to load.  Increasing this value reduces available IRAM
-      for other purposes (interrupt handlers, cache, etc.).
-
-      Typical values:
-        81920  (80 KB) — fits most NES emulators and simple apps
-        102400 (100 KB) — larger AOT modules
-
-      The ESP32-S3 has ~329 KB total IRAM.  Firmware code + vectors
-      typically use ~60-80 KB, leaving ~250 KB available.
-      AOT doesn't work on other weaker boards with very limited resources.
-
 config AKIRA_RUNTIME_CUSTOM
     bool "Enable Akira unified custom runtime (Minimalist)"
     default y
