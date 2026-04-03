@@ -5,6 +5,7 @@
 
 #include "platform_hal.h"
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/reboot.h>
 #include <string.h>
 
 #if defined(CONFIG_BOARD_NATIVE_SIM) || defined(CONFIG_NATIVE_SIM) || defined(__linux__)
@@ -390,3 +391,13 @@ void akira_sim_show_display(void)
 }
 
 #endif
+
+void akira_hal_reset(void)
+{
+    sys_reboot(SYS_REBOOT_COLD);
+}
+
+const char *akira_hal_platform(void)
+{
+    return akira_get_platform_name();
+}

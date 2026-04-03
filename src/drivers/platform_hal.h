@@ -168,6 +168,17 @@ void akira_sim_draw_pixel(int x, int y, uint16_t color);
 void akira_sim_show_display(void);
 
 /**
+ * @brief Reset the system (cold reboot)
+ */
+void akira_hal_reset(void);
+
+/**
+ * @brief Get the platform name string (alias for akira_get_platform_name)
+ * @return Platform name (e.g., "native_sim", "ESP32", "ESP32-S3")
+ */
+const char *akira_hal_platform(void);
+
+/**
  * @brief Get pointer to hardware framebuffer (240x320 RGB565)
  * @return Pointer to framebuffer or NULL if not available
  */
