@@ -24,6 +24,9 @@
 #ifdef CONFIG_AKIRA_APP_MANAGER
 #include <runtime/app_manager/app_manager.h>
 #endif
+#ifdef CONFIG_AKIRA_INPUT_API
+#include <api/akira_input_api.h>
+#endif
 #ifdef CONFIG_AKIRA_HTTP_SERVER
 #include "http_server.h"
 #include "http_routes.h"
@@ -74,7 +77,7 @@ int main(void)
     akira_display_text(5, y_pos, "AkiraOS booting", text_color);
     y_pos += line_height;
 
-    akira_display_text(5, y_pos, "AkiraOS v1.5.8", text_color);
+    akira_display_text(5, y_pos, "Minimalist v" CONFIG_AKIRA_OS_VERSION, text_color);
     y_pos += line_height;
 
     snprintf(buf, sizeof(buf), "Platform: %s", akira_get_platform_name());
@@ -244,6 +247,22 @@ int main(void)
     app_manager_init();
 #endif
 
+#ifdef CONFIG_AKIRA_INPUT_API
+    akira_input_init();
+#endif
+
+#ifdef CONFIG_AKIRA_BOOT_SHELL
+    {
+        int r = app_manager_start(CONFIG_AKIRA_BOOT_SHELL_NAME);
+        if (r < 0) {
+            LOG_WRN("Boot shell '%s' not found (%d) — install via OTA/UART",
+                    CONFIG_AKIRA_BOOT_SHELL_NAME, r);
+        } else {
+            LOG_INF("Boot shell '%s' started", CONFIG_AKIRA_BOOT_SHELL_NAME);
+        }
+    }
+#endif
+
 #ifdef CONFIG_AKIRA_SELFTEST
     /* Self-test (native_sim): install a dummy WASM and optional manifest */
     static const uint8_t dummy_wasm[] = {0x00, 'a', 's', 'm', 0x01, 0x00, 0x00, 0x00};
@@ -268,10 +287,11 @@ int main(void)
 #endif
 
     LOG_INF("AkiraOS init complete");
+    k_sleep(K_MSEC(1000));  // Brief pause before entering main loop
+
     /* Idle loop */
-    while (1)
-    {
-#ifdef CONFIG_DISPLAY
+    while (1) {
+        #if defined(CONFIG_DISPLAY) && !defined(CONFIG_AKIRA_OS_SHELL)
         extern akira_managed_app_t g_apps[AKIRA_MAX_WASM_INSTANCES];
         static uint32_t frame = 0;
         static bool idle_screen_shown = false;
@@ -290,8 +310,32 @@ int main(void)
             }
         }
 
-        if (!app_running)
+#if defined(CONFIG_AKIRA_BOOT_SHELL) && defined(CONFIG_AKIRA_BOOT_SHELL_RESTART)
         {
+            /* Keep the debounce timer fresh while any app is running so the
+             * 1.5 s window only starts counting AFTER the last app stops.
+             * Without this, s_last_shell_ms stays at 0 and the restart fires
+             * immediately after app_switch() exits the shell — racing with the
+             * deferred app_switch work and stealing the only WASM slot. */
+            static int64_t s_last_shell_ms;
+            int64_t now_ms = k_uptime_get();
+            if (app_running) {
+                s_last_shell_ms = now_ms;  /* reset: app still alive */
+            } else if (now_ms - s_last_shell_ms >= 1500) {
+                s_last_shell_ms = now_ms;
+                LOG_INF("No app running — restarting '%s'", CONFIG_AKIRA_BOOT_SHELL_NAME);
+                int sr = app_manager_start(CONFIG_AKIRA_BOOT_SHELL_NAME);
+                if (sr < 0) {
+                    LOG_WRN("Shell restart failed (%d)", sr);
+                } else {
+                    k_sleep(K_MSEC(200));
+                    app_running = true;
+                }
+            }
+        }
+#endif /* CONFIG_AKIRA_BOOT_SHELL && CONFIG_AKIRA_BOOT_SHELL_RESTART */
+
+        if (!app_running) {
             /* No app running - show system info animation */
             idle_screen_shown = true;
             akira_display_clear(bg_color);

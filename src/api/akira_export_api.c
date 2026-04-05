@@ -2,6 +2,9 @@
 #include "akira_storage_api.h"
 #include "akira_net_api.h"
 #include "akira_power_api.h"
+#ifdef CONFIG_AKIRA_WASM_INPUT
+#include "akira_input_api.h"
+#endif
 #ifdef CONFIG_AKIRA_WASM_SETTINGS
 #include "akira_settings_api.h"
 #endif
@@ -242,6 +245,12 @@ bool akira_register_native_apis()
         {"net_event_pop", (void *)akira_native_net_event_pop, "(ii)i", NULL},
         {"net_get_ip", (void *)akira_native_net_get_ip, "(ii)i", NULL},
 #endif
+
+        /* input.read: button bitmask and edge events */
+        #ifdef CONFIG_AKIRA_WASM_INPUT
+        {"input_get_buttons", (void *)akira_native_input_get_buttons, "()i",   NULL},
+        {"input_poll_event",  (void *)akira_native_input_poll_event,  "(*~)i", NULL},
+        #endif
 
 /* system: privileged SD card scan (requires app.control cap) */
 #ifdef CONFIG_AKIRA_SYSTEM_API

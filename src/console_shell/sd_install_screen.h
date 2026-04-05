@@ -32,4 +32,5 @@ void sd_install_screen_load(void);
 }
 #endif
 
+#endif /* CONFIG_LVGL */
 #endif /* SD_INSTALL_SCREEN_H */

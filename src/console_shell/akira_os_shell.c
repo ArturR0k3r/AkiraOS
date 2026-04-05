@@ -13,11 +13,12 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
  *
  * Boot order:
  *   1. SYS_INIT(APPLICATION) → shell_init() starts the shell thread.
- *   2. Shell thread claims the display, builds the HOME screen, and enters
- *      the main event loop.
- *   3. When the user launches a WASM app the shell releases the display.
- *   4. When the user long-presses (HOME) the shell loop detects the hold
- *      duration and enqueues CMD_GO_HOME.
+ *   2. Shell thread claims the display, initialises LVGL, builds the HOME
+ *      screen, and enters the main event loop.
+ *   3. When the user launches a WASM app the shell releases the display and
+ *      suspends its LVGL tick.
+ *   4. When the user long-presses X (HOME) the lvgl_input_driver fires
+ *      on_home_press(), which enqueues a CMD_GO_HOME message.
  *   5. Shell thread stops the active WASM app, reclaims the display, and
  *      refreshes the HOME screen.
  *
@@ -41,18 +42,13 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 
 #if defined(CONFIG_DISPLAY)
 #include <zephyr/drivers/display.h>
-#if defined(CONFIG_AKIRA_BOOT_ANIMATION)
-#include "boot_anim.h"
-#endif
 #endif
 
 #include <runtime/akira_ipc.h>
 #include <runtime/app_manager/app_manager.h>
+#include <drivers/display/lvgl_input_driver.h>
 
 #include <api/akira_input_api.h>
-#ifdef CONFIG_AKIRA_SETTINGS
-#include <settings/settings.h>
-#endif
 
 typedef enum {
     CMD_GO_HOME = 0,        /* Return to HOME screen (reclaim display) */
@@ -88,6 +84,22 @@ K_MSGQ_DEFINE(g_shell_msgq,
 /* ------------------------------------------------------------------ */
 
 static bool g_wasm_active; /* true while a WASM app has the display */
+
+/* ------------------------------------------------------------------ */
+/* HOME button callback — enqueues CMD_GO_HOME */
+/* ------------------------------------------------------------------ */
+
+static void on_home_press(void *user_data)
+{
+    ARG_UNUSED(user_data);
+
+    shell_event_t ev = {.type = CMD_GO_HOME};
+    int ret = k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
+
+    if (ret < 0) {
+        LOG_WRN("Home event queue full — dropped");
+    }
+}
 
 /* ------------------------------------------------------------------ */
 /* IPC lifecycle listener thread                                       */
@@ -155,14 +167,16 @@ void akira_os_shell_go_home(void)
 /* Shell main thread                                                   */
 /* ------------------------------------------------------------------ */
 
-#define SHELL_THREAD_STACK_SIZE  4096*2
+/* 8 KB: hardware LVGL rendering + SPI display driver pushes the call stack
+ * much deeper than native_sim. Each lv_refr pass can use 4-6 KB alone. */
+#define SHELL_THREAD_STACK_SIZE  8192
 #define SHELL_THREAD_PRIORITY    10  /* above WASM apps (14), below sys work */
 
 static K_THREAD_STACK_DEFINE(g_shell_stack, SHELL_THREAD_STACK_SIZE);
 static struct k_thread g_shell_thread;
 
-/* HOME button long-press threshold */
-#define HOME_LONG_MS  CONFIG_AKIRA_HOME_BUTTON_GPIO_LONG_MS
+/* LVGL timer handler period (kept for reference) */
+#define LVGL_TICK_MS 5
 
 static void shell_thread_fn(void *p1, void *p2, void *p3)
 {
@@ -181,18 +195,12 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
     if (device_is_ready(_disp_dev)) {
         display_blanking_off(_disp_dev);
         LOG_INF("Display enabled");
-#if defined(CONFIG_AKIRA_BOOT_ANIMATION)
-        boot_anim_run();
-#endif
     } else {
         LOG_WRN("Display device not ready");
     }
 #endif
 
     /* Build the HOME app launcher screen (pure akira_display_* renderer) */
-#if defined(CONFIG_LVGL)
-    shell_theme_init();
-#endif
     home_screen_create();
     settings_screen_create();
     home_screen_refresh();
@@ -206,74 +214,11 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
     k_thread_name_set(&g_lifecycle_thread, "shell_lifecycle");
 
     /* Main event + render loop */
-    static uint32_t s_prev_btns;
-    static int64_t  s_home_held_since_ms; /* 0 = not held */
-
-    /* Screen idle-blank — load timeout from settings (0 = disabled) */
-    int64_t s_display_timeout_ms = 60000; /* default 60 s */
-#ifdef CONFIG_AKIRA_SETTINGS
-    {
-        bool en = true;
-        char _sv[16] = "";
-        if (!akira_settings_get("akira/display/timeout_en", _sv, sizeof(_sv)))
-            en = (atoi(_sv) != 0);
-        if (en) {
-            memset(_sv, 0, sizeof(_sv));
-            if (!akira_settings_get("akira/display/timeout_s", _sv, sizeof(_sv))) {
-                int t = atoi(_sv);
-                s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
-            }
-        } else {
-            s_display_timeout_ms = 0;
-        }
-    }
-#endif
-    int64_t s_last_input_ms   = k_uptime_get();
-    bool    s_display_blanked = false;
-
     while (true) {
-        uint32_t btns = akira_input_get_bitmask();
-        int64_t  now_ms = k_uptime_get();
-
-        /* Any button activity resets the idle timer */
-        if (btns) {
-            s_last_input_ms = now_ms;
-        }
-
-        /* Wake display if blanked and a button was just pressed */
-        if (s_display_blanked && btns) {
-            s_display_blanked = false;
-            akira_display_hal_set_blank(false);
-#ifdef CONFIG_AKIRA_SETTINGS
-            {
-                char _sv[16] = "";
-                if (!akira_settings_get("akira/display/brightness", _sv, sizeof(_sv))) {
-                    akira_display_hal_set_brightness((uint8_t)atoi(_sv));
-                }
-            }
-#endif
-            /* Swallow this press so navigation doesn't fire while waking */
-            s_prev_btns = btns;
-            k_sleep(K_MSEC(20));
-            continue;
-        }
-
-        /* HOME long-press detection — works regardless of display owner */
-        bool home_held = !!(btns & BIT(AKIRA_BTN_HOME));
-        if (home_held && s_home_held_since_ms == 0) {
-            s_home_held_since_ms = now_ms;
-        } else if (!home_held) {
-            s_home_held_since_ms = 0;
-        } else if (s_home_held_since_ms &&
-                   (now_ms - s_home_held_since_ms) >= HOME_LONG_MS) {
-            /* Long-press threshold crossed — fire once then reset */
-            s_home_held_since_ms = 0;
-            shell_event_t ev = {.type = CMD_GO_HOME};
-            k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
-        }
-
         if (!g_wasm_active) {
             /* Button edge detection → active screen navigation */
+            static uint32_t s_prev_btns;
+            uint32_t btns = akira_input_get_bitmask();
             uint32_t just = btns & ~s_prev_btns;
             s_prev_btns = btns;
             if (just) {
@@ -284,13 +229,9 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 }
             }
 
-            /* Tick home screen animation every 20 ms */
-            if (!settings_screen_is_active()) {
-                home_screen_tick();
-            }
-
             /* Status strip updated every 1 s */
             static int64_t s_last_status_ms;
+            int64_t now_ms = k_uptime_get();
             if (now_ms - s_last_status_ms >= 1000) {
                 s_last_status_ms = now_ms;
                 if (settings_screen_is_active()) {
@@ -298,32 +239,6 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 } else {
                     home_screen_update_status();
                 }
-
-                /* Idle screen-off check */
-                if (!s_display_blanked && s_display_timeout_ms > 0 &&
-                    (now_ms - s_last_input_ms) >= s_display_timeout_ms) {
-                    s_display_blanked = true;
-                    akira_display_hal_set_blank(true);
-                }
-
-                /* Re-read timeout in case the user just changed it in settings */
-#ifdef CONFIG_AKIRA_SETTINGS
-                {
-                    bool en = true;
-                    char _sv[16] = "";
-                    if (!akira_settings_get("akira/display/timeout_en", _sv, sizeof(_sv)))
-                        en = (atoi(_sv) != 0);
-                    if (en) {
-                        memset(_sv, 0, sizeof(_sv));
-                        if (!akira_settings_get("akira/display/timeout_s", _sv, sizeof(_sv))) {
-                            int t = atoi(_sv);
-                            s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
-                        }
-                    } else {
-                        s_display_timeout_ms = 0;
-                    }
-                }
-#endif
             }
 
             k_sleep(K_MSEC(20));
