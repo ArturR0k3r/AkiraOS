@@ -280,8 +280,16 @@ if(CONFIG_AKIRA_WASM_POWER)
     target_sources(app PRIVATE src/api/akira_power_api.c)
 endif()
 
+if(CONFIG_AKIRA_WASM_SETTINGS)
+    target_sources(app PRIVATE src/api/akira_settings_api.c)
+endif()
+
 if(CONFIG_AKIRA_WASM_HID)
     target_sources(app PRIVATE src/api/akira_hid_api.c)
+endif()
+
+if(CONFIG_AKIRA_SYSTEM_API)
+    target_sources(app PRIVATE src/api/akira_system_api.c)
 endif()
 
 if(CONFIG_AKIRA_WASM_LIFECYCLE)
@@ -412,6 +420,11 @@ if(CONFIG_AKIRA_HTTP_SERVER)
         src/connectivity/http/http_server.c
         src/shell/shell_web.c
     )
+endif()
+
+# Date/time shell command — always include when Zephyr shell is enabled
+if(CONFIG_SHELL)
+    target_sources(app PRIVATE src/shell/shell_date.c)
 endif()
 
 # Bluetooth manager — needed by both HID mode and BLE app API mode

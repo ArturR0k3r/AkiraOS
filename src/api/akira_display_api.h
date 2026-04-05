@@ -72,6 +72,7 @@ int akira_native_display_triangle_fill(wasm_exec_env_t exec_env, int32_t x0, int
 int akira_native_display_rect_outline(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color);
 int akira_native_display_bitmap(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t *data, uint32_t data_size);
 int akira_native_display_bitmap_transparent(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t *data, uint32_t data_size, uint32_t key);
+int akira_native_display_raw_write(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t *data, uint32_t data_size);
 
 /* Phase 4 native wrappers */
 int akira_native_display_hline(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t len, uint32_t color);

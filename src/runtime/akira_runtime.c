@@ -725,6 +725,7 @@ thread_exit:
     }
     if (app->hash_valid) {
         module_cache_release(app->binary_hash);
+        module_cache_invalidate(app->binary_hash);
         app->hash_valid = false;
     }
     app->name[0] = '\0';
@@ -891,6 +892,7 @@ int akira_runtime_stop(int instance_id)
             }
             if (app->hash_valid) {
                 module_cache_release(app->binary_hash);
+                module_cache_invalidate(app->binary_hash);
                 app->hash_valid = false;
             }
             atomic_set(&app->memory_used, 0);
@@ -1008,6 +1010,9 @@ int akira_runtime_destroy(int instance_id)
     if (app->module) {
         wasm_runtime_unload(app->module);
         app->module = NULL;
+    }
+    if (app->hash_valid) {
+        module_cache_invalidate(app->binary_hash);
     }
     /* Free owned binary AFTER unload — WAMR keeps raw string pointers into it */
     if (app->wasm_binary) {

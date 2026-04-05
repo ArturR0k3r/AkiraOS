@@ -57,6 +57,9 @@ extern "C" {
  * Elevated privilege — do not grant to untrusted apps.
  * Manifest string: "power.control" */
 #define AKIRA_CAP_POWER_CTRL  (1U << 22)
+/* Persistent key-value settings read/write (NVS-backed).
+ * Manifest string: "settings.*" */
+#define AKIRA_CAP_SETTINGS    (1U << 23)
 
 /*
  * Capability check macro using security subsystem.

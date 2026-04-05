@@ -2,6 +2,13 @@
 #include "akira_storage_api.h"
 #include "akira_net_api.h"
 #include "akira_power_api.h"
+#ifdef CONFIG_AKIRA_WASM_SETTINGS
+#include "akira_settings_api.h"
+#endif
+#ifdef CONFIG_AKIRA_SYSTEM_API
+#include "akira_system_api.h"
+#endif
+
 #include <runtime/akira_runtime.h>
 #include <runtime/security.h>
 #include <zephyr/logging/log.h>
@@ -34,6 +41,7 @@ bool akira_register_native_apis()
         {"display_rect_outline",        (void *)akira_native_display_rect_outline,        "(iiiii)i",  NULL},
         {"display_bitmap",              (void *)akira_native_display_bitmap,              "(iiii*~)i", NULL},
         {"display_bitmap_transparent",  (void *)akira_native_display_bitmap_transparent,  "(iiii*~i)i",NULL},
+        {"display_raw_write",           (void *)akira_native_display_raw_write,           "(iiii*~)i", NULL},
         /* Phase 4 — UI helper primitives */
         {"display_hline",               (void *)akira_native_display_hline,               "(iiii)i",   NULL},
         {"display_vline",               (void *)akira_native_display_vline,               "(iiii)i",   NULL},
@@ -172,6 +180,15 @@ bool akira_register_native_apis()
         {"net_rx_bind",    (void *)akira_native_net_rx_bind,    "(iii)i",  NULL},
         {"net_tx_flush",   (void *)akira_native_net_tx_flush,   "(i)i",    NULL},
         {"net_event_pop",  (void *)akira_native_net_event_pop,  "(ii)i",   NULL},
+        {"net_get_ip",     (void *)akira_native_net_get_ip,     "(ii)i",   NULL},
+        #endif
+
+        /* system: privileged SD card scan (requires app.control cap) */
+        #ifdef CONFIG_AKIRA_SYSTEM_API
+        {"sd_scan_wasm", (void *)akira_native_sd_scan_wasm, "(*~)i", NULL},
+        #if defined(CONFIG_AKIRA_APP_SOURCE_SD)
+        {"app_install_from_sd", (void *)akira_native_app_install_from_sd, "($)i", NULL},
+        #endif
         #endif
 
         /* power.read: battery level/status, mode query */
@@ -184,6 +201,13 @@ bool akira_register_native_apis()
         {"power_wake_on_gpio",       (void *)akira_native_power_wake_on_gpio,       "(ii)i", NULL},
         {"power_wake_on_timer",      (void *)akira_native_power_wake_on_timer,      "(i)i",  NULL},
         {"power_set_low_power",      (void *)akira_native_power_set_low_power,      "(i)i",  NULL},
+        #endif
+
+        /* settings.*: persistent NVS key-value store */
+        #ifdef CONFIG_AKIRA_WASM_SETTINGS
+        {"settings_get",    (void *)akira_native_settings_get,    "($ii)i", NULL},
+        {"settings_set",    (void *)akira_native_settings_set,    "($$)i",  NULL},
+        {"settings_delete", (void *)akira_native_settings_delete, "($)i",   NULL},
         #endif
 
     };

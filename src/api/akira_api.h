@@ -48,6 +48,10 @@
 #include "akira_timer_api.h"
 #endif
 
+#ifdef CONFIG_AKIRA_SYSTEM_API
+#include "akira_system_api.h"
+#endif
+
 #ifdef CONFIG_AKIRA_WASM_UART
 #include "akira_uart_api.h"
 #endif

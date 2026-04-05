@@ -101,6 +101,20 @@ int module_cache_store(const uint8_t *hash, wasm_module_t module,
 void module_cache_release(const uint8_t *hash);
 
 /**
+ * @brief Invalidate a cache entry after the caller has already called
+ *        wasm_runtime_unload() on the module.
+ *
+ * Clears the entry's module pointer and marks the slot free so that
+ * the LRU eviction path cannot call wasm_runtime_unload() a second time
+ * (which would crash because the module memory is already freed).
+ *
+ * Call this immediately after wasm_runtime_unload() in akira_runtime.c.
+ *
+ * @param hash  SHA-256 hash of the module (32 bytes)
+ */
+void module_cache_invalidate(const uint8_t *hash);
+
+/**
  * @brief Get cache statistics
  * @param stats  Output statistics
  */

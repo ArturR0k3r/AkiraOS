@@ -216,4 +216,20 @@ void akira_display_hal_set_brightness(uint8_t brightness);
  */
 int akira_display_hal_set_rotation(uint8_t rotation);
 
+/**
+ * @brief Enable or disable display blanking (screen sleep/wake).
+ * @param blank true = screen off, false = screen on.
+ */
+void akira_display_hal_set_blank(bool blank);
+
+/**
+ * @brief Write a packed RGB565 buffer directly to the display hardware,
+ *        bypassing the OS framebuffer.
+ * @param x,y   Top-left corner on the display
+ * @param w,h   Width and height in pixels
+ * @param data  Packed RGB565 data (pitch == w, no stride)
+ * @return 0 on success, negative errno on error
+ */
+int akira_display_hal_write_raw(int x, int y, int w, int h, const uint16_t *data);
+
 #endif /* PLATFORM_HAL_H */
