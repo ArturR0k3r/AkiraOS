@@ -1,8 +1,77 @@
+/* AkiraConsole button emulation via SDL keyboard
+ *
+ * Key mapping (USB HID scan codes):
+ *   Arrow keys   → D-pad (UP/DOWN/LEFT/RIGHT)
+ *   Z            → A button (confirm / LV_KEY_ENTER)
+ *   X            → B button (back   / LV_KEY_ESC)
+ *   S            → HOME button      / LV_KEY_HOME)
+ *   A            → MENU button      / LV_KEY_END)
+ */
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/lvgl/lvgl.h>
+
+/* Extend gpio0 (zephyr,gpio-emul) with 9 pins: pin0=LED, pins1-8=buttons */
+&gpio0 {
+    ngpios = <9>;
+    sdl_gpio: sdl_gpio {
+        compatible = "zephyr,gpio-emul-sdl";
+        /* Index = GPIO pin; 0 = UNKNOWN (LED), rest = SDL scan codes */
+        scancodes = <0 82 81 80 79 29 27 22 4>;
+    };
+};
+
 / {
     chosen {
         zephyr,console = &uart0;
         zephyr,shell-uart = &uart0;
         zephyr,uart-mcumgr = &uart0;
+    };
+
+    /* GPIO keys: map GPIO pins to Zephyr input event codes */
+    buttons: buttons {
+        compatible = "gpio-keys";
+        btn_up: btn_up {
+            gpios = <&gpio0 1 GPIO_ACTIVE_HIGH>;
+            zephyr,code = <INPUT_KEY_UP>;
+        };
+        btn_down: btn_down {
+            gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+            zephyr,code = <INPUT_KEY_DOWN>;
+        };
+        btn_left: btn_left {
+            gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;
+            zephyr,code = <INPUT_KEY_LEFT>;
+        };
+        btn_right: btn_right {
+            gpios = <&gpio0 4 GPIO_ACTIVE_HIGH>;
+            zephyr,code = <INPUT_KEY_RIGHT>;
+        };
+        btn_a: btn_a {
+            gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;
+            zephyr,code = <INPUT_KEY_ENTER>;
+        };
+        btn_b: btn_b {
+            gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+            zephyr,code = <INPUT_KEY_ESC>;
+        };
+        btn_home: btn_home {
+            gpios = <&gpio0 7 GPIO_ACTIVE_HIGH>;
+            zephyr,code = <INPUT_KEY_HOME>;
+        };
+        btn_menu: btn_menu {
+            gpios = <&gpio0 8 GPIO_ACTIVE_HIGH>;
+            zephyr,code = <INPUT_KEY_END>;
+        };
+    };
+
+    /* Route GPIO key events to the LVGL keypad indev */
+    lvgl_keymap: lvgl_keymap {
+        compatible = "zephyr,lvgl-keypad-input";
+        input = <&buttons>;
+        input-codes = <INPUT_KEY_UP   INPUT_KEY_DOWN  INPUT_KEY_LEFT  INPUT_KEY_RIGHT
+                       INPUT_KEY_ENTER INPUT_KEY_ESC   INPUT_KEY_HOME  INPUT_KEY_END>;
+        lvgl-codes  = <LV_KEY_UP      LV_KEY_DOWN     LV_KEY_LEFT     LV_KEY_RIGHT
+                       LV_KEY_ENTER   LV_KEY_ESC      LV_KEY_HOME     LV_KEY_END>;
     };
 
     aliases {
