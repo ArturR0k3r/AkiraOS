@@ -19,6 +19,7 @@ Advanced topics for AkiraOS WASM app development.
 
 ### Build & Deploy
 - [Building WASM Apps](building-apps.md) - Complete WASM development workflow
+- [Testing Apps with the Simulator](testing-apps.md) - Run WASM apps on your desktop before flashing
 - [OTA Updates](ota-updates.md) - Over-the-air firmware deployment
 - [Debugging](debugging.md) - Debug techniques and tools
 

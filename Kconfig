@@ -1332,15 +1332,16 @@ config AKIRA_BOOT_SHELL_RESTART
       component: any app exit or crash return the user to the shell.
 
 config AKIRA_OS_SHELL
-    bool "Enable AkiraConsole native OS shell (LVGL)"
+    bool "Enable AkiraConsole native OS shell"
     default n
-    depends on DISPLAY && LVGL
+    depends on DISPLAY
     select AKIRA_APP_MANAGER
     help
-      Enables the native C LVGL-based OS shell that replaces the WASM
-      akira_shell app.  Provides an app launcher, SD card install,
-      BLE install, and a full settings panel.  Mutually exclusive with
-      CONFIG_AKIRA_BOOT_SHELL — disable that option when enabling this one.
+      Enables the native C OS shell that replaces the WASM akira_shell app.
+      Uses the akira_display_* framebuffer API directly — no LVGL required.
+      Provides an app launcher, SD card install, BLE install, and a full
+      settings panel.  Mutually exclusive with CONFIG_AKIRA_BOOT_SHELL —
+      disable that option when enabling this one.
 
 config AKIRA_HOME_BUTTON_GPIO
     int "GPIO pin number for the HOME / X button"
