@@ -4,7 +4,8 @@
 #include <espressif/esp32s3/esp32s3_mini_n8.dtsi>
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <zephyr/dt-bindings/input/esp32-touch-sensor-input.h>
-#include <espressif/partitions_0x0_amp.dtsi>
+/* Custom 16 MB partition table: 2 MB per image slot (see akiraconsole_partitions_16M.dtsi) */
+#include "akiraconsole_partitions_16M.dtsi"
 #include "akiraconsole-pinctrl.dtsi"
 
 / {
