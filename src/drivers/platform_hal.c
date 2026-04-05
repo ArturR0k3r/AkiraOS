@@ -39,14 +39,19 @@ static uint16_t *shared_framebuffer = NULL;
 static uint32_t *shared_buttons = NULL;
 #endif /* AKIRA_PLATFORM_NATIVE_SIM */
 
-/* On hardware platforms, large framebuffers can optionally be placed in
- * PSRAM when configured (AKIRA_FRAMEBUFFER_IN_PSRAM && MEMC). Drivers should
- * use `akira_framebuffer_get()` to obtain a pointer to the correct buffer.
+/* On hardware platforms the framebuffer lives in SPIRAM/PSRAM.
+ * ESP32 family uses CONFIG_ESP_SPIRAM + __attribute__((section(".ext_ram.bss"))).
+ * Other platforms with Zephyr MEMC/PSRAM support use CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM.
+ * 320×240×2 = 153 600 B — fits easily in the 8 MB SPIRAM on AkiraConsole.
  */
-#if defined(CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM) && defined(CONFIG_MEMC)
-__attribute__((section(".ext_ram.bss"), aligned(4))) static uint16_t hw_framebuffer[240 * 320];
+#if defined(CONFIG_ESP_SPIRAM)
+__attribute__((section(".ext_ram.bss"), aligned(4)))
+static uint16_t hw_framebuffer[320 * 240];
+#elif defined(CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM) && defined(CONFIG_MEMC)
+__attribute__((section(".ext_ram.bss"), aligned(4)))
+static uint16_t hw_framebuffer[320 * 240];
 #else
-static uint16_t hw_framebuffer[1]; /* placeholder when no HW framebuffer */
+static uint16_t hw_framebuffer[1]; /* placeholder — no SPIRAM on this target */
 #endif
 
 int akira_hal_init(void)
@@ -151,11 +156,11 @@ int akira_hal_init(void)
  */
 uint16_t *akira_framebuffer_get(void)
 {
-#if defined(CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM) && defined(CONFIG_MEMC)
-    LOG_DBG("Framebuffer get: returning PSRAM buffer at %p", hw_framebuffer);
+#if defined(CONFIG_ESP_SPIRAM) || \
+    (defined(CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM) && defined(CONFIG_MEMC))
     return hw_framebuffer;
 #else
-    LOG_WRN("Framebuffer get: no PSRAM framebuffer configured");
+    LOG_WRN("akira_framebuffer_get: no SPIRAM framebuffer (need CONFIG_ESP_SPIRAM)");
     return NULL;
 #endif
 }

@@ -15,7 +15,7 @@
 #include <stdbool.h>
 
 /* Web server configuration */
-#define WEB_SERVER_STACK_SIZE 4096
+#define WEB_SERVER_STACK_SIZE 8192  /* ESP32 lwIP poll needs ~2 KB of IRQ frames on Xtensa */
 #define WEB_SERVER_THREAD_PRIORITY 7
 #define HTTP_PORT 8080
 #define WEBSOCKET_PORT 8081

@@ -55,7 +55,9 @@ LOG_MODULE_REGISTER(akira_lifecycle_api, CONFIG_AKIRA_LOG_LEVEL);
  *   3. 200 ms later the switch work fires on the dedicated queue and calls
  *      app_manager_start() safely — WASM thread gone, SPI0 / PSRAM idle.
  */
-#define SWITCH_WQ_STACK_SIZE 4096
+/* 2 KB: this work queue only dispatches akira_runtime_start/stop; no deep
+ * call chains. 4 KB was double what the work items actually need. */
+#define SWITCH_WQ_STACK_SIZE 2048
 static K_THREAD_STACK_DEFINE(g_switch_wq_stack, SWITCH_WQ_STACK_SIZE);
 static struct k_work_q        g_switch_wq;
 static bool                   g_switch_wq_started;

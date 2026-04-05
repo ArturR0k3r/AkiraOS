@@ -171,6 +171,20 @@ int akira_native_net_tx_flush(wasm_exec_env_t exec_env, int32_t handle);
 int akira_native_net_event_pop(wasm_exec_env_t exec_env,
 			       uint32_t buf_ptr, uint32_t len);
 
+/**
+ * @brief Get the IPv4 address of the default network interface.
+ *
+ * Writes a null-terminated dotted-decimal string (e.g. "192.168.1.42") into
+ * the WASM buffer. Returns 0 on success, -ENODATA if not connected.
+ *
+ * @param exec_env  WAMR execution environment.
+ * @param buf_ptr   WASM address of a ≥16-byte destination buffer.
+ * @param len       Buffer capacity in bytes (minimum 16).
+ * @return 0 on success; -ENODATA if no IP; -EINVAL/-EFAULT on bad args.
+ */
+int akira_native_net_get_ip(wasm_exec_env_t exec_env,
+			    uint32_t buf_ptr, uint32_t len);
+
 #ifdef __cplusplus
 }
 #endif

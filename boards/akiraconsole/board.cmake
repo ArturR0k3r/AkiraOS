@@ -19,6 +19,6 @@ board_runner_args(esp32 "--esp-flash-freq=40m")
 
 # WARNING: Do NOT pass --erase to "west flash".
 # "west flash --erase" performs a full chip erase and will destroy the NVS
-# settings partition (0x400000) and the LittleFS app partition (0x408000).
-# Normal "west flash" only writes the app image into slot0 (0x20000-0x16FFFF)
-# and never touches the data region above 0x400000.
+# settings partition (0x420000) and the LittleFS app partition (0x428000).
+# Normal "west flash" only writes the app image into slot0 (0x20000-0x21FFFF)
+# and never touches the data region above 0x420000.

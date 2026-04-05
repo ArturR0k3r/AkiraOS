@@ -637,8 +637,15 @@ int app_manager_start(const char *name)
     if (ret < 0)
     {
         LOG_ERR("Failed to start app: %d", ret);
+        /* The module was loaded into the runtime slot but the thread never
+         * started.  Without explicit cleanup the slot stays occupied (used=true,
+         * module loaded) and every subsequent launch fills another slot until
+         * "No free slots" makes ALL apps unlaunchable.
+         * Destroy the slot now so it can be reused on the next start attempt. */
         set_app_state(app, APP_STATE_ERROR);
+        app->container_id = -1;
         k_mutex_unlock(&g_registry_mutex);
+        akira_runtime_destroy(container_id);
         return ret;
     }
 

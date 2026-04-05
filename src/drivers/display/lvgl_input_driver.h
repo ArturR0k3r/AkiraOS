@@ -38,4 +38,29 @@ void lvgl_input_update_touch(int16_t x, int16_t y, bool pressed);
  */
 void lvgl_input_update_buttons(uint32_t buttons);
 
+#if defined(CONFIG_LVGL)
+#include <lvgl.h>
+/**
+ * @brief Get the registered LVGL keypad input device.
+ *
+ * Use this to associate a keypad group with the LVGL focus manager.
+ *
+ * @return Pointer to lv_indev_t, or NULL if not initialised.
+ */
+lv_indev_t *lvgl_input_get_keypad(void);
+#else
+static inline void *lvgl_input_get_keypad(void) { return NULL; }
+#endif
+
+/**
+ * @brief Register a callback fired on X-button long-press (HOME event).
+ *
+ * The OS shell installs this callback to detect the user intent to return
+ * to the launcher from a running WASM app.
+ *
+ * @param cb        Function to call on HOME long-press.  May be NULL to clear.
+ * @param user_data Opaque pointer passed back to @p cb.
+ */
+void lvgl_input_set_home_callback(void (*cb)(void *user_data), void *user_data);
+
 #endif /* LVGL_INPUT_DRIVER_H */

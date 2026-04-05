@@ -280,8 +280,20 @@ if(CONFIG_AKIRA_WASM_POWER)
     target_sources(app PRIVATE src/api/akira_power_api.c)
 endif()
 
+if(CONFIG_AKIRA_WASM_SETTINGS)
+    target_sources(app PRIVATE src/api/akira_settings_api.c)
+endif()
+
 if(CONFIG_AKIRA_WASM_HID)
     target_sources(app PRIVATE src/api/akira_hid_api.c)
+endif()
+
+if(CONFIG_AKIRA_WASM_INPUT)
+    target_sources(app PRIVATE src/api/akira_input_api.c)
+endif()
+
+if(CONFIG_AKIRA_SYSTEM_API)
+    target_sources(app PRIVATE src/api/akira_system_api.c)
 endif()
 
 if(CONFIG_AKIRA_WASM_LIFECYCLE)
@@ -412,6 +424,11 @@ if(CONFIG_AKIRA_HTTP_SERVER)
         src/connectivity/http/http_server.c
         src/shell/shell_web.c
     )
+endif()
+
+# Date/time shell command — always include when Zephyr shell is enabled
+if(CONFIG_SHELL)
+    target_sources(app PRIVATE src/shell/shell_date.c)
 endif()
 
 # Bluetooth manager — needed by both HID mode and BLE app API mode
@@ -549,6 +566,29 @@ endif()
 # BLE app transfer
 if(CONFIG_AKIRA_APP_SOURCE_BLE)
     target_sources(app PRIVATE src/connectivity/bluetooth/bt_app_transfer.c)
+endif()
+
+# ===== Native OS Shell (LVGL-based launcher) =====
+if(CONFIG_AKIRA_OS_SHELL)
+    target_sources(app PRIVATE
+        src/console_shell/akira_os_shell.c
+        src/console_shell/display_ownership.c
+        src/console_shell/shell_theme.c
+        src/console_shell/home_screen.c
+        src/console_shell/sd_install_screen.c
+        src/console_shell/install_progress_screen.c
+        src/console_shell/settings_screen.c
+        src/console_shell/settings/wifi_screen.c
+        src/console_shell/settings/display_screen.c
+        src/console_shell/settings/ble_screen.c
+        src/console_shell/settings/power_screen.c
+        src/console_shell/settings/ota_screen.c
+        src/console_shell/settings/datetime_screen.c
+        src/console_shell/settings/apps_screen.c
+        src/console_shell/settings/devmode_screen.c
+        src/drivers/display/lvgl_input_driver.c
+    )
+    target_include_directories(app PRIVATE src/console_shell)
 endif()
 
 # Include directories

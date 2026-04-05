@@ -1,227 +1,93 @@
 {
-	"folders": [
-		{
-			"path": "."
-		}
-	],
-	"settings": {
-		// Workspace defaults
-		"window.openFoldersInNewWindow": "off",
-		"workbench.startupEditor": "none",
-		"files.defaultFolder": "/workspaces/AkiraOS",
-		// Hush CMake
-		"cmake.configureOnOpen": false,
-		// CppTools and IntelliSense
-		"C_Cpp.workspaceParsingPriority": "medium",
-		"C_Cpp.default.cStandard": "c11",
-		"C_Cpp.default.browse.path": [
-			"${workspaceFolder}/AkiraOS/src"
-		],
-		"C_Cpp.intelliSenseEngine": "default",
-		"C_Cpp.default.includePath": [
-			"${workspaceFolder}/AkiraOS/src/",
-			"${workspaceFolder}/zephyr/include/",
-		],
-		"C_Cpp.default.forcedInclude": [
-			"${workspaceFolder}/build/zephyr/include/generated/zephyr/autoconf.h"
-		],
-		"C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
-		// Files
-		"files.exclude": {
-			"**/.git": true,
-			"**/.svn": true,
-			"**/.hg": true,
-			"**/CVS": true,
-			"**/.DS_Store": true,
-			"**/Thumbs.db": true
-		},
-		// Kconfig
-		"kconfig.root": "${workspaceFolder}/AkiraOS/Kconfig",
-		"files.associations": {
-			"*.h": "c",
-			"*.c": "c",
-			"typeinfo": "c",
-			"*.g": "c",
-			"system_error": "c",
-			"array": "c",
-			"functional": "c",
-			"tuple": "c",
-			"type_traits": "c",
-			"utility": "c",
-			"string_view": "c",
-			"initializer_list": "c",
-			"limits": "c",
-			"algorithm": "c",
-			"random": "c",
-			"compare": "c",
-			"*.tcc": "c",
-			"unordered_map": "c",
-			"bitset": "c",
-			"format": "c",
-			"__bit_reference": "c",
-			"__node_handle": "c",
-			"deque": "c",
-			"locale": "c",
-			"optional": "c",
-			"ratio": "c",
-			"vector": "c",
-			"charconv": "c",
-			"chrono": "c",
-			"cstdlib": "c",
-			"cstdint": "c",
-			"*.overlay": "cpp",
-			"cerrno": "c",
-			"regex": "cpp"
-		},
-		"editor.formatOnType": true,
-		"cortex-debug.variableUseNaturalFormat": false,
-		"git.ignoreLimitWarning": true,
-		"cSpell.words": [
-			"blockwise",
-			"COAP",
-			"hexdump",
-			"WASI",
-			"ZCBOR",
-			"zsock"
-		],
-		"cSpell.ignoreWords": [
-			"FOTA",
-			"IWASM",
-			"autoconnect",
-			"wamr"
-		],
-		"sonarlint.pathToCompileCommands": "${workspaceFolder}/build/compile_commands.json",
-		"terminal.integrated.defaultProfile.linux": "",
-	},
-	"tasks": {
-		"version": "2.0.0",
-		"tasks": [
-			{
-				"label": "1. Initialize and Update Workspace",
-				"type": "shell",
-				"command": "west init -l . && cd .. && west update",
-				"problemMatcher": [],
-				"group": {
-					"kind": "build",
-					"isDefault": false
-				}
-			},
-			{
-				"label": "2. Build for ${input:board}",
-				"type": "shell",
-				"command": "cd .. && unset ZEPHYR_BASE && west build --pristine -b ${input:board} ${workspaceFolder} -d build -- -DMODULE_EXT_ROOT=${workspaceFolder}",
-				"group": {
-					"kind": "build",
-					"isDefault": true
-				},
-				"problemMatcher": [
-					"$gcc"
-				]
-			},
-			{
-				"label": "3. Execute (Native Sim) or Flash ${input:board}",
-				"type": "shell",
-				"command": "if [ \"${input:board}\" = \"native_sim\" ]; then cd ${workspaceFolder}/../build/zephyr && ./zephyr.exe; else cd ${workspaceFolder}/.. && west flash; fi",
-				"problemMatcher": [],
-				"group": {
-					"kind": "test",
-					"isDefault": true
-				}
-			}
-		],
-		"inputs": [
-			{
-				"id": "board",
-				"type": "pickString",
-				"options": [
-					"native_sim",
-					"esp32_devkitc/esp32/procpu",
-					"esp32s3_devkitm/esp32s3/procpu",
-					"esp32c3_devkitm",
-				],
-				"default": "native_sim",
-				"description": "See https://docs.zephyrproject.org/latest/boards/index.html"
-			},
-			{
-				"id": "pristine",
-				"type": "pickString",
-				"description": "Choose when to run a pristine build",
-				"default": "auto",
-				"options": [
-					"auto",
-					"always",
-					"never"
-				]
-			}
-		]
-	},
-	"extensions": {
-		"recommendations": [
-			"ms-vscode.cpptools-extension-pack",
-			"ms-vscode.cpptools-themes",
-			"ms-vscode.cpptools",
-			"ms-vscode.cmake-tools",
-			"ms-vscode.vscode-embedded-tools",
-			"ms-vscode.vscode-serial-monitor",
-			"marus25.cortex-debug",
-			"mcu-debug.debug-tracker-vscode",
-			"ms-python.python"
-		]
-	},
-	"launch": {
-		"version": "0.2.0",
-		"configurations": [
-			{
-				"name": "(gdb) Launch",
-				"type": "cppdbg",
-				"request": "launch",
-				"program": "${workspaceFolder}/build/zephyr/zephyr.exe",
-				"args": [
-					"-seed=$RANDOM",
-					"--flash=${workspaceFolder}/flash.bin"
-				],
-				"stopAtEntry": false,
-				"cwd": "${fileDirname}",
-				"environment": [],
-				"externalConsole": false,
-				"MIMode": "gdb",
-				"setupCommands": [
-					{
-						"description": "Enable pretty-printing for gdb",
-						"text": "-enable-pretty-printing",
-						"ignoreFailures": true
-					},
-					{
-						"description": "Set Disassembly Flavor to Intel",
-						"text": "-gdb-set disassembly-flavor intel",
-						"ignoreFailures": true
-					}
-				]
-			},
-			{
-				"name": "Cortex Debug - ST-LINK",
-				"request": "launch",
-				"cwd": "${workspaceFolder}",
-				"executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
-				"runToEntryPoint": "",
-				"showDevDebugOutput": "none",
-				"type": "cortex-debug",
-				"servertype": "stlink",
-				"stm32cubeprogrammer": "",
-				"interface": "swd",
-				"v1": false
-			},
-			{
-				"name": "Cortex Debug - jlink",
-				"cwd": "${workspaceFolder}",
-				"executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
-				"device": "nRF5340_xxAA_APP",
-				"request": "launch",
-				"type": "cortex-debug",
-				"runToEntryPoint": "main",
-				"servertype": "jlink",
-				"interface": "swd"
-			}
-		]
-	}
+    "folders": [
+        {
+            "path": "."
+        }
+    ],
+    "settings": {
+        // --- СКОРОСТЬ ИНТЕРФЕЙСА ---
+        "window.openFoldersInNewWindow": "off",
+        "workbench.startupEditor": "none",
+        "files.defaultFolder": "/workspaces/AkiraOS",
+        "terminal.integrated.gpuAcceleration": "on",
+
+        // --- ОПТИМИЗАЦИЯ C++ (ГЛАВНОЕ) ---
+        // Используем ТОЛЬКО compile_commands.json, убираем ручной перебор папок
+        "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+        "C_Cpp.intelliSenseEngine": "default",
+        "C_Cpp.workspaceParsingPriority": "low", // Чтобы не вешало проц при открытии
+        "C_Cpp.indexingLimit": 5000, 
+        "C_Cpp.maxCachedProcesses": 2,
+        
+        // Отключаем тяжелый фоновый парсинг, который вешает WSL
+        "C_Cpp.enhancedColorization": "Disabled", 
+        "C_Cpp.intelliSenseEngineFallback": "Disabled",
+        "cmake.configureOnOpen": false,
+
+        // --- ИГНОРИРОВАНИЕ МУСОРА (ЧТОБЫ НЕ ТУПИЛ WSL И COPILOT) ---
+        "files.exclude": {
+            "**/.git": true,
+            "**/.vscode": false,
+            "**/build/**": true,
+            "**/_deps/**": true,
+            "**/.DS_Store": true,
+            "**/Thumbs.db": true
+        },
+        "files.watcherExclude": {
+            "**/build/**": true,
+            "**/_deps/**": true,
+            "**/zephyr/**": true,
+            "**/.git/**": true
+        },
+
+        // --- ТВОИ АССОЦИАЦИИ (ОСТАВИЛ НУЖНОЕ) ---
+        "files.associations": {
+            "*.h": "c",
+            "*.c": "c",
+            "*.overlay": "cpp",
+            "*.conf": "kconfig",
+            "Kconfig*": "kconfig",
+            "iostream": "cpp",
+            "vector": "c",
+            "cstdint": "c"
+        },
+
+        // --- ПРОЧЕЕ ---
+        "editor.formatOnType": true,
+        "git.ignoreLimitWarning": true,
+        "kconfig.root": "${workspaceFolder}/AkiraOS/Kconfig"
+    },
+    "tasks": {
+        "version": "2.0.0",
+        "tasks": [
+            {
+                "label": "1. West Init/Update",
+                "type": "shell",
+                "command": "west init -l . && west update",
+                "problemMatcher": []
+            },
+            {
+                "label": "2. Build AkiraOS",
+                "type": "shell",
+                "command": "west build -b ${input:board} -d build --pristine",
+                "group": {"kind": "build", "isDefault": true},
+                "problemMatcher": ["$gcc"]
+            },
+            {
+                "label": "3. Flash/Run",
+                "type": "shell",
+                "command": "if [ \"${input:board}\" = \"native_sim\" ]; then ./build/zephyr/zephyr.exe; else west flash; fi",
+                "problemMatcher": [],
+                "group": {"kind": "test", "isDefault": true}
+            }
+        ],
+        "inputs": [
+            {
+                "id": "board",
+                "type": "pickString",
+                "options": ["native_sim", "esp32s3_devkitm/esp32s3/procpu", "esp32c3_devkitm"],
+                "default": "native_sim"
+            }
+        ]
+    }
 }

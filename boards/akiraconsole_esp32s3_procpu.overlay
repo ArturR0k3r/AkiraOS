@@ -114,7 +114,7 @@
             gctrl = <0x35>;
             vrhs = <0x12>;
             vdvs = <0x20>;
-            mdac = <0x68>;
+            mdac = <0x60>;
             gamma = <0x01>;
             colmod = <0x55>;
             lcm = <0x2c>;
@@ -314,23 +314,20 @@
     };
 };
 
-// Flash memory partitions - add custom partitions to existing partition table
-// NOTE: The AMP partition table (partitions_0x0_amp_4M.dtsi) occupies
-// 0x000000–0x3FFFFF.  slot1_partition lives at 0x170000–0x2C0000.
-// Our custom partitions MUST be placed at 0x400000 or higher so that OTA
-// writes to slot1 do not overwrite NVS settings or the LittleFS filesystem.
-// The AkiraConsole module has 8 MB flash (esp32s3_mini_n8 = DT_SIZE_M(8)),
-// so 0x400000–0x7FFFFF is fully available for custom use.
+// Flash memory partitions — AkiraConsole 16 MB custom layout.
+// slot0 occupies 0x020000–0x21FFFF (2 MB), slot1 0x220000–0x41FFFF (2 MB).
+// User partitions are placed starting at 0x420000 (immediately after slot1)
+// so OTA writes to slot1 never touch NVS or the LittleFS filesystem.
 &flash0 {
     partitions {
-        akira_settings_nvs_partition: partition@400000 {
+        akira_settings_nvs_partition: partition@420000 {
             label = "akira_settings_nvs";
-            reg = <0x00400000 DT_SIZE_K(32)>;
+            reg = <0x00420000 DT_SIZE_K(32)>;
         };
 
-        lfs1_partition: partition@408000 {
+        lfs1_partition: partition@428000 {
 			label = "lfs_storage";
-			reg = <0x00408000 DT_SIZE_K(512)>;
+			reg = <0x00428000 DT_SIZE_K(512)>;
 		};
     };
 };

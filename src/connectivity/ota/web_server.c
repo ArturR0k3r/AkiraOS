@@ -91,9 +91,9 @@ LOG_MODULE_REGISTER(web_server, CONFIG_LOG_DEFAULT_LEVEL);
 #endif
 #endif
 
-/* Thread stack - increased to 8KB.
- * Uses transport_notify() for zero-copy data dispatch. */
-static K_THREAD_STACK_DEFINE(web_server_stack, 8192);
+/* Thread stack: 8 KB needed — ESP32-S3 Xtensa stores 6 nested IRQ frames
+ * (~2 KB) plus zsock_poll/lwIP internals on this stack at runtime. */
+static K_THREAD_STACK_DEFINE(web_server_stack, WEB_SERVER_STACK_SIZE);
 static struct k_thread web_server_thread_data;
 static k_tid_t web_server_thread_id;
 
@@ -111,8 +111,8 @@ static struct
 static struct web_server_callbacks callbacks = {0};
 static K_MUTEX_DEFINE(server_mutex);
 
-/* Message queue - reduced size */
-#define SERVER_MSG_QUEUE_SIZE 6
+/* Message queue */
+#define SERVER_MSG_QUEUE_SIZE 4
 
 enum server_msg_type
 {
@@ -137,9 +137,9 @@ struct server_msg
 
 K_MSGQ_DEFINE(server_msgq, sizeof(struct server_msg), SERVER_MSG_QUEUE_SIZE, 4);
 
-/* Log buffer for web terminal - compact size */
-#define LOG_BUFFER_SIZE 1024
-#define MAX_LOG_LINES 30
+/* Log buffer for web terminal - keep small to save DRAM */
+#define LOG_BUFFER_SIZE 512
+#define MAX_LOG_LINES 20
 static char log_buffer[LOG_BUFFER_SIZE];
 static size_t log_buffer_pos = 0;
 static K_MUTEX_DEFINE(log_mutex);

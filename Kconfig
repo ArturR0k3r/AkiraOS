@@ -1277,6 +1277,105 @@ config AKIRA_HID_MAX_ACTIONS
       hid_action_register() / hid_action_trigger().
       Each entry uses ~34 bytes of SRAM.
 
+config AKIRA_INPUT_API
+    bool "Enable AkiraConsole button input native API"
+    default n
+    depends on INPUT
+    help
+      Registers an INPUT_CALLBACK_DEFINE handler that maintains an atomic
+      bitmask of currently held buttons and a 16-entry ring buffer of
+      press/release edge events from the gpio-keys DTS node.
+      Required for CONFIG_AKIRA_WASM_INPUT.
+
+config AKIRA_WASM_INPUT
+    bool "Export button Input API to WASM"
+    default n
+    depends on AKIRA_WASM_API && AKIRA_INPUT_API
+    help
+      Export input_get_buttons() and input_poll_event() to WASM applications.
+      input_get_buttons() returns a uint32 bitmask of currently held buttons
+      (bit N = 1 << zephyr,code).  input_poll_event() drains one edge event
+      from the ring buffer.  Requires "input.read" capability in the manifest.
+
+config AKIRA_SYSTEM_API
+    bool "Enable privileged system-level native API"
+    default n
+    depends on AKIRA_WASM_RUNTIME && AKIRA_SD_CARD
+    help
+      Exposes sd_scan_wasm() — lists *.wasm files under /SD:/apps/ into a
+      WASM buffer.  Requires "app.control" elevated capability.
+
+config AKIRA_BOOT_SHELL
+    bool "Auto-launch a WASM shell app at boot"
+    default n
+    depends on AKIRA_APP_MANAGER
+    help
+      If enabled, main() calls app_manager_start(CONFIG_AKIRA_BOOT_SHELL_NAME)
+      immediately after app_manager_init().  If the named app is not installed
+      a warning is logged and boot continues normally.
+
+config AKIRA_BOOT_SHELL_NAME
+    string "Name of WASM shell app to auto-launch"
+    default "akira_shell"
+    depends on AKIRA_BOOT_SHELL
+    help
+      Must match the "name" field in the app's manifest.json exactly.
+
+config AKIRA_BOOT_SHELL_RESTART
+    bool "Auto-restart shell on exit or crash"
+    default y
+    depends on AKIRA_BOOT_SHELL
+    help
+      When enabled, the firmware idle loop detects that no WASM app is
+      running and re-launches CONFIG_AKIRA_BOOT_SHELL_NAME after a
+      1.5 s cooldown.  This makes the shell behave like a firmware
+      component: any app exit or crash return the user to the shell.
+
+config AKIRA_OS_SHELL
+    bool "Enable AkiraConsole native OS shell (LVGL)"
+    default n
+    depends on DISPLAY && LVGL
+    select AKIRA_APP_MANAGER
+    help
+      Enables the native C LVGL-based OS shell that replaces the WASM
+      akira_shell app.  Provides an app launcher, SD card install,
+      BLE install, and a full settings panel.  Mutually exclusive with
+      CONFIG_AKIRA_BOOT_SHELL — disable that option when enabling this one.
+
+config AKIRA_HOME_BUTTON_GPIO
+    int "GPIO pin number for the HOME / X button"
+    default 17
+    depends on AKIRA_OS_SHELL && GPIO
+    help
+      GPIO pin wired to the HOME (X) button on AkiraConsole.  A long press
+      (longer than CONFIG_AKIRA_HOME_BUTTON_GPIO_LONG_MS) dismisses any
+      running WASM app and returns to the OS shell launcher.
+
+config AKIRA_HOME_BUTTON_GPIO_LONG_MS
+    int "Long-press duration threshold for HOME button (ms)"
+    default 500
+    depends on AKIRA_OS_SHELL
+    help
+      How long the HOME button must be held before the OS shell intercepts
+      the press and returns to the launcher.  Shorter presses are passed
+      through to the active WASM app as a normal key event.
+
+config AKIRA_OS_VERSION
+    string "AkiraOS version string"
+    default "1.0.0"
+    help
+      Human-readable version string displayed in the OS shell settings
+      screen and included in OTA manifests.
+
+config AKIRA_WASM_SETTINGS
+    bool "Export persistent settings API to WASM"
+    default n
+    depends on AKIRA_WASM_API && AKIRA_SETTINGS
+    help
+      Exports settings_get / settings_set to WASM apps so they can
+      store and retrieve persistent key-value pairs in NVS flash.
+      Requires the \"settings.*\" capability in the app manifest.
+
 config AKIRA_WASM_LIFECYCLE
     bool "Export App Lifecycle API to WASM"
     default n
