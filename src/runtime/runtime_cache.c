@@ -181,6 +181,26 @@ void module_cache_release(const uint8_t *hash)
     k_mutex_unlock(&g_cache_mutex);
 }
 
+void module_cache_invalidate(const uint8_t *hash)
+{
+    if (!hash || !g_cache.initialized) return;
+
+    k_mutex_lock(&g_cache_mutex, K_FOREVER);
+
+    module_cache_entry_t *entry = cache_find_locked(hash);
+    if (entry) {
+        /* Caller already called wasm_runtime_unload() — just clear the slot.
+         * Do NOT call wasm_runtime_unload() here; that would double-free. */
+        entry->module    = NULL;
+        entry->used      = false;
+        entry->ref_count = 0;
+        g_cache.stats.evictions++;
+        LOG_DBG("Module cache invalidated (pre-freed by caller)");
+    }
+
+    k_mutex_unlock(&g_cache_mutex);
+}
+
 void module_cache_get_stats(module_cache_stats_t *stats)
 {
     if (!stats) return;

@@ -151,9 +151,8 @@ void akira_display_hal_set_brightness(uint8_t brightness)
 }
 
 /**
- * @brief Set display orientation/rotation
- * @param rotation Rotation mode (0=0°, 1=90°, 2=180°, 3=270°)
- * @return 0 on success, negative errno on error
+ * @brief Set display rotation
+ * ...
  */
 int akira_display_hal_set_rotation(uint8_t rotation)
 {
@@ -186,6 +185,70 @@ int akira_display_hal_set_rotation(uint8_t rotation)
     LOG_WRN("Runtime rotation not yet implemented - change 'mdac' in device tree");
     
     return -ENOTSUP;
+#else
+    return -ENOTSUP;
+#endif
+}
+
+/**
+ * @brief Enable or disable display blanking (screen sleep).
+ *
+ * When blanked the panel backlight and pixel output are disabled.
+ * The framebuffer contents are preserved — call akira_display_flush()
+ * after akira_display_hal_set_blank(false) to restore the image.
+ *
+ * @param blank true = screen off, false = screen on.
+ */
+void akira_display_hal_set_blank(bool blank)
+{
+#if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
+    if (!display_dev) return;
+    if (blank) {
+        /* Backlight off first, then panel blank */
+        if (backlight_gpio_dev && device_is_ready(backlight_gpio_dev)) {
+            gpio_pin_set(backlight_gpio_dev, BACKLIGHT_GPIO_PIN, 0);
+        }
+        display_blanking_on(display_dev);
+    } else {
+        display_blanking_off(display_dev);
+        if (backlight_gpio_dev && device_is_ready(backlight_gpio_dev)) {
+            gpio_pin_set(backlight_gpio_dev, BACKLIGHT_GPIO_PIN, 1);
+        }
+    }
+#endif
+}
+
+/**
+ * @brief Write a packed RGB565 buffer directly to the display hardware.
+ *
+ * Unlike akira_display_hal_flush() this bypasses the OS framebuffer entirely.
+ * The caller supplies a buffer with pitch == w (no row stride), allowing the
+ * display controller to DMA exactly w*h pixels in a single SPI window.
+ *
+ * Use this for full-screen game renderers (e.g. NES emulator) where the
+ * game maintains its own pixel buffer and writes to a sub-rectangle of the
+ * screen every frame, saving both the fb-copy and the full-screen SPI flush.
+ *
+ * @param x,y   Top-left corner on the display (in pixels)
+ * @param w,h   Width and height (pixels)
+ * @param data  Packed RGB565 data (w*h*2 bytes, pitch=w, no stride)
+ * @return 0 on success, negative errno on error
+ */
+int akira_display_hal_write_raw(int x, int y, int w, int h, const uint16_t *data)
+{
+#if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
+    if (display_dev == NULL || data == NULL || w <= 0 || h <= 0)
+        return -EINVAL;
+
+    struct display_buffer_descriptor desc = {
+        .buf_size = (uint32_t)((uint32_t)w * (uint32_t)h * 2U),
+        .width    = (uint16_t)w,
+        .height   = (uint16_t)h,
+        .pitch    = (uint16_t)w,   /* packed — stride == width */
+    };
+
+    return display_write(display_dev,
+                         (uint16_t)x, (uint16_t)y, &desc, data);
 #else
     return -ENOTSUP;
 #endif

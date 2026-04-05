@@ -29,6 +29,8 @@ LOG_MODULE_REGISTER(akira_net_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <stdint.h>
 #include <string.h>
 #include <wasm_export.h>
+#include <zephyr/net/net_if.h>
+#include <zephyr/net/net_ip.h>
 
 /* =========================================================================
  * Internal helpers (mirrors wasm_ptr_to_native in akira_ble_api.c)
@@ -209,6 +211,39 @@ int akira_native_net_event_pop(wasm_exec_env_t exec_env,
 	return type;
 }
 
+int akira_native_net_get_ip(wasm_exec_env_t exec_env,
+			    uint32_t buf_ptr, uint32_t len)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EACCES);
+
+	if (len < 16) {
+		return -EINVAL;
+	}
+
+	char *buf = (char *)wasm_ptr_to_native(exec_env, buf_ptr, len);
+
+	if (!buf) {
+		return -EFAULT;
+	}
+
+	struct net_if *iface = net_if_get_default();
+
+	if (!iface) {
+		buf[0] = '\0';
+		return -ENODATA;
+	}
+
+	struct in_addr *addr = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
+
+	if (!addr) {
+		buf[0] = '\0';
+		return -ENODATA;
+	}
+
+	net_addr_ntop(AF_INET, addr, buf, (size_t)len);
+	return 0;
+}
+
 #else /* !CONFIG_AKIRA_WASM_NET */
 
 int akira_native_net_open(wasm_exec_env_t e, int32_t t)
@@ -228,6 +263,8 @@ int akira_native_net_rx_bind(wasm_exec_env_t e, int32_t h, int32_t p, int32_t s)
 int akira_native_net_tx_flush(wasm_exec_env_t e, int32_t h)
 { (void)e; (void)h; return -ENOTSUP; }
 int akira_native_net_event_pop(wasm_exec_env_t e, uint32_t b, uint32_t l)
+{ (void)e; (void)b; (void)l; return -ENOTSUP; }
+int akira_native_net_get_ip(wasm_exec_env_t e, uint32_t b, uint32_t l)
 { (void)e; (void)b; (void)l; return -ENOTSUP; }
 
 #endif /* CONFIG_AKIRA_WASM_NET */

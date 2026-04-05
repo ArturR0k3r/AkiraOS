@@ -41,6 +41,9 @@ uint32_t akira_capability_str_to_mask(const char *cap)
     if (strcmp(cap, "power.read") == 0)     return AKIRA_CAP_POWER_READ;
     if (strcmp(cap, "power.control") == 0)  return AKIRA_CAP_POWER_CTRL;
     if (strcmp(cap, "power.*") == 0)        return AKIRA_CAP_POWER_READ | AKIRA_CAP_POWER_CTRL;
+    if (strcmp(cap, "settings.read") == 0)  return AKIRA_CAP_SETTINGS;
+    if (strcmp(cap, "settings.write") == 0) return AKIRA_CAP_SETTINGS;
+    if (strcmp(cap, "settings.*") == 0)     return AKIRA_CAP_SETTINGS;
     /* Wildcard patterns */
     if (strcmp(cap, "display.*") == 0)      return AKIRA_CAP_DISPLAY_WRITE;
     if (strcmp(cap, "input.*") == 0)        return AKIRA_CAP_INPUT_READ | AKIRA_CAP_INPUT_WRITE;

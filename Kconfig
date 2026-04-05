@@ -1277,6 +1277,56 @@ config AKIRA_HID_MAX_ACTIONS
       hid_action_register() / hid_action_trigger().
       Each entry uses ~34 bytes of SRAM.
 
+config AKIRA_SYSTEM_API
+    bool "Enable privileged system-level native API"
+    default n
+    depends on AKIRA_WASM_RUNTIME && AKIRA_SD_CARD
+    help
+      Exposes sd_scan_wasm() — lists *.wasm files under /SD:/apps/ into a
+      WASM buffer.  Requires "app.control" elevated capability.
+
+config AKIRA_BOOT_SHELL
+    bool "Auto-launch a WASM shell app at boot"
+    default n
+    depends on AKIRA_APP_MANAGER
+    help
+      If enabled, main() calls app_manager_start(CONFIG_AKIRA_BOOT_SHELL_NAME)
+      immediately after app_manager_init().  If the named app is not installed
+      a warning is logged and boot continues normally.
+
+config AKIRA_BOOT_SHELL_NAME
+    string "Name of WASM shell app to auto-launch"
+    default "akira_shell"
+    depends on AKIRA_BOOT_SHELL
+    help
+      Must match the "name" field in the app's manifest.json exactly.
+
+config AKIRA_BOOT_SHELL_RESTART
+    bool "Auto-restart shell on exit or crash"
+    default y
+    depends on AKIRA_BOOT_SHELL
+    help
+      When enabled, the firmware idle loop detects that no WASM app is
+      running and re-launches CONFIG_AKIRA_BOOT_SHELL_NAME after a
+      1.5 s cooldown.  This makes the shell behave like a firmware
+      component: any app exit or crash return the user to the shell.
+
+config AKIRA_OS_VERSION
+    string "AkiraOS version string"
+    default "1.0.0"
+    help
+      Human-readable version string displayed in the OS shell settings
+      screen and included in OTA manifests.
+
+config AKIRA_WASM_SETTINGS
+    bool "Export persistent settings API to WASM"
+    default n
+    depends on AKIRA_WASM_API && AKIRA_SETTINGS
+    help
+      Exports settings_get / settings_set to WASM apps so they can
+      store and retrieve persistent key-value pairs in NVS flash.
+      Requires the \"settings.*\" capability in the app manifest.
+
 config AKIRA_WASM_LIFECYCLE
     bool "Export App Lifecycle API to WASM"
     default n
