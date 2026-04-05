@@ -42,13 +42,7 @@ void home_screen_load(void);
 void home_screen_update_status(void);
 
 /**
- * @brief Animation + dirty-flag tick.  Call every 20 ms from the shell loop.
- *        Internally gates the 1-second status refresh.
- */
-void home_screen_tick(void);
-
-/**
- * @brief Forward a button edge-bitmask for carousel / options navigation.
+ * @brief Forward a button edge-bitmask for grid / menu navigation.
  *
  * @param just_pressed  Bits that just transitioned pressed this tick.
  *                      Bit N = BIT(AKIRA_BTN_*).

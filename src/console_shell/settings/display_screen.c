@@ -2,137 +2,198 @@
  * Copyright (c) 2025 AkiraOS Contributors
  * SPDX-License-Identifier: GPL-3.0-only
  */
+
 #define LOG_MODULE_NAME akira_display_screen
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(akira_display_screen, CONFIG_AKIRA_LOG_LEVEL);
 
+/**
+ * @file display_screen.c
+ * @brief Display brightness slider and screen-off timeout spinbox.
+ */
+
 #include <zephyr/kernel.h>
-#include <settings/settings.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
-#include <api/akira_display_api.h>
-#include <api/akira_input_api.h>
-#include <drivers/platform_hal.h>
+#include <zephyr/settings/settings.h>
+#include <zephyr/drivers/display.h>
+#include <lvgl.h>
+
+#include "../shell_theme.h"
 #include "display_screen.h"
-#include "../settings_shared.h"
 
-#define BRIGHT_MIN   10
-#define BRIGHT_MAX   100
-#define BRIGHT_STEP  10
-#define TMOUT_MIN    5
-#define TMOUT_MAX    300
-#define TMOUT_STEP   5
+#define BRIGHTNESS_MIN  10
+#define BRIGHTNESS_MAX  255
+#define TIMEOUT_MIN_S   5
+#define TIMEOUT_MAX_S   300
 
-typedef enum {
-    ITEM_BRIGHTNESS = 0,
-    ITEM_TIMEOUT_EN,
-    ITEM_TIMEOUT_S,
-    NUM_ITEMS,
-} disp_item_t;
+static lv_obj_t *g_screen;
+static lv_obj_t *g_brightness_slider;
+static lv_obj_t *g_brightness_val_label;
+static lv_obj_t *g_timeout_spinbox;
 
-static int  g_brightness = BRIGHT_MAX;
-static int  g_timeout    = 60;
-static bool g_timeout_en = true;
+/* ------------------------------------------------------------------ */
+/* Hardware write                                                       */
+/* ------------------------------------------------------------------ */
 
-static void apply_brightness(int v)
+static void apply_brightness(int val)
 {
-    akira_display_hal_set_brightness((uint8_t)v);
-    LOG_DBG("Bright=%d", v);
-}
-
-static void draw(int sel)
-{
-    char bv[8], tv[8];
-    snprintf(bv, sizeof(bv), "%d", g_brightness);
-    snprintf(tv, sizeof(tv), "%ds", g_timeout);
-
-    const char *labels[NUM_ITEMS]  = { "Brightness", "Auto Sleep", "Screen Off (s)" };
-    const char *rvalues[NUM_ITEMS] = { bv, g_timeout_en ? "ON" : "OFF", tv };
-
-    akira_display_clear(SS_C_BLACK);
-    ss_draw_header("DISPLAY");
-    akira_display_rect(0, SS_CONT_Y, SS_SCR_W, SS_RIB_Y - SS_CONT_Y, SS_C_BLACK);
-
-    for (int i = 0; i < NUM_ITEMS; i++) {
-        int bx = SS_MENU_X;
-        int by = SS_CONT_Y + i * SS_MENU_ITH + 2;
-        int bw = SS_MENU_W;
-        int bh = SS_MENU_ITH - 4;
-        bool hi = (i == sel);
-        /* Duration row is dimmed while auto sleep is disabled */
-        bool inactive = (i == ITEM_TIMEOUT_S && !g_timeout_en);
-
-        if (hi && !inactive) {
-            ss_glass_rect_focus(bx, by, bw, bh, 5);
-        } else {
-            ss_glass_rect_dim(bx, by, bw, bh, 5);
-        }
-        int ty = by + (bh - 10) / 2;
-        uint16_t fg = (hi && !inactive) ? SS_C_WHITE : SS_C_DKGRAY;
-        akira_display_text(bx + 10, ty, labels[i], fg);
-        int rvlen = (int)strlen(rvalues[i]);
-        akira_display_text(bx + bw - rvlen * 8 - 10, ty, rvalues[i], fg);
+#if defined(CONFIG_DISPLAY)
+    const struct device *disp = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+    if (device_is_ready(disp)) {
+        uint8_t pct = (uint8_t)((val * 100U) / BRIGHTNESS_MAX);
+        display_set_brightness(disp, pct);
     }
-
-    ss_draw_ribbon("[</> Adjust", "[B] Back");
-    akira_display_flush();
+#endif
+    LOG_DBG("Brightness set to %d", val);
 }
+
+/* ------------------------------------------------------------------ */
+/* Back key                                                             */
+/* ------------------------------------------------------------------ */
+
+static void back_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_KEY) {
+        uint32_t key = lv_indev_get_key(lv_indev_get_act());
+        if (key == LV_KEY_ESC) {
+            extern void settings_screen_load(void);
+            settings_screen_load();
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Slider callback                                                      */
+/* ------------------------------------------------------------------ */
+
+static void brightness_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
+        return;
+    }
+    int val = lv_slider_get_value(g_brightness_slider);
+    lv_label_set_text_fmt(g_brightness_val_label, "%d", val);
+    apply_brightness(val);
+
+    settings_save_one("akira/display/brightness", &val, sizeof(val));
+}
+
+/* ------------------------------------------------------------------ */
+/* Spinbox callback                                                     */
+/* ------------------------------------------------------------------ */
+
+static void timeout_save_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
+        return;
+    }
+    int32_t val = lv_spinbox_get_value(g_timeout_spinbox);
+    settings_save_one("akira/display/timeout_s", &val, sizeof(val));
+}
+
+/* ------------------------------------------------------------------ */
+/* Settings load callback                                               */
+/* ------------------------------------------------------------------ */
+
+static int settings_load_cb(const char *key, size_t len,
+                             settings_read_cb read_cb, void *cb_arg,
+                             void *param)
+{
+    ARG_UNUSED(param);
+
+    if (strcmp(key, "brightness") == 0 && len == sizeof(int)) {
+        int val;
+        if (read_cb(cb_arg, &val, sizeof(val)) == sizeof(val)) {
+            lv_slider_set_value(g_brightness_slider, val, LV_ANIM_OFF);
+            lv_label_set_text_fmt(g_brightness_val_label, "%d", val);
+        }
+    } else if (strcmp(key, "timeout_s") == 0 && len == sizeof(int32_t)) {
+        int32_t val;
+        if (read_cb(cb_arg, &val, sizeof(val)) == sizeof(val)) {
+            lv_spinbox_set_value(g_timeout_spinbox, val);
+        }
+    }
+    return 0;
+}
+
+SETTINGS_STATIC_HANDLER_DEFINE(akira_display_sh, "akira/display",
+                                NULL, settings_load_cb, NULL, NULL);
+
+/* ------------------------------------------------------------------ */
+/* Screen construction                                                  */
+/* ------------------------------------------------------------------ */
+
+static void add_row_label(lv_obj_t *parent, const char *text, int y_ofs)
+{
+    lv_obj_t *lbl = lv_label_create(parent);
+    lv_label_set_text(lbl, text);
+    lv_obj_add_style(lbl, &g_style_list_item, 0);
+    lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 8, y_ofs);
+}
+
+static void build_screen(void)
+{
+    g_screen = lv_obj_create(NULL);
+    lv_obj_add_style(g_screen, &g_style_screen, 0);
+
+    shell_theme_make_header(g_screen, "Display");
+    shell_theme_make_footer(g_screen, "B:Back", "");
+
+    int y = SHELL_HEADER_H + 8;
+
+    /* --- Brightness --- */
+    add_row_label(g_screen, "Brightness", y);
+    y += 20;
+
+    g_brightness_slider = lv_slider_create(g_screen);
+    lv_slider_set_range(g_brightness_slider, BRIGHTNESS_MIN, BRIGHTNESS_MAX);
+    lv_slider_set_value(g_brightness_slider, BRIGHTNESS_MAX, LV_ANIM_OFF);
+    lv_obj_set_size(g_brightness_slider, SHELL_SCREEN_W - 72, 16);
+    lv_obj_align(g_brightness_slider, LV_ALIGN_TOP_LEFT, 8, y);
+    lv_obj_add_event_cb(g_brightness_slider, brightness_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+
+    g_brightness_val_label = lv_label_create(g_screen);
+    lv_label_set_text(g_brightness_val_label, "255");
+    lv_obj_add_style(g_brightness_val_label, &g_style_list_item, 0);
+    lv_obj_align_to(g_brightness_val_label, g_brightness_slider,
+                    LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+
+    y += 28;
+
+    /* Separator */
+    lv_obj_t *sep = lv_obj_create(g_screen);
+    lv_obj_set_size(sep, SHELL_SCREEN_W - 16, 1);
+    lv_obj_align(sep, LV_ALIGN_TOP_LEFT, 8, y);
+    lv_obj_add_style(sep, &g_style_separator, 0);
+    y += 8;
+
+    /* --- Screen-off timeout --- */
+    add_row_label(g_screen, "Screen-off timeout (s)", y);
+    y += 20;
+
+    g_timeout_spinbox = lv_spinbox_create(g_screen);
+    lv_spinbox_set_range(g_timeout_spinbox, TIMEOUT_MIN_S, TIMEOUT_MAX_S);
+    lv_spinbox_set_value(g_timeout_spinbox, 60);
+    lv_spinbox_set_digit_format(g_timeout_spinbox, 3, 0);
+    lv_obj_set_width(g_timeout_spinbox, 80);
+    lv_obj_align(g_timeout_spinbox, LV_ALIGN_TOP_LEFT, 8, y);
+    lv_obj_add_event_cb(g_timeout_spinbox, timeout_save_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+
+    lv_obj_add_event_cb(g_screen, back_event_cb, LV_EVENT_KEY, NULL);
+
+    /* Load persisted values */
+    settings_load_subtree("akira/display");
+}
+
+/* ------------------------------------------------------------------ */
+/* Public API                                                           */
+/* ------------------------------------------------------------------ */
 
 void display_screen_load(void)
 {
-    extern void settings_screen_load(void);
-    { char _sv[16] = ""; if (!akira_settings_get("akira/display/brightness", _sv, sizeof(_sv))) { g_brightness = atoi(_sv); if (g_brightness > BRIGHT_MAX) g_brightness = BRIGHT_MAX; if (g_brightness < BRIGHT_MIN) g_brightness = BRIGHT_MIN; } }
-    { char _sv[16] = ""; if (!akira_settings_get("akira/display/timeout_s",  _sv, sizeof(_sv))) g_timeout    = atoi(_sv); }
-    { char _sv[4]  = ""; if (!akira_settings_get("akira/display/timeout_en", _sv, sizeof(_sv))) g_timeout_en = (atoi(_sv) != 0); }
-
-    int sel = 0;
-    draw(sel);
-    uint32_t prev = akira_input_get_bitmask();
-    while (true) {
-        k_sleep(K_MSEC(20));
-        uint32_t btns = akira_input_get_bitmask(), just = btns & ~prev;
-        prev = btns;
-        if (!just) continue;
-
-        if (just & BIT(AKIRA_BTN_UP))   { if (sel > 0)            { sel--; draw(sel); } }
-        if (just & BIT(AKIRA_BTN_DOWN)) { if (sel < NUM_ITEMS - 1) { sel++; draw(sel); } }
-
-        if (just & BIT(AKIRA_BTN_LEFT)) {
-            if (sel == ITEM_BRIGHTNESS) {
-                g_brightness -= BRIGHT_STEP;
-                if (g_brightness < BRIGHT_MIN) g_brightness = BRIGHT_MIN;
-                apply_brightness(g_brightness);
-                { char _sv[16]; snprintf(_sv, sizeof(_sv), "%d", g_brightness); akira_settings_set("akira/display/brightness", _sv, 0); }
-            } else if (sel == ITEM_TIMEOUT_EN) {
-                g_timeout_en = false;
-                akira_settings_set("akira/display/timeout_en", "0", 0);
-            } else if (sel == ITEM_TIMEOUT_S && g_timeout_en) {
-                g_timeout -= TMOUT_STEP;
-                if (g_timeout < TMOUT_MIN) g_timeout = TMOUT_MIN;
-                { char _sv[16]; snprintf(_sv, sizeof(_sv), "%d", g_timeout); akira_settings_set("akira/display/timeout_s", _sv, 0); }
-            }
-            draw(sel);
-        }
-        if (just & BIT(AKIRA_BTN_RIGHT)) {
-            if (sel == ITEM_BRIGHTNESS) {
-                g_brightness += BRIGHT_STEP;
-                if (g_brightness > BRIGHT_MAX) g_brightness = BRIGHT_MAX;
-                apply_brightness(g_brightness);
-                { char _sv[16]; snprintf(_sv, sizeof(_sv), "%d", g_brightness); akira_settings_set("akira/display/brightness", _sv, 0); }
-            } else if (sel == ITEM_TIMEOUT_EN) {
-                g_timeout_en = true;
-                akira_settings_set("akira/display/timeout_en", "1", 0);
-            } else if (sel == ITEM_TIMEOUT_S && g_timeout_en) {
-                g_timeout += TMOUT_STEP;
-                if (g_timeout > TMOUT_MAX) g_timeout = TMOUT_MAX;
-                { char _sv[16]; snprintf(_sv, sizeof(_sv), "%d", g_timeout); akira_settings_set("akira/display/timeout_s", _sv, 0); }
-            }
-            draw(sel);
-        }
-        if ((just & BIT(AKIRA_BTN_B)) || (just & BIT(AKIRA_BTN_HOME))) {
-            settings_screen_load();
-            return;
-        }
+    if (!g_screen) {
+        build_screen();
     }
+    lv_scr_load(g_screen);
 }

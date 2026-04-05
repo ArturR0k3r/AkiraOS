@@ -15,6 +15,10 @@ LOG_MODULE_REGISTER(akira_display_own, CONFIG_AKIRA_LOG_LEVEL);
 #include "display_ownership.h"
 #include <zephyr/kernel.h>
 
+#if defined(CONFIG_LVGL)
+#include <lvgl.h>
+#endif
+
 /* Mutex protecting g_owner transitions */
 static K_MUTEX_DEFINE(g_display_mutex);
 
@@ -35,6 +39,11 @@ int akira_display_claim_shell(void)
     g_owner = DISPLAY_OWNER_SHELL;
     k_mutex_unlock(&g_display_mutex);
 
+#if defined(CONFIG_LVGL)
+    /* Resume LVGL's periodic tick so it can refresh the screen */
+    lv_timer_handler();
+#endif
+
     LOG_DBG("Display claimed by OS shell");
     return 0;
 }
@@ -42,6 +51,15 @@ int akira_display_claim_shell(void)
 void akira_display_release_to_wasm(void)
 {
     k_mutex_lock(&g_display_mutex, K_FOREVER);
+
+#if defined(CONFIG_LVGL)
+    /*
+     * Flush any pending LVGL draw operations before handing over.
+     * This prevents tearing when the WASM app immediately clears the screen.
+     */
+    lv_timer_handler();
+#endif
+
     g_owner = DISPLAY_OWNER_WASM;
     k_mutex_unlock(&g_display_mutex);
 

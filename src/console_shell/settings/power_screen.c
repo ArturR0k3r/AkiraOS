@@ -2,112 +2,162 @@
  * Copyright (c) 2025 AkiraOS Contributors
  * SPDX-License-Identifier: GPL-3.0-only
  */
+
 #define LOG_MODULE_NAME akira_power_screen
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(akira_power_screen, CONFIG_AKIRA_LOG_LEVEL);
 
+/**
+ * @file power_screen.c
+ * @brief Idle sleep and display-off timeout configuration.
+ */
+
 #include <zephyr/kernel.h>
-#include <settings/settings.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
-#include <api/akira_display_api.h>
-#include <api/akira_input_api.h>
+#include <zephyr/settings/settings.h>
+#include <lvgl.h>
+
+#include "../shell_theme.h"
 #include "power_screen.h"
-#include "../settings_shared.h"
 
-#define SLEEP_MIN   30
-#define SLEEP_MAX   3600
-#define SLEEP_STEP  30
-#define DISP_MIN    5
-#define DISP_MAX    600
-#define DISP_STEP   5
-#define NUM_ITEMS   2
+#define SLEEP_MIN_S        30
+#define SLEEP_MAX_S        3600
+#define DISPLAY_OFF_MIN_S  5
+#define DISPLAY_OFF_MAX_S  600
 
-static int g_sleep_s   = 300;
-static int g_dispoff_s = 60;
+static lv_obj_t *g_screen;
+static lv_obj_t *g_sleep_spinbox;
+static lv_obj_t *g_dispoff_spinbox;
 
-static void draw(int sel)
+/* ------------------------------------------------------------------ */
+/* Back key                                                             */
+/* ------------------------------------------------------------------ */
+
+static void back_event_cb(lv_event_t *e)
 {
-    char sv[8], dv[8];
-    snprintf(sv, sizeof(sv), "%ds", g_sleep_s);
-    snprintf(dv, sizeof(dv), "%ds", g_dispoff_s);
-
-    const char *labels[NUM_ITEMS]  = { "Sleep Timeout", "Display Off" };
-    const char *rvalues[NUM_ITEMS] = { sv, dv };
-
-    akira_display_clear(SS_C_BLACK);
-    ss_draw_header("POWER");
-    akira_display_rect(0, SS_CONT_Y, SS_SCR_W, SS_RIB_Y - SS_CONT_Y, SS_C_BLACK);
-
-    for (int i = 0; i < NUM_ITEMS; i++) {
-        int bx = SS_MENU_X;
-        int by = SS_CONT_Y + i * SS_MENU_ITH + 2;
-        int bw = SS_MENU_W;
-        int bh = SS_MENU_ITH - 4;
-        bool hi = (i == sel);
-
-        if (hi) {
-            ss_glass_rect_focus(bx, by, bw, bh, 5);
-        } else {
-            ss_glass_rect_dim(bx, by, bw, bh, 5);
+    if (lv_event_get_code(e) == LV_EVENT_KEY) {
+        uint32_t key = lv_indev_get_key(lv_indev_get_act());
+        if (key == LV_KEY_ESC) {
+            extern void settings_screen_load(void);
+            settings_screen_load();
         }
-        int ty = by + (bh - 10) / 2;
-        uint16_t fg = hi ? SS_C_WHITE : SS_C_DKGRAY;
-        akira_display_text(bx + 10, ty, labels[i], fg);
-        int rvlen = (int)strlen(rvalues[i]);
-        akira_display_text(bx + bw - rvlen * 8 - 10, ty, rvalues[i], fg);
     }
-
-    ss_draw_ribbon("[</> Adjust", "[B] Back");
-    akira_display_flush();
 }
+
+/* ------------------------------------------------------------------ */
+/* Save callbacks                                                       */
+/* ------------------------------------------------------------------ */
+
+static void sleep_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
+        return;
+    }
+    int32_t val = lv_spinbox_get_value(g_sleep_spinbox);
+    settings_save_one("akira/power/sleep_s", &val, sizeof(val));
+    LOG_DBG("Sleep timeout set to %d s", val);
+}
+
+static void dispoff_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
+        return;
+    }
+    int32_t val = lv_spinbox_get_value(g_dispoff_spinbox);
+    settings_save_one("akira/power/display_off_s", &val, sizeof(val));
+    LOG_DBG("Display-off timeout set to %d s", val);
+}
+
+/* ------------------------------------------------------------------ */
+/* Settings handler                                                     */
+/* ------------------------------------------------------------------ */
+
+static int settings_load_cb(const char *key, size_t len,
+                             settings_read_cb read_cb, void *cb_arg,
+                             void *param)
+{
+    ARG_UNUSED(param);
+
+    if (strcmp(key, "sleep_s") == 0 && len == sizeof(int32_t)) {
+        int32_t val;
+        if (read_cb(cb_arg, &val, sizeof(val)) == sizeof(val)) {
+            lv_spinbox_set_value(g_sleep_spinbox, val);
+        }
+    } else if (strcmp(key, "display_off_s") == 0 &&
+               len == sizeof(int32_t)) {
+        int32_t val;
+        if (read_cb(cb_arg, &val, sizeof(val)) == sizeof(val)) {
+            lv_spinbox_set_value(g_dispoff_spinbox, val);
+        }
+    }
+    return 0;
+}
+
+SETTINGS_STATIC_HANDLER_DEFINE(akira_power_sh, "akira/power",
+                                NULL, settings_load_cb, NULL, NULL);
+
+/* ------------------------------------------------------------------ */
+/* Screen construction helpers                                          */
+/* ------------------------------------------------------------------ */
+
+static lv_obj_t *make_spinbox_row(lv_obj_t *parent, const char *text,
+                                   int min_val, int max_val,
+                                   int default_val, int y,
+                                   lv_event_cb_t cb)
+{
+    lv_obj_t *lbl = lv_label_create(parent);
+    lv_label_set_text(lbl, text);
+    lv_obj_add_style(lbl, &g_style_list_item, 0);
+    lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 8, y);
+
+    lv_obj_t *sb = lv_spinbox_create(parent);
+    lv_spinbox_set_range(sb, min_val, max_val);
+    lv_spinbox_set_value(sb, default_val);
+    lv_spinbox_set_digit_format(sb, 4, 0);
+    lv_obj_set_width(sb, 90);
+    lv_obj_align(sb, LV_ALIGN_TOP_RIGHT, -8, y);
+    lv_obj_add_event_cb(sb, cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    return sb;
+}
+
+static void build_screen(void)
+{
+    g_screen = lv_obj_create(NULL);
+    lv_obj_add_style(g_screen, &g_style_screen, 0);
+
+    shell_theme_make_header(g_screen, "Power");
+    shell_theme_make_footer(g_screen, "B:Back", "");
+
+    int y = SHELL_HEADER_H + 12;
+
+    g_sleep_spinbox = make_spinbox_row(g_screen,
+        "Idle sleep (s)", SLEEP_MIN_S, SLEEP_MAX_S, 300, y, sleep_cb);
+    y += 40;
+
+    /* Separator */
+    lv_obj_t *sep = lv_obj_create(g_screen);
+    lv_obj_set_size(sep, SHELL_SCREEN_W - 16, 1);
+    lv_obj_align(sep, LV_ALIGN_TOP_LEFT, 8, y);
+    lv_obj_add_style(sep, &g_style_separator, 0);
+    y += 10;
+
+    g_dispoff_spinbox = make_spinbox_row(g_screen,
+        "Display-off (s)", DISPLAY_OFF_MIN_S, DISPLAY_OFF_MAX_S,
+        60, y, dispoff_cb);
+
+    lv_obj_add_event_cb(g_screen, back_event_cb, LV_EVENT_KEY, NULL);
+
+    settings_load_subtree("akira/power");
+}
+
+/* ------------------------------------------------------------------ */
+/* Public API                                                           */
+/* ------------------------------------------------------------------ */
 
 void power_screen_load(void)
 {
-    extern void settings_screen_load(void);
-    { char _sv[16] = ""; if (!akira_settings_get("akira/power/sleep_s",   _sv, sizeof(_sv))) g_sleep_s   = atoi(_sv); }
-    { char _sv[16] = ""; if (!akira_settings_get("akira/power/dispoff_s", _sv, sizeof(_sv))) g_dispoff_s = atoi(_sv); }
-
-    int sel = 0;
-    draw(sel);
-    uint32_t prev = akira_input_get_bitmask();
-    while (true) {
-        k_sleep(K_MSEC(20));
-        uint32_t btns = akira_input_get_bitmask(), just = btns & ~prev;
-        prev = btns;
-        if (!just) continue;
-
-        if (just & BIT(AKIRA_BTN_UP))   { if (sel > 0)            { sel--; draw(sel); } }
-        if (just & BIT(AKIRA_BTN_DOWN)) { if (sel < NUM_ITEMS - 1) { sel++; draw(sel); } }
-
-        if (just & BIT(AKIRA_BTN_LEFT)) {
-            if (sel == 0) {
-                g_sleep_s -= SLEEP_STEP;
-                if (g_sleep_s < SLEEP_MIN) g_sleep_s = SLEEP_MIN;
-                { char _sv[16]; snprintf(_sv, sizeof(_sv), "%d", g_sleep_s); akira_settings_set("akira/power/sleep_s", _sv, 0); }
-            } else {
-                g_dispoff_s -= DISP_STEP;
-                if (g_dispoff_s < DISP_MIN) g_dispoff_s = DISP_MIN;
-                { char _sv[16]; snprintf(_sv, sizeof(_sv), "%d", g_dispoff_s); akira_settings_set("akira/power/dispoff_s", _sv, 0); }
-            }
-            draw(sel);
-        }
-        if (just & BIT(AKIRA_BTN_RIGHT)) {
-            if (sel == 0) {
-                g_sleep_s += SLEEP_STEP;
-                if (g_sleep_s > SLEEP_MAX) g_sleep_s = SLEEP_MAX;
-                { char _sv[16]; snprintf(_sv, sizeof(_sv), "%d", g_sleep_s); akira_settings_set("akira/power/sleep_s", _sv, 0); }
-            } else {
-                g_dispoff_s += DISP_STEP;
-                if (g_dispoff_s > DISP_MAX) g_dispoff_s = DISP_MAX;
-                { char _sv[16]; snprintf(_sv, sizeof(_sv), "%d", g_dispoff_s); akira_settings_set("akira/power/dispoff_s", _sv, 0); }
-            }
-            draw(sel);
-        }
-        if ((just & BIT(AKIRA_BTN_B)) || (just & BIT(AKIRA_BTN_HOME))) {
-            settings_screen_load();
-            return;
-        }
+    if (!g_screen) {
+        build_screen();
     }
+    lv_scr_load(g_screen);
 }

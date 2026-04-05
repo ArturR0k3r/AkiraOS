@@ -11,7 +11,8 @@
 #ifndef INSTALL_PROGRESS_SCREEN_H
 #define INSTALL_PROGRESS_SCREEN_H
 
-
+#if defined(CONFIG_LVGL)
+#include <lvgl.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,4 +39,5 @@ void install_progress_hide(void);
 }
 #endif
 
+#endif /* CONFIG_LVGL */
 #endif /* INSTALL_PROGRESS_SCREEN_H */

@@ -9,98 +9,116 @@ LOG_MODULE_REGISTER(akira_install_progress, CONFIG_AKIRA_LOG_LEVEL);
 
 /**
  * @file install_progress_screen.c
- * @brief Modal install progress overlay — Liquid Crystal style.
+ * @brief Modal install progress overlay reused by SD, BLE, and HTTP installers.
  *
- * Centred 288x110 panel with:
- *   - Dither glass backdrop
+ * A semi-transparent black overlay (200×110 px, centred) containing:
  *   - App name label
- *   - Segmented progress bar (20 segments, 1 px gap)
- *   - Status message
+ *   - Progress bar (0..100 %)
+ *   - Status message label
  *
- * Pure akira_display_* — no LVGL.
+ * The overlay is built lazily on first show() call and reused.
+ * Destroyed on hide().
  */
 
 #include "install_progress_screen.h"
-
-#include <api/akira_display_api.h>
-#include <zephyr/kernel.h>
-#include <string.h>
-#include <stdio.h>
-
-
 #include "shell_theme.h"
 
-#define OVL_W    288
-#define OVL_H    110
-#define OVL_X    ((SCR_W - OVL_W) / 2)
-#define OVL_Y    ((SCR_H - OVL_H) / 2)
+#if defined(CONFIG_LVGL)
+
+#include <lvgl.h>
+#include <string.h>
+#include <zephyr/kernel.h>
+
+#define OVERLAY_W 220
+#define OVERLAY_H 110
+
+static lv_obj_t *g_overlay;
+static lv_obj_t *g_lbl_name;
+static lv_obj_t *g_bar;
+static lv_obj_t *g_lbl_msg;
 
 /* ------------------------------------------------------------------ */
 
-
-
-static void draw_centred(int x, int y, int w, const char *s, uint16_t fg, uint16_t bg)
+static void overlay_create(void)
 {
-    int tw = (int)strlen(s) * 8;
-    int lx = x + (tw < w ? (w - tw) / 2 : 0);
-    akira_display_rect(x, y, w, 10, bg);
-    akira_display_text(lx, y, s, fg);
+    lv_obj_t *scr = lv_scr_act();
+
+    /* Dimmed backdrop */
+    g_overlay = lv_obj_create(scr);
+    lv_obj_set_size(g_overlay, OVERLAY_W, OVERLAY_H);
+    lv_obj_center(g_overlay);
+    lv_obj_set_style_bg_color(g_overlay, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(g_overlay, LV_OPA_80, 0);
+    lv_obj_set_style_border_color(g_overlay,
+                                  lv_color_white(), 0);
+    lv_obj_set_style_border_width(g_overlay, 1, 0);
+    lv_obj_set_style_radius(g_overlay, 8, 0);
+    lv_obj_set_style_pad_all(g_overlay, 10, 0);
+    lv_obj_set_scrollbar_mode(g_overlay, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_flex_flow(g_overlay, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(g_overlay,
+                          LV_FLEX_ALIGN_SPACE_EVENLY,
+                          LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(g_overlay, 6, 0);
+
+    /* App name */
+    g_lbl_name = lv_label_create(g_overlay);
+    lv_label_set_text(g_lbl_name, "Installing...");
+    lv_obj_set_style_text_color(g_lbl_name, lv_color_white(), 0);
+    lv_obj_set_style_text_font(g_lbl_name, SHELL_FONT_SMALL, 0);
+
+    /* Progress bar */
+    g_bar = lv_bar_create(g_overlay);
+    lv_obj_set_size(g_bar, OVERLAY_W - 30, 14);
+    lv_bar_set_range(g_bar, 0, 100);
+    lv_bar_set_value(g_bar, 0, LV_ANIM_ON);
+    lv_obj_set_style_bg_color(g_bar, lv_color_make(60, 60, 60), 0);
+    lv_obj_set_style_bg_color(g_bar, lv_color_white(),
+                              LV_PART_INDICATOR);
+
+    /* Status message */
+    g_lbl_msg = lv_label_create(g_overlay);
+    lv_label_set_text(g_lbl_msg, "");
+    lv_obj_set_style_text_color(g_lbl_msg, lv_color_make(200, 200, 200), 0);
+    lv_obj_set_style_text_font(g_lbl_msg, SHELL_FONT_SMALL, 0);
 }
 
 /* ------------------------------------------------------------------ */
 
 void install_progress_show(const char *name, int pct, const char *msg)
 {
-    if (pct < 0)   pct = 0;
-    if (pct > 100) pct = 100;
-
-    /* Panel */
-    akira_display_rect(OVL_X, OVL_Y, OVL_W, OVL_H, C_BLACK);
-    akira_display_rect_outline(OVL_X,     OVL_Y,     OVL_W,     OVL_H,     C_WHITE);
-    akira_display_rect_outline(OVL_X + 1, OVL_Y + 1, OVL_W - 2, OVL_H - 2, C_WHITE);
-
-    /* Title */
-    draw_centred(OVL_X + 4, OVL_Y + 6, OVL_W - 8, "INSTALLING", C_WHITE, C_BLACK);
-    akira_display_hline(OVL_X + 4, OVL_Y + 18, OVL_W - 8, C_WHITE);
-
-    /* App name */
-    const char *disp_name = name ? name : "app";
-    draw_centred(OVL_X + 4, OVL_Y + 24, OVL_W - 8, disp_name, C_WHITE, C_BLACK);
-
-    /* Segmented progress bar: 20 segments across OVL_W-16 */
-    int bar_x = OVL_X + 8;
-    int bar_y = OVL_Y + 40;
-    int bar_w = OVL_W - 16;
-    int bar_h = 14;
-    int segs  = 20;
-    int sw    = (bar_w - (segs - 1)) / segs;   /* segment width */
-
-    akira_display_rect_outline(bar_x - 1, bar_y - 1, bar_w + 2, bar_h + 2, C_WHITE);
-    int filled = pct * segs / 100;
-    for (int i = 0; i < segs; i++) {
-        int sx  = bar_x + i * (sw + 1);
-        uint16_t sc = (i < filled) ? C_WHITE : C_DKGRAY;
-        akira_display_rect(sx, bar_y, sw, bar_h, sc);
+    if (!g_overlay) {
+        overlay_create();
     }
 
-    /* Percentage */
-    char pct_str[8];
-    snprintf(pct_str, sizeof(pct_str), "%d%%", pct);
-    draw_centred(OVL_X + 4, OVL_Y + 58, OVL_W - 8, pct_str, C_WHITE, C_BLACK);
-
-    /* Status message */
-    if (msg && *msg) {
-        draw_centred(OVL_X + 4, OVL_Y + 74, OVL_W - 8, msg, C_GRAY, C_BLACK);
+    if (g_lbl_name) {
+        lv_label_set_text(g_lbl_name, name ? name : "Installing...");
     }
 
-    akira_display_flush();
+    if (g_bar) {
+        int clamped = (pct < 0) ? 0 : (pct > 100) ? 100 : pct;
+        lv_bar_set_value(g_bar, clamped, LV_ANIM_ON);
+    }
 
+    if (g_lbl_msg && msg) {
+        lv_label_set_text(g_lbl_msg, msg);
+    }
+
+    lv_timer_handler();
     LOG_DBG("Install progress: '%s' %d%% — %s",
-            disp_name, pct, msg ? msg : "");
+            name ? name : "?", pct, msg ? msg : "");
 }
 
 void install_progress_hide(void)
 {
-    /* Nothing to destroy — next full redraw will overwrite */
-    LOG_DBG("Install progress overlay hidden");
+    if (g_overlay) {
+        lv_obj_del(g_overlay);
+        g_overlay  = NULL;
+        g_lbl_name = NULL;
+        g_bar      = NULL;
+        g_lbl_msg  = NULL;
+    }
 }
+
+#endif /* CONFIG_LVGL */
