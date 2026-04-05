@@ -60,6 +60,12 @@ extern "C" {
 /* Persistent key-value settings read/write (NVS-backed).
  * Manifest string: "settings.*" */
 #define AKIRA_CAP_SETTINGS    (1U << 23)
+/* ADC channel read (raw and millivolt).
+ * Manifest string: "adc" */
+#define AKIRA_CAP_ADC         (1U << 24)
+/* Feed/pet the system watchdog from a WASM app.
+ * Manifest string: "wdt" */
+#define AKIRA_CAP_WDT         (1U << 25)
 
 /*
  * Capability check macro using security subsystem.

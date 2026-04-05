@@ -66,6 +66,14 @@ Toggle these flags to export particular native APIs into the WASM sandboxes. If 
 | `CONFIG_AKIRA_WASM_HID` | `n` | Export Human Interface Device API to WASM. |
 | `CONFIG_AKIRA_WASM_LIFECYCLE` | `y` | Export app manipulation API (`app_start`, `app_stop`). |
 | `CONFIG_AKIRA_WASM_IPC` | `y` | Export Pub/Sub IPC API. |
+| `CONFIG_AKIRA_WASM_ADC` | `n` | Export ADC API (`adc_read`, `adc_read_mv`). Requires `CONFIG_ADC=y`. |
+| `CONFIG_AKIRA_WASM_ADC_MAX_CHANNELS`| `4` | Number of ADC channels accessible to WASM apps. |
+| `CONFIG_AKIRA_WASM_ADC_RESOLUTION`| `12` | ADC bit resolution (bits). |
+| `CONFIG_AKIRA_WASM_ADC_VREF_MV`| `3300` | ADC reference voltage in millivolts for `adc_read_mv()`. |
+| `CONFIG_AKIRA_WDT` | `n` | Enable AkiraOS system watchdog manager (auto-feed worker). Requires `CONFIG_WATCHDOG=y`. |
+| `CONFIG_AKIRA_WDT_TIMEOUT_MS` | `30000` | Watchdog hardware timeout in milliseconds. |
+| `CONFIG_AKIRA_WDT_FEED_INTERVAL_MS`| `10000`| Auto-feed interval in milliseconds (must be < timeout). |
+| `CONFIG_AKIRA_WASM_WDT` | `n` | Export `wdt_pet()` to WASM apps. Requires `CONFIG_AKIRA_WDT=y`. |
 
 ### Storage & Settings
 

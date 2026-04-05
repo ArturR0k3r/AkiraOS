@@ -8,6 +8,12 @@
 #ifdef CONFIG_AKIRA_SYSTEM_API
 #include "akira_system_api.h"
 #endif
+#ifdef CONFIG_AKIRA_WASM_ADC
+#include "akira_adc_api.h"
+#endif
+#ifdef CONFIG_AKIRA_WASM_WDT
+#include "akira_wdt_api.h"
+#endif
 
 #include <runtime/akira_runtime.h>
 #include <runtime/security.h>
@@ -159,6 +165,15 @@ bool akira_register_native_apis()
         #ifdef CONFIG_AKIRA_WASM_PWM
         {"pwm_set",     (void *)akira_native_pwm_set,     "(iii)i", NULL},
         {"pwm_disable", (void *)akira_native_pwm_disable, "(i)i",   NULL},
+        #endif
+
+        #ifdef CONFIG_AKIRA_WASM_ADC
+        {"adc_read",    (void *)akira_native_adc_read,    "(i)i",   NULL},
+        {"adc_read_mv", (void *)akira_native_adc_read_mv, "(i)i",   NULL},
+        #endif
+
+        #ifdef CONFIG_AKIRA_WASM_WDT
+        {"wdt_pet", (void *)akira_native_wdt_pet, "()i", NULL},
         #endif
 
         #ifdef CONFIG_AKIRA_WASM_STORAGE

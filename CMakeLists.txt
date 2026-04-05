@@ -261,6 +261,18 @@ if(CONFIG_AKIRA_WASM_PWM)
     target_sources(app PRIVATE src/api/akira_pwm_api.c)
 endif()
 
+if(CONFIG_AKIRA_WASM_ADC)
+    target_sources(app PRIVATE src/api/akira_adc_api.c)
+endif()
+
+if(CONFIG_AKIRA_WDT)
+    target_sources(app PRIVATE src/drivers/wdt/akira_wdt.c)
+endif()
+
+if(CONFIG_AKIRA_WASM_WDT)
+    target_sources(app PRIVATE src/api/akira_wdt_api.c)
+endif()
+
 if(CONFIG_AKIRA_WASM_STORAGE)
     target_sources(app PRIVATE src/api/akira_storage_api.c)
 endif()

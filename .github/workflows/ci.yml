@@ -15,6 +15,9 @@ jobs:
           - board: esp32s3_devkitm/esp32s3/procpu
             name: board-esp32s3_procpu
             fetch_espressif_blobs: true
+          - board: akiraconsole/esp32s3/procpu
+            name: board-akiraconsole
+            fetch_espressif_blobs: true
           - board: b_u585i_iot02a
             name: board-b_u585i_iot02a
             fetch_espressif_blobs: false

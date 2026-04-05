@@ -116,6 +116,8 @@ Array of permission strings.
 | `memory` | `mem_alloc()`, `mem_free()` |
 | `app.info` | `app_get_status()`, `app_list()`, `app_get_self_name()` (read-only) |
 | `input.write` | Inject synthetic input events |
+| `adc` | `adc_read()`, `adc_read_mv()` |
+| `wdt` | `wdt_pet()` |
 
 `printf()` and `delay()` are always available and require no capability declaration.
 
@@ -139,7 +141,7 @@ The following group aliases are recognized and expand to all capabilities of tha
 | `storage.*` | `storage.read` + `storage.write` |
 | `gpio.*` | `gpio.read` + `gpio.write` |
 | `bt.*` | `ble` + `hid` |
-| `hw.*` | `timer` + `uart` + `i2c` + `pwm` |
+| `hw.*` | `timer` + `uart` + `i2c` + `pwm` + `adc` + `wdt` |
 | `power.*` | `power.read` + `power.control` |
 | `*` | All capabilities |
 
@@ -307,7 +309,8 @@ Execution priority hint (future use).
 Apps can combine capabilities based on use case:
 
 | Use Case | Capabilities | Memory Quota |
-|----------|--------------|--------------|
+|----------|--------------|-------------|
+| ADC sampler | `adc` | 16–32 KB |
 | Display UI | `display.write`, `input.read` | 32–64 KB |
 | Sensor monitor | `sensor.read`, `display.write` | 48–80 KB |
 | Data logger | `sensor.read`, `storage.write` | 64–96 KB |

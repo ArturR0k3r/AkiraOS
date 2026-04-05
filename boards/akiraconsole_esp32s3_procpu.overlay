@@ -81,6 +81,30 @@
     };
 };
 
+// ============================================================================
+// ADC Configuration
+// adc1 is the SAR ADC available on ESP32-S3 (10-bit/12-bit).
+// akira-adc alias lets the akira_adc_api resolve the device without
+// board-specific code.
+// ============================================================================
+&adc1 {
+    status = "okay";
+};
+
+/ {
+    aliases {
+        akira-adc = &adc1;
+    };
+};
+
+// ============================================================================
+// Watchdog Configuration
+// wdt0 is the Main System Timer watchdog on ESP32-S3.
+// ============================================================================
+&wdt0 {
+    status = "okay";
+};
+
 / {
     // ST7789V is the default display for AkiraConsole.
     // chosen and the MIPI DBI node are unconditional — `#if` inside a DTS

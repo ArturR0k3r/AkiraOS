@@ -1440,6 +1440,84 @@ config AKIRA_WASM_PWM
       Provides pwm_set(channel, freq_hz, duty_pct) and pwm_disable(channel).
       Requires AKIRA_CAP_PWM capability in the app manifest.
 
+config AKIRA_WASM_ADC
+    bool "Export ADC API to WASM"
+    default n
+    depends on AKIRA_WASM_API && ADC
+    help
+      Export ADC channel read functions to WASM applications.
+      Provides adc_read(channel) and adc_read_mv(channel).
+      Board overlay must enable the ADC node and set alias akira-adc pointing
+      to it.  If the alias is absent the first zephyr,adc device is used.
+      Requires AKIRA_CAP_ADC capability ("adc") in the app manifest.
+
+config AKIRA_WASM_ADC_MAX_CHANNELS
+    int "Maximum ADC channels exposed to WASM"
+    default 4
+    range 1 16
+    depends on AKIRA_WASM_ADC
+    help
+      Upper bound on the channel index accepted by adc_read() / adc_read_mv().
+      Channels are lazily configured on first access.
+
+config AKIRA_WASM_ADC_RESOLUTION
+    int "ADC resolution in bits"
+    default 12
+    range 8 16
+    depends on AKIRA_WASM_ADC
+    help
+      Bit resolution passed to the Zephyr ADC driver for each conversion.
+      Must match the hardware capability of the selected ADC device.
+
+config AKIRA_WASM_ADC_VREF_MV
+    int "ADC reference voltage in millivolts"
+    default 3300
+    range 1000 5000
+    depends on AKIRA_WASM_ADC
+    help
+      Reference voltage used by adc_read_mv() for raw-to-millivolt conversion.
+      Set to the board's actual VREF (e.g. 3300 for 3.3 V, 1800 for 1.8 V).
+
+config AKIRA_WDT
+    bool "AkiraOS system watchdog"
+    default n
+    depends on WATCHDOG
+    help
+      Enable hardware watchdog timer integration for AkiraOS.
+      The first enabled zephyr,watchdog device found in the device tree is
+      used — no additional board-specific code is required.
+      A background worker auto-feeds the WDT every AKIRA_WDT_FEED_INTERVAL_MS
+      so the system resets only if AkiraOS itself hangs.
+      Board overlay must enable the watchdog node (status = "okay").
+      Board .conf must set CONFIG_WATCHDOG=y and CONFIG_AKIRA_WDT=y.
+
+config AKIRA_WDT_TIMEOUT_MS
+    int "Watchdog timeout in milliseconds"
+    default 30000
+    range 1000 120000
+    depends on AKIRA_WDT
+    help
+      Hardware watchdog timeout.  The system resets if the WDT is not fed
+      within this window.  Must be greater than AKIRA_WDT_FEED_INTERVAL_MS.
+
+config AKIRA_WDT_FEED_INTERVAL_MS
+    int "Watchdog auto-feed interval in milliseconds"
+    default 10000
+    range 500 60000
+    depends on AKIRA_WDT
+    help
+      Interval at which the AkiraOS WDT worker automatically feeds the
+      watchdog.  Must be less than AKIRA_WDT_TIMEOUT_MS.
+
+config AKIRA_WASM_WDT
+    bool "Export WDT pet API to WASM"
+    default n
+    depends on AKIRA_WASM_API && AKIRA_WDT
+    help
+      Allows WASM apps to manually pet/feed the system watchdog via wdt_pet().
+      Useful for apps that want to signal liveness to the hardware watchdog.
+      Requires AKIRA_CAP_WDT capability ("wdt") in the app manifest.
+
 config AKIRA_WASM_STORAGE
     bool "Export Storage (filesystem) API to WASM"
     default y

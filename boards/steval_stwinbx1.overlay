@@ -21,6 +21,7 @@
         led0 = &green_led;
         led1 = &orange_led;
         sw0 = &user_button;
+        akira-adc = &adc1;
     };
 };
 

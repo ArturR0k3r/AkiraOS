@@ -349,6 +349,103 @@ See [Error Codes Reference](error-codes.md) for domain-specific `AKIRA_ERR_*` co
 
 ---
 
+## ADC Functions
+
+> **Available only when `CONFIG_AKIRA_WASM_ADC=y`.**  
+> Requires `CONFIG_ADC=y` and an `akira-adc` DTS alias (or the first `zephyr,adc` device).
+
+### `adc_read(channel)`
+
+Read a raw ADC sample from the specified channel.
+
+```c
+extern int adc_read(int32_t channel);
+```
+
+**Parameters:**
+- `channel`: ADC channel index (`0` … `CONFIG_AKIRA_WASM_ADC_MAX_CHANNELS - 1`)
+
+**Returns:**
+- Raw 12-bit (or configured resolution) sample value on success
+- `-EPERM`: Missing `adc` capability
+- `-ENODEV`: ADC hardware not ready
+- `-EINVAL`: Channel out of range
+
+**Capability Required:** `adc`
+
+**Example:**
+```c
+int raw = adc_read(0);
+if (raw >= 0) {
+    printf("ADC ch0 raw: %d", raw);
+}
+```
+
+---
+
+### `adc_read_mv(channel)`
+
+Read an ADC channel and convert the sample to millivolts.
+
+```c
+extern int adc_read_mv(int32_t channel);
+```
+
+**Parameters:**
+- `channel`: ADC channel index
+
+**Returns:**
+- Voltage in millivolts on success
+- Negative errno on error (same codes as `adc_read`)
+
+**Capability Required:** `adc`
+
+Conversion uses `CONFIG_AKIRA_WASM_ADC_VREF_MV` and `CONFIG_AKIRA_WASM_ADC_RESOLUTION`.
+
+**Example:**
+```c
+int mv = adc_read_mv(0);
+if (mv >= 0) {
+    printf("Battery: %d mV", mv);
+}
+```
+
+---
+
+## Watchdog Functions
+
+> **Available only when `CONFIG_AKIRA_WASM_WDT=y`.**  
+> Requires `CONFIG_WATCHDOG=y` and `CONFIG_AKIRA_WDT=y`.
+
+### `wdt_pet()`
+
+Manually feed the system watchdog, signalling that the app is still alive.
+
+```c
+extern int wdt_pet(void);
+```
+
+**Returns:**
+- `0`: Success
+- `-EPERM`: Missing `wdt` capability
+- `-ENODEV`: Watchdog not active
+
+**Capability Required:** `wdt`
+
+The AkiraOS watchdog is auto-fed every `CONFIG_AKIRA_WDT_FEED_INTERVAL_MS` ms by an internal work queue. Call `wdt_pet()` from a long-running computation to supplement the automatic feeding when the main thread may be busy for longer than that interval.
+
+**Example:**
+```c
+for (int i = 0; i < 1000; i++) {
+    heavy_processing_step(i);
+    if (i % 100 == 0) {
+        wdt_pet();   // keep watchdog happy during heavy work
+    }
+}
+```
+
+---
+
 ## Related Documentation
 
 - [SDK API Reference](../development/sdk-api-reference.md) - High-level SDK functions with examples
