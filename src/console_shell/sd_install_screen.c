@@ -16,7 +16,7 @@ LOG_MODULE_REGISTER(akira_sd_install, CONFIG_AKIRA_LOG_LEVEL);
  * the .wasm file is parsed automatically by app_manager_install_from_path().
  *
  * Flow:
- *   1. sd_install_screen_load() mounts FAT, scans /SD:/apps/*.wasm
+ *   1. sd_install_screen_load() mounts FAT, scans /SD:/apps for .wasm files
  *   2. lv_list of found files (name + human-readable size)
  *   3. User selects entry → A → install_progress_screen overlaid
  *   4. app_manager_install_from_path() called in a work-queue item

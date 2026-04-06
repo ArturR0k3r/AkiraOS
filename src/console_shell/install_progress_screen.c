@@ -118,5 +118,3 @@ void install_progress_hide(void)
         g_lbl_msg  = NULL;
     }
 }
-
-#endif /* CONFIG_LVGL */
