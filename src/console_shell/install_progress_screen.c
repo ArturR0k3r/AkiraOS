@@ -23,9 +23,7 @@ LOG_MODULE_REGISTER(akira_install_progress, CONFIG_AKIRA_LOG_LEVEL);
 #include "install_progress_screen.h"
 #include "shell_theme.h"
 
-#if defined(CONFIG_LVGL)
 
-#include <lvgl.h>
 #include <string.h>
 #include <zephyr/kernel.h>
 

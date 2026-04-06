@@ -14,7 +14,7 @@ LOG_MODULE_REGISTER(akira_wifi_screen, CONFIG_AKIRA_LOG_LEVEL);
 
 #include <zephyr/kernel.h>
 #include <zephyr/settings/settings.h>
-#include <lvgl.h>
+
 
 #include "../shell_theme.h"
 #include "../home_screen.h"

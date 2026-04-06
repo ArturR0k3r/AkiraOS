@@ -15,7 +15,7 @@ LOG_MODULE_REGISTER(akira_display_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/kernel.h>
 #include <zephyr/settings/settings.h>
 #include <zephyr/drivers/display.h>
-#include <lvgl.h>
+
 
 #include "../shell_theme.h"
 #include "display_screen.h"

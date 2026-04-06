@@ -23,8 +23,8 @@ LOG_MODULE_REGISTER(akira_apps_screen, CONFIG_AKIRA_LOG_LEVEL);
 static lv_obj_t *g_screen;
 static lv_obj_t *g_list;
 
-/* Pending uninstall ID */
-static uint8_t g_pending_uninstall_id;
+/* Pending uninstall name */
+static char g_pending_uninstall_name[APP_NAME_MAX_LEN];
 
 /* ------------------------------------------------------------------ */
 /* Confirm dialog                                                       */
@@ -36,11 +36,11 @@ static void confirm_yes_cb(lv_event_t *e)
         return;
     }
 
-    int ret = app_manager_uninstall(g_pending_uninstall_id);
+    int ret = app_manager_uninstall(g_pending_uninstall_name);
     if (ret < 0) {
-        LOG_ERR("Uninstall id=%u failed: %d", g_pending_uninstall_id, ret);
+        LOG_ERR("Uninstall '%s' failed: %d", g_pending_uninstall_name, ret);
     } else {
-        LOG_INF("App %u uninstalled", g_pending_uninstall_id);
+        LOG_INF("App '%s' uninstalled", g_pending_uninstall_name);
     }
 
     /* Close dialog and refresh list */
@@ -77,9 +77,10 @@ static void confirm_no_cb(lv_event_t *e)
     lv_obj_del(dialog);
 }
 
-static void open_confirm_dialog(uint8_t app_id, const char *app_name)
+static void open_confirm_dialog(const char *app_name)
 {
-    g_pending_uninstall_id = app_id;
+    strncpy(g_pending_uninstall_name, app_name, APP_NAME_MAX_LEN - 1);
+    g_pending_uninstall_name[APP_NAME_MAX_LEN - 1] = '\0';
 
     /* Semi-transparent overlay */
     lv_obj_t *overlay = lv_obj_create(lv_scr_act());
@@ -139,9 +140,17 @@ static void list_key_cb(lv_event_t *e)
         return;
     }
 
-    uint8_t app_id = (uint8_t)(uintptr_t)lv_obj_get_user_data(focused);
-    const char *name = lv_list_get_btn_text(g_list, focused);
-    open_confirm_dialog(app_id, name);
+    const char *btn_text = lv_list_get_btn_text(g_list, focused);
+    /* Extract pure app name (before "  v" in formatted entry) */
+    char pure_name[APP_NAME_MAX_LEN];
+    const char *end = strstr(btn_text, "  v");
+    size_t len = end ? (size_t)(end - btn_text) : strlen(btn_text);
+    if (len >= APP_NAME_MAX_LEN) {
+        len = APP_NAME_MAX_LEN - 1;
+    }
+    strncpy(pure_name, btn_text, len);
+    pure_name[len] = '\0';
+    open_confirm_dialog(pure_name);
 }
 
 /* ------------------------------------------------------------------ */

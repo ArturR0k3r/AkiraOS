@@ -11,8 +11,7 @@
 #ifndef INSTALL_PROGRESS_SCREEN_H
 #define INSTALL_PROGRESS_SCREEN_H
 
-#if defined(CONFIG_LVGL)
-#include <lvgl.h>
+
 
 #ifdef __cplusplus
 extern "C" {

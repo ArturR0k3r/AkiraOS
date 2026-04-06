@@ -14,6 +14,10 @@
 #ifndef SHELL_THEME_H
 #define SHELL_THEME_H
 
+#if defined(CONFIG_LVGL)
+#include <lvgl.h>
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Screen geometry (320×240 landscape)                                 */
 /* ------------------------------------------------------------------ */
@@ -46,5 +50,56 @@
 #define SHELL_COLOR_DOT_RUN      SHELL_C_BLACK
 #define SHELL_COLOR_DOT_STOP     SHELL_C_GRAY
 #define SHELL_COLOR_DOT_ERR      SHELL_C_RED
+
+/* ------------------------------------------------------------------ */
+/* LVGL styles (shared across all settings sub-screens)                */
+/* ------------------------------------------------------------------ */
+
+#if defined(CONFIG_LVGL)
+
+/** Small text font (Montserrat 14) */
+#define SHELL_FONT_SMALL  (&lv_font_montserrat_14)
+
+/** LVGL-typed colors for use with lv_obj_set_style_* API */
+#define SHELL_LVGL_COLOR_BG      lv_color_white()
+#define SHELL_LVGL_COLOR_FG      lv_color_black()
+#define SHELL_LVGL_COLOR_SUBTEXT lv_color_make(0x80, 0x80, 0x80)
+#define SHELL_COLOR_SUBTEXT      SHELL_LVGL_COLOR_SUBTEXT
+
+/** White-background screen style */
+extern lv_style_t g_style_screen;
+
+/** List-item row style (white bg, dark text, padding) */
+extern lv_style_t g_style_list_item;
+
+/** Dialog card style (white bg, thin border) */
+extern lv_style_t g_style_card;
+
+/** Horizontal separator line style */
+extern lv_style_t g_style_separator;
+
+/**
+ * @brief Initialise shared shell LVGL styles.  Call once before any
+ *        settings sub-screen is created.
+ */
+void shell_theme_init(void);
+
+/**
+ * @brief Attach a black title bar to @p parent.
+ * @param parent  Screen object.
+ * @param title   Text to display in the header.
+ */
+void shell_theme_make_header(lv_obj_t *parent, const char *title);
+
+/**
+ * @brief Attach a black hint bar to @p parent.
+ * @param parent      Screen object.
+ * @param left_hint   Left-side button hint (e.g. "B:Back").
+ * @param right_hint  Right-side button hint (e.g. "A:OK").
+ */
+void shell_theme_make_footer(lv_obj_t *parent, const char *left_hint,
+                              const char *right_hint);
+
+#endif /* CONFIG_LVGL */
 
 #endif /* SHELL_THEME_H */

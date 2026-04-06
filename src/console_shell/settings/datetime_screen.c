@@ -14,7 +14,7 @@ LOG_MODULE_REGISTER(akira_datetime_screen, CONFIG_AKIRA_LOG_LEVEL);
 
 #include <zephyr/kernel.h>
 #include <time.h>
-#include <lvgl.h>
+
 
 #include "../shell_theme.h"
 #include "datetime_screen.h"

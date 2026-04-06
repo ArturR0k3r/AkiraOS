@@ -102,11 +102,8 @@ static void sw_event_cb(lv_event_t *e)
 /* ------------------------------------------------------------------ */
 
 static int settings_load_cb(const char *key, size_t len,
-                             settings_read_cb read_cb, void *cb_arg,
-                             void *param)
+                             settings_read_cb read_cb, void *cb_arg)
 {
-    ARG_UNUSED(param);
-
     if (strcmp(key, "enabled") == 0 && len == sizeof(bool)) {
         bool val;
         if (read_cb(cb_arg, &val, sizeof(val)) == sizeof(val)) {

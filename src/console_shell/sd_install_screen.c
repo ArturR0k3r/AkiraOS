@@ -28,9 +28,7 @@ LOG_MODULE_REGISTER(akira_sd_install, CONFIG_AKIRA_LOG_LEVEL);
 #include "shell_theme.h"
 #include "home_screen.h"
 
-#if defined(CONFIG_LVGL)
 
-#include <lvgl.h>
 #include <string.h>
 #include <zephyr/kernel.h>
 #include <zephyr/fs/fs.h>
@@ -119,7 +117,7 @@ void sd_install_screen_create(void)
     int list_h = SHELL_SCREEN_H - list_y - SHELL_FOOTER_H;
     lv_obj_set_size(g_list, SHELL_SCREEN_W, list_h);
     lv_obj_set_pos(g_list, 0, list_y);
-    lv_obj_set_style_bg_color(g_list, SHELL_COLOR_BG, 0);
+    lv_obj_set_style_bg_color(g_list, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(g_list, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(g_list, 0, 0);
     lv_obj_set_style_pad_all(g_list, 0, 0);
@@ -209,5 +207,3 @@ void sd_install_screen_load(void)
         LOG_INF("SD scan: %d WASM files found", count);
     }
 }
-
-#endif /* CONFIG_LVGL */

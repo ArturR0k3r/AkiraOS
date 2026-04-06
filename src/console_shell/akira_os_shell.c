@@ -181,6 +181,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 #endif
 
     /* Build the HOME app launcher screen (pure akira_display_* renderer) */
+    shell_theme_init();
     home_screen_create();
     settings_screen_create();
     home_screen_refresh();

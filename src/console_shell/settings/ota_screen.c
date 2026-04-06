@@ -13,7 +13,7 @@ LOG_MODULE_REGISTER(akira_ota_screen, CONFIG_AKIRA_LOG_LEVEL);
  */
 
 #include <zephyr/kernel.h>
-#include <lvgl.h>
+
 
 #include "../shell_theme.h"
 #include "ota_screen.h"
