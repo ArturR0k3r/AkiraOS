@@ -1,0 +1,165 @@
+/*
+ * AkiraOS Device Tree Overlay — esp32c6_devkitc/esp32c6/hpcore
+ *
+ * ESP32-C6 DevKitC (RISC-V HP Core @ 160MHz)
+ * Module: ESP32-C6-WROOM-1-N8 (8MB Flash, 512KB SRAM)
+ * Radios: WiFi 6 (802.11ax) + BLE 5.3 + IEEE 802.15.4
+ *
+ * Upstream base DTS already enables:
+ *   uart0 (TX=GPIO16, RX=GPIO17), gpio0, wdt0, wifi, ieee802154, esp32_bt_hci
+ * Upstream pinctrl dtsi defines:
+ *   spim2_default: MISO=GPIO2, SCLK=GPIO6, CSEL=GPIO10, MOSI=GPIO7
+ *   i2c0_default:  SDA=GPIO6, SCL=GPIO7   ← CONFLICT with SPI2!
+ *
+ * CRITICAL: SPI2 and I2C0 share GPIO6/GPIO7 in upstream defaults.
+ * This overlay remaps I2C0 to GPIO21 (SDA) / GPIO22 (SCL).
+ *
+ * SPI2 peripheral map (this overlay):
+ *   MISO=GPIO2, SCLK=GPIO6, MOSI=GPIO7, HW-CS=GPIO10
+ *   SD card SW-CS=GPIO20 via cs-gpios[0]
+ *
+ * I2C0 (remapped, this overlay):
+ *   SDA=GPIO21, SCL=GPIO22
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/pinctrl/esp-pinctrl-common.h>
+#include <dt-bindings/pinctrl/esp32c6-pinctrl.h>
+#include <zephyr/dt-bindings/pinctrl/esp32c6-gpio-sigmap.h>
+
+/* =========================================================================
+ * Pin Controller — remap I2C0 away from SPI2's GPIO6/GPIO7
+ * ========================================================================= */
+&pinctrl {
+	i2c0_akira: i2c0_akira {
+		group1 {
+			/* SDA=GPIO21, SCL=GPIO22 — free pins on DevKitC header */
+			pinmux = <I2C0_SDA_GPIO21>,
+				 <I2C0_SCL_GPIO22>;
+			bias-pull-up;
+			drive-open-drain;
+			output-high;
+		};
+	};
+};
+
+/* =========================================================================
+ * SPI2 — add SD card as a software-CS child device
+ *
+ * The upstream base DTS already sets pinctrl-0 = <&spim2_default> and
+ * #address-cells/#size-cells. This overlay adds cs-gpios and the sdhc node.
+ * Hardware CS (GPIO10) remains available for a display or other device.
+ *
+ * SD card CS: GPIO20 (software-managed, cs-gpios[0]).
+ * ========================================================================= */
+&spi2 {
+	status = "okay";
+	cs-gpios = <&gpio0 20 GPIO_ACTIVE_LOW>;
+
+	sdhc0: sdhc@0 {
+		compatible = "zephyr,sdhc-spi-slot";
+		reg = <0>;              /* uses cs-gpios[0] = GPIO20 */
+		status = "okay";
+		spi-max-frequency = <25000000>;    /* 25 MHz — SD SPI max */
+
+		mmc {
+			compatible = "zephyr,sdmmc-disk";
+			disk-name = "SD";
+			status = "okay";
+		};
+	};
+};
+
+/* =========================================================================
+ * I2C0 — remapped to GPIO21 (SDA) / GPIO22 (SCL)
+ * ========================================================================= */
+&i2c0 {
+	status = "okay";
+	pinctrl-0 = <&i2c0_akira>;
+	pinctrl-names = "default";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+};
+
+/* =========================================================================
+ * ADC — SAR ADC, channel 0
+ * ========================================================================= */
+&adc0 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>;
+	};
+};
+
+/* =========================================================================
+ * Flash Partitions — AkiraOS-specific
+ *
+ * The upstream partitions_0x0_default.dtsi (4MB table) occupies 0x0–0x3FFFFF.
+ * WROOM-N8 has 8MB flash; AkiraOS partitions live in the second 4MB.
+ *
+ *   NVS settings:  32KB @ 0x400000   — persistent settings store
+ *   LittleFS:     512KB @ 0x408000   — WASM app storage (XIP-from-Flash path)
+ *
+ * WASM binaries are stored in LittleFS on flash and loaded by the WAMR
+ * interpreter. Code executes via the ESP32-C6 flash cache (XIP by default).
+ * ========================================================================= */
+&flash0 {
+	partitions {
+		akira_settings_nvs_partition: partition@400000 {
+			label = "akira_settings_nvs";
+			reg = <0x00400000 DT_SIZE_K(32)>;
+		};
+
+		lfs1_partition: partition@408000 {
+			label = "lfs_storage";
+			reg = <0x00408000 DT_SIZE_K(512)>;
+		};
+	};
+};
+
+/* =========================================================================
+ * Root nodes — aliases, LEDs, fstab
+ * ========================================================================= */
+/ {
+	aliases {
+		led0      = &led0;
+		akira-adc = &adc0;
+		/* sw0 alias already defined in upstream base DTS (GPIO9 boot button) */
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		led0: led_0 {
+			/* ESP32-C6 DevKitC RGB LED is on GPIO8 (WS2812 or plain GPIO) */
+			gpios = <&gpio0 8 GPIO_ACTIVE_HIGH>;
+			label = "LED";
+		};
+	};
+
+	chosen {
+		zephyr,console            = &uart0;
+		zephyr,shell-uart         = &uart0;
+		zephyr,settings-partition = &akira_settings_nvs_partition;
+	};
+
+	fstab {
+		compatible = "zephyr,fstab";
+
+		lfs1: lfs1 {
+			compatible = "zephyr,fstab,littlefs";
+			read-size      = <1>;
+			prog-size      = <16>;
+			cache-size     = <256>;
+			lookahead-size = <32>;
+			block-cycles   = <512>;
+			partition      = <&lfs1_partition>;
+			mount-point    = "/lfs";
+		};
+	};
+};

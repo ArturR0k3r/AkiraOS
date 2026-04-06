@@ -136,7 +136,31 @@ int akira_hal_init(void)
     }
 #endif
 
-#else 
+#elif AKIRA_PLATFORM_ESP32C6
+    LOG_INF("Running on ESP32-C6 - RISC-V hardware support (WiFi 6 + BLE + 802.15.4)");
+
+#if defined(CONFIG_DISPLAY)
+    {
+        int ret = akira_display_hal_init();
+        if (ret < 0 && ret != -ENOTSUP) {
+            LOG_WRN("Display HAL initialization failed: %d", ret);
+        }
+    }
+#endif
+
+#elif AKIRA_PLATFORM_ESP32H2
+    LOG_INF("Running on ESP32-H2 - RISC-V minimal hardware support (BLE + 802.15.4, no WiFi)");
+
+#if defined(CONFIG_DISPLAY)
+    {
+        int ret = akira_display_hal_init();
+        if (ret < 0 && ret != -ENOTSUP) {
+            LOG_WRN("Display HAL initialization failed: %d", ret);
+        }
+    }
+#endif
+
+#else
     LOG_INF("Running on ESP32 - full hardware support");
 
 #if defined(CONFIG_DISPLAY)
@@ -192,6 +216,10 @@ const char *akira_get_platform_name(void)
     return "native_sim";
 #elif AKIRA_PLATFORM_ESP32S3
     return "ESP32-S3";
+#elif AKIRA_PLATFORM_ESP32C6
+    return "ESP32-C6";
+#elif AKIRA_PLATFORM_ESP32H2
+    return "ESP32-H2";
 #elif AKIRA_PLATFORM_ESP32
     return "ESP32";
 #elif AKIRA_PLATFORM_STM32

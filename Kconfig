@@ -47,6 +47,9 @@ config AKIRA_WASM_RUNTIME
 config WAMR_AOT_SUPPORT
     bool "Enable WASM Ahead-of-Time (AOT) compilation support"
     default y if SOC_SERIES_ESP32S3 || BOARD_NATIVE_SIM
+    # RISC-V targets (C6, H2, C3) have no PSRAM — AOT code must fit in SRAM.
+    # Interpreter mode is sufficient and uses significantly less flash/RAM.
+    default n if SOC_SERIES_ESP32C6 || SOC_ESP32H2
     default n
     depends on AKIRA_WASM_RUNTIME
     help

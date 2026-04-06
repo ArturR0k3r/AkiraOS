@@ -1,0 +1,186 @@
+/*
+ * AkiraOS Device Tree Overlay — esp32h2_devkitm/esp32h2/procpu
+ *
+ * ESP32-H2 DevKitM (RISC-V @ 96MHz)
+ * 320KB SRAM, 2-4MB Flash
+ * Radios: BLE 5.3 + IEEE 802.15.4 — NO WiFi
+ *
+ * IMPORTANT: ESP32-H2 Zephyr SOC support ships in Zephyr 4.3.0.
+ * Before building, run `west update` and verify:
+ *   1. Board target name:  west boards | grep esp32h2
+ *   2. Upstream pinctrl dtsi GPIO assignments (this file uses known H2 defaults
+ *      from ESP-IDF; verify against zephyr/boards/espressif/esp32h2_devkitm/ once
+ *      Zephyr 4.3.0 is installed)
+ *   3. Flash partition table (check partitions_0x0_*.dtsi included by H2 board DTS)
+ *      and adjust akira_settings_nvs_partition / lfs1_partition offsets if needed.
+ *
+ * Assumed H2 default GPIO assignments (ESP-IDF reference, verify with Zephyr 4.3.0):
+ *   UART0:  TX=GPIO24, RX=GPIO23
+ *   USB-JTAG: D-=GPIO26, D+=GPIO27 (built-in USB Serial/JTAG, not USB Device Stack)
+ *   SPI2:  MISO=GPIO0, SCLK=GPIO4, MOSI=GPIO5
+ *   I2C0:  SDA=GPIO12, SCL=GPIO22
+ *   Boot button: GPIO9
+ *
+ * DO NOT add &wifi { } node — H2 has no WiFi hardware. Adding it causes DTC error.
+ *
+ * SD card SPI2 CS: GPIO1 (avoids GPIO0=MISO strapping, GPIO9=boot, GPIO12/22=I2C)
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+/*
+ * NOTE: Uncomment and verify the correct H2 pinctrl include once Zephyr 4.3.0 ships:
+ * #include <zephyr/dt-bindings/pinctrl/esp-pinctrl-common.h>
+ * #include <dt-bindings/pinctrl/esp32h2-pinctrl.h>
+ * #include <zephyr/dt-bindings/pinctrl/esp32h2-gpio-sigmap.h>
+ */
+
+/* =========================================================================
+ * SPI2 — SD card as single chip-select device
+ *
+ * The upstream H2 board DTS/pinctrl will set spim2_default pinctrl.
+ * This overlay adds cs-gpios and the sdhc child node only.
+ * SD card CS: GPIO1 (software-managed, cs-gpios[0]).
+ * ========================================================================= */
+&spi2 {
+	status = "okay";
+	cs-gpios = <&gpio0 1 GPIO_ACTIVE_LOW>;
+
+	sdhc0: sdhc@0 {
+		compatible = "zephyr,sdhc-spi-slot";
+		reg = <0>;              /* uses cs-gpios[0] = GPIO1 */
+		status = "okay";
+		spi-max-frequency = <20000000>;    /* 20 MHz — conservative for H2 */
+
+		mmc {
+			compatible = "zephyr,sdmmc-disk";
+			disk-name = "SD";
+			status = "okay";
+		};
+	};
+};
+
+/* =========================================================================
+ * I2C0
+ * ========================================================================= */
+&i2c0 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+};
+
+/* =========================================================================
+ * ADC — SAR ADC, channel 0
+ * ========================================================================= */
+&adc0 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>;
+	};
+};
+
+/* =========================================================================
+ * IEEE 802.15.4 — H2's primary wireless feature (Thread/Zigbee)
+ * Already enabled in upstream base DTS; confirming it is okay here.
+ * ========================================================================= */
+&ieee802154 {
+	status = "okay";
+};
+
+/* =========================================================================
+ * BLE
+ * ========================================================================= */
+&esp32_bt_hci {
+	status = "okay";
+};
+
+/* =========================================================================
+ * GPIO / Watchdog
+ * ========================================================================= */
+&gpio0 {
+	status = "okay";
+};
+
+&wdt0 {
+	status = "okay";
+};
+
+/* =========================================================================
+ * Flash Partitions — AkiraOS-specific
+ *
+ * H2 DevKitM ships with 4MB flash. Estimated standard Espressif partition map:
+ *   boot(64KB)  @ 0x0
+ *   sys(64KB)   @ 0x10000
+ *   slot0(?)    @ 0x20000      — verify size in upstream 4.3.0 partition dtsi
+ *   slot1(?)    @ ...
+ *   storage(?)  @ ...
+ *
+ * AkiraOS partitions placed conservatively at the end of 4MB flash.
+ * VERIFY these addresses do not overlap the upstream partition table once
+ * Zephyr 4.3.0 ships with the H2 board DTS.
+ *
+ * If flash is only 2MB, reduce lfs1_partition to DT_SIZE_K(128) and
+ * move akira_settings_nvs_partition to 0x1E0000 (adjust as needed).
+ *
+ * NVS settings:  16KB @ 0x380000
+ * LittleFS:     256KB @ 0x384000   — WASM app store (XIP-from-Flash path)
+ * ========================================================================= */
+&flash0 {
+	partitions {
+		akira_settings_nvs_partition: partition@380000 {
+			label = "akira_settings_nvs";
+			reg = <0x00380000 DT_SIZE_K(16)>;
+		};
+
+		lfs1_partition: partition@384000 {
+			label = "lfs_storage";
+			reg = <0x00384000 DT_SIZE_K(256)>;
+		};
+	};
+};
+
+/* =========================================================================
+ * Root nodes — aliases, LEDs, fstab
+ * ========================================================================= */
+/ {
+	aliases {
+		led0      = &led0;
+		akira-adc = &adc0;
+		/* sw0 alias — boot button GPIO9, expected in upstream base DTS */
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		led0: led_0 {
+			/* H2 DevKitM LED — verify GPIO number from board schematic */
+			gpios = <&gpio0 8 GPIO_ACTIVE_HIGH>;
+			label = "LED";
+		};
+	};
+
+	chosen {
+		zephyr,console            = &uart0;
+		zephyr,shell-uart         = &uart0;
+		zephyr,settings-partition = &akira_settings_nvs_partition;
+	};
+
+	fstab {
+		compatible = "zephyr,fstab";
+
+		lfs1: lfs1 {
+			compatible = "zephyr,fstab,littlefs";
+			read-size      = <1>;
+			prog-size      = <16>;
+			cache-size     = <128>;    /* Smaller than C6 — H2 has less RAM */
+			lookahead-size = <32>;
+			block-cycles   = <512>;
+			partition      = <&lfs1_partition>;
+			mount-point    = "/lfs";
+		};
+	};
+};

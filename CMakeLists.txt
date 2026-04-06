@@ -102,7 +102,11 @@ if(CONFIG_AKIRA_WASM_RUNTIME)
 
     set(WAMR_BUILD_LIBC_WASI 0)
     set(WAMR_BUILD_GLOBAL_HEAP_POOL 1)
-    set(WAMR_BUILD_GLOBAL_HEAP_SIZE 131072)
+    if(CONFIG_WAMR_HEAP_SIZE)
+        set(WAMR_BUILD_GLOBAL_HEAP_SIZE ${CONFIG_WAMR_HEAP_SIZE})
+    else()
+        set(WAMR_BUILD_GLOBAL_HEAP_SIZE 131072)
+    endif()
     # Enable reference-types support so WAMR can load WASM binaries produced by
     # WASI SDK 19+ / LLVM 17+.  Those toolchains emit element sections in the
     # extended multi-table format (non-zero segment-kind prefix) even when user
