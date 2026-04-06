@@ -320,6 +320,35 @@ static int cmd_app_scan(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "Total: %d", count);
     return 0;
 }
+
+#if defined(CONFIG_AKIRA_SD_XIP)
+static int cmd_app_run_sd(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "Usage: app run_sd <name>");
+        return -EINVAL;
+    }
+    int ret = app_manager_run_from_sd(argv[1]);
+    if (ret == -EEXIST)
+    {
+        AKIRA_SHELL_ERROR(sh, "'%s' is installed — use: app start %s", argv[1], argv[1]);
+        return ret;
+    }
+    if (ret == -EBUSY)
+    {
+        AKIRA_SHELL_ERROR(sh, "'%s' is already running from SD", argv[1]);
+        return ret;
+    }
+    if (ret < 0)
+    {
+        AKIRA_SHELL_ERROR(sh, "Failed to run '%s' from SD: %d", argv[1], ret);
+        return ret;
+    }
+    AKIRA_SHELL_PRINT(sh, "Running '%s' from SD card", argv[1]);
+    return 0;
+}
+#endif /* CONFIG_AKIRA_SD_XIP */
 #endif /* CONFIG_AKIRA_APP_MANAGER */
 
 /* Optimized data structures */
@@ -1817,6 +1846,9 @@ SHELL_STATIC_SUBCMD_SET_CREATE(app_cmds,
                                SHELL_CMD(uninstall, NULL, "Uninstall app <name>", cmd_app_uninstall),
                                SHELL_CMD(install, NULL, "Install app from SD/USB: <name> <sd|usb>", cmd_app_install),
                                SHELL_CMD(scan, NULL, "Scan for apps in SD/USB", cmd_app_scan),
+#if defined(CONFIG_AKIRA_SD_XIP)
+                               SHELL_CMD(run_sd, NULL, "Run app directly from SD card <name>", cmd_app_run_sd),
+#endif
                                SHELL_SUBCMD_SET_END);
 #endif /* CONFIG_AKIRA_APP_MANAGER */
 

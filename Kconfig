@@ -775,6 +775,18 @@ config AKIRA_APP_SOURCE_SD
       Scans /SD:/apps/*.wasm and installs any unregistered apps.
       Requires CONFIG_AKIRA_SD_CARD=y in the board .conf file.
 
+config AKIRA_SD_XIP
+    bool "Execute WASM apps directly from SD card (XIP-from-SD)"
+    default n
+    depends on AKIRA_APP_SOURCE_SD
+    help
+      Allow running WASM apps directly from SD card into PSRAM/RAM
+      without copying them to the internal LittleFS flash store first.
+      Apps run transiently: they are loaded on demand and removed from
+      memory when stopped.  The normal SD->LittleFS install path
+      (app install <name> sd) is unaffected.
+      Enable with: app run_sd <name>  (shell command).
+
 config AKIRA_APP_SOURCE_FIRMWARE
     bool "Enable firmware-embedded apps"
     default y

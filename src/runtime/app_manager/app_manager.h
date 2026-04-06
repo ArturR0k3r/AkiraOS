@@ -232,6 +232,24 @@ extern "C"
      */
     int app_manager_install_from_path(const char *path);
 
+#if defined(CONFIG_AKIRA_SD_XIP)
+    /**
+     * @brief Run a WASM app directly from SD card (transient, no flash install)
+     *
+     * Loads the binary from SD into PSRAM/RAM and starts it immediately.
+     * The app is not added to the persistent registry.  It is cleaned up
+     * automatically when it exits or is stopped with app_manager_stop().
+     *
+     * @param name_or_path Bare name ("hello_world"), filename
+     *                     ("hello_world.wasm"), or full path
+     *                     ("/SD:/apps/hello_world.wasm").
+     * @return 0 on success, -EEXIST if already installed (use app_manager_start),
+     *         -EBUSY if already running from SD, -ENOENT if not on SD card,
+     *         -EFBIG if exceeds size limit, -ENOMEM/-ENOSPC on resource exhaustion.
+     */
+    int app_manager_run_from_sd(const char *name_or_path);
+#endif /* CONFIG_AKIRA_SD_XIP */
+
     /**
      * @brief Uninstall app
      *

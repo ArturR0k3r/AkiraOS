@@ -90,6 +90,62 @@ static uint8_t g_app_count = 0;
 static bool g_initialized = false;
 static K_MUTEX_DEFINE(g_registry_mutex);
 
+#if defined(CONFIG_AKIRA_SD_XIP)
+/* Transient app tracker — in-memory only, not persisted to flash.
+ * Protected by g_registry_mutex (same lock as the registry). */
+typedef struct
+{
+    char     name[APP_NAME_MAX_LEN];
+    int32_t  container_id;
+    app_state_t state;
+    bool     in_use;
+} transient_entry_t;
+
+static transient_entry_t g_transient_apps[CONFIG_AKIRA_APP_MAX_RUNNING];
+
+static transient_entry_t *find_transient_by_name(const char *name)
+{
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_RUNNING; i++) {
+        if (g_transient_apps[i].in_use &&
+            strncmp(g_transient_apps[i].name, name, APP_NAME_MAX_LEN) == 0) {
+            return &g_transient_apps[i];
+        }
+    }
+    return NULL;
+}
+
+static transient_entry_t *find_transient_by_container(int32_t container_id)
+{
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_RUNNING; i++) {
+        if (g_transient_apps[i].in_use &&
+            g_transient_apps[i].container_id == container_id) {
+            return &g_transient_apps[i];
+        }
+    }
+    return NULL;
+}
+
+static transient_entry_t *alloc_transient_slot(void)
+{
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_RUNNING; i++) {
+        if (!g_transient_apps[i].in_use) {
+            memset(&g_transient_apps[i], 0, sizeof(g_transient_apps[i]));
+            g_transient_apps[i].in_use = true;
+            g_transient_apps[i].container_id = -1;
+            return &g_transient_apps[i];
+        }
+    }
+    return NULL;
+}
+
+static void free_transient_slot(transient_entry_t *t)
+{
+    if (t) {
+        memset(t, 0, sizeof(*t));
+    }
+}
+#endif /* CONFIG_AKIRA_SD_XIP */
+
 /* Install sessions for chunked upload */
 #define MAX_INSTALL_SESSIONS 2
 static install_session_t g_sessions[MAX_INSTALL_SESSIONS];
@@ -686,6 +742,29 @@ int app_manager_stop(const char *name)
     app_entry_t *app = find_app_by_name(name);
     if (!app)
     {
+#if defined(CONFIG_AKIRA_SD_XIP)
+        /* Check transient (SD XIP) apps — same mutex-release-before-stop
+         * pattern used by the regular stop path to avoid deadlock with the
+         * exit callback that also needs g_registry_mutex. */
+        transient_entry_t *t = find_transient_by_name(name);
+        if (t) {
+            int t_container_id = t->container_id;
+            /* Invalidate container_id so the exit callback won't
+             * double-process this entry as a "natural exit". */
+            t->container_id = -1;
+            k_mutex_unlock(&g_registry_mutex);
+
+            int ret = akira_runtime_stop(t_container_id);
+
+            k_mutex_lock(&g_registry_mutex, K_FOREVER);
+            t = find_transient_by_name(name);
+            if (t) { free_transient_slot(t); }
+            k_mutex_unlock(&g_registry_mutex);
+
+            LOG_INF("Stopped transient SD app: %s", name);
+            return ret < 0 ? ret : 0;
+        }
+#endif /* CONFIG_AKIRA_SD_XIP */
         k_mutex_unlock(&g_registry_mutex);
         return -ENOENT;
     }
@@ -832,6 +911,24 @@ int app_manager_list(app_info_t *out_list, int max_count)
         }
     }
 
+#if defined(CONFIG_AKIRA_SD_XIP)
+    /* Append transient (SD XIP) entries */
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_RUNNING && count < max_count; i++) {
+        if (g_transient_apps[i].in_use) {
+            out_list[count].id = 0xFF; /* sentinel: not in persistent registry */
+            strncpy(out_list[count].name, g_transient_apps[i].name, APP_NAME_MAX_LEN);
+            strncpy(out_list[count].version, "sd-xip", APP_VERSION_MAX_LEN);
+            out_list[count].state = g_transient_apps[i].state;
+            out_list[count].size = 0;
+            out_list[count].heap_kb = 0;
+            out_list[count].stack_kb = 0;
+            out_list[count].crash_count = 0;
+            out_list[count].auto_restart = false;
+            count++;
+        }
+    }
+#endif /* CONFIG_AKIRA_SD_XIP */
+
     k_mutex_unlock(&g_registry_mutex);
     return count;
 }
@@ -876,6 +973,12 @@ app_state_t app_manager_get_state(const char *name)
     k_mutex_lock(&g_registry_mutex, K_FOREVER);
     app_entry_t *app = find_app_by_name(name);
     app_state_t state = app ? app->state : APP_STATE_NEW;
+#if defined(CONFIG_AKIRA_SD_XIP)
+    if (!app) {
+        transient_entry_t *t = find_transient_by_name(name);
+        if (t) { state = t->state; }
+    }
+#endif
     k_mutex_unlock(&g_registry_mutex);
 
     return state;
@@ -1520,6 +1623,16 @@ static void app_manager_on_runtime_exit(int slot, int exit_code)
         }
     }
 
+#if defined(CONFIG_AKIRA_SD_XIP)
+    /* Also check transient (SD XIP) apps — free the slot on natural exit. */
+    {
+        transient_entry_t *t = find_transient_by_container((int32_t)slot);
+        if (t) {
+            free_transient_slot(t);
+        }
+    }
+#endif /* CONFIG_AKIRA_SD_XIP */
+
     k_mutex_unlock(&g_registry_mutex);
 
 #ifdef CONFIG_AKIRA_WASM_IPC
@@ -1531,3 +1644,178 @@ static void app_manager_on_runtime_exit(int slot, int exit_code)
     }
 #endif
 }
+
+#if defined(CONFIG_AKIRA_SD_XIP)
+/**
+ * @brief Run a WASM app directly from SD card without installing it to flash.
+ *
+ * The app is loaded into PSRAM/RAM and executed transiently.  It does not
+ * appear in the persistent registry and is automatically removed from memory
+ * when it exits naturally or is stopped with `app stop <name>`.
+ *
+ * @param name_or_path Bare name ("hello_world"), filename ("hello_world.wasm"),
+ *                     or full SD path ("/SD:/apps/hello_world.wasm").
+ * @return 0 on success, negative errno on failure.
+ *         -EEXIST  : app is already installed (use `app start <name>`)
+ *         -EBUSY   : a transient instance of this app is already running
+ *         -ENOENT  : binary not found on SD card
+ *         -EFBIG   : binary exceeds CONFIG_AKIRA_APP_MAX_SIZE_KB limit
+ *         -ENOMEM  : not enough heap to load the binary
+ *         -ENOSPC  : no free transient slots (all CONFIG_AKIRA_APP_MAX_RUNNING used)
+ */
+int app_manager_run_from_sd(const char *name_or_path)
+{
+    if (!g_initialized || !name_or_path) {
+        return -EINVAL;
+    }
+
+    char path[APP_PATH_MAX_LEN];
+    char name[APP_NAME_MAX_LEN];
+
+    /* ---- Resolve the full SD path ---- */
+    if (strncmp(name_or_path, "/SD:", 4) == 0 ||
+        strncmp(name_or_path, "/sd:", 4) == 0) {
+        /* Full path given — use as-is */
+        strncpy(path, name_or_path, sizeof(path) - 1);
+        path[sizeof(path) - 1] = '\0';
+
+        /* Derive name from filename, strip extension */
+        const char *filename = strrchr(path, '/');
+        filename = filename ? filename + 1 : path;
+        strncpy(name, filename, APP_NAME_MAX_LEN - 1);
+        name[APP_NAME_MAX_LEN - 1] = '\0';
+        char *ext = strstr(name, ".aot");
+        if (!ext) { ext = strstr(name, ".wasm"); }
+        if (ext)  { *ext = '\0'; }
+    } else {
+        /* Bare name or filename — try .aot first, fall back to .wasm */
+        /* Strip any extension the caller may have appended */
+        strncpy(name, name_or_path, APP_NAME_MAX_LEN - 1);
+        name[APP_NAME_MAX_LEN - 1] = '\0';
+        char *ext = strstr(name, ".aot");
+        if (!ext) { ext = strstr(name, ".wasm"); }
+        if (ext)  { *ext = '\0'; }
+
+        snprintf(path, sizeof(path), "/SD:/apps/%s.aot", name);
+        if (!fs_manager_exists(path)) {
+            snprintf(path, sizeof(path), "/SD:/apps/%s.wasm", name);
+        }
+    }
+
+    if (!fs_manager_exists(path)) {
+        LOG_ERR("SD XIP: app not found on SD: %s", path);
+        return -ENOENT;
+    }
+
+    /* ---- Duplicate check ---- */
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
+    if (find_app_by_name(name) != NULL) {
+        k_mutex_unlock(&g_registry_mutex);
+        LOG_WRN("SD XIP: '%s' is installed — use 'app start %s'", name, name);
+        return -EEXIST;
+    }
+    if (find_transient_by_name(name) != NULL) {
+        k_mutex_unlock(&g_registry_mutex);
+        LOG_WRN("SD XIP: '%s' is already running from SD", name);
+        return -EBUSY;
+    }
+    k_mutex_unlock(&g_registry_mutex);
+
+    /* ---- Read binary ---- */
+    ssize_t size = fs_manager_get_size(path);
+    if (size < 0) {
+        LOG_ERR("SD XIP: failed to get size of %s: %zd", path, size);
+        return (int)size;
+    }
+    if (size > (ssize_t)(CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024)) {
+        LOG_ERR("SD XIP: binary too large (%zd bytes)", size);
+        return -EFBIG;
+    }
+
+    uint8_t *buffer = akira_malloc_buffer((size_t)size);
+    if (!buffer) {
+        LOG_ERR("SD XIP: failed to allocate %zd bytes", size);
+        return -ENOMEM;
+    }
+
+    ssize_t bytes_read = fs_manager_read_file(path, buffer, (size_t)size);
+    if (bytes_read != size) {
+        akira_free_buffer(buffer);
+        LOG_ERR("SD XIP: read mismatch %zd != %zd", bytes_read, size);
+        return bytes_read < 0 ? (int)bytes_read : -EIO;
+    }
+
+    /* ---- Optional sidecar JSON manifest ---- */
+    char *json = akira_malloc_buffer(512);
+    if (!json) {
+        akira_free_buffer(buffer);
+        return -ENOMEM;
+    }
+    ssize_t json_len = -1;
+
+    /* Build manifest path: replace extension with .json */
+    char json_path[APP_PATH_MAX_LEN];
+    const char *dot = strrchr(path, '.');
+    if (dot) {
+        size_t base_len = (size_t)(dot - path);
+        if (base_len + 5 < sizeof(json_path)) {
+            memcpy(json_path, path, base_len);
+            memcpy(json_path + base_len, ".json", 6);
+            if (fs_manager_exists(json_path)) {
+                json_len = fs_manager_read_file(json_path, json, 511);
+                if (json_len > 0) {
+                    json[json_len] = '\0';
+                }
+            }
+        }
+    }
+
+    /* ---- Load into WAMR ---- */
+    int container_id = akira_runtime_install_with_manifest(
+        name, buffer, (size_t)size,
+        json_len > 0 ? json : NULL,
+        json_len > 0 ? (size_t)json_len : 0);
+    akira_free_buffer(buffer);
+    akira_free_buffer(json);
+
+    if (container_id < 0) {
+        LOG_ERR("SD XIP: failed to load WASM '%s': %d", name, container_id);
+        return container_id;
+    }
+
+    /* ---- Reserve transient slot ---- */
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
+    transient_entry_t *slot = alloc_transient_slot();
+    if (!slot) {
+        k_mutex_unlock(&g_registry_mutex);
+        akira_runtime_destroy(container_id);
+        LOG_ERR("SD XIP: no free transient slots");
+        return -ENOSPC;
+    }
+    strncpy(slot->name, name, APP_NAME_MAX_LEN - 1);
+    slot->name[APP_NAME_MAX_LEN - 1] = '\0';
+    slot->container_id = container_id;
+    slot->state = APP_STATE_STOPPED;
+    k_mutex_unlock(&g_registry_mutex);
+
+    /* ---- Start execution ---- */
+    int ret = akira_runtime_start(container_id);
+    if (ret < 0) {
+        k_mutex_lock(&g_registry_mutex, K_FOREVER);
+        transient_entry_t *t = find_transient_by_name(name);
+        if (t) { free_transient_slot(t); }
+        k_mutex_unlock(&g_registry_mutex);
+        akira_runtime_destroy(container_id);
+        LOG_ERR("SD XIP: failed to start '%s': %d", name, ret);
+        return ret;
+    }
+
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
+    transient_entry_t *running = find_transient_by_name(name);
+    if (running) { running->state = APP_STATE_RUNNING; }
+    k_mutex_unlock(&g_registry_mutex);
+
+    LOG_INF("SD XIP: running '%s' directly from SD card", name);
+    return 0;
+}
+#endif /* CONFIG_AKIRA_SD_XIP */
