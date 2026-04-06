@@ -123,9 +123,19 @@ if(CONFIG_AKIRA_WASM_RUNTIME)
     set(WAMR_BUILD_REF_TYPES 1)
     include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
     target_sources(app PRIVATE ${WAMR_RUNTIME_LIB_SOURCE})
+    # runtime_lib.cmake uses include_directories() which only affects the current
+    # directory scope - not the parent app target. Add all required WAMR paths
+    # explicitly via target_include_directories so they propagate correctly.
     target_include_directories(app PRIVATE
         ${WAMR_ROOT_DIR}/core/iwasm/include
+        ${WAMR_ROOT_DIR}/core/iwasm/common
+        ${WAMR_ROOT_DIR}/core/iwasm/interpreter
+        ${WAMR_ROOT_DIR}/core/iwasm/aot
         ${WAMR_ROOT_DIR}/core/shared
+        ${WAMR_ROOT_DIR}/core/shared/platform/include
+        ${WAMR_ROOT_DIR}/core/shared/platform/zephyr
+        ${WAMR_ROOT_DIR}/core/shared/utils
+        ${WAMR_ROOT_DIR}/core/shared/mem-alloc
         ${WAMR_ROOT_DIR}/core/deps
     )
     # Modular WASM API layer
