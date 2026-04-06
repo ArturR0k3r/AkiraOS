@@ -39,5 +39,4 @@ void install_progress_hide(void);
 }
 #endif
 
-#endif /* CONFIG_LVGL */
 #endif /* INSTALL_PROGRESS_SCREEN_H */
