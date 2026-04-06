@@ -2,6 +2,14 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
+# Support being include()d from an external firmware project.
+# CMAKE_CURRENT_LIST_DIR is always set to this file's directory by CMake,
+# even during include().  Anchor CMAKE_CURRENT_SOURCE_DIR here so that all
+# subsequent target_sources() relative paths resolve against the AkiraOS
+# source tree rather than the external caller's directory.
+set(CMAKE_CURRENT_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}" CACHE PATH
+    "AkiraOS source root" FORCE)
+
 # Force disable Kconfig warnings
 set(KCONFIG_WARN_UNDEF OFF CACHE BOOL "Disable Kconfig warnings" FORCE)
 set(KCONFIG_WERROR OFF CACHE BOOL "Disable Kconfig warnings as errors" FORCE)
@@ -14,8 +22,12 @@ list(APPEND BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR})
 # DTS_ROOT should point to directory that CONTAINS a 'dts/bindings' subdirectory
 list(APPEND DTS_ROOT ${CMAKE_CURRENT_LIST_DIR})
 
-find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(akira_os VERSION 1.4.9)
+# Guard: skip find_package / project when included from an external firmware
+# project that has already initialised the Zephyr build system.
+if(NOT TARGET app)
+  find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+  project(akira_os VERSION 1.4.9)
+endif()
 
 
 
