@@ -13,12 +13,11 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
  *
  * Boot order:
  *   1. SYS_INIT(APPLICATION) → shell_init() starts the shell thread.
- *   2. Shell thread claims the display, initialises LVGL, builds the HOME
- *      screen, and enters the main event loop.
- *   3. When the user launches a WASM app the shell releases the display and
- *      suspends its LVGL tick.
- *   4. When the user long-presses X (HOME) the lvgl_input_driver fires
- *      on_home_press(), which enqueues a CMD_GO_HOME message.
+ *   2. Shell thread claims the display, builds the HOME screen, and enters
+ *      the main event loop.
+ *   3. When the user launches a WASM app the shell releases the display.
+ *   4. When the user long-presses X (HOME) the shell loop detects the hold
+ *      duration and enqueues CMD_GO_HOME.
  *   5. Shell thread stops the active WASM app, reclaims the display, and
  *      refreshes the HOME screen.
  *
@@ -46,7 +45,6 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 
 #include <runtime/akira_ipc.h>
 #include <runtime/app_manager/app_manager.h>
-#include <drivers/display/lvgl_input_driver.h>
 
 #include <api/akira_input_api.h>
 
@@ -84,22 +82,6 @@ K_MSGQ_DEFINE(g_shell_msgq,
 /* ------------------------------------------------------------------ */
 
 static bool g_wasm_active; /* true while a WASM app has the display */
-
-/* ------------------------------------------------------------------ */
-/* HOME button callback — enqueues CMD_GO_HOME */
-/* ------------------------------------------------------------------ */
-
-static void on_home_press(void *user_data)
-{
-    ARG_UNUSED(user_data);
-
-    shell_event_t ev = {.type = CMD_GO_HOME};
-    int ret = k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
-
-    if (ret < 0) {
-        LOG_WRN("Home event queue full — dropped");
-    }
-}
 
 /* ------------------------------------------------------------------ */
 /* IPC lifecycle listener thread                                       */
@@ -167,16 +149,14 @@ void akira_os_shell_go_home(void)
 /* Shell main thread                                                   */
 /* ------------------------------------------------------------------ */
 
-/* 8 KB: hardware LVGL rendering + SPI display driver pushes the call stack
- * much deeper than native_sim. Each lv_refr pass can use 4-6 KB alone. */
-#define SHELL_THREAD_STACK_SIZE  8192
+#define SHELL_THREAD_STACK_SIZE  4096*2
 #define SHELL_THREAD_PRIORITY    10  /* above WASM apps (14), below sys work */
 
 static K_THREAD_STACK_DEFINE(g_shell_stack, SHELL_THREAD_STACK_SIZE);
 static struct k_thread g_shell_thread;
 
-/* LVGL timer handler period (kept for reference) */
-#define LVGL_TICK_MS 5
+/* HOME (X) button long-press threshold */
+#define HOME_LONG_MS  CONFIG_AKIRA_HOME_BUTTON_GPIO_LONG_MS
 
 static void shell_thread_fn(void *p1, void *p2, void *p3)
 {
@@ -201,6 +181,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 #endif
 
     /* Build the HOME app launcher screen (pure akira_display_* renderer) */
+    shell_theme_init();
     home_screen_create();
     settings_screen_create();
     home_screen_refresh();
@@ -214,11 +195,29 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
     k_thread_name_set(&g_lifecycle_thread, "shell_lifecycle");
 
     /* Main event + render loop */
+    static uint32_t s_prev_btns;
+    static int64_t  s_home_held_since_ms; /* 0 = not held */
+
     while (true) {
+        uint32_t btns = akira_input_get_bitmask();
+        int64_t  now_ms = k_uptime_get();
+
+        /* HOME (X) long-press detection — works regardless of display owner */
+        bool home_held = !!(btns & BIT(AKIRA_BTN_X));
+        if (home_held && s_home_held_since_ms == 0) {
+            s_home_held_since_ms = now_ms;
+        } else if (!home_held) {
+            s_home_held_since_ms = 0;
+        } else if (s_home_held_since_ms &&
+                   (now_ms - s_home_held_since_ms) >= HOME_LONG_MS) {
+            /* Long-press threshold crossed — fire once then reset */
+            s_home_held_since_ms = 0;
+            shell_event_t ev = {.type = CMD_GO_HOME};
+            k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
+        }
+
         if (!g_wasm_active) {
             /* Button edge detection → active screen navigation */
-            static uint32_t s_prev_btns;
-            uint32_t btns = akira_input_get_bitmask();
             uint32_t just = btns & ~s_prev_btns;
             s_prev_btns = btns;
             if (just) {
@@ -231,7 +230,6 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 
             /* Status strip updated every 1 s */
             static int64_t s_last_status_ms;
-            int64_t now_ms = k_uptime_get();
             if (now_ms - s_last_status_ms >= 1000) {
                 s_last_status_ms = now_ms;
                 if (settings_screen_is_active()) {
