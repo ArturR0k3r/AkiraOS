@@ -11,7 +11,7 @@ Every app is a sandboxed `.wasm` module. Deploy over-the-air. No firmware flash 
 [![Version](https://img.shields.io/badge/version-1.4.9%20"Gl1tch"-7f5af0?style=flat-square)](https://github.com/ArturR0k3r/AkiraOS/releases)
 [![Zephyr](https://img.shields.io/badge/Zephyr-4.3.0-3b82f6?style=flat-square)](https://zephyrproject.org)
 [![WAMR](https://img.shields.io/badge/WAMR-2.x-22c55e?style=flat-square)](https://github.com/bytecodealliance/wasm-micro-runtime)
-[![License](https://img.shields.io/badge/license-GPL--3.0-ef4444?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-22c55e?style=flat-square)](LICENSE)
 [![OSHWA](https://img.shields.io/badge/OSHWA-MD000003-f59e0b?style=flat-square)](https://certification.oshwa.org/md000003.html)
 [![Stars](https://img.shields.io/github/stars/ArturR0k3r/AkiraOS?style=flat-square&color=7f5af0)](https://github.com/ArturR0k3r/AkiraOS/stargazers)
 
@@ -261,6 +261,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) · Code style: Zephyr C · Commits: conve
 
 [Star on GitHub](https://github.com/ArturR0k3r/AkiraOS) · [Follow updates](https://t.me/theguywithpen) · [Docs](https://docs.akiraos.dev)
 
-*GPL-3.0 · Copyright © 2025–2026 PenEngineering SRL*
+*Apache 2.0 · Copyright © 2026 PenEngineering S.R.L · [Commercial licenses available](COMMERCIAL.md)*
 
 </div>

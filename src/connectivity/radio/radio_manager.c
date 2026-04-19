@@ -5,8 +5,8 @@
  * Central registry and management for all radio hardware in the system.
  * Provides hardware-agnostic access to WiFi, BLE, and 802.15.4 radios.
  *
- * @copyright Copyright (c) 2024-2026 Akira Technologies
- */
+ * @copyright Copyright (c) 2026 PenEngineering S.R.L
+*/
 
 #include "connectivity/radio_interface.h"
 #include <zephyr/logging/log.h>

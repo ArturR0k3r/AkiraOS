@@ -5,8 +5,8 @@
  * Implements lightweight mesh networking with multi-transport support.
  * Foundation implementation - full routing and state sync to be completed.
  *
- * @copyright Copyright (c) 2024-2026 Akira Technologies
- */
+ * @copyright Copyright (c) 2026 PenEngineering S.R.L
+*/
 
 #include "connectivity/akira_mesh.h"
 #include "connectivity/radio_interface.h"

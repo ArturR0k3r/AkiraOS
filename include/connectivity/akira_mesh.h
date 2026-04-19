@@ -8,8 +8,8 @@
  * - WASM app distribution across mesh
  * - State synchronization between nodes
  *
- * @copyright Copyright (c) 2024-2026 Akira Technologies
- */
+ * @copyright Copyright (c) 2026 PenEngineering S.R.L
+*/
 
 #ifndef AKIRA_MESH_H
 #define AKIRA_MESH_H

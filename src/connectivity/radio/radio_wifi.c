@@ -5,8 +5,8 @@
  * Implements RAL interface for IEEE 802.11 WiFi radios (ESP32, nRF7002, etc.)
  * Binds to Zephyr's WiFi management API.
  *
- * @copyright Copyright (c) 2024-2026 Akira Technologies
- */
+ * @copyright Copyright (c) 2026 PenEngineering S.R.L
+*/
 
 #include "connectivity/radio_interface.h"
 #include <zephyr/logging/log.h>

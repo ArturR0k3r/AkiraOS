@@ -197,7 +197,6 @@ The site is built with Jekyll + Just the Docs (dark theme) and covers:
 
 - **[@ArturR0k3r](https://github.com/ArturR0k3r)** — architecture, WAMR runtime, security, board support, WASM APIs, AkiraSDK, CI/CD, docs
 - **[@drxgoshh](https://github.com/drxgoshh)** — settings manager, filesystem, web server, connectivity, BT/USB HID
-- **[@LivingLegendLL](https://github.com/LivingLegendLL)** — documentation review, build fixes
 
 ---
 

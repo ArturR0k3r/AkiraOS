@@ -5,8 +5,8 @@
  * Provides Thread mesh networking support with hardware-agnostic radio binding.
  * Implements Thread network formation, joining, and border router functionality.
  *
- * @copyright Copyright (c) 2024-2026 Akira Technologies
- */
+ * @copyright Copyright (c) 2026 PenEngineering S.R.L
+*/
 
 #ifndef AKIRA_THREAD_MANAGER_H
 #define AKIRA_THREAD_MANAGER_H

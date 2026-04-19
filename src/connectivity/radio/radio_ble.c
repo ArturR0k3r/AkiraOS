@@ -5,8 +5,8 @@
  * Implements RAL interface for Bluetooth Low Energy radios.
  * Integrates with existing BT manager and provides raw HCI access.
  *
- * @copyright Copyright (c) 2024-2026 Akira Technologies
- */
+ * @copyright Copyright (c) 2026 PenEngineering S.R.L
+*/
 
 #include "connectivity/radio_interface.h"
 #include <zephyr/logging/log.h>

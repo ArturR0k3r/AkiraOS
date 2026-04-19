@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2025 AkiraOS Contributors
- * SPDX-License-Identifier: GPL-3.0-only
+ * Copyright (c) 2026 PenEngineering S.R.L
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #define LOG_MODULE_NAME akira_date

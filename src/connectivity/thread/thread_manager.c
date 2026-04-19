@@ -5,8 +5,8 @@
  * Foundation implementation for Thread mesh networking.
  * Full implementation requires OpenThread module in west.yml.
  *
- * @copyright Copyright (c) 2024-2026 Akira Technologies
- */
+ * @copyright Copyright (c) 2026 PenEngineering S.R.L
+*/
 
 #include "connectivity/thread_manager.h"
 #include "connectivity/radio_interface.h"

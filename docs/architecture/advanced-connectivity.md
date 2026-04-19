@@ -339,5 +339,5 @@ radio stats ble  # Check TX packets
 
 ## License
 
-Copyright (c) 2024-2026 Akira Technologies  
+Copyright (c) 2026 PenEngineering S.R.L
 SPDX-License-Identifier: Apache-2.0

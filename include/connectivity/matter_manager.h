@@ -5,8 +5,8 @@
  * Provides Matter (Connected Home over IP) protocol support with hardware-agnostic
  * transport binding through the Radio Abstraction Layer.
  *
- * @copyright Copyright (c) 2024-2026 Akira Technologies
- */
+ * @copyright Copyright (c) 2026 PenEngineering S.R.L
+*/
 
 #ifndef AKIRA_MATTER_MANAGER_H
 #define AKIRA_MATTER_MANAGER_H

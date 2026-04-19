@@ -5,8 +5,8 @@
  * Implements RAL interface for 802.15.4 radios (nRF, CC2520, etc.)
  * Used for Thread, Zigbee, and custom mesh protocols.
  *
- * @copyright Copyright (c) 2024-2026 Akira Technologies
- */
+ * @copyright Copyright (c) 2026 PenEngineering S.R.L
+*/
 
 #include "connectivity/radio_interface.h"
 #include <zephyr/logging/log.h>

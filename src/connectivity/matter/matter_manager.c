@@ -9,8 +9,8 @@
  * requires adding ConnectedHomeOverIP module to west.yml and enabling
  * CONFIG_CHIP in Kconfig.
  *
- * @copyright Copyright (c) 2024-2026 Akira Technologies
- */
+ * @copyright Copyright (c) 2026 PenEngineering S.R.L
+*/
 
 #include "connectivity/matter_manager.h"
 #include "connectivity/radio_interface.h"

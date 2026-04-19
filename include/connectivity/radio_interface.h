@@ -11,8 +11,8 @@
  * - Zero-copy where possible: Direct buffer management
  * - Thread-safe: Concurrent protocol access to different radios
  *
- * @copyright Copyright (c) 2024-2026 Akira Technologies
- */
+ * @copyright Copyright (c) 2026 PenEngineering S.R.L
+*/
 
 #ifndef AKIRA_RADIO_INTERFACE_H
 #define AKIRA_RADIO_INTERFACE_H
