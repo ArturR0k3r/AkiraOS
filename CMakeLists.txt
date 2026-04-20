@@ -267,6 +267,16 @@ target_sources(app PRIVATE
     src/ui/ui_framework.c
 )
 
+<<<<<<< HEAD
+=======
+# Boot logo animation (only compiled when the boot animation is enabled)
+if(CONFIG_AKIRA_BOOT_ANIMATION)
+    target_sources(app PRIVATE
+        src/console_shell/boot_anim.c
+    )
+endif()
+
+>>>>>>> 9a29d49 (feat(boot aniamtion):)
 # App Loader/Manager are implemented under src/runtime (loader/ and manager/) — included above
 
 # ===== Core Libraries =====
