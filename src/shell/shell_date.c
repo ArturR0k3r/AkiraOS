@@ -33,12 +33,14 @@ LOG_MODULE_REGISTER(akira_date, CONFIG_AKIRA_LOG_LEVEL);
 
 #ifdef CONFIG_AKIRA_SETTINGS
 #include <settings/settings.h>
-#define TIME_BASE_KEY  "system/time_base"
+#define TIME_BASE_KEY   "system/time_base"
+#define TZ_OFFSET_KEY   "system/tz_offset"
 #endif
 
 /* Offset such that: real_epoch = s_time_base + uptime_s */
-static int64_t s_time_base = 0;
-static bool    s_clock_set = false;
+static int64_t s_time_base    = 0;
+static bool    s_clock_set    = false;
+static int32_t s_tz_offset_s  = 0; /* UTC offset in seconds, default UTC */
 
 /* ------------------------------------------------------------------ */
 /* Public API (declared in include/lib/akira_time.h)                  */
@@ -67,6 +69,21 @@ bool akira_time_is_set(void)
     return s_clock_set;
 }
 
+int32_t akira_time_get_tz_offset_s(void)
+{
+    return s_tz_offset_s;
+}
+
+void akira_time_set_tz_offset_s(int32_t offset_s)
+{
+    s_tz_offset_s = offset_s;
+#ifdef CONFIG_AKIRA_SETTINGS
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%d", (int)offset_s);
+    akira_settings_set(TZ_OFFSET_KEY, buf, 0);
+#endif
+}
+
 /* ------------------------------------------------------------------ */
 /* Boot init: restore time_base from NVS                              */
 /* ------------------------------------------------------------------ */
@@ -81,6 +98,13 @@ static int shell_date_init(void)
             s_clock_set = true;
             LOG_INF("Clock restored: base=%lld", (long long)s_time_base);
         }
+    }
+    /* Restore UTC offset */
+    char tz_buf[12] = {0};
+    if (akira_settings_get(TZ_OFFSET_KEY, tz_buf, sizeof(tz_buf)) == 0) {
+        s_tz_offset_s = (int32_t)strtol(tz_buf, NULL, 10);
+        LOG_INF("TZ offset restored: %d s (UTC%+d)",
+                (int)s_tz_offset_s, (int)(s_tz_offset_s / 3600));
     }
     return 0;
 }

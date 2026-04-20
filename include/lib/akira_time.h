@@ -37,6 +37,22 @@ void akira_time_set_epoch(int64_t epoch_s);
  */
 bool akira_time_is_set(void);
 
+/**
+ * @brief Get the stored UTC offset in seconds (default 0 = UTC).
+ *
+ * Apply to akira_time_get_epoch() to obtain local wall-clock time.
+ * E.g. UTC+3 → returns 10800.
+ */
+int32_t akira_time_get_tz_offset_s(void);
+
+/**
+ * @brief Set and persist the UTC offset in seconds.
+ *
+ * Pass 0 for UTC, 3*3600 for UTC+3, -5*3600 for UTC-5, etc.
+ * Persisted to NVS under "system/tz_offset".
+ */
+void akira_time_set_tz_offset_s(int32_t offset_s);
+
 #ifdef __cplusplus
 }
 #endif
