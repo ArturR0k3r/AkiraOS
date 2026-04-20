@@ -63,26 +63,29 @@ LOG_MODULE_REGISTER(akira_shell_settings, CONFIG_AKIRA_LOG_LEVEL);
 #endif
 
 /* ------------------------------------------------------------------ */
-/* Palette — standard RGB565 (matches akira_api.h COLOR_* constants) */
+/* Palette                                                            */
 /* ------------------------------------------------------------------ */
-#define C_BLACK  0x0000u
-#define C_WHITE  0xFFFFu
-#define C_GRAY   0x7BEFu
+#define C_BLACK      0x0000u
+#define C_WHITE      0xFFFFu
+#define C_GRAY       0x7BEFu
+#define C_DKGRAY     0x39E7u
+#define C_GLASS_HILIT 0x7BEFu
+#define C_GLASS_BODY  0x0000u
 
 /* ------------------------------------------------------------------ */
-/* Geometry — matches home_screen layout                              */
+/* Geometry — Liquid Crystal layout (matches home_screen)            */
 /* ------------------------------------------------------------------ */
 #define SCR_W    320
 #define SCR_H    240
-#define SBAR_H   32
-#define CONT_Y   34
-#define CONT_H   174
-#define RIB_Y    210
-#define RIB_H    30
+#define SBAR_H   24        /* status bar height */
+#define CONT_Y   26        /* content area top  */
+#define CONT_H   188       /* 240-24-2-26 = content to ribbon */
+#define RIB_Y    216
+#define RIB_H    24
 
-#define MENU_X   20
-#define MENU_W   (SCR_W - 40)   /* 280 */
-#define MENU_ITH 40             /* menu item height */
+#define MENU_X   16
+#define MENU_W   (SCR_W - 32)  /* 288 */
+#define MENU_ITH 32            /* menu item height */
 
 /* ------------------------------------------------------------------ */
 /* Page state machine                                                  */
@@ -162,6 +165,74 @@ static int64_t g_sleep_first_press_ms;
 /* ------------------------------------------------------------------ */
 /* Draw helpers                                                        */
 /* ------------------------------------------------------------------ */
+static void glass_rect(int x, int y, int w, int h, int r)
+{
+    akira_display_rounded_rect_fill(x, y, w, h, r, C_BLACK);
+    akira_display_rounded_rect(x, y, w, h, r, C_WHITE);
+    if (w > 4 && h > 4) {
+        int ri = (r > 1) ? r - 1 : 0;
+        akira_display_rounded_rect(x + 1, y + 1, w - 2, h - 2, ri, C_DKGRAY);
+    }
+    int ti = r + 2;
+    if (w > ti * 2 && h > 6)
+        akira_display_hline(x + ti, y + 3, w - ti * 2, C_GLASS_HILIT);
+    if (w > 12 && h > 7) {
+        int gw = w / 5; if (gw > 14) gw = 14;
+        akira_display_rect(x + ti, y + 3, gw, 2, C_WHITE);
+        if (gw > 4) akira_display_hline(x + ti, y + 5, gw / 2, C_GLASS_HILIT);
+    }
+    if (w > ti * 2 && h > 8)
+        akira_display_hline(x + ti, y + h - 4, w - ti * 2, C_DKGRAY);
+}
+
+static void glass_rect_focus(int x, int y, int w, int h, int r)
+{
+    akira_display_rounded_rect_fill(x, y, w, h, r, C_BLACK);
+    akira_display_rounded_rect(x, y, w, h, r, C_WHITE);
+    if (w > 2 && h > 2) {
+        int r1 = (r > 0) ? r - 1 : 0;
+        akira_display_rounded_rect(x + 1, y + 1, w - 2, h - 2, r1, C_WHITE);
+    }
+    if (w > 6 && h > 6) {
+        int r2 = (r > 1) ? r - 2 : 0;
+        akira_display_rounded_rect(x + 2, y + 2, w - 4, h - 4, r2, C_DKGRAY);
+    }
+    int ti = r + 3;
+    if (w > ti * 2 && h > 8)
+        akira_display_hline(x + ti, y + 4, w - ti * 2, C_GLASS_HILIT);
+    if (w > 14 && h > 9) {
+        int gw = w / 5; if (gw > 16) gw = 16;
+        akira_display_rect(x + ti, y + 4, gw, 2, C_WHITE);
+        if (gw > 4) akira_display_hline(x + ti, y + 6, gw / 2, C_GLASS_HILIT);
+    }
+    if (w > ti * 2 && h > 10)
+        akira_display_hline(x + ti, y + h - 5, w - ti * 2, C_DKGRAY);
+    if (w > 14 && h > 11) {
+        int gw = w / 6; if (gw > 12) gw = 12;
+        akira_display_hline(x + w - ti - gw, y + h - 5, gw, C_WHITE);
+        akira_display_hline(x + w - ti - gw, y + h - 4, gw / 2, C_GLASS_HILIT);
+    }
+}
+
+static void glass_rect_dim(int x, int y, int w, int h, int r)
+{
+    akira_display_rounded_rect_fill(x, y, w, h, r, C_BLACK);
+    akira_display_rounded_rect(x, y, w, h, r, C_DKGRAY);
+    if (w > 4 && h > 4) {
+        int ri = (r > 1) ? r - 1 : 0;
+        akira_display_rounded_rect(x + 1, y + 1, w - 2, h - 2, ri, C_BLACK);
+    }
+    int ti = r + 2;
+    if (w > ti * 2 && h > 6)
+        akira_display_hline(x + ti, y + 3, w - ti * 2, C_DKGRAY);
+    if (w > 12 && h > 7) {
+        int gw = w / 5; if (gw > 14) gw = 14;
+        akira_display_hline(x + ti, y + 3, gw, C_GRAY);
+    }
+    if (w > ti * 2 && h > 8)
+        akira_display_hline(x + ti, y + h - 4, w - ti * 2, C_BLACK);
+}
+
 static void draw_centred(int x, int y, int w, const char *s,
                           uint16_t fg, uint16_t bg)
 {
@@ -180,17 +251,18 @@ static void draw_right(int rx, int y, const char *s, uint16_t col)
 static void draw_header(const char *title)
 {
     akira_display_rect(0, 0, SCR_W, SBAR_H, C_BLACK);
-    draw_centred(0, 11, SCR_W, title, C_WHITE, C_BLACK);
+    draw_centred(0, (SBAR_H - 10) / 2, SCR_W, title, C_WHITE, C_BLACK);
     akira_display_hline(0, SBAR_H,     SCR_W, C_WHITE);
-    akira_display_hline(0, SBAR_H + 1, SCR_W, C_BLACK);
+    akira_display_hline(0, SBAR_H + 1, SCR_W, C_WHITE);
 }
 
 static void draw_ribbon(const char *left, const char *right)
 {
     akira_display_hline(0, RIB_Y - 1, SCR_W, C_WHITE);
+    akira_display_hline(0, RIB_Y - 2, SCR_W, C_WHITE);
     akira_display_rect(0, RIB_Y, SCR_W, RIB_H, C_BLACK);
-    if (left  && *left)  akira_display_text(6, RIB_Y + 10, left,  C_WHITE);
-    if (right && *right) draw_right(SCR_W - 6, RIB_Y + 10, right, C_WHITE);
+    if (left  && *left)  akira_display_text(8, RIB_Y + 7, left,  C_WHITE);
+    if (right && *right) draw_right(SCR_W - 8, RIB_Y + 7, right, C_WHITE);
 }
 
 /* How many MENU_ITH items fit between top_y and the ribbon */
@@ -222,19 +294,17 @@ static void draw_menu_at(const char **labels, int count, int sel,
         int row = i - scroll;
         int iy  = top_y + row * MENU_ITH;
         bool hi  = (i == sel);
-        uint16_t bg = hi ? C_WHITE : C_BLACK;
-        uint16_t fg = hi ? C_BLACK : C_WHITE;
+        int bx = MENU_X, by = iy + 2, bw = MENU_W, bh = MENU_ITH - 4;
 
-        akira_display_rect(MENU_X, iy + 2, MENU_W, MENU_ITH - 4, bg);
-        akira_display_rect_outline(MENU_X, iy + 2, MENU_W, MENU_ITH - 4,
-                                   hi ? C_BLACK : C_GRAY);
         if (hi) {
-            akira_display_rect_outline(MENU_X + 1, iy + 3,
-                                       MENU_W - 2, MENU_ITH - 6, C_BLACK);
+            glass_rect_focus(bx, by, bw, bh, 5);
+        } else {
+            glass_rect_dim(bx, by, bw, bh, 5);
         }
-        int ty = iy + 2 + (MENU_ITH - 4 - 10) / 2;
-        draw_centred(MENU_X + 4, ty, MENU_W - 28, labels[i], fg, bg);
-        akira_display_text(MENU_X + MENU_W - 18, ty, ">", fg);
+        int ty = by + (bh - 10) / 2;
+        uint16_t fg = hi ? C_WHITE : C_DKGRAY;
+        draw_centred(bx + 4, ty, bw - 28, labels[i], fg, C_GLASS_BODY);
+        akira_display_text(bx + bw - 18, ty, ">", fg);
     }
 
     /* Scroll indicators in the right margin (x > MENU_X+MENU_W) */
@@ -378,8 +448,8 @@ static void draw_wifi(void)
     snprintf(l1, sizeof(l1), "Status: %s", state);
     snprintf(l2, sizeof(l2), "SSID: %-14s IP: %s", ssid, ip);
 
-    akira_display_rect(4, CONT_Y + 4, SCR_W - 8, 36, C_BLACK);
-    akira_display_rect_outline(4, CONT_Y + 4, SCR_W - 8, 36, C_GRAY);
+    akira_display_rounded_rect_fill(4, CONT_Y + 4, SCR_W - 8, 34, 3, C_BLACK);
+    akira_display_rounded_rect(4, CONT_Y + 4, SCR_W - 8, 34, 3, C_DKGRAY);
     akira_display_text(10, CONT_Y + 10, l1, C_WHITE);
     akira_display_text(10, CONT_Y + 24, l2, C_WHITE);
 
@@ -447,15 +517,13 @@ static void draw_wifi_connect(void)
     /* CONNECT button */
     int btn_y = CONT_Y + 6 + 2 * (FH + 20) + 8;
     bool btn_hi = (g_conn_field == CONNECT_FIELD);
-    uint16_t bbg = btn_hi ? C_WHITE : C_BLACK;
-    uint16_t bfg = btn_hi ? C_BLACK : C_WHITE;
-    akira_display_rect(MENU_X, btn_y, MENU_W, 34, bbg);
-    akira_display_rect_outline(MENU_X, btn_y, MENU_W, 34,
-                               btn_hi ? C_BLACK : C_GRAY);
     if (btn_hi) {
-        akira_display_rect_outline(MENU_X + 1, btn_y + 1, MENU_W - 2, 32, C_BLACK);
+        glass_rect_focus(MENU_X, btn_y, MENU_W, 34, 5);
+    } else {
+        glass_rect(MENU_X, btn_y, MENU_W, 34, 5);
     }
-    draw_centred(MENU_X + 4, btn_y + 12, MENU_W - 8, "CONNECT", bfg, bbg);
+    uint16_t bfg = btn_hi ? C_WHITE : C_GRAY;
+    draw_centred(MENU_X + 4, btn_y + 12, MENU_W - 8, "CONNECT", bfg, C_GLASS_BODY);
 
     draw_ribbon("[UP/DN] char  [A] add  [X] del  [Y] next", "[B] BACK");
 }
@@ -477,8 +545,8 @@ static void draw_webserver(void)
     }
 #endif
 
-    akira_display_rect(4, CONT_Y + 4, SCR_W - 8, 36, C_BLACK);
-    akira_display_rect_outline(4, CONT_Y + 4, SCR_W - 8, 36, C_GRAY);
+    akira_display_rounded_rect_fill(4, CONT_Y + 4, SCR_W - 8, 34, 3, C_BLACK);
+    akira_display_rounded_rect(4, CONT_Y + 4, SCR_W - 8, 34, 3, C_DKGRAY);
     akira_display_text(10, CONT_Y + 10, l1, C_WHITE);
     akira_display_text(10, CONT_Y + 24, l2, C_WHITE);
 
@@ -526,8 +594,8 @@ static void draw_bluetooth(void)
     snprintf(l1, sizeof(l1), "State: %s",   state_str);
     snprintf(l2, sizeof(l2), "Addr:  %s",   addr_str);
 
-    akira_display_rect(4, CONT_Y + 4, SCR_W - 8, 36, C_BLACK);
-    akira_display_rect_outline(4, CONT_Y + 4, SCR_W - 8, 36, C_GRAY);
+    akira_display_rounded_rect_fill(4, CONT_Y + 4, SCR_W - 8, 34, 3, C_BLACK);
+    akira_display_rounded_rect(4, CONT_Y + 4, SCR_W - 8, 34, 3, C_DKGRAY);
     akira_display_text(10, CONT_Y + 10, l1, C_WHITE);
     akira_display_text(10, CONT_Y + 24, l2, C_WHITE);
 
