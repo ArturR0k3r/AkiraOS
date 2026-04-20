@@ -9,201 +9,282 @@ LOG_MODULE_REGISTER(akira_sd_install, CONFIG_AKIRA_LOG_LEVEL);
 
 /**
  * @file sd_install_screen.c
- * @brief SD card WASM app browser and one-touch installer.
+ * @brief SD card WASM app browser and one-touch installer — Liquid Crystal UI.
  *
- * Scans /SD:/apps/ for *.wasm files, lists them name+size, and lets the
- * user install any app with a single A-press.  A manifest.json next to
- * the .wasm file is parsed automatically by app_manager_install_from_path().
+ * Scans /SD:/apps/ for *.wasm files, renders a scrollable list panel,
+ * and installs via app_manager_install_from_path() on A-press.
+ * Pure akira_display_* renderer — no LVGL.
  *
- * Flow:
- *   1. sd_install_screen_load() mounts FAT, scans /SD:/apps for .wasm files
- *   2. lv_list of found files (name + human-readable size)
- *   3. User selects entry → A → install_progress_screen overlaid
- *   4. app_manager_install_from_path() called in a work-queue item
- *   5. Progress screen closes on completion; HOME list refreshes
+ * Layout (320x240):
+ *   y=  0..23   Status bar (dither + title)
+ *   y= 24       Hairline separator
+ *   y= 25..215  Scrollable file list (ITEM_H=32 px per row)
+ *   y=215       Hairline separator
+ *   y=216..239  Footer: "A - Install  |  B - Back"
  */
 
 #include "sd_install_screen.h"
 #include "install_progress_screen.h"
-#include "shell_theme.h"
 #include "home_screen.h"
+#include "shell_theme.h"
 
-
-#include <string.h>
+#include <api/akira_display_api.h>
+#include <api/akira_input_api.h>
 #include <zephyr/kernel.h>
 #include <zephyr/fs/fs.h>
 #include <runtime/app_manager/app_manager.h>
+#include <storage/fs_manager.h>
+#include <string.h>
+#include <stdio.h>
 
-/* SD mount point (must match DTS / storage.c) */
-#define SD_APPS_DIR "/SD:/apps"
+/* SD install uses slightly different geometry than the standard settings list */
+#undef  LIST_Y
+#define LIST_Y   25
+#define LIST_H   190
+#undef  ITEM_H
+#define ITEM_H   32
+
+/* ---- SD scan state ---------------------------------------------- */
+#define SD_APPS_DIR  "/SD:/apps"
 #define MAX_SD_APPS  16
 
-/* ------------------------------------------------------------------ */
-/* Install work item (runs outside LVGL thread to avoid blocking UI)  */
-/* ------------------------------------------------------------------ */
+typedef struct {
+    char name[64];
+    char path[128];
+    uint32_t size;
+} sd_entry_t;
 
+static sd_entry_t g_entries[MAX_SD_APPS];
+static int        g_entry_count;
+static int        g_sel;
+static int        g_scroll;
+static bool       g_active;
+
+/* ---- Install work ----------------------------------------------- */
 static char g_install_path[128];
 
 static void do_install_work(struct k_work *work)
 {
     ARG_UNUSED(work);
-
     LOG_INF("Installing from SD: %s", g_install_path);
-    install_progress_show(NULL, 0, "Installing...");
+    install_progress_show(NULL, 0, "Preparing...");
 
     int ret = app_manager_install_from_path(g_install_path);
     if (ret < 0) {
         LOG_ERR("Install failed: %d", ret);
-        install_progress_show(NULL, 100, "Install FAILED");
+        install_progress_show(NULL, 100, "FAILED");
         k_sleep(K_SECONDS(2));
     } else {
         install_progress_show(NULL, 100, "Done!");
         k_sleep(K_MSEC(800));
     }
-
     install_progress_hide();
-    home_screen_refresh();
     home_screen_load();
 }
 
-K_WORK_DEFINE(g_install_work, do_install_work);
+K_WORK_DEFINE(g_sd_install_work, do_install_work);
 
-/* ------------------------------------------------------------------ */
-/* List item callback                                                  */
-/* ------------------------------------------------------------------ */
-
-typedef struct {
-    char path[128]; /* full SD path */
-} sd_item_t;
-
-static sd_item_t g_sd_items[MAX_SD_APPS];
-
-static void item_clicked(lv_event_t *e)
+/* ---- Draw helpers ----------------------------------------------- */
+static void draw_centred(int x, int y, int w, const char *s, uint16_t fg, uint16_t bg)
 {
-    sd_item_t *item = lv_event_get_user_data(e);
-    if (!item) return;
-
-    strncpy(g_install_path, item->path, sizeof(g_install_path) - 1);
-    k_work_submit(&g_install_work);
+    int tw = (int)strlen(s) * 8;
+    int lx = x + (tw < w ? (w - tw) / 2 : 0);
+    akira_display_rect(x, y, w, 10, bg);
+    akira_display_text(lx, y, s, fg);
 }
 
-/* ------------------------------------------------------------------ */
-/* Back button                                                         */
-/* ------------------------------------------------------------------ */
-
-static void back_btn_cb(lv_event_t *e)
+static void draw_screen(void)
 {
-    ARG_UNUSED(e);
-    home_screen_load();
-}
+    akira_display_clear(C_BLACK);
 
-/* ------------------------------------------------------------------ */
-/* Screen state                                                        */
-/* ------------------------------------------------------------------ */
+    /* Status bar */
+    akira_display_rect(0, 0, SCR_W, SBAR_H, C_BLACK);
+    draw_centred(0, (SBAR_H - 10) / 2, SCR_W, "INSTALL FROM SD", C_WHITE, C_BLACK);
+    akira_display_hline(0, SBAR_H,     SCR_W, C_WHITE);
+    akira_display_hline(0, SBAR_H + 1, SCR_W, C_WHITE);
 
-static lv_obj_t *g_screen;
-static lv_obj_t *g_list;
-static lv_group_t *g_group;
+    /* List area */
+    akira_display_rect(0, LIST_Y, SCR_W, LIST_H, C_BLACK);
 
-void sd_install_screen_create(void)
-{
-    g_screen = lv_obj_create(NULL);
-    lv_obj_add_style(g_screen, &g_style_screen, 0);
+    int vis = LIST_H / ITEM_H;
 
-    shell_theme_make_header(g_screen, "Install from SD");
+    if (g_entry_count == 0) {
+        draw_centred(0, LIST_Y + LIST_H / 2 - 10, SCR_W,
+                     "No *.wasm files found", C_GRAY, C_BLACK);
+        draw_centred(0, LIST_Y + LIST_H / 2 + 4,  SCR_W,
+                     "in /SD:/apps/",         C_DKGRAY, C_BLACK);
+    } else {
+        if (g_scroll > g_entry_count - vis) g_scroll = g_entry_count - vis;
+        if (g_scroll < 0)                   g_scroll = 0;
 
-    g_list = lv_list_create(g_screen);
-    int list_y = SHELL_HEADER_H;
-    int list_h = SHELL_SCREEN_H - list_y - SHELL_FOOTER_H;
-    lv_obj_set_size(g_list, SHELL_SCREEN_W, list_h);
-    lv_obj_set_pos(g_list, 0, list_y);
-    lv_obj_set_style_bg_color(g_list, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(g_list, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(g_list, 0, 0);
-    lv_obj_set_style_pad_all(g_list, 0, 0);
-    lv_obj_set_style_radius(g_list, 0, 0);
+        for (int i = g_scroll; i < g_entry_count && i < g_scroll + vis; i++) {
+            int iy   = LIST_Y + (i - g_scroll) * ITEM_H;
+            bool hi  = (i == g_sel);
+            uint16_t ibg = hi ? C_WHITE : C_BLACK;
+            uint16_t ifg = hi ? C_BLACK : C_WHITE;
 
-    shell_theme_make_footer(g_screen, "B:Back", "A:Install");
+            akira_display_rounded_rect_fill(ITEM_X, iy + 2, ITEM_W, ITEM_H - 4, 3, ibg);
+            if (hi) {
+                akira_display_rounded_rect(ITEM_X,     iy + 2, ITEM_W,     ITEM_H - 4, 3, C_BLACK);
+                akira_display_rounded_rect(ITEM_X + 1, iy + 3, ITEM_W - 2, ITEM_H - 6, 2, C_BLACK);
+            } else {
+                akira_display_rounded_rect(ITEM_X, iy + 2, ITEM_W, ITEM_H - 4, 3, C_DKGRAY);
+            }
 
-    g_group = lv_group_create();
-    lv_indev_set_group(lv_indev_get_next(NULL), g_group);
+            /* Name (left) */
+            akira_display_text(ITEM_X + 6, iy + 2 + (ITEM_H - 4 - 10) / 2,
+                               g_entries[i].name, ifg);
 
-    /* Back button mapped to B key (LV_KEY_ESC) via group */
-    lv_obj_add_event_cb(g_screen, back_btn_cb, LV_EVENT_KEY, NULL);
-}
+            /* Size (right) */
+            char sz[16];
+            if (g_entries[i].size >= 1024) {
+                snprintf(sz, sizeof(sz), "%uKB", (unsigned)(g_entries[i].size / 1024));
+            } else {
+                snprintf(sz, sizeof(sz), "%uB", (unsigned)g_entries[i].size);
+            }
+            int tw = (int)strlen(sz) * 8;
+            akira_display_text(ITEM_X + ITEM_W - tw - 6,
+                               iy + 2 + (ITEM_H - 4 - 10) / 2,
+                               sz, ifg);
+        }
 
-void sd_install_screen_load(void)
-{
-    if (!g_screen) {
-        sd_install_screen_create();
+        /* Scroll indicators */
+        if (g_scroll > 0) {
+            akira_display_text(SCR_W - 12, LIST_Y + 2, "^", C_GRAY);
+        }
+        if (g_scroll + vis < g_entry_count) {
+            akira_display_text(SCR_W - 12, LIST_Y + vis * ITEM_H + 2, "v", C_GRAY);
+        }
     }
 
-    /* Clear previous scan results */
-    lv_obj_clean(g_list);
-    lv_group_remove_all_objs(g_group);
+    /* Footer */
+    akira_display_hline(0, FOOT_Y - 1, SCR_W, C_WHITE);
+    akira_display_hline(0, FOOT_Y - 2, SCR_W, C_WHITE);
+    akira_display_rect(0, FOOT_Y, SCR_W, FOOT_H, C_BLACK);
+    akira_display_text(8, FOOT_Y + 7, "A-Install  |  B-Back", C_WHITE);
 
-    lv_scr_load(g_screen);
+    akira_display_flush();
+}
 
-    /* Scan SD */
+/* ---- Scan ------------------------------------------------------- */
+static void scan_sd(void)
+{
+    g_entry_count = 0;
+
     struct fs_dir_t dir;
     fs_dir_t_init(&dir);
 
     int ret = fs_opendir(&dir, SD_APPS_DIR);
     if (ret < 0) {
         LOG_WRN("SD:/apps not accessible: %d", ret);
-        lv_obj_t *lbl = lv_label_create(g_list);
-        lv_label_set_text(lbl, "SD card not found or empty.\nInsert card with /apps/*.wasm");
-        lv_obj_set_style_text_color(lbl, SHELL_COLOR_SUBTEXT, 0);
-        lv_obj_set_style_text_font(lbl, SHELL_FONT_SMALL, 0);
-        lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 12);
         return;
     }
 
     struct fs_dirent entry;
-    int count = 0;
-
-    while (count < MAX_SD_APPS && fs_readdir(&dir, &entry) == 0
-           && entry.name[0] != '\0') {
-
-        /* Filter for *.wasm files */
-        int namelen = strlen(entry.name);
-        if (entry.type != FS_DIR_ENTRY_FILE || namelen < 6 ||
-            strcmp(&entry.name[namelen - 5], ".wasm") != 0) {
+    while (g_entry_count < MAX_SD_APPS &&
+           fs_readdir(&dir, &entry) == 0 &&
+           entry.name[0] != '\0') {
+        int nl = (int)strlen(entry.name);
+        if (entry.type != FS_DIR_ENTRY_FILE || nl < 6 ||
+            strcmp(&entry.name[nl - 5], ".wasm") != 0) {
             continue;
         }
-
-        snprintf(g_sd_items[count].path,
-                 sizeof(g_sd_items[count].path),
+        strncpy(g_entries[g_entry_count].name, entry.name,
+                sizeof(g_entries[0].name) - 1);
+        snprintf(g_entries[g_entry_count].path,
+                 sizeof(g_entries[0].path),
                  "%s/%s", SD_APPS_DIR, entry.name);
+        g_entries[g_entry_count].size = (uint32_t)entry.size;
+        g_entry_count++;
+    }
+    fs_closedir(&dir);
+    LOG_INF("SD scan: %d .wasm files", g_entry_count);
+}
 
-        /* Human-readable size: show KB */
-        char label[64];
-        if (entry.size >= 1024) {
-            snprintf(label, sizeof(label), "%s  (%u KB)",
-                     entry.name, (unsigned)(entry.size / 1024));
-        } else {
-            snprintf(label, sizeof(label), "%s  (%u B)",
-                     entry.name, (unsigned)entry.size);
+/* ---- Public API ------------------------------------------------- */
+void sd_install_screen_create(void)
+{
+    g_entry_count = 0;
+    g_sel         = 0;
+    g_scroll      = 0;
+    g_active      = false;
+}
+
+void sd_install_screen_load(void)
+{
+    /* Check SD card presence via FS manager before doing anything */
+    if (!fs_manager_sd_available()) {
+        akira_display_clear(C_BLACK);
+        akira_display_rect(0, 0, SCR_W, SBAR_H, C_BLACK);
+        draw_centred(0, (SBAR_H - 10) / 2, SCR_W, "INSTALL FROM SD", C_WHITE, C_BLACK);
+        akira_display_hline(0, SBAR_H,     SCR_W, C_WHITE);
+        akira_display_hline(0, SBAR_H + 1, SCR_W, C_WHITE);
+        draw_centred(0, SCR_H / 2 - 10, SCR_W, "No SD card detected", C_GRAY, C_BLACK);
+        draw_centred(0, SCR_H / 2 + 4,  SCR_W, "Insert card and reboot", C_DKGRAY, C_BLACK);
+        akira_display_hline(0, FOOT_Y - 1, SCR_W, C_WHITE);
+        akira_display_hline(0, FOOT_Y - 2, SCR_W, C_WHITE);
+        akira_display_rect(0, FOOT_Y, SCR_W, FOOT_H, C_BLACK);
+        akira_display_text(8, FOOT_Y + 7, "B-Back", C_WHITE);
+        akira_display_flush();
+        /* Wait for B to go back */
+        uint32_t prev = 0;
+        while (true) {
+            k_sleep(K_MSEC(20));
+            uint32_t btns = akira_input_get_bitmask();
+            uint32_t just = btns & ~prev;
+            prev = btns;
+            if (just & BIT(AKIRA_BTN_B)) {
+                home_screen_load();
+                return;
+            }
         }
-
-        lv_obj_t *btn = lv_list_add_btn(g_list, NULL, label);
-        lv_obj_add_style(btn, &g_style_list_item, 0);
-        lv_obj_add_event_cb(btn, item_clicked,
-                            LV_EVENT_CLICKED, &g_sd_items[count]);
-        lv_group_add_obj(g_group, btn);
-
-        count++;
     }
 
-    fs_closedir(&dir);
+    g_active = true;
+    g_sel    = 0;
+    g_scroll = 0;
+    scan_sd();
+    draw_screen();
 
-    if (count == 0) {
-        lv_obj_t *lbl = lv_label_create(g_list);
-        lv_label_set_text(lbl, "No *.wasm files found\nin /SD:/apps/");
-        lv_obj_set_style_text_color(lbl, SHELL_COLOR_SUBTEXT, 0);
-        lv_obj_set_style_text_font(lbl, SHELL_FONT_SMALL, 0);
-        lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 12);
-    } else {
-        LOG_INF("SD scan: %d WASM files found", count);
+    /* Blocking event loop — returns when B pressed or install triggered */
+    uint32_t prev_btns = 0;
+
+    while (g_active) {
+        k_sleep(K_MSEC(20));
+
+        uint32_t btns  = akira_input_get_bitmask();
+        uint32_t just  = btns & ~prev_btns;
+        prev_btns      = btns;
+
+        if (!just) continue;
+
+        int vis = LIST_H / ITEM_H;
+
+        if (just & BIT(AKIRA_BTN_UP)) {
+            if (g_sel > 0) {
+                g_sel--;
+                if (g_sel < g_scroll) g_scroll--;
+                draw_screen();
+            }
+        }
+        if (just & BIT(AKIRA_BTN_DOWN)) {
+            if (g_sel < g_entry_count - 1) {
+                g_sel++;
+                if (g_sel >= g_scroll + vis) g_scroll++;
+                draw_screen();
+            }
+        }
+        if (just & BIT(AKIRA_BTN_A)) {
+            if (g_entry_count > 0 && g_sel < g_entry_count) {
+                strncpy(g_install_path, g_entries[g_sel].path,
+                        sizeof(g_install_path) - 1);
+                k_work_submit(&g_sd_install_work);
+                g_active = false;
+            }
+        }
+        if ((just & BIT(AKIRA_BTN_B)) || (just & BIT(AKIRA_BTN_HOME))) {
+            g_active = false;
+            home_screen_load();
+        }
     }
 }

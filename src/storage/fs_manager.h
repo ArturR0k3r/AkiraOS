@@ -204,6 +204,12 @@ const char *fs_manager_get_status(void);
 bool fs_manager_has_persistent_storage(void);
 
 /**
+ * Check if SD card storage is available
+ * @return true if SD card is mounted and ready
+ */
+bool fs_manager_sd_available(void);
+
+/**
  * RAM file info for listing
  */
 typedef struct {

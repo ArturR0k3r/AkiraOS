@@ -2,140 +2,77 @@
  * Copyright (c) 2025 AkiraOS Contributors
  * SPDX-License-Identifier: GPL-3.0-only
  */
-
 #define LOG_MODULE_NAME akira_ota_screen
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(akira_ota_screen, CONFIG_AKIRA_LOG_LEVEL);
 
-/**
- * @file ota_screen.c
- * @brief OTA firmware update: version display, check and progress bar.
- */
-
 #include <zephyr/kernel.h>
-
-
-#include "../shell_theme.h"
+#include <string.h>
+#include <stdio.h>
+#include <api/akira_display_api.h>
+#include <api/akira_input_api.h>
 #include "ota_screen.h"
+#include "../shell_theme.h"
 
 #if defined(CONFIG_AKIRA_OTA)
 #include "../../connectivity/ota/ota_manager.h"
 #endif
 
-static lv_obj_t *g_screen;
-static lv_obj_t *g_status_label;
-static lv_obj_t *g_progress_bar;
-static lv_obj_t *g_check_btn;
+static void lc_centred(int x, int y, int w, const char *s, uint16_t fg, uint16_t bg) {
+    int tw = (int)(strlen(s)*8); int lx = x+(tw<w?(w-tw)/2:0);
+    akira_display_rect(x,y,w,10,bg); akira_display_text(lx,y,s,fg);
+}
+static void lc_header(const char *title) {
+    akira_display_rect(0,0,SCR_W,SBAR_H,C_BLACK);
+    lc_centred(0,(SBAR_H-10)/2,SCR_W,title,C_WHITE,C_BLACK);
+    akira_display_hline(0,SBAR_H,SCR_W,C_WHITE); akira_display_hline(0,SBAR_H+1,SCR_W,C_WHITE);
+}
+static void lc_footer(const char *txt) {
+    akira_display_hline(0,FOOT_Y-1,SCR_W,C_WHITE); akira_display_hline(0,FOOT_Y-2,SCR_W,C_WHITE);
+    akira_display_rect(0,FOOT_Y,SCR_W,FOOT_H,C_BLACK); akira_display_text(8,FOOT_Y+7,txt,C_WHITE);
+}
+static void lc_item(int idx, int sel, const char *lbl, const char *rv) {
+    int iy=LIST_Y+idx*ITEM_H; bool hi=(idx==sel);
+    uint16_t ibg=hi?C_WHITE:C_BLACK, ifg=hi?C_BLACK:C_WHITE;
+    akira_display_rounded_rect_fill(ITEM_X,iy+3,ITEM_W,ITEM_H-6,5,ibg);
+    akira_display_rounded_rect(ITEM_X,iy+3,ITEM_W,ITEM_H-6,5,hi?C_BLACK:C_DKGRAY);
+    int ty=iy+3+(ITEM_H-6-10)/2;
+    akira_display_text(ITEM_X+10,ty,lbl,ifg);
+    if (rv&&rv[0]){int tw=(int)strlen(rv)*8; akira_display_text(ITEM_X+ITEM_W-tw-10,ty,rv,ifg);}
+}
+static void lc_bar(int x, int y, int w, int h, int pct) {
+    akira_display_rect_outline(x-1,y-1,w+2,h+2,C_WHITE);
+    int fw = pct*w/100;
+    akira_display_rect(x,y,w,h,C_DKGRAY);
+    if (fw>0) akira_display_rect(x,y,fw,h,C_WHITE);
+}
 
-/* ------------------------------------------------------------------ */
-/* Check / apply button                                                 */
-/* ------------------------------------------------------------------ */
-
-static void check_btn_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
-        return;
-    }
-
-    lv_label_set_text(g_status_label, "Checking for update…");
-    lv_bar_set_value(g_progress_bar, 0, LV_ANIM_OFF);
-    lv_obj_set_state(g_check_btn, LV_STATE_DISABLED, true);
-    lv_timer_handler();
-
+static void draw(void) {
+    akira_display_clear(C_BLACK); lc_header("FIRMWARE UPDATE");
+    char ver[48]; snprintf(ver,sizeof(ver),"Version: %s",CONFIG_AKIRA_OS_VERSION);
+    akira_display_rounded_rect_fill(ITEM_X,LIST_Y+4,ITEM_W,22,4,C_BLACK);
+    akira_display_rounded_rect(ITEM_X,LIST_Y+4,ITEM_W,22,4,C_DKGRAY);
+    akira_display_text(ITEM_X+8,LIST_Y+11,ver,C_WHITE);
+    akira_display_text(ITEM_X+8,LIST_Y+32,
 #if defined(CONFIG_AKIRA_OTA)
-    /* OTA is driven by the web-server transport; the screen just shows
-     * live progress via the registered callback. */
-    lv_label_set_text(g_status_label, "OTA via web upload only");
+        "OTA via web upload only",
 #else
-    lv_label_set_text(g_status_label, "OTA not enabled");
+        "OTA not enabled in this build",
 #endif
-
-    lv_obj_set_state(g_check_btn, LV_STATE_DISABLED, false);
+        C_GRAY);
+    lc_footer("B-Back");
+    akira_display_flush();
 }
-
-/* ------------------------------------------------------------------ */
-/* Back key                                                             */
-/* ------------------------------------------------------------------ */
-
-static void back_event_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) == LV_EVENT_KEY) {
-        uint32_t key = lv_indev_get_key(lv_indev_get_act());
-        if (key == LV_KEY_ESC) {
-            extern void settings_screen_load(void);
-            settings_screen_load();
-        }
-    }
-}
-
-/* ------------------------------------------------------------------ */
-/* Screen construction                                                  */
-/* ------------------------------------------------------------------ */
-
-static void build_screen(void)
-{
-    g_screen = lv_obj_create(NULL);
-    lv_obj_add_style(g_screen, &g_style_screen, 0);
-
-    shell_theme_make_header(g_screen, "Firmware Update");
-    shell_theme_make_footer(g_screen, "B:Back", "A:Check");
-
-    int y = SHELL_HEADER_H + 10;
-
-    /* Current version */
-    lv_obj_t *ver_lbl = lv_label_create(g_screen);
-    lv_label_set_text_fmt(ver_lbl, "Version: %s",
-                          CONFIG_AKIRA_OS_VERSION);
-    lv_obj_set_style_text_font(ver_lbl, SHELL_FONT_SMALL, 0);
-    lv_obj_align(ver_lbl, LV_ALIGN_TOP_LEFT, 8, y);
-    y += 24;
-
-    /* Status label */
-    g_status_label = lv_label_create(g_screen);
-    lv_label_set_text(g_status_label, "Press A to check for updates");
-    lv_obj_set_style_text_font(g_status_label, SHELL_FONT_SMALL, 0);
-    lv_obj_set_style_text_color(g_status_label,
-                                lv_color_make(0x50, 0x50, 0x50), 0);
-    lv_obj_set_width(g_status_label, SHELL_SCREEN_W - 16);
-    lv_obj_align(g_status_label, LV_ALIGN_TOP_LEFT, 8, y);
-    y += 24;
-
-    /* Progress bar */
-    g_progress_bar = lv_bar_create(g_screen);
-    lv_obj_set_size(g_progress_bar, SHELL_SCREEN_W - 16, 16);
-    lv_bar_set_range(g_progress_bar, 0, 100);
-    lv_bar_set_value(g_progress_bar, 0, LV_ANIM_OFF);
-    lv_obj_align(g_progress_bar, LV_ALIGN_TOP_LEFT, 8, y);
-    /* White indicator on dark bar */
-    lv_obj_set_style_bg_color(g_progress_bar,
-                              lv_color_make(0x30, 0x30, 0x30), 0);
-    lv_obj_set_style_bg_color(g_progress_bar,
-                              lv_color_white(),
-                              LV_PART_INDICATOR);
-    y += 28;
-
-    /* Check button */
-    g_check_btn = lv_btn_create(g_screen);
-    lv_obj_set_size(g_check_btn, 160, 36);
-    lv_obj_align(g_check_btn, LV_ALIGN_TOP_LEFT, 8, y);
-    lv_obj_add_event_cb(g_check_btn, check_btn_cb,
-                        LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t *btn_lbl = lv_label_create(g_check_btn);
-    lv_label_set_text(btn_lbl, "Check Update");
-    lv_obj_center(btn_lbl);
-
-    lv_obj_add_event_cb(g_screen, back_event_cb, LV_EVENT_KEY, NULL);
-}
-
-/* ------------------------------------------------------------------ */
-/* Public API                                                           */
-/* ------------------------------------------------------------------ */
 
 void ota_screen_load(void)
 {
-    if (!g_screen) {
-        build_screen();
+    extern void settings_screen_load(void);
+    draw();
+    uint32_t prev=0;
+    while (true) {
+        k_sleep(K_MSEC(20));
+        uint32_t btns=akira_input_get_bitmask(), just=btns&~prev; prev=btns;
+        if (!just) continue;
+        if ((just&BIT(AKIRA_BTN_B))||(just&BIT(AKIRA_BTN_HOME))||(just&BIT(AKIRA_BTN_A))) { settings_screen_load(); return; }
     }
-    lv_scr_load(g_screen);
 }

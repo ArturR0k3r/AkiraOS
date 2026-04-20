@@ -2,221 +2,140 @@
  * Copyright (c) 2025 AkiraOS Contributors
  * SPDX-License-Identifier: GPL-3.0-only
  */
-
 #define LOG_MODULE_NAME akira_ble_screen
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(akira_ble_screen, CONFIG_AKIRA_LOG_LEVEL);
 
-/**
- * @file ble_screen.c
- * @brief Bluetooth on/off toggle and pairing mode button.
- */
-
 #include <zephyr/kernel.h>
-#include <lvgl.h>
+#include <string.h>
+#include <stdio.h>
+#include <api/akira_display_api.h>
+#include <api/akira_input_api.h>
 
-#include "../shell_theme.h"
+#include "shell_theme.h"
+#include <connectivity/bluetooth/bt_manager.h>
 #include "ble_screen.h"
 
-#if defined(CONFIG_BT)
-#include <zephyr/bluetooth/bluetooth.h>
-#include <zephyr/bluetooth/hci.h>
-#include <zephyr/bluetooth/conn.h>
-#endif
 
-static lv_obj_t *g_screen;
-static lv_obj_t *g_sw;
-static lv_obj_t *g_pair_btn;
-static lv_obj_t *g_conn_label;
 
-/* ------------------------------------------------------------------ */
-/* BT helpers                                                          */
-/* ------------------------------------------------------------------ */
-
-#if defined(CONFIG_BT)
-static struct bt_conn *g_conn;
-
-static void connected_cb(struct bt_conn *conn, uint8_t err)
+static void centred(int x, int y, int w, const char *s, uint16_t fg, uint16_t bg)
 {
-    if (err) {
-        LOG_WRN("BT connection failed: %d", err);
-        return;
-    }
-    g_conn = bt_conn_ref(conn);
-    if (g_conn_label) {
-        char addr[BT_ADDR_LE_STR_LEN];
-        bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-        lv_label_set_text_fmt(g_conn_label, "Connected: %s", addr);
+    int tw = (int)(strlen(s) * 8);
+    int lx = x + (tw < w ? (w - tw) / 2 : 0);
+    akira_display_rect(x, y, w, 10, bg);
+    akira_display_text(lx, y, s, fg);
+}
+
+static void draw_item(int idx, int sel, const char *lbl, const char *rv)
+{
+    int iy = LIST_Y + idx * ITEM_H;
+    bool hi = (idx == sel);
+    uint16_t ibg = hi ? C_WHITE : C_BLACK;
+    uint16_t ifg = hi ? C_BLACK : C_WHITE;
+
+    akira_display_rounded_rect_fill(ITEM_X, iy + 3, ITEM_W, ITEM_H - 6, 5, ibg);
+    akira_display_rounded_rect(ITEM_X, iy + 3, ITEM_W, ITEM_H - 6, 5,
+                               hi ? C_BLACK : C_DKGRAY);
+    int ty = iy + 3 + (ITEM_H - 6 - 10) / 2;
+    akira_display_text(ITEM_X + 10, ty, lbl, ifg);
+    if (rv && rv[0]) {
+        int tw = (int)strlen(rv) * 8;
+        akira_display_text(ITEM_X + ITEM_W - tw - 10, ty, rv, ifg);
     }
 }
 
-static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
+static const char *state_label(bt_state_t st)
 {
-    ARG_UNUSED(reason);
-    if (g_conn) {
-        bt_conn_unref(g_conn);
-        g_conn = NULL;
-    }
-    if (g_conn_label) {
-        lv_label_set_text(g_conn_label, "Not connected");
+    switch (st) {
+    case BT_STATE_OFF:          return "OFF";
+    case BT_STATE_INITIALIZING: return "Init...";
+    case BT_STATE_READY:        return "Ready";
+    case BT_STATE_ADVERTISING:  return "Advertising";
+    case BT_STATE_CONNECTED:    return "Connected";
+    case BT_STATE_PAIRING:      return "Pairing";
+    case BT_STATE_ERROR:        return "Error";
+    default:                    return "Unknown";
     }
 }
 
-BT_CONN_CB_DEFINE(conn_callbacks) = {
-    .connected    = connected_cb,
-    .disconnected = disconnected_cb,
-};
-#endif /* CONFIG_BT */
-
-/* ------------------------------------------------------------------ */
-/* Toggle callback                                                      */
-/* ------------------------------------------------------------------ */
-
-static void sw_event_cb(lv_event_t *e)
+static void draw(int sel)
 {
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) {
-        return;
-    }
+    bt_state_t st = bt_manager_get_state();
+    bool on       = (st != BT_STATE_OFF && st != BT_STATE_ERROR);
 
-    bool on = lv_obj_has_state(g_sw, LV_STATE_CHECKED);
+    akira_display_clear(C_BLACK);
+    akira_display_rect(0, 0, SCR_W, SBAR_H, C_BLACK);
+    centred(0, (SBAR_H - 10) / 2, SCR_W, "BLUETOOTH", C_WHITE, C_BLACK);
+    akira_display_hline(0, SBAR_H,     SCR_W, C_WHITE);
+    akira_display_hline(0, SBAR_H + 1, SCR_W, C_WHITE);
 
-#if defined(CONFIG_BT)
-    if (on) {
-        int ret = bt_enable(NULL);
-        if (ret < 0 && ret != -EALREADY) {
-            LOG_ERR("bt_enable failed: %d", ret);
-        }
+    draw_item(0, sel, "Bluetooth",    on ? "ON" : "OFF");
+    draw_item(1, sel, "Pairing Mode", state_label(st));
+
+    /* Connection info */
+    char addr[48] = "";
+    bt_manager_get_address(addr, sizeof(addr));
+    int info_y = LIST_Y + 2 * ITEM_H + 10;
+    if (bt_manager_is_connected()) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "Connected: %s", addr);
+        akira_display_text(ITEM_X + 6, info_y, buf, C_GRAY);
     } else {
-        int ret = bt_disable();
-        if (ret < 0) {
-            LOG_ERR("bt_disable failed: %d", ret);
-        }
+        akira_display_text(ITEM_X + 6, info_y, "Not connected", C_DKGRAY);
     }
-#else
-    ARG_UNUSED(on);
-#endif
 
-    if (g_pair_btn) {
-        lv_obj_set_state(g_pair_btn,
-                         on ? LV_STATE_DEFAULT : LV_STATE_DISABLED,
-                         !on);
-    }
+    akira_display_hline(0, FOOT_Y - 1, SCR_W, C_WHITE);
+    akira_display_hline(0, FOOT_Y - 2, SCR_W, C_WHITE);
+    akira_display_rect(0, FOOT_Y, SCR_W, FOOT_H, C_BLACK);
+    akira_display_text(8, FOOT_Y + 7, "A-Toggle  |  B-Back", C_WHITE);
+    akira_display_flush();
 }
-
-/* ------------------------------------------------------------------ */
-/* Pairing button                                                       */
-/* ------------------------------------------------------------------ */
-
-static void pair_click_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
-        return;
-    }
-
-#if defined(CONFIG_BT)
-    const struct bt_data ad[] = {
-        BT_DATA_BYTES(BT_DATA_FLAGS,
-                      BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR),
-        BT_DATA(BT_DATA_NAME_COMPLETE, "AkiraConsole",
-                sizeof("AkiraConsole") - 1),
-    };
-    int ret = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad),
-                               NULL, 0);
-    if (ret < 0) {
-        LOG_ERR("bt_le_adv_start failed: %d", ret);
-    } else {
-        LOG_INF("BT pairing advertising started");
-        lv_label_set_text(lv_obj_get_child(g_pair_btn, 0),
-                          "Advertising…");
-    }
-#endif
-}
-
-/* ------------------------------------------------------------------ */
-/* Back key                                                             */
-/* ------------------------------------------------------------------ */
-
-static void back_event_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) == LV_EVENT_KEY) {
-        uint32_t key = lv_indev_get_key(lv_indev_get_act());
-        if (key == LV_KEY_ESC) {
-            extern void settings_screen_load(void);
-            settings_screen_load();
-        }
-    }
-}
-
-/* ------------------------------------------------------------------ */
-/* Screen construction                                                  */
-/* ------------------------------------------------------------------ */
-
-static void build_screen(void)
-{
-    g_screen = lv_obj_create(NULL);
-    lv_obj_add_style(g_screen, &g_style_screen, 0);
-
-    shell_theme_make_header(g_screen, "Bluetooth");
-    shell_theme_make_footer(g_screen, "B:Back", "");
-
-    int y = SHELL_HEADER_H + 12;
-
-    /* Enable toggle */
-    lv_obj_t *lbl_en = lv_label_create(g_screen);
-    lv_label_set_text(lbl_en, "Bluetooth");
-    lv_obj_add_style(lbl_en, &g_style_list_item, 0);
-    lv_obj_align(lbl_en, LV_ALIGN_TOP_LEFT, 8, y);
-
-    g_sw = lv_switch_create(g_screen);
-    lv_obj_align(g_sw, LV_ALIGN_TOP_RIGHT, -8, y);
-    lv_obj_add_event_cb(g_sw, sw_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
-
-#if defined(CONFIG_BT)
-    /* Assume BT is ON if already enabled */
-    lv_obj_add_state(g_sw, LV_STATE_CHECKED);
-#endif
-
-    y += 36;
-
-    /* Separator */
-    lv_obj_t *sep = lv_obj_create(g_screen);
-    lv_obj_set_size(sep, SHELL_SCREEN_W - 16, 1);
-    lv_obj_align(sep, LV_ALIGN_TOP_LEFT, 8, y);
-    lv_obj_add_style(sep, &g_style_separator, 0);
-    y += 10;
-
-    /* Pairing button */
-    g_pair_btn = lv_btn_create(g_screen);
-    lv_obj_set_size(g_pair_btn, 160, 36);
-    lv_obj_align(g_pair_btn, LV_ALIGN_TOP_LEFT, 8, y);
-    lv_obj_add_event_cb(g_pair_btn, pair_click_cb, LV_EVENT_CLICKED,
-                        NULL);
-
-    lv_obj_t *pair_lbl = lv_label_create(g_pair_btn);
-    lv_label_set_text(pair_lbl, "Enter Pairing Mode");
-    lv_obj_center(pair_lbl);
-
-    y += 44;
-
-    /* Connected device label */
-    g_conn_label = lv_label_create(g_screen);
-    lv_label_set_text(g_conn_label, "Not connected");
-    lv_obj_set_style_text_font(g_conn_label, SHELL_FONT_SMALL, 0);
-    lv_obj_set_style_text_color(g_conn_label,
-                                lv_color_make(0x60, 0x60, 0x60), 0);
-    lv_obj_align(g_conn_label, LV_ALIGN_TOP_LEFT, 8, y);
-
-    lv_obj_add_event_cb(g_screen, back_event_cb, LV_EVENT_KEY, NULL);
-}
-
-/* ------------------------------------------------------------------ */
-/* Public API                                                           */
-/* ------------------------------------------------------------------ */
 
 void ble_screen_load(void)
 {
-    if (!g_screen) {
-        build_screen();
+    extern void settings_screen_load(void);
+
+    int sel = 0;
+    draw(sel);
+
+    uint32_t prev = 0;
+    while (true) {
+        k_sleep(K_MSEC(20));
+        uint32_t btns = akira_input_get_bitmask();
+        uint32_t just = btns & ~prev;
+        prev = btns;
+        if (!just) continue;
+
+        if (just & BIT(AKIRA_BTN_UP)) {
+            if (sel > 0) { sel--; draw(sel); }
+        }
+        if (just & BIT(AKIRA_BTN_DOWN)) {
+            if (sel < 1) { sel++; draw(sel); }
+        }
+        if (just & BIT(AKIRA_BTN_A)) {
+            bt_state_t st = bt_manager_get_state();
+            if (sel == 0) {
+                if (st == BT_STATE_OFF || st == BT_STATE_ERROR) {
+                    int r = bt_manager_init(NULL);
+                    if (r < 0) LOG_ERR("bt_manager_init: %d", r);
+                } else {
+                    int r = bt_manager_deinit();
+                    if (r < 0) LOG_ERR("bt_manager_deinit: %d", r);
+                }
+            } else if (sel == 1) {
+                if (st == BT_STATE_ADVERTISING) {
+                    int r = bt_manager_stop_advertising();
+                    if (r < 0) LOG_ERR("bt_manager_stop_advertising: %d", r);
+                } else if (st == BT_STATE_READY || st == BT_STATE_CONNECTED) {
+                    int r = bt_manager_start_advertising();
+                    if (r < 0) LOG_ERR("bt_manager_start_advertising: %d", r);
+                }
+            }
+            draw(sel);
+        }
+        if ((just & BIT(AKIRA_BTN_B)) || (just & BIT(AKIRA_BTN_HOME))) {
+            settings_screen_load();
+            return;
+        }
     }
-    lv_scr_load(g_screen);
 }
