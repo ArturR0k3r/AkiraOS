@@ -33,6 +33,12 @@ LOG_MODULE_REGISTER(akira_shell_settings, CONFIG_AKIRA_LOG_LEVEL);
 
 #include "settings_screen.h"
 #include "home_screen.h"
+#include "settings/datetime_screen.h"
+#include "settings/display_screen.h"
+#include "settings/power_screen.h"
+#include "settings/apps_screen.h"
+#include "settings/ota_screen.h"
+#include "settings/devmode_screen.h"
 
 #include <zephyr/kernel.h>
 #include <string.h>
@@ -103,10 +109,13 @@ typedef enum {
 static bool      g_active;
 static ss_page_t g_page;
 
-/* ---- Main menu (3 items) ----------------------------------------- */
-#define MAIN_ITEMS 5
+/* ---- Main menu --------------------------------------------------- */
+#define MAIN_ITEMS 11
 static const char *s_main_labels[MAIN_ITEMS] = {
-    "WiFi", "Bluetooth", "Web Server", "About", "Sleep"
+    "WiFi", "Bluetooth", "Web Server",
+    "Date & Time", "Display", "Power",
+    "Apps", "OTA Update", "Developer",
+    "About", "Sleep"
 };
 static int g_main_sel;
 
@@ -161,6 +170,9 @@ static bool    g_sleeping;
 /* Timestamp of first B press during sleep (ms); -1 = no pending press */
 static int64_t g_sleep_first_press_ms;
 #define SLEEP_DPRESSW_MS  500   /* double-press window in ms */
+/* Set by settings_screen_load() to absorb the B press that came from a
+ * sub-screen's blocking loop before settings re-enables its own handler. */
+static bool    g_flush_next_key;
 
 /* ------------------------------------------------------------------ */
 /* Draw helpers                                                        */
@@ -320,6 +332,18 @@ static void draw_menu_at(const char **labels, int count, int sel,
 }
 
 /* ------------------------------------------------------------------ */
+/* Shared draw helpers — non-static, used by settings sub-screens     */
+/* ------------------------------------------------------------------ */
+void ss_glass_rect_focus(int x, int y, int w, int h, int r) { glass_rect_focus(x, y, w, h, r); }
+void ss_glass_rect_dim  (int x, int y, int w, int h, int r) { glass_rect_dim(x, y, w, h, r);   }
+void ss_draw_centred(int x, int y, int w, const char *s, uint16_t fg, uint16_t bg) { draw_centred(x, y, w, s, fg, bg); }
+void ss_draw_header(const char *title)                                              { draw_header(title);               }
+void ss_draw_ribbon(const char *left, const char *right)                            { draw_ribbon(left, right);         }
+int  ss_menu_vis_count(int top_y)                                                   { return menu_vis_count(top_y);     }
+int  ss_scroll_clamp(int sel, int scroll, int count, int top_y)                     { return scroll_clamp(sel, scroll, count, top_y); }
+void ss_draw_menu_at(const char **labels, int count, int sel, int top_y, int scroll) { draw_menu_at(labels, count, sel, top_y, scroll); }
+
+/* ------------------------------------------------------------------ */
 /* WiFi helpers                                                        */
 /* ------------------------------------------------------------------ */
 static bool wifi_get_status(char *ssid_out, size_t ssid_sz,
@@ -357,11 +381,9 @@ static void wifi_get_ip(char *buf, size_t len)
 #if defined(CONFIG_WIFI) && defined(CONFIG_NET_MGMT)
     struct net_if *iface = net_if_get_default();
     if (!iface) return;
-    struct net_if_addr *addr =
-        net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
+    struct in_addr *addr = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
     if (addr) {
-        net_addr_ntop(AF_INET, &addr->address.in_addr,
-                      buf, (socklen_t)len);
+        net_addr_ntop(AF_INET, addr, buf, (socklen_t)len);
     }
 #endif
 }
@@ -654,9 +676,34 @@ static void handle_main(uint32_t k)
             g_page = SS_WEBSERVER;
             break;
         case 3:
+            /* Date & Time — hands off to datetime_screen (blocking loop) */
+            g_active = false;
+            datetime_screen_load();
+            return;
+        case 4:
+            g_active = false;
+            display_screen_load();
+            return;
+        case 5:
+            g_active = false;
+            power_screen_load();
+            return;
+        case 6:
+            g_active = false;
+            apps_screen_load();
+            return;
+        case 7:
+            g_active = false;
+            ota_screen_load();
+            return;
+        case 8:
+            g_active = false;
+            devmode_screen_load();
+            return;
+        case 9:
             g_page = SS_ABOUT;
             break;
-        case 4: /* Sleep */
+        case 10: /* Sleep */
             g_sleeping = true;
             g_sleep_first_press_ms = -1;
             g_page = SS_SLEEP;
@@ -804,9 +851,22 @@ static void handle_webserver(uint32_t k)
     }
     if (k & BIT(AKIRA_BTN_A)) {
         switch (g_ws_sel) {
-        case 0: /* Start */
-#if defined(CONFIG_AKIRA_HTTP_SERVER)
-            web_server_start(NULL);
+        case 0: /* Start — notify server thread of current IP (thread started at boot) */
+#if defined(CONFIG_AKIRA_HTTP_SERVER) && defined(CONFIG_WIFI) && defined(CONFIG_NET_MGMT)
+        {
+            char ws_ip[NET_IPV4_ADDR_LEN] = "0.0.0.0";
+            struct net_if *ws_iface = net_if_get_default();
+            if (ws_iface) {
+                struct in_addr *ws_addr =
+                    net_if_ipv4_get_global_addr(ws_iface, NET_ADDR_PREFERRED);
+                if (ws_addr) {
+                    net_addr_ntop(AF_INET, ws_addr, ws_ip, sizeof(ws_ip));
+                }
+            }
+            web_server_notify_network_status(true, ws_ip);
+        }
+#elif defined(CONFIG_AKIRA_HTTP_SERVER)
+            web_server_notify_network_status(true, "0.0.0.0");
 #else
             LOG_WRN("HTTP server not compiled in");
 #endif
@@ -933,16 +993,25 @@ void settings_screen_create(void)
 
 void settings_screen_load(void)
 {
-    g_active   = true;
-    g_page     = SS_MAIN;
-    g_main_sel   = 0;
-    g_main_scroll = 0;
+    g_active         = true;
+    g_page           = SS_MAIN;
+    g_main_sel       = 0;
+    g_main_scroll    = 0;
+    g_flush_next_key = true;   /* discard stale B from returning sub-screen */
     redraw();
 }
 
 void settings_screen_handle_key(uint32_t just_pressed)
 {
     if (!g_active) return;
+    if (g_flush_next_key) {
+        g_flush_next_key = false;
+        /* Strip B/HOME from the very first event after returning from a
+         * sub-screen so the button that caused the return is not replayed
+         * here and does not immediately navigate to the home screen. */
+        just_pressed &= ~(BIT(AKIRA_BTN_B) | BIT(AKIRA_BTN_HOME));
+        if (!just_pressed) return;
+    }
     switch (g_page) {
     case SS_MAIN:         handle_main(just_pressed);          break;
     case SS_WIFI:          handle_wifi(just_pressed);           break;

@@ -26,7 +26,6 @@ LOG_MODULE_REGISTER(akira_home_screen, CONFIG_AKIRA_LOG_LEVEL);
  *   Panel slides up from off-screen to y=95..239
  *
  * Animation: cubic ease-in-out, 10 frames x 20 ms = 200 ms.
- * Glass backdrop: checkerboard dither (0x0000 / 0x2104).
  */
 
 #include "home_screen.h"
@@ -41,6 +40,10 @@ LOG_MODULE_REGISTER(akira_home_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include <api/akira_input_api.h>
 #include <runtime/app_manager/app_manager.h>
 #include <lib/akira_time.h>
+
+#if defined(CONFIG_SNTP)
+#include <zephyr/net/sntp.h>
+#endif
 
 #if defined(CONFIG_WIFI) && defined(CONFIG_NET_MGMT)
 #include <zephyr/net/net_if.h>
@@ -328,10 +331,22 @@ static const char *s_opts_wasm[OPTS_WASM_COUNT]      = { "START",  "UNINSTALL", 
 static const char *s_opts_builtin[OPTS_BUILTIN_COUNT] = { "OPEN",   "CANCEL" };
 
 /* ---- Animation state -------------------------------------------- */
-static anim_t g_anim_car_h;
-static anim_t g_anim_panel_y;
-static anim_t g_anim_focus_pop; /* focus tile vertical pop (px below → 0) */
-static bool   g_dirty;
+static anim_t  g_anim_car_h;
+static anim_t  g_anim_panel_y;
+static anim_t  g_anim_focus_pop; /* focus tile vertical pop (px below → 0) */
+static bool    g_dirty;
+
+/* ---- XMB ribbon -------------------------------------------------- */
+/* 64-entry full-period sine, amplitude ±20 px */
+static const int8_t XMB_SINE[64] = {
+     0,  2,  4,  6,  8,  9, 11, 13, 14, 15, 17, 18, 18, 19, 20, 20,
+    20, 20, 20, 19, 18, 18, 17, 15, 14, 13, 11,  9,  8,  6,  4,  2,
+     0, -2, -4, -6, -8, -9,-11,-13,-14,-15,-17,-18,-18,-19,-20,-20,
+   -20,-20,-20,-19,-18,-18,-17,-15,-14,-13,-11, -9, -8, -6, -4, -2
+};
+static uint8_t g_xmb_phase;  /* 0..63, slowly advances each tick */
+static uint8_t g_xmb_tick;   /* sub-tick counter for phase rate */
+#define XMB_TICK_DIV  2      /* advance phase every N ticks (~100 ms/step, ~6.4 s/cycle) */
 
 #define POP_PX 8   /* max drop distance for the focus pop */
 /* Start mid-curve so the pop only runs the ease-out tail (~6 frames, 120 ms) */
@@ -344,6 +359,57 @@ static char g_time_str[10] = "00:00:00";
 static char g_batt_str[8]  = "100%";
 static bool g_wifi_conn;
 static bool g_bt_conn;
+static bool g_sntp_done;    /* true once SNTP sync succeeded or gave up   */
+
+#if defined(CONFIG_SNTP)
+/* Wait 8 s after WiFi connect — gives DHCP + DNS time to settle fully */
+#define SNTP_INITIAL_DELAY_S 8
+#define SNTP_MAX_RETRIES     5
+
+/* Fallback NTP server IP (Google) used when DNS resolution of the
+ * hostname fails (-ENOENT from sntp_simple).  No DNS needed for this. */
+#define SNTP_FALLBACK_IP     "216.239.35.0"
+
+static struct k_work_delayable g_sntp_work;
+static uint8_t                 g_sntp_retries;
+
+static void sntp_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    if (g_sntp_done) {
+        return;
+    }
+    struct sntp_time st;
+
+    /* First try the hostname; if DNS fails fall back to IP immediately */
+    int r = sntp_simple("pool.ntp.org", 4000, &st);
+    if (r == -ENOENT) {
+        LOG_WRN("SNTP DNS failed, trying fallback IP " SNTP_FALLBACK_IP);
+        r = sntp_simple(SNTP_FALLBACK_IP, 4000, &st);
+    }
+
+    if (r == 0) {
+        akira_time_set_epoch((int64_t)st.seconds);
+        LOG_INF("SNTP sync OK: epoch %lld", (long long)st.seconds);
+        g_sntp_done = true;
+    } else {
+        g_sntp_retries++;
+        LOG_WRN("SNTP sync failed (%u/%u): %d",
+                g_sntp_retries, SNTP_MAX_RETRIES, r);
+        if (g_sntp_retries < SNTP_MAX_RETRIES) {
+            /* Exponential backoff: 10 s, 20 s, 40 s, 60 s */
+            static const uint8_t delays_s[] = {10, 20, 40, 60};
+            uint8_t idx = g_sntp_retries - 1;
+            if (idx >= ARRAY_SIZE(delays_s)) {
+                idx = ARRAY_SIZE(delays_s) - 1;
+            }
+            k_work_reschedule(&g_sntp_work, K_SECONDS(delays_s[idx]));
+        } else {
+            g_sntp_done = true; /* give up after max retries */
+        }
+    }
+}
+#endif /* CONFIG_SNTP */
 
 /* ================================================================== */
 /* Draw helpers                                                        */
@@ -571,6 +637,29 @@ static void draw_footer(void)
 #define CAR_LABEL_H     10
 
 /*
+ * draw_xmb_ribbon — curved glowing horizon, PS3/XMB style.
+ * Draws 7-row glow (±3 px) following a sine curve; slowly drifts via g_xmb_phase.
+ * Each of 64 LUT segments maps to ~5 px of screen width → drawn as short hlines.
+ */
+static void draw_xmb_ribbon(int cy, int car_bot)
+{
+    for (int seg = 0; seg < 64; seg++) {
+        int lut_i = (seg + g_xmb_phase) & 63;
+        int ry    = cy + XMB_SINE[lut_i];
+        int x0    = seg       * SCR_W / 64;
+        int x1    = (seg + 1) * SCR_W / 64;
+        int w     = x1 - x0;
+        if (ry - 3 >= CAR_Y && ry - 3 < car_bot) akira_display_hline(x0, ry - 3, w, C_DKGRAY);
+        if (ry - 2 >= CAR_Y && ry - 2 < car_bot) akira_display_hline(x0, ry - 2, w, C_DKGRAY);
+        if (ry - 1 >= CAR_Y && ry - 1 < car_bot) akira_display_hline(x0, ry - 1, w, C_GRAY);
+        if (ry     >= CAR_Y && ry     < car_bot) akira_display_hline(x0, ry,     w, C_WHITE);
+        if (ry + 1 >= CAR_Y && ry + 1 < car_bot) akira_display_hline(x0, ry + 1, w, C_GRAY);
+        if (ry + 2 >= CAR_Y && ry + 2 < car_bot) akira_display_hline(x0, ry + 2, w, C_DKGRAY);
+        if (ry + 3 >= CAR_Y && ry + 3 < car_bot) akira_display_hline(x0, ry + 3, w, C_DKGRAY);
+    }
+}
+
+/*
  * draw_carousel — only 3 tiles visible: -1, 0, +1.
  * Focus scale shrinks automatically when car_h is compressed.
  * dimmed = true when options panel is open (no white focus bg).
@@ -596,6 +685,9 @@ static void draw_carousel(int car_h, bool dimmed)
     int centre_x = SCR_W / 2;
     int cy       = CAR_Y + car_h / 2;
     int focus_pop_y = anim_value(&g_anim_focus_pop);
+
+    /* XMB-style curved glowing ribbon */
+    draw_xmb_ribbon(cy, CAR_Y + car_h);
 
     /* Draw adjacent tiles first so focus renders on top */
     for (int pass = 0; pass < 2; pass++) {
@@ -925,9 +1017,16 @@ void home_screen_create(void)
     g_dirty            = false;
     memset(g_all_tiles, 0, sizeof(g_all_tiles));
 
-    g_anim_car_h    = (anim_t){ CAR_H_IDLE, CAR_H_IDLE, ANIM_FRAMES };
-    g_anim_panel_y  = (anim_t){ SCR_H,      SCR_H,      ANIM_FRAMES };
-    g_anim_focus_pop = (anim_t){ 0, 0, ANIM_FRAMES };
+    g_anim_car_h     = (anim_t){ CAR_H_IDLE, CAR_H_IDLE, ANIM_FRAMES };
+    g_anim_panel_y   = (anim_t){ SCR_H,      SCR_H,      ANIM_FRAMES };
+    g_anim_focus_pop = (anim_t){ 0,          0,          ANIM_FRAMES };
+    g_xmb_phase      = 0;
+    g_xmb_tick       = 0;
+    g_sntp_done      = false;
+#if defined(CONFIG_SNTP)
+    g_sntp_retries   = 0;
+    k_work_init_delayable(&g_sntp_work, sntp_work_handler);
+#endif
 
     LOG_INF("Liquid Crystal home screen initialised");
 }
@@ -936,11 +1035,18 @@ void home_screen_refresh(void)
 {
     rebuild_tiles();
     g_ui_state     = UI_HOME;
-    g_anim_car_h    = (anim_t){ CAR_H_IDLE, CAR_H_IDLE, ANIM_FRAMES };
-    g_anim_panel_y  = (anim_t){ SCR_H,      SCR_H,      ANIM_FRAMES };
-    g_anim_focus_pop = (anim_t){ 0, 0, ANIM_FRAMES };
-    g_visible      = true;
-    g_dirty        = true;
+    g_anim_car_h     = (anim_t){ CAR_H_IDLE, CAR_H_IDLE, ANIM_FRAMES };
+    g_anim_panel_y   = (anim_t){ SCR_H,      SCR_H,      ANIM_FRAMES };
+    g_anim_focus_pop = (anim_t){ 0,          0,          ANIM_FRAMES };
+    g_xmb_phase      = 0;
+    g_xmb_tick       = 0;
+    g_sntp_done      = false;
+#if defined(CONFIG_SNTP)
+    k_work_cancel_delayable(&g_sntp_work);
+    g_sntp_retries   = 0;
+#endif
+    g_visible        = true;
+    g_dirty          = true;
     full_redraw();
 }
 
@@ -963,29 +1069,52 @@ void home_screen_update_status(void)
         g_dirty = true;
     }
 
-    int64_t epoch = akira_time_get_epoch();
-    if (akira_time_is_set()) {
-        int64_t day_sec = epoch % 86400;
-        if (day_sec < 0) day_sec += 86400;
-        snprintf(g_time_str, sizeof(g_time_str), "%02u:%02u:%02u",
-                 (unsigned)(day_sec / 3600),
-                 (unsigned)((day_sec % 3600) / 60),
-                 (unsigned)(day_sec % 60));
-    } else {
-        uint32_t s = (uint32_t)epoch;
-        snprintf(g_time_str, sizeof(g_time_str), "%02u:%02u:%02u",
-                 (s / 3600U) % 24U, (s % 3600U) / 60U, s % 60U);
+    /* Clock — use akira_time subsystem; show uptime if real time not yet set */
+    {
+        int64_t epoch = akira_time_get_epoch();
+        if (akira_time_is_set()) {
+            /* Apply stored UTC offset so display shows local time */
+            int64_t local = epoch + (int64_t)akira_time_get_tz_offset_s();
+            int64_t day_sec = local % 86400;
+            if (day_sec < 0) day_sec += 86400;
+            snprintf(g_time_str, sizeof(g_time_str), "%02u:%02u:%02u",
+                     (unsigned)(day_sec / 3600),
+                     (unsigned)((day_sec % 3600) / 60),
+                     (unsigned)(day_sec % 60));
+        } else {
+            uint32_t s = (uint32_t)epoch;
+            snprintf(g_time_str, sizeof(g_time_str), "%02u:%02u:%02u",
+                     (s / 3600U) % 24U, (s % 3600U) / 60U, s % 60U);
+        }
     }
 
     /* WiFi connectivity status */
 #if defined(CONFIG_WIFI) && defined(CONFIG_NET_MGMT)
     {
+        bool prev_wifi = g_wifi_conn;
         struct net_if *iface = net_if_get_default();
         struct wifi_iface_status wst = {0};
         g_wifi_conn = iface &&
                       net_mgmt(NET_REQUEST_WIFI_IFACE_STATUS, iface,
                                &wst, sizeof(wst)) == 0 &&
                       wst.state >= WIFI_STATE_ASSOCIATED;
+
+        /* Auto SNTP: schedule async when WiFi first connects and time not set */
+        if (g_wifi_conn && !prev_wifi && !g_sntp_done && !akira_time_is_set()) {
+#if defined(CONFIG_SNTP)
+            g_sntp_retries = 0;
+            k_work_reschedule(&g_sntp_work, K_SECONDS(SNTP_INITIAL_DELAY_S));
+#endif
+        }
+        /* Reset on disconnect so we retry on the next connection */
+        if (!g_wifi_conn && prev_wifi) {
+#if defined(CONFIG_SNTP)
+            k_work_cancel_delayable(&g_sntp_work);
+            if (!g_sntp_done) {
+                g_sntp_retries = 0;
+            }
+#endif
+        }
     }
 #endif
     /* BT connectivity status */
@@ -1006,6 +1135,13 @@ void home_screen_tick(void)
     anim_step(&g_anim_panel_y);
     anim_step(&g_anim_focus_pop);
     bool now = anim_running(&g_anim_car_h) || anim_running(&g_anim_panel_y) || anim_running(&g_anim_focus_pop);
+
+    /* Advance XMB ribbon phase — one step every XMB_TICK_DIV ticks */
+    if (++g_xmb_tick >= XMB_TICK_DIV) {
+        g_xmb_tick = 0;
+        g_xmb_phase = (g_xmb_phase + 1) & 63;
+        g_dirty = true;
+    }
 
     if (was || now || g_dirty) {
         full_redraw();
