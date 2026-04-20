@@ -43,8 +43,9 @@ typedef struct {
 #define AKIRA_BTN_RIGHT 5
 #define AKIRA_BTN_A     6   /**< Confirm / launch */
 #define AKIRA_BTN_B     7   /**< Back / cancel */
-#define AKIRA_BTN_X     8   /**< HOME (long-press = go home) */
+#define AKIRA_BTN_X     8 
 #define AKIRA_BTN_Y     9   /**< Context menu / alternate action */
+#define AKIRA_BTN_HOME  10  /**< Home button   */
 
 /* ── Native (non-WASM) API ───────────────────────────────────────────────── */
 

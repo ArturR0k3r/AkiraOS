@@ -155,7 +155,7 @@ void akira_os_shell_go_home(void)
 static K_THREAD_STACK_DEFINE(g_shell_stack, SHELL_THREAD_STACK_SIZE);
 static struct k_thread g_shell_thread;
 
-/* HOME (X) button long-press threshold */
+/* HOME button long-press threshold */
 #define HOME_LONG_MS  CONFIG_AKIRA_HOME_BUTTON_GPIO_LONG_MS
 
 static void shell_thread_fn(void *p1, void *p2, void *p3)
@@ -201,8 +201,8 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
         uint32_t btns = akira_input_get_bitmask();
         int64_t  now_ms = k_uptime_get();
 
-        /* HOME (X) long-press detection — works regardless of display owner */
-        bool home_held = !!(btns & BIT(AKIRA_BTN_X));
+        /* HOME long-press detection — works regardless of display owner */
+        bool home_held = !!(btns & BIT(AKIRA_BTN_HOME));
         if (home_held && s_home_held_since_ms == 0) {
             s_home_held_since_ms = now_ms;
         } else if (!home_held) {
