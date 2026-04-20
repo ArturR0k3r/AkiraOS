@@ -33,6 +33,28 @@
 #define SHELL_C_LTGRAY   0xD6BAu   /* light gray separator            */
 #define SHELL_C_RED      0xF800u   /* error indicator                 */
 
+/* Flat short aliases (used by all Liquid Crystal screens) */
+#define C_BLACK       SHELL_C_BLACK
+#define C_WHITE       SHELL_C_WHITE
+#define C_GRAY        SHELL_C_GRAY
+#define C_DKGRAY      SHELL_C_DKGRAY
+#define C_GLASS       0x2104u   /* dither pixel (unused — no dithering) */
+#define C_GLASS_BODY  0x0000u   /* glass fill = black (transparent look) */
+#define C_GLASS_HILIT 0x7BEFu   /* glass top-sheen highlight          */
+
+/* ------------------------------------------------------------------ */
+/* Screen geometry (320×240 landscape, shared across all screens)     */
+/* ------------------------------------------------------------------ */
+#define SCR_W    320
+#define SCR_H    240
+#define SBAR_H   24    /* status / header bar height                  */
+#define LIST_Y   26    /* content list start y                        */
+#define FOOT_Y   216   /* footer bar start y                          */
+#define FOOT_H   24    /* footer bar height                           */
+#define ITEM_H   36    /* settings list item height                   */
+#define ITEM_X   12    /* settings list item left margin              */
+#define ITEM_W   (SCR_W - 24)  /* settings list item width            */
+
 /* Semantic aliases */
 #define SHELL_COLOR_BG           SHELL_C_WHITE
 #define SHELL_COLOR_FG           SHELL_C_BLACK

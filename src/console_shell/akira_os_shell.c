@@ -16,7 +16,7 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
  *   2. Shell thread claims the display, builds the HOME screen, and enters
  *      the main event loop.
  *   3. When the user launches a WASM app the shell releases the display.
- *   4. When the user long-presses X (HOME) the shell loop detects the hold
+ *   4. When the user long-presses (HOME) the shell loop detects the hold
  *      duration and enqueues CMD_GO_HOME.
  *   5. Shell thread stops the active WASM app, reclaims the display, and
  *      refreshes the HOME screen.
@@ -187,6 +187,9 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 #endif
 
     /* Build the HOME app launcher screen (pure akira_display_* renderer) */
+#if defined(CONFIG_LVGL)
+    shell_theme_init();
+#endif
     home_screen_create();
     settings_screen_create();
     home_screen_refresh();
@@ -231,6 +234,11 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 } else {
                     home_screen_handle_key(just);
                 }
+            }
+
+            /* Tick home screen animation every 20 ms */
+            if (!settings_screen_is_active()) {
+                home_screen_tick();
             }
 
             /* Status strip updated every 1 s */

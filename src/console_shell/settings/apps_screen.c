@@ -2,214 +2,127 @@
  * Copyright (c) 2025 AkiraOS Contributors
  * SPDX-License-Identifier: GPL-3.0-only
  */
-
 #define LOG_MODULE_NAME akira_apps_screen
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(akira_apps_screen, CONFIG_AKIRA_LOG_LEVEL);
 
-/**
- * @file apps_screen.c
- * @brief Installed app list with size/version and uninstall via confirm dialog.
- */
-
 #include <zephyr/kernel.h>
-#include <lvgl.h>
-
-#include "../shell_theme.h"
-#include "apps_screen.h"
-#include <drivers/display/lvgl_input_driver.h>
+#include <string.h>
+#include <stdio.h>
+#include <api/akira_display_api.h>
+#include <api/akira_input_api.h>
 #include <runtime/app_manager/app_manager.h>
+#include "apps_screen.h"
+#include "../shell_theme.h"
 
-static lv_obj_t *g_screen;
-static lv_obj_t *g_list;
+static void lc_centred(int x, int y, int w, const char *s, uint16_t fg, uint16_t bg) {
+    int tw = (int)(strlen(s)*8); int lx = x+(tw<w?(w-tw)/2:0);
+    akira_display_rect(x,y,w,10,bg); akira_display_text(lx,y,s,fg);
+}
+static void lc_header(const char *title) {
+    akira_display_rect(0,0,SCR_W,SBAR_H,C_BLACK);
+    lc_centred(0,(SBAR_H-10)/2,SCR_W,title,C_WHITE,C_BLACK);
+    akira_display_hline(0,SBAR_H,SCR_W,C_WHITE); akira_display_hline(0,SBAR_H+1,SCR_W,C_WHITE);
+}
+static void lc_footer(const char *txt) {
+    akira_display_hline(0,FOOT_Y-1,SCR_W,C_WHITE); akira_display_hline(0,FOOT_Y-2,SCR_W,C_WHITE);
+    akira_display_rect(0,FOOT_Y,SCR_W,FOOT_H,C_BLACK); akira_display_text(8,FOOT_Y+7,txt,C_WHITE);
+}
+static void lc_item(int idx, int sel, const char *lbl, const char *rv) {
+    int iy=LIST_Y+idx*ITEM_H; bool hi=(idx==sel);
+    uint16_t ibg=hi?C_WHITE:C_BLACK, ifg=hi?C_BLACK:C_WHITE;
+    akira_display_rounded_rect_fill(ITEM_X,iy+3,ITEM_W,ITEM_H-6,5,ibg);
+    akira_display_rounded_rect(ITEM_X,iy+3,ITEM_W,ITEM_H-6,5,hi?C_BLACK:C_DKGRAY);
+    int ty=iy+3+(ITEM_H-6-10)/2;
+    akira_display_text(ITEM_X+10,ty,lbl,ifg);
+    if (rv&&rv[0]){int tw=(int)strlen(rv)*8; akira_display_text(ITEM_X+ITEM_W-tw-10,ty,rv,ifg);}
+}
+static void lc_bar(int x, int y, int w, int h, int pct) {
+    akira_display_rect_outline(x-1,y-1,w+2,h+2,C_WHITE);
+    int fw = pct*w/100;
+    akira_display_rect(x,y,w,h,C_DKGRAY);
+    if (fw>0) akira_display_rect(x,y,fw,h,C_WHITE);
+}
 
-/* Pending uninstall ID */
-static uint8_t g_pending_uninstall_id;
+#define MAX_APPS CONFIG_AKIRA_APP_MAX_INSTALLED
 
-/* ------------------------------------------------------------------ */
-/* Confirm dialog                                                       */
-/* ------------------------------------------------------------------ */
+static app_info_t g_apps[MAX_APPS];
+static int g_count;
+static int g_sel, g_scroll;
 
-static void confirm_yes_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
-        return;
-    }
+static int vis_count(void) { return (FOOT_Y - LIST_Y) / ITEM_H; }
 
-    int ret = app_manager_uninstall(g_pending_uninstall_id);
-    if (ret < 0) {
-        LOG_ERR("Uninstall id=%u failed: %d", g_pending_uninstall_id, ret);
+static void draw(void) {
+    akira_display_clear(C_BLACK);
+    lc_header("APPS");
+    int vis = vis_count();
+    if (g_scroll > g_count - vis) g_scroll = g_count - vis;
+    if (g_scroll < 0) g_scroll = 0;
+    if (g_count == 0) {
+        lc_centred(0,LIST_Y+40,SCR_W,"No apps installed",C_GRAY,C_BLACK);
     } else {
-        LOG_INF("App %u uninstalled", g_pending_uninstall_id);
-    }
-
-    /* Close dialog and refresh list */
-    lv_obj_t *dialog = lv_event_get_user_data(e);
-    lv_obj_del(dialog);
-
-    /* Rebuild list */
-    lv_obj_clean(g_list);
-
-    app_info_t apps[CONFIG_AKIRA_APP_MAX_INSTALLED];
-    int count = app_manager_list(apps, CONFIG_AKIRA_APP_MAX_INSTALLED);
-    if (count <= 0) {
-        lv_list_add_text(g_list, "No apps installed");
-        return;
-    }
-
-    for (int i = 0; i < count; i++) {
-        char entry[80];
-        snprintf(entry, sizeof(entry), "%s  v%s  %u KB",
-                 apps[i].name, apps[i].version,
-                 (apps[i].size + 1023U) / 1024U);
-        lv_obj_t *btn = lv_list_add_btn(g_list, NULL, entry);
-        lv_obj_add_style(btn, &g_style_list_item, 0);
-        lv_obj_set_user_data(btn, (void *)(uintptr_t)apps[i].id);
-    }
-}
-
-static void confirm_no_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
-        return;
-    }
-    lv_obj_t *dialog = lv_event_get_user_data(e);
-    lv_obj_del(dialog);
-}
-
-static void open_confirm_dialog(uint8_t app_id, const char *app_name)
-{
-    g_pending_uninstall_id = app_id;
-
-    /* Semi-transparent overlay */
-    lv_obj_t *overlay = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(overlay, SHELL_SCREEN_W, SHELL_SCREEN_H);
-    lv_obj_align(overlay, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_bg_color(overlay, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(overlay, LV_OPA_50, 0);
-    lv_obj_set_style_border_width(overlay, 0, 0);
-
-    /* Dialog card */
-    lv_obj_t *card = lv_obj_create(overlay);
-    lv_obj_set_size(card, 240, 100);
-    lv_obj_center(card);
-    lv_obj_add_style(card, &g_style_card, 0);
-
-    lv_obj_t *msg = lv_label_create(card);
-    lv_label_set_text_fmt(msg, "Uninstall \"%s\"?", app_name);
-    lv_obj_set_style_text_font(msg, SHELL_FONT_SMALL, 0);
-    lv_obj_set_width(msg, 220);
-    lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
-    lv_obj_align(msg, LV_ALIGN_TOP_MID, 0, 4);
-
-    lv_obj_t *yes_btn = lv_btn_create(card);
-    lv_obj_set_size(yes_btn, 90, 30);
-    lv_obj_align(yes_btn, LV_ALIGN_BOTTOM_LEFT, 4, -4);
-    lv_obj_add_event_cb(yes_btn, confirm_yes_cb, LV_EVENT_CLICKED,
-                        overlay);
-    lv_obj_t *yes_lbl = lv_label_create(yes_btn);
-    lv_label_set_text(yes_lbl, "Uninstall");
-    lv_obj_center(yes_lbl);
-
-    lv_obj_t *no_btn = lv_btn_create(card);
-    lv_obj_set_size(no_btn, 90, 30);
-    lv_obj_align(no_btn, LV_ALIGN_BOTTOM_RIGHT, -4, -4);
-    lv_obj_add_event_cb(no_btn, confirm_no_cb, LV_EVENT_CLICKED, overlay);
-    lv_obj_t *no_lbl = lv_label_create(no_btn);
-    lv_label_set_text(no_lbl, "Cancel");
-    lv_obj_center(no_lbl);
-}
-
-/* ------------------------------------------------------------------ */
-/* List item long-press (Y = LV_KEY_END)                               */
-/* ------------------------------------------------------------------ */
-
-static void list_key_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) != LV_EVENT_KEY) {
-        return;
-    }
-    uint32_t key = lv_indev_get_key(lv_indev_get_act());
-    if (key != LV_KEY_END) { /* Y button → uninstall */
-        return;
-    }
-
-    lv_obj_t *focused = lv_group_get_focused(lv_group_get_default());
-    if (!focused) {
-        return;
-    }
-
-    uint8_t app_id = (uint8_t)(uintptr_t)lv_obj_get_user_data(focused);
-    const char *name = lv_list_get_btn_text(g_list, focused);
-    open_confirm_dialog(app_id, name);
-}
-
-/* ------------------------------------------------------------------ */
-/* Back key                                                             */
-/* ------------------------------------------------------------------ */
-
-static void back_event_cb(lv_event_t *e)
-{
-    if (lv_event_get_code(e) == LV_EVENT_KEY) {
-        uint32_t key = lv_indev_get_key(lv_indev_get_act());
-        if (key == LV_KEY_ESC) {
-            extern void settings_screen_load(void);
-            settings_screen_load();
+        for (int i = g_scroll; i < g_count && i < g_scroll+vis; i++) {
+            char sz[16]; snprintf(sz,sizeof(sz),"%uKB",(unsigned)((g_apps[i].size+1023)/1024));
+            /* Draw the item but with name limited to 24 chars */
+            char nm[25]; strncpy(nm,g_apps[i].name,24); nm[24]=0;
+            lc_item(i-g_scroll, g_sel-g_scroll, nm, sz);
         }
     }
+    lc_footer("A-Uninstall  |  B-Back");
+    akira_display_flush();
 }
 
-/* ------------------------------------------------------------------ */
-/* Screen construction                                                  */
-/* ------------------------------------------------------------------ */
-
-static void build_screen(void)
-{
-    g_screen = lv_obj_create(NULL);
-    lv_obj_add_style(g_screen, &g_style_screen, 0);
-
-    shell_theme_make_header(g_screen, "Apps");
-    shell_theme_make_footer(g_screen, "B:Back", "Y:Uninstall");
-
-    g_list = lv_list_create(g_screen);
-    lv_obj_set_size(g_list, SHELL_SCREEN_W, SHELL_CONTENT_H);
-    lv_obj_align(g_list, LV_ALIGN_TOP_LEFT, 0, SHELL_HEADER_H);
-    lv_obj_set_style_border_width(g_list, 0, 0);
-    lv_obj_set_style_pad_all(g_list, 0, 0);
-
-    /* Populate */
-    app_info_t apps[CONFIG_AKIRA_APP_MAX_INSTALLED];
-    int count = app_manager_list(apps, CONFIG_AKIRA_APP_MAX_INSTALLED);
-
-    if (count <= 0) {
-        lv_list_add_text(g_list, "No apps installed");
-    } else {
-        lv_group_t *grp = lv_group_create();
-        for (int i = 0; i < count; i++) {
-            char entry[80];
-            snprintf(entry, sizeof(entry), "%s  v%s  %u KB",
-                     apps[i].name, apps[i].version,
-                     (apps[i].size + 1023U) / 1024U);
-            lv_obj_t *btn = lv_list_add_btn(g_list, NULL, entry);
-            lv_obj_add_style(btn, &g_style_list_item, 0);
-            lv_obj_set_user_data(btn, (void *)(uintptr_t)apps[i].id);
-            lv_group_add_obj(grp, btn);
-        }
-        lv_indev_set_group(lvgl_input_get_keypad(), grp);
-        lv_obj_add_event_cb(g_list, list_key_cb, LV_EVENT_KEY, NULL);
-    }
-
-    lv_obj_add_event_cb(g_screen, back_event_cb, LV_EVENT_KEY, NULL);
+static void draw_confirm(const char *name) {
+    int pw=240,ph=70; int px=(SCR_W-pw)/2, py=(SCR_H-ph)/2;
+    for (int qy=py;qy<py+ph;qy++) for (int qx=px;qx<px+pw;qx++) if ((qx^qy)&1) akira_display_pixel(qx,qy,C_GLASS);
+    akira_display_rect(px,py,pw,ph,C_BLACK);
+    akira_display_rect_outline(px,py,pw,ph,C_WHITE); akira_display_rect_outline(px+1,py+1,pw-2,ph-2,C_WHITE);
+    char msg[48]; snprintf(msg,sizeof(msg),"Uninstall %s ?",name);
+    lc_centred(px+4,py+8,pw-8,msg,C_WHITE,C_BLACK);
+    akira_display_hline(px+4,py+22,pw-8,C_WHITE);
+    lc_item(0,0,"YES","");
+    lc_item(1,-1,"CANCEL","");
+    akira_display_flush();
 }
-
-/* ------------------------------------------------------------------ */
-/* Public API                                                           */
-/* ------------------------------------------------------------------ */
 
 void apps_screen_load(void)
 {
-    if (!g_screen) {
-        build_screen();
+    extern void settings_screen_load(void);
+    g_count = app_manager_list(g_apps, MAX_APPS);
+    if (g_count < 0) g_count = 0;
+    g_sel = 0; g_scroll = 0;
+    draw();
+    uint32_t prev = 0;
+    while (true) {
+        k_sleep(K_MSEC(20));
+        uint32_t btns = akira_input_get_bitmask(), just = btns&~prev; prev=btns;
+        if (!just) continue;
+        int vis = vis_count();
+        if (just&BIT(AKIRA_BTN_UP)) { if(g_sel>0){g_sel--;if(g_sel<g_scroll)g_scroll--;draw();} }
+        if (just&BIT(AKIRA_BTN_DOWN)) { if(g_sel<g_count-1){g_sel++;if(g_sel>=g_scroll+vis)g_scroll++;draw();} }
+        if ((just&BIT(AKIRA_BTN_A)) && g_count>0) {
+            draw_confirm(g_apps[g_sel].name);
+            /* Wait for confirm */
+            uint32_t cp=0; int cs=0;
+            while (true) {
+                k_sleep(K_MSEC(20));
+                uint32_t cb=akira_input_get_bitmask(), cj=cb&~cp; cp=cb; if(!cj) continue;
+                if (cj&BIT(AKIRA_BTN_UP)) { if(cs>0){cs--;draw_confirm(g_apps[g_sel].name);} }
+                if (cj&BIT(AKIRA_BTN_DOWN)) { if(cs<1){cs++;draw_confirm(g_apps[g_sel].name);} }
+                if (cj&BIT(AKIRA_BTN_A)) {
+                    if (cs==0) {
+                        app_manager_uninstall(g_apps[g_sel].name);
+                        g_count = app_manager_list(g_apps, MAX_APPS);
+                        if (g_count<0) g_count=0;
+                        if (g_sel>=g_count) g_sel=g_count>0?g_count-1:0;
+                        g_scroll=0;
+                    }
+                    break;
+                }
+                if ((cj&BIT(AKIRA_BTN_B))||(cj&BIT(AKIRA_BTN_HOME))) break;
+            }
+            draw();
+        }
+        if ((just&BIT(AKIRA_BTN_B))||(just&BIT(AKIRA_BTN_HOME))) { settings_screen_load(); return; }
     }
-    lv_scr_load(g_screen);
 }

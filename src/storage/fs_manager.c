@@ -931,6 +931,14 @@ bool fs_manager_has_persistent_storage(void)
 }
 
 /**
+ * Check if SD card storage is available
+ */
+bool fs_manager_sd_available(void)
+{
+    return fs_state.sd_available;
+}
+
+/**
  * List files in RAM storage
  */
 int fs_manager_list_ram_files(ram_file_info_t *info, size_t max_count)
