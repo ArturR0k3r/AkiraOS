@@ -203,8 +203,14 @@
     gpio_keys {
         compatible = "gpio-keys";
         
+        button_home: button_home {
+            gpios = <&gpio0 2 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>; // GPIO2
+            label = "Button Home";
+            zephyr,code = <10>; // AKIRA_BTN_HOME
+        };
+
         button_y: button_y {
-            gpios = <&gpio1 9 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>; // GPIO41
+            gpios = <&gpio1 9 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>; // GPIO9
             label = "Button Y";
             zephyr,code = <9>; // AKIRA_BTN_Y
         };
