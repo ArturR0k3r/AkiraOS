@@ -41,6 +41,9 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 
 #if defined(CONFIG_DISPLAY)
 #include <zephyr/drivers/display.h>
+#if defined(CONFIG_AKIRA_BOOT_ANIMATION)
+#include "boot_anim.h"
+#endif
 #endif
 
 #include <runtime/akira_ipc.h>
@@ -175,6 +178,9 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
     if (device_is_ready(_disp_dev)) {
         display_blanking_off(_disp_dev);
         LOG_INF("Display enabled");
+#if defined(CONFIG_AKIRA_BOOT_ANIMATION)
+        boot_anim_run();
+#endif
     } else {
         LOG_WRN("Display device not ready");
     }
