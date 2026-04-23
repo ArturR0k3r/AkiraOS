@@ -69,7 +69,7 @@ void devmode_screen_load(void)
     { char _sv[4] = ""; akira_settings_get("akira/devmode/enabled", _sv, sizeof(_sv)); g_devmode_enabled = (_sv[0] == '1'); }
     int sel = 0;
     draw(sel);
-    uint32_t prev = 0;
+    uint32_t prev = akira_input_get_bitmask();
     while (true) {
         k_sleep(K_MSEC(20));
         uint32_t btns = akira_input_get_bitmask(), just = btns & ~prev;

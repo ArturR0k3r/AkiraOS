@@ -101,13 +101,13 @@ static void draw_confirm(const char *name)
     ss_draw_centred(px + 4, py + 10, pw - 8, msg, SS_C_WHITE, SS_C_BLACK);
     akira_display_hline(px + 4, py + 24, pw - 8, SS_C_DKGRAY);
 
-    /* YES button (row 0) */
-    ss_glass_rect_focus(px + 8,        py + 30, (pw - 24) / 2, 24, 4);
-    ss_draw_centred    (px + 8,        py + 40, (pw - 24) / 2, "YES", SS_C_WHITE, SS_C_GLASS_BODY);
+    /* YES button — dimmed (not default) */
+    ss_glass_rect_dim  (px + 8,        py + 30, (pw - 24) / 2, 24, 4);
+    ss_draw_centred    (px + 8,        py + 40, (pw - 24) / 2, "YES", SS_C_DKGRAY, SS_C_GLASS_BODY);
 
-    /* CANCEL button (row 1) */
-    ss_glass_rect_dim  (px + 8 + (pw - 24) / 2 + 8, py + 30, (pw - 24) / 2, 24, 4);
-    ss_draw_centred    (px + 8 + (pw - 24) / 2 + 8, py + 40, (pw - 24) / 2, "CANCEL", SS_C_DKGRAY, SS_C_GLASS_BODY);
+    /* CANCEL button — focused (default) */
+    ss_glass_rect_focus(px + 8 + (pw - 24) / 2 + 8, py + 30, (pw - 24) / 2, 24, 4);
+    ss_draw_centred    (px + 8 + (pw - 24) / 2 + 8, py + 40, (pw - 24) / 2, "CANCEL", SS_C_WHITE, SS_C_GLASS_BODY);
 
     akira_display_flush();
 }
@@ -149,7 +149,7 @@ void apps_screen_load(void)
     if (g_count < 0) g_count = 0;
     g_sel = 0; g_scroll = 0;
     draw();
-    uint32_t prev = 0;
+    uint32_t prev = akira_input_get_bitmask();
     while (true) {
         k_sleep(K_MSEC(20));
         uint32_t btns = akira_input_get_bitmask(), just = btns & ~prev;
@@ -174,9 +174,9 @@ void apps_screen_load(void)
         }
 
         if ((just & BIT(AKIRA_BTN_A)) && g_count > 0) {
+            int cs = 1;  /* 0=YES, 1=CANCEL — default to CANCEL */
             draw_confirm(g_apps[g_sel].name);
-            uint32_t cp = 0;
-            int cs = 0;  /* 0=YES, 1=CANCEL */
+            uint32_t cp = akira_input_get_bitmask();
             while (true) {
                 k_sleep(K_MSEC(20));
                 uint32_t cb = akira_input_get_bitmask(), cj = cb & ~cp;

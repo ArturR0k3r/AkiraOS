@@ -110,7 +110,21 @@ static bool      g_active;
 static ss_page_t g_page;
 
 /* ---- Main menu --------------------------------------------------- */
-#define MAIN_ITEMS 11
+typedef enum {
+    MAIN_ITEM_WIFI = 0,
+    MAIN_ITEM_BLUETOOTH,
+    MAIN_ITEM_WEBSERVER,
+    MAIN_ITEM_DATETIME,
+    MAIN_ITEM_DISPLAY,
+    MAIN_ITEM_POWER,
+    MAIN_ITEM_APPS,
+    MAIN_ITEM_OTA,
+    MAIN_ITEM_DEVELOPER,
+    MAIN_ITEM_ABOUT,
+    MAIN_ITEM_SLEEP,
+    MAIN_ITEMS,
+} main_item_t;
+
 static const char *s_main_labels[MAIN_ITEMS] = {
     "WiFi", "Bluetooth", "Web Server",
     "Date & Time", "Display", "Power",
@@ -319,15 +333,18 @@ static void draw_menu_at(const char **labels, int count, int sel,
         akira_display_text(bx + bw - 18, ty, ">", fg);
     }
 
-    /* Scroll indicators in the right margin (x > MENU_X+MENU_W) */
-    if (scroll > 0) {
-        akira_display_text(SCR_W - 10, top_y + 2, "^", C_GRAY);
-    }
-    if (scroll + vis < count) {
-        int bot_y = top_y + vis * MENU_ITH + 2;
-        if (bot_y < RIB_Y - 10) {
-            akira_display_text(SCR_W - 10, bot_y, "v", C_GRAY);
-        }
+    /* Scrollbar — only when content overflows */
+    if (count > vis) {
+        int sbar_x = SCR_W - 8;
+        int sbar_w = 5;
+        int track_y = top_y + 2;
+        int track_h = vis * MENU_ITH - 4;
+        akira_display_rect(sbar_x, track_y, sbar_w, track_h, C_BLACK);
+        int thumb_h = track_h * vis / count;
+        if (thumb_h < 8) thumb_h = 8;
+        int max_off = count - vis;
+        int thumb_y = track_y + (track_h - thumb_h) * scroll / max_off;
+        akira_display_rect(sbar_x + 1, thumb_y, sbar_w - 2, thumb_h, C_WHITE);
     }
 }
 
@@ -453,7 +470,7 @@ static void draw_main(void)
 {
     draw_header("SETTINGS");
     akira_display_rect(0, CONT_Y, SCR_W, CONT_H, C_BLACK);
-    draw_menu_at(s_main_labels, MAIN_ITEMS, g_main_sel, CONT_Y, g_main_scroll);
+    draw_menu_at(s_main_labels, MAIN_ITEMS, g_main_sel, CONT_Y + 15, g_main_scroll);
     draw_ribbon("[A] SELECT", "[B] HOME");
 }
 
@@ -649,61 +666,65 @@ static void handle_main(uint32_t k)
 {
     bool ch = false;
     if (k & BIT(AKIRA_BTN_UP)) {
-        g_main_sel = (g_main_sel - 1 + MAIN_ITEMS) % MAIN_ITEMS;
-        g_main_scroll = scroll_clamp(g_main_sel, g_main_scroll, MAIN_ITEMS, CONT_Y);
-        ch = true;
+        if (g_main_sel > 0) {
+            g_main_sel--;
+            g_main_scroll = scroll_clamp(g_main_sel, g_main_scroll, MAIN_ITEMS, CONT_Y + 15);
+            ch = true;
+        }
     }
     if (k & BIT(AKIRA_BTN_DOWN)) {
-        g_main_sel = (g_main_sel + 1) % MAIN_ITEMS;
-        g_main_scroll = scroll_clamp(g_main_sel, g_main_scroll, MAIN_ITEMS, CONT_Y);
-        ch = true;
+        if (g_main_sel < MAIN_ITEMS - 1) {
+            g_main_sel++;
+            g_main_scroll = scroll_clamp(g_main_sel, g_main_scroll, MAIN_ITEMS, CONT_Y + 15);
+            ch = true;
+        }
     }
     if (k & BIT(AKIRA_BTN_A)) {
         switch (g_main_sel) {
-        case 0:
+        case MAIN_ITEM_WIFI:
             g_wifi_sel    = 0;
             g_wifi_scroll = 0;
             g_page = SS_WIFI;
             break;
-        case 1:
+        case MAIN_ITEM_BLUETOOTH:
             g_bt_sel    = 0;
             g_bt_scroll = 0;
             g_page = SS_BLUETOOTH;
             break;
-        case 2:
+        case MAIN_ITEM_WEBSERVER:
             g_ws_sel    = 0;
             g_ws_scroll = 0;
             g_page = SS_WEBSERVER;
             break;
-        case 3:
+        case MAIN_ITEM_DATETIME:
             /* Date & Time — hands off to datetime_screen (blocking loop) */
             g_active = false;
             datetime_screen_load();
             return;
-        case 4:
+        case MAIN_ITEM_DISPLAY:
             g_active = false;
             display_screen_load();
             return;
-        case 5:
+        case MAIN_ITEM_POWER:
             g_active = false;
             power_screen_load();
             return;
-        case 6:
+        case MAIN_ITEM_APPS:
             g_active = false;
             apps_screen_load();
             return;
-        case 7:
+        case MAIN_ITEM_OTA:
             g_active = false;
             ota_screen_load();
             return;
-        case 8:
+        case MAIN_ITEM_DEVELOPER:
             g_active = false;
             devmode_screen_load();
             return;
-        case 9:
+        case MAIN_ITEM_ABOUT:
             g_page = SS_ABOUT;
             break;
-        case 10: /* Sleep */
+        case MAIN_ITEM_SLEEP:
             g_sleeping = true;
             g_sleep_first_press_ms = -1;
             g_page = SS_SLEEP;
@@ -712,6 +733,8 @@ static void handle_main(uint32_t k)
             akira_display_flush();
             akira_display_hal_set_blank(true);
             return;
+        default:
+            break;
         }
         redraw();
         return;

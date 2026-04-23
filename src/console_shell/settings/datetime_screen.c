@@ -115,7 +115,7 @@ void datetime_screen_load(void)
     g_tz_edit_s = akira_time_get_tz_offset_s();
     int sel = 0;
     draw(sel);
-    uint32_t prev = 0;
+    uint32_t prev = akira_input_get_bitmask();
     while (true) {
         k_sleep(K_MSEC(20));
         uint32_t btns = akira_input_get_bitmask(), just = btns & ~prev;
