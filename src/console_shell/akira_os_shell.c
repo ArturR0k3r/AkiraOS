@@ -50,6 +50,9 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 #include <runtime/app_manager/app_manager.h>
 
 #include <api/akira_input_api.h>
+#ifdef CONFIG_AKIRA_SETTINGS
+#include <settings/settings.h>
+#endif
 
 typedef enum {
     CMD_GO_HOME = 0,        /* Return to HOME screen (reclaim display) */
@@ -206,9 +209,46 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
     static uint32_t s_prev_btns;
     static int64_t  s_home_held_since_ms; /* 0 = not held */
 
+    /* Screen idle-blank — load timeout from settings (0 = disabled) */
+    int64_t s_display_timeout_ms = 60000; /* default 60 s */
+#ifdef CONFIG_AKIRA_SETTINGS
+    {
+        char _sv[16] = "";
+        if (!akira_settings_get("akira/display/timeout_s", _sv, sizeof(_sv))) {
+            int t = atoi(_sv);
+            s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
+        }
+    }
+#endif
+    int64_t s_last_input_ms   = k_uptime_get();
+    bool    s_display_blanked = false;
+
     while (true) {
         uint32_t btns = akira_input_get_bitmask();
         int64_t  now_ms = k_uptime_get();
+
+        /* Any button activity resets the idle timer */
+        if (btns) {
+            s_last_input_ms = now_ms;
+        }
+
+        /* Wake display if blanked and a button was just pressed */
+        if (s_display_blanked && btns) {
+            s_display_blanked = false;
+            akira_display_hal_set_blank(false);
+#ifdef CONFIG_AKIRA_SETTINGS
+            {
+                char _sv[16] = "";
+                if (!akira_settings_get("akira/display/brightness", _sv, sizeof(_sv))) {
+                    akira_display_hal_set_brightness((uint8_t)atoi(_sv));
+                }
+            }
+#endif
+            /* Swallow this press so navigation doesn't fire while waking */
+            s_prev_btns = btns;
+            k_sleep(K_MSEC(20));
+            continue;
+        }
 
         /* HOME long-press detection — works regardless of display owner */
         bool home_held = !!(btns & BIT(AKIRA_BTN_HOME));
@@ -250,6 +290,24 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 } else {
                     home_screen_update_status();
                 }
+
+                /* Idle screen-off check */
+                if (!s_display_blanked && s_display_timeout_ms > 0 &&
+                    (now_ms - s_last_input_ms) >= s_display_timeout_ms) {
+                    s_display_blanked = true;
+                    akira_display_hal_set_blank(true);
+                }
+
+                /* Re-read timeout in case the user just changed it in settings */
+#ifdef CONFIG_AKIRA_SETTINGS
+                {
+                    char _sv[16] = "";
+                    if (!akira_settings_get("akira/display/timeout_s", _sv, sizeof(_sv))) {
+                        int t = atoi(_sv);
+                        s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
+                    }
+                }
+#endif
             }
 
             k_sleep(K_MSEC(20));

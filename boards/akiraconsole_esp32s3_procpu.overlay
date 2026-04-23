@@ -102,6 +102,23 @@
 };
 
 // ============================================================================
+// Backlight PWM — LEDC channel 0 routed to GPIO3 via the GPIO matrix.
+// Frequency: 1 kHz, 8-bit resolution → 256 duty steps.
+// ============================================================================
+&ledc0 {
+    status = "okay";
+    pinctrl-0 = <&ledc0_default>;
+    pinctrl-names = "default";
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    channel0@0 {
+        reg = <0x0>;
+        timer = <0>;
+    };
+};
+
+// ============================================================================
 // ADC Configuration
 // adc1 is the SAR ADC available on ESP32-S3 (10-bit/12-bit).
 // akira-adc alias lets the akira_adc_api resolve the device without
