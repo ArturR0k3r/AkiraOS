@@ -213,10 +213,18 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
     int64_t s_display_timeout_ms = 60000; /* default 60 s */
 #ifdef CONFIG_AKIRA_SETTINGS
     {
+        bool en = true;
         char _sv[16] = "";
-        if (!akira_settings_get("akira/display/timeout_s", _sv, sizeof(_sv))) {
-            int t = atoi(_sv);
-            s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
+        if (!akira_settings_get("akira/display/timeout_en", _sv, sizeof(_sv)))
+            en = (atoi(_sv) != 0);
+        if (en) {
+            memset(_sv, 0, sizeof(_sv));
+            if (!akira_settings_get("akira/display/timeout_s", _sv, sizeof(_sv))) {
+                int t = atoi(_sv);
+                s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
+            }
+        } else {
+            s_display_timeout_ms = 0;
         }
     }
 #endif
@@ -301,10 +309,18 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 /* Re-read timeout in case the user just changed it in settings */
 #ifdef CONFIG_AKIRA_SETTINGS
                 {
+                    bool en = true;
                     char _sv[16] = "";
-                    if (!akira_settings_get("akira/display/timeout_s", _sv, sizeof(_sv))) {
-                        int t = atoi(_sv);
-                        s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
+                    if (!akira_settings_get("akira/display/timeout_en", _sv, sizeof(_sv)))
+                        en = (atoi(_sv) != 0);
+                    if (en) {
+                        memset(_sv, 0, sizeof(_sv));
+                        if (!akira_settings_get("akira/display/timeout_s", _sv, sizeof(_sv))) {
+                            int t = atoi(_sv);
+                            s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
+                        }
+                    } else {
+                        s_display_timeout_ms = 0;
                     }
                 }
 #endif
