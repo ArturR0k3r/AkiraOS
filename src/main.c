@@ -54,7 +54,7 @@ int main(void)
     LOG_INF("Platform: %s", akira_get_platform_name());
     LOG_INF("Build: %s %s", __DATE__, __TIME__);
     LOG_INF("=====================================================)");
-
+    
     /* Initialize hardware HAL */
     if (akira_hal_init() < 0)
     {

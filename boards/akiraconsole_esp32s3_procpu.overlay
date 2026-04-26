@@ -143,12 +143,6 @@
 };
 
 / {
-    // ST7789V is the default display for AkiraConsole.
-    // chosen and the MIPI DBI node are unconditional — `#if` inside a DTS
-    // root node is not reliably evaluated before label resolution.
-    // To use ILI9341 instead: set CONFIG_ILI9341=y (and drop CONFIG_ST7789V)
-    // in the board .conf; the ili9341 override block below will then replace
-    // the chosen pointer and add the ILI9341 child node.
     chosen {
         zephyr,display = &st7789v_akiraconsole;
     };
