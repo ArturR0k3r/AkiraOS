@@ -33,7 +33,7 @@ cd ../build/zephyr
 **Expected output:**
 ```
 *** Booting Zephyr OS build v4.3.0 ***
-[00:00:00.000] <inf> main: AkiraOS v1.5.1 starting...
+[00:00:00.000] <inf> main: AkiraOS v1.5.4 starting...
 [00:00:00.010] <inf> wasm: Runtime initialized
 AkiraOS:~$ 
 ```

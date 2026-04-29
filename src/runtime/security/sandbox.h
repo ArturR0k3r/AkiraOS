@@ -10,6 +10,8 @@
  *
  * Design: Zero-allocation hot path using pre-computed bitmasks and
  * atomic counters. Target overhead: <100ns per syscall check.
+ * @stability stable
+ * @since 1.3
  */
 
 #ifndef AKIRA_SANDBOX_H

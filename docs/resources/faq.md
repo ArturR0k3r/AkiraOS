@@ -9,7 +9,7 @@ A: AkiraOS is an embedded operating system combining Zephyr RTOS with WebAssembl
 A: ESP32-S3 (primary), nRF54L15, STM32 (experimental), and native simulation.
 
 **Q: Is AkiraOS production-ready?**  
-A: Yes, v1.5.1 is stable for production use on ESP32-S3.
+A: Yes, v1.5.4 is stable for production use on ESP32-S3.
 
 ---
 
