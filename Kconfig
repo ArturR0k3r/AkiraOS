@@ -238,6 +238,16 @@ config AKIRA_SHARP_DISPLAY
     bool
     default y if LS0XX
 
+  config AKIRA_SHARP_DISPLAY
+      bool "Enable Sharp Memory LCD (LS027B7DH01)"
+      default n
+      depends on SPI && GPIO
+      help
+        Enable support for the Sharp LS027B7DH01 2.7" 400x240 Memory LCD.
+        Activates the DTS overlay block that enables the ls027b7dh01 SPI node
+        and overrides SCS chip-select polarity to ACTIVE_HIGH.
+        Set CONFIG_LS0XX=y alongside this to enable the Zephyr display driver.
+
 endmenu
 menu "PSRAM / External RAM options"
 
