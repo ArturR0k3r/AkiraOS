@@ -461,8 +461,43 @@ flash_esp32() {
         erase_flash
     fi
     
-    # Flash bootloader
-    if [[ "$FLASH_TARGET" == "b" || "$FLASH_TARGET" == "all" ]]; then
+    # Flash bootloader and/or application.
+    # Both are written in a SINGLE esptool invocation when flashing "all" to
+    # avoid the chip booting into MCUboot between two separate connections
+    # (which causes "Wrong boot mode detected" on the second connect).
+    if [[ "$FLASH_TARGET" == "all" ]]; then
+        local bootloader_bin="$mcuboot_dir/zephyr/zephyr.bin"
+        local app_bin="$build_dir/zephyr/zephyr.signed.bin"
+        if [[ ! -f "$app_bin" ]]; then
+            app_bin="$build_dir/zephyr/zephyr.bin"
+        fi
+
+        if [[ ! -f "$bootloader_bin" ]]; then
+            print_error "MCUboot binary not found: $bootloader_bin"
+            print_info "Build bootloader first: ./build.sh -b $BOARD -bl o"
+            exit 1
+        fi
+        if [[ ! -f "$app_bin" ]]; then
+            print_error "Application binary not found in $build_dir/zephyr/"
+            print_info "Build application first: ./build.sh -b $BOARD"
+            exit 1
+        fi
+
+        local bootloader_offset="0x0"
+        if [[ "$chip" == "esp32" ]]; then
+            bootloader_offset="0x1000"
+        fi
+
+        print_step "Flashing MCUboot ($bootloader_offset) + AkiraOS (0x20000) in one pass"
+        esptool --chip "$chip" --port "$PORT" --baud "$BAUD" \
+            write_flash "$bootloader_offset" "$bootloader_bin" \
+                        0x20000              "$app_bin"
+        print_success "MCUboot + AkiraOS flashed!"
+        return
+    fi
+
+    # Flash bootloader only
+    if [[ "$FLASH_TARGET" == "b" ]]; then
         local bootloader_bin="$mcuboot_dir/zephyr/zephyr.bin"
         
         if [[ ! -f "$bootloader_bin" ]]; then
@@ -482,8 +517,8 @@ flash_esp32() {
         print_success "MCUboot flashed!"
     fi
     
-    # Flash application
-    if [[ "$FLASH_TARGET" == "a" || "$FLASH_TARGET" == "all" ]]; then
+    # Flash application only
+    if [[ "$FLASH_TARGET" == "a" ]]; then
         # Try signed binary first, fall back to unsigned
         local app_bin="$build_dir/zephyr/zephyr.signed.bin"
         if [[ ! -f "$app_bin" ]]; then
