@@ -40,10 +40,14 @@ static struct usb_manager_context usb_mgr_ctx = {
     .initialized = false,
 };
 
-/* USB device context */
+/* USB device context
+ * VID 0x303A = Espressif Systems (customer-allocated pool)
+ * PID 0x8363 = PenEngineering S.R.L - AkiraConsole
+ * Registered at https://github.com/espressif/usb-pids
+ */
 USBD_DEVICE_DEFINE(device_usbd,
                    DEVICE_DT_GET(DT_NODELABEL(zephyr_udc0)),
-                   0x2fe3, 0x0001);
+                   0x303A, 0x8363);
 
 /**
  * @brief Notify all registered callbacks of an event
@@ -164,8 +168,8 @@ static void usb_manager_msg_cb(struct usbd_context *const ctx,
 }
 
 USBD_DESC_LANG_DEFINE(device_lang); 
-USBD_DESC_MANUFACTURER_DEFINE(device_mfr, "AkiraOS");
-USBD_DESC_PRODUCT_DEFINE(device_product, "Akira USB Device");
+USBD_DESC_MANUFACTURER_DEFINE(device_mfr, "PenEngineering S.R.L");
+USBD_DESC_PRODUCT_DEFINE(device_product, "AkiraConsole");
 
 static const uint8_t attributes = USB_SCD_SELF_POWERED | USB_SCD_REMOTE_WAKEUP;
 

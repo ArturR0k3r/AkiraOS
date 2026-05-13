@@ -216,9 +216,9 @@ int hid_manager_init(const hid_config_t *config)
          * WASM apps call hid_set_transport(BLE) + hid_enable() explicitly. */
         hid_mgr.config.device_types = HID_DEVICE_KEYBOARD;
         hid_mgr.config.preferred_transport = HID_TRANSPORT_NONE;
-        hid_mgr.config.device_name = "AkiraOS HID";
-        hid_mgr.config.vendor_id = 0x1234;
-        hid_mgr.config.product_id = 0x5678;
+        hid_mgr.config.device_name = "AkiraConsole";
+        hid_mgr.config.vendor_id = 0x303A; /* Espressif VID */
+        hid_mgr.config.product_id = 0x8363; /* PenEngineering S.R.L - AkiraConsole */
         hid_mgr.state.device_type = HID_DEVICE_KEYBOARD;
     }
 
