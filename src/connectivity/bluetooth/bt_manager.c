@@ -298,9 +298,9 @@ int bt_manager_init(const bt_config_t *config)
     }
     else
     {
-        bt_mgr.config.device_name = "AkiraOS";
-        bt_mgr.config.vendor_id = 0x1234;
-        bt_mgr.config.product_id = 0x5678;
+        bt_mgr.config.device_name = "AkiraConsole";
+        bt_mgr.config.vendor_id = 0x303A; /* Espressif VID */
+        bt_mgr.config.product_id = 0x8363; /* PenEngineering S.R.L - AkiraConsole */
         bt_mgr.config.services = BT_SERVICE_ALL;
         bt_mgr.config.auto_advertise = true;
         bt_mgr.config.pairable = true;
