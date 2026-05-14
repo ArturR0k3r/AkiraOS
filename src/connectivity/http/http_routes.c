@@ -4,7 +4,7 @@
  *
  * Implements and registers all REST API routes. Migrates the two endpoints
  * previously served by the deleted web_server.c (/upload, /api/apps/install)
- * and adds the new /api/v1/* management API.
+ * and adds the new /api/v1/... management API.
  */
 
 #define _GNU_SOURCE
@@ -26,8 +26,6 @@
 
 #ifdef CONFIG_AKIRA_APP_MANAGER
 #include "runtime/app_manager/app_manager.h"
-#include "lib/akpkg.h"
-#include "lib/mem_helper.h"
 #endif
 
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
@@ -131,7 +129,7 @@ static bool query_param(const char *query, const char *key,
 
 static char upload_resp_buf[128] = "{\"status\":\"ok\"}";
 
-static void set_upload_resp(const char *fmt, ...)
+static void __attribute__((unused)) set_upload_resp(const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
@@ -425,88 +423,96 @@ static int route_app_install(const http_request_t *req, http_response_t *res,
     char app_name[APP_NAME_MAX_LEN] = "uploaded_app";
     query_param(req->query, "name", app_name, sizeof(app_name));
 
-    /* Accumulate the entire body into a single contiguous buffer so we can
-     * inspect the format before deciding how to install it.  For .akpkg
-     * (gzip-wrapped tar) we decompress and extract; for a raw .wasm we pass
-     * it straight to the app manager. */
-    uint8_t *pkg = akira_malloc_buffer(content_length);
-    if (!pkg)
+    /* Begin chunked install session */
+    int session = app_manager_install_begin(app_name, content_length,
+                                            APP_SOURCE_HTTP);
+    if (session < 0)
     {
-        res->status_code = 503;
+        snprintf(resp, sizeof(resp),
+                 "{\"error\":\"install_begin failed: %d\"}", session);
+        res->status_code = 500;
         res->content_type = HTTP_CONTENT_JSON;
-        res->body = "{\"error\":\"Out of memory\"}";
+        res->body = resp;
         return 0;
     }
 
-    /* Copy the initial body bytes already in the HTTP receive buffer. */
+    /* Write initial body chunk already read into the HTTP buffer */
     size_t total_received = 0;
     if (req->body && req->body_len > 0)
     {
-        size_t n = MIN(req->body_len, content_length);
-        memcpy(pkg, req->body, n);
-        total_received = n;
-    }
-
-    /* Set a 60 s receive timeout for large uploads. */
-    struct timeval tv = {.tv_sec = 60, .tv_usec = 0};
-    setsockopt(req->client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-    /* Stream the rest of the body directly from the socket. */
-    while (total_received < content_length)
-    {
-        ssize_t got = recv(req->client_fd,
-                           pkg + total_received,
-                           content_length - total_received, 0);
-        if (got <= 0)
+        int ret = app_manager_install_chunk(session,
+                                            req->body, req->body_len);
+        if (ret < 0)
         {
-            LOG_ERR("Upload recv failed at %zu/%zu: errno %d",
-                    total_received, content_length, errno);
-            akira_free_buffer(pkg);
-            res->status_code = 500;
-            res->content_type = HTTP_CONTENT_JSON;
-            res->body = "{\"error\":\"Upload incomplete\"}";
-            return 0;
-        }
-        total_received += (size_t)got;
-        k_yield();
-    }
-
-    /* Dispatch: .akpkg (gzip magic) or raw WASM. */
-    int app_id;
-    if (akpkg_is_gzip(pkg, total_received))
-    {
-        LOG_INF("Detected .akpkg format, decompressing...");
-        app_id = app_manager_install_akpkg(app_name, sizeof(app_name),
-                                           pkg, total_received,
-                                           APP_SOURCE_HTTP);
-    }
-    else
-    {
-        int session = app_manager_install_begin(app_name, total_received,
-                                                APP_SOURCE_HTTP);
-        if (session < 0)
-        {
-            akira_free_buffer(pkg);
+            app_manager_install_abort(session);
             snprintf(resp, sizeof(resp),
-                     "{\"error\":\"install_begin failed: %d\"}", session);
+                     "{\"error\":\"chunk write failed: %d\"}", ret);
             res->status_code = 500;
             res->content_type = HTTP_CONTENT_JSON;
             res->body = resp;
             return 0;
         }
-        int ret = app_manager_install_chunk(session, pkg, total_received);
-        app_id = (ret < 0) ? ret : app_manager_install_end(session, NULL);
-        if (ret < 0) {
-            app_manager_install_abort(session);
-        }
+        total_received = req->body_len;
     }
 
-    akira_free_buffer(pkg);
+    /* Stream the remaining body directly from the socket */
+    struct akira_buf *buf = akira_buf_alloc(K_MSEC(200));
+    if (!buf)
+    {
+        app_manager_install_abort(session);
+        res->status_code = 503;
+        res->content_type = HTTP_CONTENT_JSON;
+        res->body = "{\"error\":\"Server busy\"}";
+        return 0;
+    }
 
+    /* Set a 60 s receive timeout for large uploads */
+    struct timeval tv = {.tv_sec = 60, .tv_usec = 0};
+    setsockopt(req->client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    while (total_received < content_length)
+    {
+        akira_buf_reset(buf);
+        size_t want = MIN(AKIRA_BUF_SIZE,
+                          content_length - total_received);
+        ssize_t got = recv(req->client_fd, buf->data, want, 0);
+        if (got <= 0)
+        {
+            LOG_ERR("Upload recv failed at %zu/%zu: errno %d",
+                    total_received, content_length, errno);
+            akira_buf_unref(buf);
+            app_manager_install_abort(session);
+            res->status_code = 500;
+            res->content_type = HTTP_CONTENT_JSON;
+            res->body = "{\"error\":\"Upload incomplete\"}";
+            return 0;
+        }
+        akira_buf_add_len(buf, got);
+
+        int ret = app_manager_install_chunk(session,
+                                            (const char *)buf->data, buf->len);
+        if (ret < 0)
+        {
+            akira_buf_unref(buf);
+            app_manager_install_abort(session);
+            snprintf(resp, sizeof(resp),
+                     "{\"error\":\"chunk write failed: %d\"}", ret);
+            res->status_code = 500;
+            res->content_type = HTTP_CONTENT_JSON;
+            res->body = resp;
+            return 0;
+        }
+        total_received += got;
+        k_yield();
+    }
+    akira_buf_unref(buf);
+
+    /* Finalise */
+    int app_id = app_manager_install_end(session, NULL);
     if (app_id < 0)
     {
         snprintf(resp, sizeof(resp),
-                 "{\"error\":\"install failed: %d\"}", app_id);
+                 "{\"error\":\"install_end failed: %d\"}", app_id);
         res->status_code = 500;
     }
     else
@@ -795,7 +801,6 @@ static int route_options(const http_request_t *req, http_response_t *res,
     res->status_code = 204;
     res->content_type = HTTP_CONTENT_TEXT;
     res->body = "";
-    res->body_len = 0;
     return 0;
 }
 
@@ -814,7 +819,7 @@ int akira_http_routes_init(void)
         {HTTP_POST, "/api/v1/apps/start", route_app_start, NULL},
         {HTTP_POST, "/api/v1/apps/stop", route_app_stop, NULL},
         {HTTP_DELETE, "/api/v1/apps", route_app_delete, NULL},
-    /* App + firmware upload */
+        /* App + firmware upload */
 #if defined(CONFIG_AKIRA_HTTP_DEV_UPLOAD)
         {HTTP_POST, "/api/apps/install", route_app_install, NULL},
 #endif

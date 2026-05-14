@@ -14,6 +14,7 @@
 #include <zephyr/kernel.h>
 #include <string.h>
 #include <stdlib.h>
+#include <inttypes.h>
 #include "akira.h"
 
 /* Include flash and MCUboot APIs only if available */
@@ -297,10 +298,10 @@ static enum ota_result do_start_update(uint32_t expected_size)
     }
 
     /* Log partition boundaries for verification */
-    LOG_INF("OTA Secondary slot: offset=0x%08x size=0x%08x (%u KB)",
-            secondary_fa->fa_off,
-            secondary_fa->fa_size,
-            secondary_fa->fa_size / 1024);
+    LOG_INF("OTA Secondary slot: offset=0x%08" PRIx32 " size=0x%08" PRIx32 " (%u KB)",
+            (uint32_t)secondary_fa->fa_off,
+            (uint32_t)secondary_fa->fa_size,
+            (uint32_t)(secondary_fa->fa_size / 1024));
     LOG_INF("Note: Storage partition (LittleFS) is separate and NOT erased");
 
     update_progress(OTA_STATE_RECEIVING, "Erasing flash...");
@@ -875,6 +876,25 @@ const struct ota_progress *ota_get_progress(void)
 enum ota_result ota_confirm_firmware(void)
 {
     return do_confirm_firmware();
+}
+
+enum ota_result ota_request_rollback(void)
+{
+    /* If the current image has not yet been confirmed (test-mode boot), a
+     * cold reset will cause MCUboot to automatically revert to the previous
+     * confirmed image.  If the image was already confirmed, rollback is not
+     * possible without reinstalling the old firmware via a new OTA cycle.
+     * Either way, this call marks the state and lets the caller trigger the
+     * reboot via sys_reboot() or the shell. */
+    k_mutex_lock(&ota_mutex, K_FOREVER);
+    ota_status.state = OTA_STATE_IDLE;
+    strncpy(ota_status.status_message, "Rollback requested — reboot to apply",
+            sizeof(ota_status.status_message) - 1);
+    ota_status.status_message[sizeof(ota_status.status_message) - 1] = '\0';
+    k_mutex_unlock(&ota_mutex);
+
+    LOG_INF("OTA rollback requested (reboot to apply)");
+    return OTA_OK;
 }
 
 enum ota_result ota_register_progress_callback(ota_progress_cb_t callback, void *user_data)

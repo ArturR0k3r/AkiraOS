@@ -250,7 +250,7 @@ static int resp_send(response_ctx_t *ctx, const char *data, size_t len)
     return 0;
 }
 
-static int resp_send_json(response_ctx_t *ctx, const char *json)
+static int __attribute__((unused)) resp_send_json(response_ctx_t *ctx, const char *json)
 {
     ctx->content_type = HTTP_CONTENT_JSON;
     return resp_send(ctx, json, strlen(json));

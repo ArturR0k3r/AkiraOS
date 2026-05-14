@@ -128,7 +128,7 @@ extern "C"
     typedef struct
     {
         http_method_t method;
-        const char *path; /**< Path pattern (supports wildcards: /api/*) */
+        const char *path; /**< Path pattern (supports wildcards, e.g. /api/x) */
         http_handler_t handler;
         void *user_data;
     } http_route_t;
