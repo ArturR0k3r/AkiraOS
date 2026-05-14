@@ -286,8 +286,14 @@ static int cmd_log_level(const struct shell *sh, size_t argc, char **argv)
         return -EINVAL;
     }
 
+#if defined(CONFIG_LOG_RUNTIME_FILTERING)
     log_filter_set(NULL, Z_LOG_LOCAL_DOMAIN_ID, log_source_id_get(mod), lvl);
     shell_print(sh, "Log level for '%s' set to %s", mod, level);
+#else
+    ARG_UNUSED(lvl);
+    shell_error(sh, "Runtime log filtering not enabled (CONFIG_LOG_RUNTIME_FILTERING=n)");
+    return -ENOTSUP;
+#endif
     return 0;
 }
 
