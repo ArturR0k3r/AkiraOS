@@ -63,6 +63,17 @@ config WAMR_AOT_SUPPORT
       - Enable for ESP32-S3 (XTENSA) and native_sim (powerful targets)
       - Disable for ARM Cortex-M targets (limited resources)
 
+config WAMR_INTERP_FALLBACK
+    bool "Keep interpreter alongside AOT (allows loading plain .wasm files)"
+    default y if !SOC_SERIES_STM32WBX
+    default n
+    depends on WAMR_AOT_SUPPORT
+    help
+      When enabled, WAMR builds both the AOT loader and the interpreter so
+      plain .wasm bytecode files can still be executed alongside .aot modules.
+      Costs ~90 KB of flash — disable on flash-constrained targets (e.g.
+      STM32WB55) where only pre-compiled .aot modules are deployed.
+
 config AKIRA_RUNTIME_CUSTOM
     bool "Enable Akira unified custom runtime (Minimalist)"
     default y

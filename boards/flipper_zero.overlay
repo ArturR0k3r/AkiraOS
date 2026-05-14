@@ -14,6 +14,9 @@
  *   0x0D4000   8KB  NVS settings
  *   0x0D6000  20KB  LittleFS user storage  [→ ends at 0x0DB000]
  *   0x0DB000+       STM32WB M0+ BLE HCI-only wireless binary (unmanaged)
+ *
+ * Note: image must stay ≤ 399.5 KB (400 KB minus 512-byte MCUboot header).
+ * With WAMR AOT-only (no interpreter), the AkiraOS image is ~340 KB.
  */
 
 #include <zephyr/dt-bindings/input/input-event-codes.h>

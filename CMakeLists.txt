@@ -125,7 +125,14 @@ if(CONFIG_AKIRA_WASM_RUNTIME)
         endif()
     endif()
 
-    set(WAMR_BUILD_INTERP 1)
+    # Interpreter: disabled in pure-AOT builds to save ~90 KB flash.
+    # When both AOT and INTERP are enabled, WAMR falls back to interpreter
+    # for plain .wasm files; AOT-only mode rejects them (only .aot accepted).
+    if(CONFIG_WAMR_AOT_SUPPORT AND NOT CONFIG_WAMR_INTERP_FALLBACK)
+        set(WAMR_BUILD_INTERP 0)
+    else()
+        set(WAMR_BUILD_INTERP 1)
+    endif()
     # Mini-loader: skips redundant module-level validation already handled by
     # akira_runtime (SHA-256 integrity check + sandbox capability audit).
     # Reduces WAMR flash footprint by ~20-30 KB. Disable if loading untrusted
@@ -170,7 +177,12 @@ if(CONFIG_AKIRA_WASM_RUNTIME)
     # extended multi-table format (non-zero segment-kind prefix) even when user
     # code itself does not use reference types.  Without this flag WAMR rejects
     # such binaries with "zero byte expected … reference types … disabled".
-    set(WAMR_BUILD_REF_TYPES 1)
+    # Disabled on flash-constrained AOT-only STM32WB55 builds (~15 KB saving).
+    if(CONFIG_WAMR_AOT_SUPPORT AND NOT CONFIG_WAMR_INTERP_FALLBACK AND CONFIG_SOC_SERIES_STM32WBX)
+        set(WAMR_BUILD_REF_TYPES 0)
+    else()
+        set(WAMR_BUILD_REF_TYPES 1)
+    endif()
     include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
     target_sources(app PRIVATE ${WAMR_RUNTIME_LIB_SOURCE})
     target_include_directories(app PRIVATE
