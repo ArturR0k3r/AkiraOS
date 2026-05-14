@@ -37,6 +37,7 @@ LOG_MODULE_REGISTER(akira_delta, CONFIG_AKIRA_LOG_LEVEL);
 #include <stdlib.h>
 #include <errno.h>
 #include <inttypes.h>
+#include "lib/mem_helper.h"
 
 /* We use zlib-compatible tinflate (available via CONFIG_ZLIB) or a dedicated
  * bzip2 decoder.  For the initial implementation we use a raw inflate-based
@@ -92,16 +93,16 @@ int akira_delta_open(akira_delta_ctx_t **ctx_out)
         return -EINVAL;
     }
 
-    akira_delta_ctx_t *ctx = k_malloc(sizeof(*ctx));
+    akira_delta_ctx_t *ctx = akira_malloc_buffer(sizeof(*ctx));
     if (!ctx) {
         return -ENOMEM;
     }
     memset(ctx, 0, sizeof(*ctx));
 
     ctx->patch_cap = CONFIG_AKIRA_OTA_DELTA_CHUNK_SIZE * 2;
-    ctx->patch_buf = k_malloc(ctx->patch_cap);
+    ctx->patch_buf = akira_malloc_buffer(ctx->patch_cap);
     if (!ctx->patch_buf) {
-        k_free(ctx);
+        akira_free_buffer(ctx);
         return -ENOMEM;
     }
 
@@ -110,8 +111,8 @@ int akira_delta_open(akira_delta_ctx_t **ctx_out)
                               &ctx->fa_old);
     if (ret < 0) {
         LOG_ERR("Delta: cannot open primary slot: %d", ret);
-        k_free(ctx->patch_buf);
-        k_free(ctx);
+        akira_free_buffer(ctx->patch_buf);
+        akira_free_buffer(ctx);
         return ret;
     }
 
@@ -120,12 +121,8 @@ int akira_delta_open(akira_delta_ctx_t **ctx_out)
     if (ret < 0) {
         LOG_ERR("Delta: ota_start_update failed: %d", ret);
         flash_area_close(ctx->fa_old);
-        k_free(ctx->patch_buf);
-        k_free(ctx);
-        return ret;
-    }
-
-    *ctx_out = ctx;
+        akira_free_buffer(ctx->patch_buf);
+        akira_free_buffer(ctx);
     LOG_INF("Delta patch session opened");
     return 0;
 #endif /* DELTA_HAVE_DECOMP */
@@ -142,13 +139,15 @@ int akira_delta_feed(akira_delta_ctx_t *ctx, const void *chunk, size_t len)
         return -EINVAL;
     }
 
-    /* Grow buffer if needed */
+    /* Grow buffer if needed (akira_malloc_buffer has no realloc; grow manually) */
     if (ctx->patch_len + len > ctx->patch_cap) {
         size_t new_cap = ctx->patch_len + len + CONFIG_AKIRA_OTA_DELTA_CHUNK_SIZE;
-        uint8_t *nb = k_realloc(ctx->patch_buf, new_cap);
+        uint8_t *nb = akira_malloc_buffer(new_cap);
         if (!nb) {
             return -ENOMEM;
         }
+        memcpy(nb, ctx->patch_buf, ctx->patch_len);
+        akira_free_buffer(ctx->patch_buf);
         ctx->patch_buf = nb;
         ctx->patch_cap = new_cap;
     }
@@ -228,8 +227,8 @@ int akira_delta_close(akira_delta_ctx_t *ctx)
     }
 
     flash_area_close(ctx->fa_old);
-    k_free(ctx->patch_buf);
-    k_free(ctx);
+    akira_free_buffer(ctx->patch_buf);
+    akira_free_buffer(ctx);
     return ret;
 #endif
 }
@@ -244,8 +243,8 @@ void akira_delta_abort(akira_delta_ctx_t *ctx)
     if (ctx->fa_old) {
         flash_area_close(ctx->fa_old);
     }
-    k_free(ctx->patch_buf);
-    k_free(ctx);
+    akira_free_buffer(ctx->patch_buf);
+    akira_free_buffer(ctx);
 }
 
 #endif /* CONFIG_AKIRA_OTA_DELTA */

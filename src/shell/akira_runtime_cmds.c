@@ -39,7 +39,7 @@ LOG_MODULE_REGISTER(akira_runtime_cmds, CONFIG_AKIRA_LOG_LEVEL);
 #include <runtime/akira_ipc.h>
 #endif
 
-#ifdef CONFIG_AKIRA_OTA
+#if defined(CONFIG_AKIRA_OTA) && defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
 #include <connectivity/ota/ota_manager.h>
 #endif
 
@@ -235,8 +235,8 @@ static int cmd_ipc_stats(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_ota_status(const struct shell *sh, size_t argc, char **argv)
 {
-#ifndef CONFIG_AKIRA_OTA
-    shell_print(sh, "OTA not enabled (CONFIG_AKIRA_OTA=n)");
+#if !defined(CONFIG_AKIRA_OTA) || !defined(CONFIG_FLASH_MAP) || !defined(CONFIG_BOOTLOADER_MCUBOOT)
+    shell_print(sh, "OTA not available on this build");
     return 0;
 #else
     const struct ota_progress *p = ota_get_progress();
