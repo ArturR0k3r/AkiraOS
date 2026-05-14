@@ -29,6 +29,14 @@ jobs:
             name: native_sim
             fetch_espressif_blobs: false
             zephyr_toolchain: x86_64-zephyr-elf
+          - board: flipper_zero
+            name: board-flipper_zero
+            fetch_espressif_blobs: false
+            zephyr_toolchain: arm-zephyr-eabi
+          - board: nrf54l15dk/nrf54l15/cpuapp
+            name: board-nrf54l15dk
+            fetch_espressif_blobs: false
+            zephyr_toolchain: arm-zephyr-eabi
     
     env:
       ZEPHYR_TOOLCHAIN_VARIANT: zephyr
@@ -94,7 +102,8 @@ jobs:
           docker exec \
             -e ZEPHYR_SDK_INSTALL_DIR=/opt/toolchains/zephyr-sdk-0.17.4 \
             -e ZEPHYR_TOOLCHAIN_VARIANT=zephyr \
-            -w /workspace/akira-os zephyr-ci west build -b ${{ matrix.board }} . --pristine
+            -w /workspace/akira-os zephyr-ci west build -b ${{ matrix.board }} . --pristine \
+              -- -DMODULE_EXT_ROOT=/workspace/akira-os
       
       - name: Cleanup container
         if: always()
@@ -135,11 +144,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          path: akira-os
           submodules: recursive
 
       - name: Initialize west workspace
         run: |
-          docker exec -w /workspace zephyr-test bash -c \
+          docker exec -w /workspace/akira-os zephyr-test bash -c \
             "west init -l . && west update"
 
       - name: Setup Zephyr SDK
@@ -147,7 +157,7 @@ jobs:
           docker exec \
             -e ZEPHYR_SDK_INSTALL_DIR=/opt/toolchains/zephyr-sdk-0.17.4 \
             -e ZEPHYR_TOOLCHAIN_VARIANT=zephyr \
-            -w /workspace zephyr-test bash -c '
+            -w /workspace/akira-os zephyr-test bash -c '
             if [ ! -f "$ZEPHYR_SDK_INSTALL_DIR/sdk_version" ]; then
               echo "Zephyr SDK not found, installing...";
               wget -q https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.17.4/zephyr-sdk-0.17.4_linux-x86_64.tar.xz;
@@ -164,14 +174,19 @@ jobs:
           docker exec \
             -e ZEPHYR_SDK_INSTALL_DIR=/opt/toolchains/zephyr-sdk-0.17.4 \
             -e ZEPHYR_TOOLCHAIN_VARIANT=zephyr \
-            -w /workspace zephyr-test west zephyr-export
+            -w /workspace/akira-os zephyr-test west zephyr-export
+
+      - name: Install gcovr
+        run: |
+          docker exec -w /workspace/akira-os zephyr-test bash -c \
+            'pip3 install gcovr --quiet --break-system-packages || pip3 install gcovr --quiet'
 
       - name: Run ztest suite via Twister
         run: |
           docker exec \
             -e ZEPHYR_SDK_INSTALL_DIR=/opt/toolchains/zephyr-sdk-0.17.4 \
             -e ZEPHYR_TOOLCHAIN_VARIANT=zephyr \
-            -w /workspace zephyr-test bash -c '
+            -w /workspace/akira-os zephyr-test bash -c '
               west twister \
                 --testsuite-root tests/ \
                 --platform native_sim \
@@ -200,15 +215,14 @@ jobs:
         run: |
           docker exec \
             -e ZEPHYR_SDK_INSTALL_DIR=/opt/toolchains/zephyr-sdk-0.17.4 \
-            -w /workspace zephyr-test bash -c '
-              pip install gcovr --quiet
+            -w /workspace/akira-os zephyr-test bash -c '
               gcovr \
                 --root . \
                 --xml coverage.xml \
                 --xml-pretty \
-                --exclude "twister-out" \
-                --exclude "modules" \
-                --exclude "tests" \
+                --exclude "twister-out/.*" \
+                --exclude "modules/.*" \
+                --exclude "tests/.*" \
                 twister-out/ || true
             '
 
