@@ -1,0 +1,8 @@
+# Copyright (c) 2026 Akira Project
+# SPDX-License-Identifier: Apache-2.0
+
+# Flipper Zero board Kconfig
+# MCU: STM32WB55RGV6 (ARM Cortex-M4 application core + Cortex-M0+ radio core)
+
+config BOARD_FLIPPER_ZERO
+	select SOC_STM32WB55XX

@@ -52,7 +52,7 @@ const char *transport_type_to_string(enum transport_data_type type)
     return "UNKNOWN";
 }
 
-int transport_init(void)
+int akira_transport_init(void)
 {
     k_mutex_lock(&transport_mutex, K_FOREVER);
 

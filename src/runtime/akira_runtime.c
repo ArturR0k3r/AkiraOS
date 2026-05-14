@@ -339,7 +339,12 @@ int akira_runtime_init(void)
         k_work_init(&g_slot_cleanup[i].work, slot_cleanup_work_fn);
     }
     LOG_DBG("App thread stacks: lazy SRAM alloc per slot (%u B each, deferred free)",
-            CONFIG_AKIRA_WASM_APP_STACK_SIZE);
+#ifdef CONFIG_AKIRA_WASM_APP_STACK_SIZE
+            CONFIG_AKIRA_WASM_APP_STACK_SIZE
+#else
+            0U
+#endif
+    );
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
     /*

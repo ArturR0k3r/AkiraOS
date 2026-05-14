@@ -708,7 +708,7 @@ int ota_manager_init(void)
     strcpy(ota_status.status_message, "Initialized");
 
     /* Initialize transport interface */
-    transport_init();
+    akira_transport_init();
 
     /* Register as handler for FIRMWARE data type */
     ota_transport_handler_id = transport_register_handler(

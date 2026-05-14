@@ -193,6 +193,10 @@ if(CONFIG_AKIRA_WASM_RUNTIME)
     message(STATUS "WAMR enabled: modular WASM API layer will be built!")
 else()
     message(WARNING "WASM support disabled - runtime will use stub implementations. To enable: set CONFIG_AKIRA_WASM_RUNTIME and ensure WAMR is integrated.")
+    # Provide stub wasm_export.h so API headers compile without the real WAMR tree.
+    target_include_directories(app BEFORE PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/include/stubs
+    )
 endif()
 
 # Akira Module System removed for Minimalist Architecture
@@ -294,12 +298,15 @@ if(CONFIG_DISPLAY)
     )
 endif()
 
+# GPIO and RF API implementations are also used by shell commands — compile always.
+target_sources(app PRIVATE
+    src/api/akira_gpio_api.c
+    src/api/akira_rf_api.c
+)
+
 # WASM-dependent API wrappers (need wasm_export.h)
-# gpio_api and rf_api are also used by shell commands so compile under WASM_RUNTIME
 if(CONFIG_AKIRA_WASM_RUNTIME)
     target_sources(app PRIVATE
-        src/api/akira_gpio_api.c
-        src/api/akira_rf_api.c
         src/api/akira_export_api.c
     )
 endif()

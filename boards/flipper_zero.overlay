@@ -1,0 +1,112 @@
+/*
+ * AkiraOS overlay for Flipper Zero
+ *
+ * Augments flipper_zero.dts with AkiraOS-specific configuration:
+ *   - Flash partition table (MCUboot + OTA + NVS + LittleFS)
+ *   - SPI device nodes (ST7565 display via SSD1306-compat driver, CC1101 sub-GHz)
+ *   - LittleFS fstab
+ *   - chosen node overrides (display, code-partition)
+ *
+ * Flash layout (1 MB, STM32WB55RG — wireless HCI firmware at ≥0x080DB000):
+ *   0x000000  48KB  MCUboot bootloader
+ *   0x00C000 400KB  Primary application slot (image-0)
+ *   0x070000 400KB  OTA secondary slot (image-1)
+ *   0x0D4000   8KB  NVS settings
+ *   0x0D6000  20KB  LittleFS user storage  [→ ends at 0x0DB000]
+ *   0x0DB000+       STM32WB M0+ BLE HCI-only wireless binary (unmanaged)
+ */
+
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/ {
+	chosen {
+		zephyr,code-partition = &slot0_partition;
+		zephyr,display        = &st7565;
+	};
+
+	fstab {
+		compatible = "zephyr,fstab";
+
+		lfs1: lfs1 {
+			compatible = "zephyr,fstab,littlefs";
+			read-size      = <1>;
+			prog-size      = <8>;
+			cache-size     = <64>;
+			lookahead-size = <32>;
+			block-cycles   = <512>;
+		partition      = <&lfs1_partition>;
+			mount-point    = "/lfs";
+		};
+	};
+};
+
+&flash0 {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		boot_partition: partition@0 {
+			label = "mcuboot";
+			reg = <0x00000000 DT_SIZE_K(48)>;
+			read-only;
+		};
+
+		slot0_partition: partition@c000 {
+			label = "image-0";
+			reg = <0x0000c000 DT_SIZE_K(400)>;
+		};
+
+		slot1_partition: partition@70000 {
+			label = "image-1";
+			reg = <0x00070000 DT_SIZE_K(400)>;
+		};
+
+		akira_settings_nvs_partition: partition@d4000 {
+			label = "akira_settings_nvs";
+			reg = <0x000d4000 DT_SIZE_K(8)>;
+		};
+
+		storage_partition: lfs1_partition: partition@d6000 {
+			label = "lfs_storage";
+			reg = <0x000d6000 DT_SIZE_K(20)>;
+		};
+	};
+};
+
+&zephyr_udc0 {
+	cdc_acm_uart0: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};
+
+&spi1 {
+	st7565: st7565@0 {
+		compatible = "solomon,ssd1306fb";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+		width  = <128>;
+		height = <64>;
+		data-cmd-gpios = <&gpioa 8 GPIO_ACTIVE_HIGH>;
+		reset-gpios     = <&gpioa 9 GPIO_ACTIVE_LOW>;
+		segment-offset  = <0>;
+		page-offset     = <0>;
+		display-offset  = <0>;
+		multiplex-ratio = <63>;
+		prechargep      = <0x22>;
+		segment-remap;
+		com-invdir;
+	};
+
+	cc1101: cc1101@1 {
+		compatible = "ti,cc1101";
+		reg = <1>;
+		spi-max-frequency = <6500000>;
+		gdo0-gpios  = <&gpiob 0 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+		reset-gpios = <&gpiob 1 GPIO_ACTIVE_LOW>;
+		akira,default-frequency-hz = <433920000>;
+		akira,default-tx-power-dbm = <10>;
+		akira,default-bitrate-bps  = <4800>;
+		akira,xosc-frequency-hz    = <26000000>;
+	};
+};

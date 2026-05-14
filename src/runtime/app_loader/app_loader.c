@@ -180,7 +180,7 @@ static int wasm_data_callback(const uint8_t *data, size_t len,
 int app_loader_init(void)
 {
     /* Initialize transport interface */
-    transport_init();
+    akira_transport_init();
 
     /* Register for WASM_APP data type */
     wasm_handler_id = transport_register_handler(

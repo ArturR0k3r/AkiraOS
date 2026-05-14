@@ -1,0 +1,196 @@
+/*
+ * Flipper Zero board definition for AkiraOS
+ * MCU: STM32WB55RGV6 (ARM Cortex-M4 @ 64 MHz)
+ *
+ * Copyright (c) 2026 Akira Project
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Hardware reference: Flipper Zero open hardware v7.1
+ * https://github.com/flipperdevices/flipperzero-hardware
+ *
+ * NOTE: STM32WB55 top 256 KB of flash (0x0C0000–0x0FFFFF) is reserved
+ *       for the M0+ BLE co-processor wireless binary (FUS + BLE stack).
+ *       Flash partitions defined in the AkiraOS overlay must not overlap
+ *       this area.
+ */
+
+/dts-v1/;
+#include <st/wb/stm32wb55Xg.dtsi>
+#include <st/wb/stm32wb55rgvx-pinctrl.dtsi>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/ {
+	model = "Flipper Zero (STM32WB55RGV6)";
+	compatible = "flipper,flipper-zero", "st,stm32wb55rg";
+
+	chosen {
+		zephyr,sram       = &sram0;
+		zephyr,flash      = &flash0;
+		zephyr,console    = &usart1;
+		zephyr,shell-uart = &usart1;
+		/*
+		 * BLE UART — STM32WB uses IPCC (Inter-Processor Communication
+		 * Controller) for M4↔M0+ signalling; bt-c2h-uart not required
+		 * when using CONFIG_BT_STM32WB HCI driver.
+		 */
+	};
+
+	/* -----------------------------------------------------------------
+	 * GPIO buttons — 6 directional/action keys
+	 * All lines are active-low with internal pull-up.
+	 * ----------------------------------------------------------------- */
+	gpio_keys {
+		compatible = "gpio-keys";
+		status = "okay";
+
+		btn_up: button_up {
+			label = "UP";
+			gpios = <&gpiob 14 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_UP>;
+		};
+
+		btn_down: button_down {
+			label = "DOWN";
+			gpios = <&gpioc 5 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_DOWN>;
+		};
+
+		btn_left: button_left {
+			label = "LEFT";
+			gpios = <&gpiob 11 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_LEFT>;
+		};
+
+		btn_right: button_right {
+			label = "RIGHT";
+			gpios = <&gpiob 12 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_RIGHT>;
+		};
+
+		btn_ok: button_ok {
+			label = "OK";
+			gpios = <&gpiob 13 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_ENTER>;
+		};
+
+		btn_back: button_back {
+			label = "BACK";
+			gpios = <&gpioc 13 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			zephyr,code = <INPUT_KEY_ESC>;
+		};
+	};
+
+	/* -----------------------------------------------------------------
+	 * Vibration motor — ERM, driven by GPIO PC0 (active high)
+	 * ----------------------------------------------------------------- */
+	vibro_motor: vibro-motor {
+		compatible = "gpio-leds";
+		vibro: vibro_0 {
+			label = "VIBRO";
+			gpios = <&gpioc 0 GPIO_ACTIVE_HIGH>;
+		};
+	};
+
+	aliases {
+		led0       = &vibro;
+		sw0        = &btn_ok;
+		sw1        = &btn_back;
+		watchdog0  = &iwdg;
+	};
+};
+
+/* ==========================================================================
+ * RCC — Clock tree configuration
+ * Flipper Zero uses a 32 MHz HSE crystal (same as Nucleo WB55RG).
+ * cpu2-prescaler: M0+ radio core divider (must be set even when BLE f/w
+ * manages the M0+ clock; Zephyr DTS binding marks it required).
+ * ========================================================================== */
+&rcc {
+	clocks = <&clk_hse>;
+	clock-frequency = <DT_FREQ_M(32)>;
+	cpu1-prescaler = <1>;
+	cpu2-prescaler = <1>;
+	ahb4-prescaler = <1>;
+	apb1-prescaler = <1>;
+	apb2-prescaler = <1>;
+};
+
+/* ==========================================================================
+ * USART1 — AkiraOS shell / debug console (TX=PB6, RX=PB7)
+ * ========================================================================== */
+&usart1 {
+	pinctrl-0 = <&usart1_tx_pb6 &usart1_rx_pb7>;
+	pinctrl-names = "default";
+	current-speed = <115200>;
+	status = "okay";
+};
+
+/* ==========================================================================
+ * SPI1 — ST7565 128×64 display (CS PA4) + CC1101 sub-GHz (CS PB2)
+ * SCK=PA5, MISO=PA6, MOSI=PA7; CS lines driven by SPI controller.
+ * ========================================================================== */
+&spi1 {
+	pinctrl-0 = <&spi1_nss_pa4 &spi1_sck_pa5
+	             &spi1_miso_pa6 &spi1_mosi_pa7>;
+	pinctrl-names = "default";
+	cs-gpios = <&gpioa 4 GPIO_ACTIVE_LOW>,   /* CS0: ST7565 display  */
+	           <&gpiob 2 GPIO_ACTIVE_LOW>;    /* CS1: CC1101 sub-GHz  */
+	status = "okay";
+};
+
+/* ==========================================================================
+ * I2C1 — DRV2605L haptic motor driver (SCL=PB8, SDA=PB9)
+ * ========================================================================== */
+&i2c1 {
+	pinctrl-0 = <&i2c1_scl_pb8 &i2c1_sda_pb9>;
+	pinctrl-names = "default";
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+
+	/*
+	 * TI DRV2605L haptic motor driver — LRA/ERM, I2C addr 0x5A (fixed).
+	 */
+	drv2605: drv2605@5a {
+		compatible = "ti,drv2605";
+		reg = <0x5a>;
+		actuator-mode = "ERM";
+		en-gpios = <&gpioc 0 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+/* ==========================================================================
+ * USB 2.0 Full-Speed — CDC-ACM console (DM=PA11, DP=PA12)
+ * zephyr_udc0 alias required by AkiraOS USB manager (USBD_DEVICE_DEFINE)
+ * ========================================================================== */
+zephyr_udc0: &usb {
+	pinctrl-0 = <&usb_dm_pa11 &usb_dp_pa12>;
+	pinctrl-names = "default";
+	status = "okay";
+};
+
+/* ==========================================================================
+ * TIM1 CH3 — IR transmitter PWM carrier (38 kHz, PA10)
+ * ========================================================================== */
+&timers1 {
+	status = "okay";
+
+	pwm_ir: pwm {
+		status = "okay";
+		pinctrl-0 = <&tim1_ch3_pa10>;
+		pinctrl-names = "default";
+	};
+};
+
+/* ==========================================================================
+ * Independent Watchdog
+ * ========================================================================== */
+&iwdg {
+	status = "okay";
+};
+
+/* ==========================================================================
+ * Hardware RNG (entropy source for BLE / crypto)
+ * ========================================================================== */
+&rng {
+	status = "okay";
+};

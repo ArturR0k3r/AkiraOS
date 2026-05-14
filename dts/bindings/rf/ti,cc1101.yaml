@@ -1,0 +1,107 @@
+# Copyright (c) 2026 Akira Project
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  TI CC1101 low-power Sub-GHz RF transceiver (CC11xx family).
+  Covers 300–348 MHz, 387–464 MHz, and 779–928 MHz bands via 4-wire SPI.
+
+  The CC1101 exposes two configurable output pins (GDO0, GDO2) for
+  signalling interrupts, FIFO thresholds, carrier sense, etc.
+  GDO0 is used by the AkiraOS driver as a receive/transmit interrupt line.
+
+  All radio parameters are taken from device-tree at init — no rebuild
+  required when changing frequency, power, or bitrate between boards.
+
+  Example node (Flipper Zero, 433 MHz default):
+
+    cc1101: cc1101@1 {
+        compatible = "ti,cc1101";
+        reg = <1>;
+        spi-max-frequency = <6500000>;
+        gdo0-gpios  = <&gpiob 0 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+        reset-gpios = <&gpiob 1 GPIO_ACTIVE_LOW>;
+        akira,default-frequency-hz  = <433920000>;
+        akira,default-tx-power-dbm  = <10>;
+        akira,default-bitrate-bps   = <4800>;
+        akira,xosc-frequency-hz     = <26000000>;
+    };
+
+compatible: "ti,cc1101"
+
+include: spi-device.yaml
+
+properties:
+
+  gdo0-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      GPIO connected to the CC1101 GDO0 pin.
+      Used by the AkiraOS driver as the primary interrupt / packet-received
+      signal line. Configure with GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH.
+
+  gdo2-gpios:
+    type: phandle-array
+    required: false
+    description: |
+      GPIO connected to the CC1101 GDO2 pin.
+      Optional secondary signal pin (e.g. FIFO threshold, CLK output).
+      Not required for basic AkiraOS operation.
+
+  reset-gpios:
+    type: phandle-array
+    required: false
+    description: |
+      GPIO connected to the CC1101 CSn (chip-select / reset override) pin.
+      When present, the driver issues a hardware reset sequence on init
+      (CSn low → delay 1 µs → CSn high → delay 40 µs → CSn low).
+      If omitted, the driver relies on the SPI CS line for reset signalling.
+
+  spi-max-frequency:
+    type: int
+    required: true
+    description: |
+      Maximum SPI clock in Hz. CC1101 supports up to 6.5 MHz.
+      Recommended: 6500000.
+
+  akira,default-frequency-hz:
+    type: int
+    required: false
+    default: 433920000
+    description: |
+      Default carrier frequency in Hz applied at driver init.
+      Valid sub-bands supported by CC1101 synthesiser:
+        Low  band: 300–348 MHz
+        Mid  band: 387–464 MHz (includes 433 MHz ISM)
+        High band: 779–928 MHz (includes 868/915 MHz ISM)
+      The driver selects the matching FSCTRL0/1 and FREQ2/1/0 registers
+      automatically from this value.
+
+  akira,default-tx-power-dbm:
+    type: int
+    required: false
+    default: 10
+    description: |
+      Default TX output power in dBm applied at driver init.
+      Achievable range: −30 to +10 dBm (band- and PA-table-dependent).
+      The driver maps this value to the nearest PATABLE entry.
+
+  akira,default-bitrate-bps:
+    type: int
+    required: false
+    default: 4800
+    description: |
+      Default symbol rate / bit rate in bits per second applied at init.
+      Range: 600–500 000 bps.
+      Stored in MDMCFG4/MDMCFG3 (DRATE_E/DRATE_M) registers.
+
+  akira,xosc-frequency-hz:
+    type: int
+    required: false
+    default: 26000000
+    description: |
+      Crystal oscillator frequency in Hz.
+      Standard value: 26 000 000 Hz (26 MHz — used in Flipper Zero and
+      most CC1101 reference designs).
+      Some boards use 27 MHz or 32 MHz; this value drives all frequency,
+      bitrate, and channel spacing calculations.

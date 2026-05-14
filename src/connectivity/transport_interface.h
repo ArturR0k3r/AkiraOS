@@ -102,7 +102,7 @@ struct transport_stats {
  *
  * @return 0 on success, negative errno on failure
  */
-int transport_init(void);
+int akira_transport_init(void);
 
 /**
  * @brief Register a handler for a specific data type

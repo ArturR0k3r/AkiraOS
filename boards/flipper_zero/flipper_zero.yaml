@@ -1,0 +1,23 @@
+identifier: flipper_zero
+name: Flipper Zero
+type: mcu
+arch: arm
+soc: stm32wb55xx
+toolchain:
+  - zephyr
+ram: 192
+flash: 768
+supported:
+  - gpio
+  - uart
+  - i2c
+  - spi
+  - usb
+  - bt
+  - pwm
+  - counter
+  - entropy
+  - watchdog
+  - adc
+  - input
+vendor: penengineering

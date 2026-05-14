@@ -7,6 +7,42 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.5.6-FlipperZeroFW] — "C1PH3R · Flipper Zero" — 2026-05-14
+
+### Added
+- **Flipper Zero board port** (`flipper_zero`) — full AkiraOS support for the
+  Flipper Zero (STM32WB55RGV6, Cortex-M4 @ 64 MHz + Cortex-M0+ BLE co-processor).
+  - `boards/flipper_zero.conf` — Kconfig for BLE, CC1101 sub-GHz, ST7565 display,
+    USB CDC-ACM shell, 6 GPIO buttons, IR TX, DRV2605L haptic, MCUboot OTA.
+  - `boards/flipper_zero.overlay` — flash partition layout (MCUboot 64KB, slot0
+    448KB, slot1 OTA 192KB, NVS 16KB, LittleFS 48KB, wireless binary area 256KB),
+    all peripheral nodes (SPI1 bus, I2C1, USART1, USB, TIM1/IR PWM, gpio-keys).
+  - `boards/flipper_zero/board.yml` — Zephyr board metadata (vendor: penengineering,
+    SoC: stm32wb55rg).
+  - `boards/flipper_zero/board.cmake` — USB DFU (dfu-util, ROM bootloader) as
+    primary flash runner; OpenOCD/SWD commented as fallback.
+  - `boards/flipper_zero/Kconfig.flipper_zero` — selects `SOC_STM32WB55RG`.
+  - `boards/flipper_zero/flipper_zero.yaml` — Zephyr board identifier with
+    supported feature set.
+  - `boards/flipper_zero/flipper_zero-pinctrl.dtsi` — STM32WB55 pin assignments
+    (USART1 PB6/PB7, SPI1 PA5/PA6/PA7, I2C1 PB8/PB9, TIM1 CH3 PA10 IR TX).
+  - `dts/bindings/rf/ti,cc1101.yaml` — DTS binding for TI CC1101 Sub-GHz
+    transceiver (compatible: "ti,cc1101"); properties: `gdo0-gpios`, `gdo2-gpios`,
+    `reset-gpios`, `akira,default-frequency-hz/tx-power-dbm/bitrate-bps/xosc-frequency-hz`.
+
+> **BLE bring-up prerequisite**: STM32WB55 requires the ST wireless binary
+> (`stm32wb5x_BLE_HCILayer_extended_fw.bin`) pre-flashed at `0x080CE000` via
+> STM32CubeProgrammer before `CONFIG_BT_STM32WB` will enumerate the BLE controller.
+>
+> **OTA note**: The OTA secondary slot (image-1) is 192 KB — smaller than
+> the primary slot (448 KB). Ensure the built application image fits within
+> 192 KB, or set `CONFIG_AKIRA_OTA=n` to disable OTA on this board.
+>
+> **NFC**: ST25R3916 active NFC reader is hardware-present but deferred
+> (`CONFIG_AKIRA_NFC=n`) — requires an out-of-tree driver not yet implemented.
+
+---
+
 ## [1.5.6] — "C1PH3R" — 2026-05-14
 
 ### Added
