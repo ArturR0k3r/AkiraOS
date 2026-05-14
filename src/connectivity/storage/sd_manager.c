@@ -13,6 +13,7 @@
 #include <string.h>
 #if defined(CONFIG_AKIRA_SD_CARD)
 #include <storage/sd_card.h>
+#include <storage/fs_manager.h>
 #endif
 
 LOG_MODULE_REGISTER(sd_manager, CONFIG_AKIRA_LOG_LEVEL);
@@ -63,13 +64,20 @@ int sd_manager_mount(void)
 
 #if defined(CONFIG_AKIRA_SD_CARD)
     /* sd_card.c already mounted the filesystem at /SD: via SYS_INIT.
-     * Just verify the card is present and adopt the existing mount. */
+     * If the card was absent at boot (hot-plug), attempt a re-probe now. */
     if (!akira_sd_card_is_present())
     {
-        LOG_ERR("SD card not present");
-        notify_state_change(SD_STATE_ERROR);
-        k_mutex_unlock(&g_sd_mutex);
-        return -ENODEV;
+        int ret = akira_sd_card_init();
+        if (ret < 0)
+        {
+            LOG_ERR("SD card not present: %d", ret);
+            notify_state_change(SD_STATE_ERROR);
+            k_mutex_unlock(&g_sd_mutex);
+            return -ENODEV;
+        }
+        LOG_INF("SD card detected after hot-plug");
+        /* Update fs_manager's availability flag so SD paths are recognized */
+        fs_manager_reinit_sd();
     }
     notify_state_change(SD_STATE_MOUNTED);
     LOG_INF("SD card available at %s (via sd_card driver)", SD_MOUNT_POINT);

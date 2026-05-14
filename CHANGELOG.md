@@ -53,6 +53,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `docs/ota_design.md` — OTA architecture design document.
 
 ### Fixed
+- SD card hot-plug: if the card was absent at boot, inserting it later now works. `sd_manager_mount()` re-probes via `akira_sd_card_init()` instead of returning `-ENODEV` immediately, and `fs_manager_reinit_sd()` updates the availability flag so all SD paths become accessible without reboot.
 - `ota_request_rollback()` implemented (was declared but never defined).
 - `ota_manager.c` compile guard aligned with `CONFIG_AKIRA_OTA` (fixes undeclared `CONFIG_AKIRA_OTA_THREAD_STACK_SIZE` on boards with OTA disabled).
 - Pre-existing warnings: nested `/*` in Doxygen comments, `printf` format mismatch (`off_t` vs `%x`), unused static functions.

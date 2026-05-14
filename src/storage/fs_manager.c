@@ -285,6 +285,18 @@ static int init_sd_storage(void)
 }
 
 /**
+ * Re-probe SD card and update availability flag (call after hot-plug).
+ */
+int fs_manager_reinit_sd(void)
+{
+    if (!fs_state.initialized)
+    {
+        return -EINVAL;
+    }
+    return init_sd_storage();
+}
+
+/**
  * Initialize filesystem manager
  */
 int fs_manager_init(void)

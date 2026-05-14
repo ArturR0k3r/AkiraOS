@@ -57,6 +57,13 @@ typedef struct {
 int fs_manager_init(void);
 
 /**
+ * Re-probe SD card and update availability flag.
+ * Call this after a hot-plug insertion when the card was absent at boot.
+ * @return 0 on success, -ENODEV if card still not present
+ */
+int fs_manager_reinit_sd(void);
+
+/**
  * Get available filesystems and their status
  * @param info - Array to store filesystem info
  * @param max_count - Maximum number of entries
