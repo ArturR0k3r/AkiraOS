@@ -378,6 +378,41 @@ if(CONFIG_AKIRA_WASM_IPC)
     )
 endif()
 
+# Track B — new WASM native APIs
+if(CONFIG_AKIRA_WASM_FS)
+    target_sources(app PRIVATE src/api/akira_fs_api.c)
+endif()
+
+if(CONFIG_AKIRA_WASM_CRYPTO)
+    target_sources(app PRIVATE src/api/akira_crypto_api.c)
+endif()
+
+if(CONFIG_AKIRA_WASM_RTC)
+    target_sources(app PRIVATE src/api/akira_rtc_api.c)
+endif()
+
+if(CONFIG_AKIRA_WASM_OTA)
+    target_sources(app PRIVATE src/api/akira_ota_api.c)
+endif()
+
+# Track A — OTA extensions
+if(CONFIG_AKIRA_BOOT_GUARD)
+    target_sources(app PRIVATE src/runtime/akira_boot_guard.c)
+endif()
+
+if(CONFIG_AKIRA_OTA_DELTA)
+    target_sources(app PRIVATE src/lib/akira_delta.c)
+endif()
+
+# Track D — DX: telemetry, panic handler, runtime shell commands
+if(CONFIG_AKIRA_TELEMETRY)
+    target_sources(app PRIVATE src/lib/akira_telemetry.c)
+endif()
+
+if(CONFIG_AKIRA_PANIC)
+    target_sources(app PRIVATE src/lib/akira_panic.c)
+endif()
+
 # Keep connectivity and drivers as before (use module gating further below)
 
 # Akira shell commands
@@ -386,7 +421,9 @@ if(CONFIG_SHELL)
     if(CONFIG_AKIRA_HID)
         target_sources(app PRIVATE src/shell/hid_shell.c)
     endif()
-    
+
+    target_sources(app PRIVATE src/shell/akira_runtime_cmds.c)
+
     if(CONFIG_AKIRA_MODULE_RF)
         target_sources(app PRIVATE src/shell/shell_rf.c)
     endif()

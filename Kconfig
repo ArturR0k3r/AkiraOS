@@ -993,6 +993,50 @@ config AKIRA_OTA_THREAD_STACK_SIZE
       Stack size for the dedicated OTA download worker thread.
       Increase if OTA callbacks or hash verification overflow the stack.
 
+config AKIRA_OTA_DELTA
+    bool "Delta (binary-patch) OTA updates"
+    default n
+    depends on AKIRA_OTA
+    select ZLIB if ZLIB
+    help
+      Enable streaming bspatch-based delta OTA to reduce download size.
+      Requires CONFIG_ZLIB=y for the decompressor backend.
+
+config AKIRA_OTA_DELTA_CHUNK_SIZE
+    int "Delta patch input chunk size (bytes)"
+    default 4096
+    range 512 65536
+    depends on AKIRA_OTA_DELTA
+    help
+      Size of each compressed patch chunk fed to the delta decoder.
+
+config AKIRA_WASM_OTA
+    bool "WASM OTA native API"
+    default n
+    depends on AKIRA_OTA
+    help
+      Expose ota_check / ota_fetch_and_apply / ota_get_state / ota_confirm /
+      ota_rollback to WASM apps holding the AKIRA_CAP_OTA_TRIGGER capability.
+
+config AKIRA_BOOT_GUARD
+    bool "AkiraOS software boot counter / rollback guard"
+    default n
+    select AKIRA_OTA
+    select NVS
+    help
+      Track consecutive unconfirmed boots in NVS.  After
+      CONFIG_AKIRA_OTA_MAX_BOOT_FAILURES resets without confirmation,
+      trigger ota_request_rollback() automatically.
+
+config AKIRA_OTA_MAX_BOOT_FAILURES
+    int "Max consecutive unconfirmed boots before rollback"
+    default 3
+    range 1 10
+    depends on AKIRA_BOOT_GUARD
+    help
+      Number of consecutive boots without akira_boot_guard_confirm() before
+      the boot guard triggers OTA rollback.
+
 endmenu
 
 menu "Power Management"
@@ -1686,6 +1730,74 @@ config AKIRA_WASM_STORAGE_MAX_FDS
     help
       Global limit on open storage file descriptors across all running WASM
       apps.  Each descriptor holds a Zephyr struct fs_file_t (~48 bytes).
+
+config AKIRA_WASM_FS
+    bool "Export rich POSIX-like filesystem API to WASM"
+    default n
+    depends on AKIRA_WASM_API && FILE_SYSTEM
+    help
+      POSIX-like filesystem surface for WASM apps: fs_open/close/read/write/
+      seek/tell/stat/unlink/mkdir/readdir.  Apps are jailed to their sandbox.
+      Capabilities: "fs.read" (bit 26), "fs.write" (bit 27).
+      Complements AKIRA_WASM_STORAGE which provides the simpler surface.
+
+config AKIRA_WASM_FS_MAX_FDS
+    int "Maximum simultaneous open FS file descriptors"
+    default 8
+    range 2 32
+    depends on AKIRA_WASM_FS
+    help
+      Global limit on open file descriptors for the FS API (independent of
+      AKIRA_WASM_STORAGE_MAX_FDS).
+
+config AKIRA_WASM_CRYPTO
+    bool "Export cryptographic operations to WASM"
+    default n
+    depends on AKIRA_WASM_API
+    select TINYCRYPT
+    select TINYCRYPT_SHA256
+    select TINYCRYPT_AES
+    select TINYCRYPT_CBC_MODE
+    select TINYCRYPT_HMAC
+    help
+      Expose SHA-256, AES-256-CBC, HMAC-SHA256 and random_bytes to WASM.
+      Capability: "crypto" (bit 28).
+      Key material is zeroed in memory after each operation.
+
+config AKIRA_WASM_CRYPTO_MAX_INPUT
+    int "Maximum crypto input size (bytes)"
+    default 65536
+    range 256 131072
+    depends on AKIRA_WASM_CRYPTO
+    help
+      Maximum size of any single crypto operation input buffer.
+      Operations exceeding this limit return -EMSGSIZE.
+
+config AKIRA_WASM_RTC
+    bool "Export real-time clock API to WASM"
+    default n
+    depends on AKIRA_WASM_API
+    help
+      Expose rtc_get_unix_time / rtc_get_uptime_ms / rtc_set_unix_time /
+      rtc_set_alarm / rtc_alarm_fired to WASM.
+      Falls back to k_uptime_get() when no RTC hardware is present.
+      Capabilities: "rtc.read" (bit 29), "rtc.write" (bit 30).
+
+config AKIRA_TELEMETRY
+    bool "Structured JSON telemetry sink"
+    default n
+    help
+      Emit structured JSON event lines via the Zephyr log backend (UART/RTT).
+      When disabled all akira_telemetry_*() calls compile to empty inlines.
+
+config AKIRA_PANIC
+    bool "Panic handler with crash record storage"
+    default n
+    depends on NVS
+    help
+      Hooks k_sys_fatal_error_handler() to write a crash record (uptime,
+      reason, fault address, last app name) to an NVS partition.  On next
+      boot the record is logged at ERR level and erased.
 
 endmenu
 

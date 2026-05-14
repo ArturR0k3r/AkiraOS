@@ -14,6 +14,18 @@
 #ifdef CONFIG_AKIRA_WASM_WDT
 #include "akira_wdt_api.h"
 #endif
+#ifdef CONFIG_AKIRA_WASM_FS
+#include "akira_fs_api.h"
+#endif
+#ifdef CONFIG_AKIRA_WASM_CRYPTO
+#include "akira_crypto_api.h"
+#endif
+#ifdef CONFIG_AKIRA_WASM_RTC
+#include "akira_rtc_api.h"
+#endif
+#ifdef CONFIG_AKIRA_WASM_OTA
+#include "akira_ota_api.h"
+#endif
 
 #include <runtime/akira_runtime.h>
 #include <runtime/security.h>
@@ -223,6 +235,47 @@ bool akira_register_native_apis()
         {"settings_get", (void *)akira_native_settings_get, "($ii)i", NULL},
         {"settings_set", (void *)akira_native_settings_set, "($$)i", NULL},
         {"settings_delete", (void *)akira_native_settings_delete, "($)i", NULL},
+#endif
+
+/* fs.*: POSIX-like sandbox filesystem (seek/tell/stat/mkdir/readdir) */
+#ifdef CONFIG_AKIRA_WASM_FS
+        {"fs_open",    (void *)akira_native_fs_open,    "($i)i",   NULL},
+        {"fs_close",   (void *)akira_native_fs_close,   "(i)i",    NULL},
+        {"fs_read",    (void *)akira_native_fs_read,    "(i*~)i",  NULL},
+        {"fs_write",   (void *)akira_native_fs_write,   "(i*~)i",  NULL},
+        {"fs_seek",    (void *)akira_native_fs_seek,    "(iii)i",  NULL},
+        {"fs_tell",    (void *)akira_native_fs_tell,    "(i)i",    NULL},
+        {"fs_stat",    (void *)akira_native_fs_stat,    "($*)i",   NULL},
+        {"fs_unlink",  (void *)akira_native_fs_unlink,  "($)i",    NULL},
+        {"fs_mkdir",   (void *)akira_native_fs_mkdir,   "($)i",    NULL},
+        {"fs_readdir", (void *)akira_native_fs_readdir, "($*~)i",  NULL},
+#endif
+
+/* crypto.*: sha256, aes256-cbc, hmac-sha256, random */
+#ifdef CONFIG_AKIRA_WASM_CRYPTO
+        {"crypto_sha256",          (void *)akira_native_crypto_sha256,          "(*~*)i",        NULL},
+        {"crypto_aes256_encrypt",  (void *)akira_native_crypto_aes256_encrypt,  "(**i*~*)i",     NULL},
+        {"crypto_aes256_decrypt",  (void *)akira_native_crypto_aes256_decrypt,  "(**i*~*)i",     NULL},
+        {"crypto_hmac_sha256",     (void *)akira_native_crypto_hmac_sha256,     "(*~*~*)i",      NULL},
+        {"crypto_random",          (void *)akira_native_crypto_random,          "(*~)i",         NULL},
+#endif
+
+/* rtc.*: get/set unix time, uptime, alarm */
+#ifdef CONFIG_AKIRA_WASM_RTC
+        {"rtc_get_unix_time",  (void *)akira_native_rtc_get_unix_time,  "()i",  NULL},
+        {"rtc_get_uptime_ms",  (void *)akira_native_rtc_get_uptime_ms,  "()i",  NULL},
+        {"rtc_set_unix_time",  (void *)akira_native_rtc_set_unix_time,  "(i)i", NULL},
+        {"rtc_set_alarm",      (void *)akira_native_rtc_set_alarm,      "(i)i", NULL},
+        {"rtc_alarm_fired",    (void *)akira_native_rtc_alarm_fired,    "()i",  NULL},
+#endif
+
+/* ota.*: check / fetch-apply / state / confirm / rollback */
+#ifdef CONFIG_AKIRA_WASM_OTA
+        {"ota_check",            (void *)akira_native_ota_check,            "($)i", NULL},
+        {"ota_fetch_and_apply",  (void *)akira_native_ota_fetch_and_apply,  "($)i", NULL},
+        {"ota_get_state",        (void *)akira_native_ota_get_state,        "()i",  NULL},
+        {"ota_confirm",          (void *)akira_native_ota_confirm,          "()i",  NULL},
+        {"ota_rollback",         (void *)akira_native_ota_rollback,         "()i",  NULL},
 #endif
 
     };
