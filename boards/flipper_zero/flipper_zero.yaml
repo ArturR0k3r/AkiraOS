@@ -2,7 +2,6 @@ identifier: flipper_zero
 name: Flipper Zero
 type: mcu
 arch: arm
-soc: stm32wb55xx
 toolchain:
   - zephyr
 ram: 192
