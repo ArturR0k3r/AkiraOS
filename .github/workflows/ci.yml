@@ -144,12 +144,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          path: akira-os
+          fetch-depth: 0
           submodules: recursive
 
       - name: Initialize west workspace
         run: |
-          docker exec -w /workspace/akira-os zephyr-test bash -c \
+          docker exec -w /workspace zephyr-test bash -c \
             "west init -l . && west update"
 
       - name: Setup Zephyr SDK
@@ -157,7 +157,7 @@ jobs:
           docker exec \
             -e ZEPHYR_SDK_INSTALL_DIR=/opt/toolchains/zephyr-sdk-0.17.4 \
             -e ZEPHYR_TOOLCHAIN_VARIANT=zephyr \
-            -w /workspace/akira-os zephyr-test bash -c '
+            -w /workspace zephyr-test bash -c '
             if [ ! -f "$ZEPHYR_SDK_INSTALL_DIR/sdk_version" ]; then
               echo "Zephyr SDK not found, installing...";
               wget -q https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.17.4/zephyr-sdk-0.17.4_linux-x86_64.tar.xz;
@@ -174,11 +174,11 @@ jobs:
           docker exec \
             -e ZEPHYR_SDK_INSTALL_DIR=/opt/toolchains/zephyr-sdk-0.17.4 \
             -e ZEPHYR_TOOLCHAIN_VARIANT=zephyr \
-            -w /workspace/akira-os zephyr-test west zephyr-export
+            -w /workspace zephyr-test west zephyr-export
 
       - name: Install gcovr
         run: |
-          docker exec -w /workspace/akira-os zephyr-test bash -c \
+          docker exec -w /workspace zephyr-test bash -c \
             'pip3 install gcovr --quiet --break-system-packages || pip3 install gcovr --quiet'
 
       - name: Run ztest suite via Twister
@@ -186,7 +186,7 @@ jobs:
           docker exec \
             -e ZEPHYR_SDK_INSTALL_DIR=/opt/toolchains/zephyr-sdk-0.17.4 \
             -e ZEPHYR_TOOLCHAIN_VARIANT=zephyr \
-            -w /workspace/akira-os zephyr-test bash -c '
+            -w /workspace zephyr-test bash -c '
               west twister \
                 --testsuite-root tests/ \
                 --platform native_sim \
@@ -201,7 +201,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: twister-results
-          path: twister-out/**/twister.xml
+          path: ${{ github.workspace }}/twister-out/**/twister.xml
 
       - name: Annotate PR with test results
         if: always()
@@ -215,7 +215,7 @@ jobs:
         run: |
           docker exec \
             -e ZEPHYR_SDK_INSTALL_DIR=/opt/toolchains/zephyr-sdk-0.17.4 \
-            -w /workspace/akira-os zephyr-test bash -c '
+            -w /workspace zephyr-test bash -c '
               gcovr \
                 --root . \
                 --xml coverage.xml \
@@ -229,7 +229,7 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
-          files: coverage.xml
+          files: ${{ github.workspace }}/coverage.xml
           fail_ci_if_error: false
           verbose: false
 
