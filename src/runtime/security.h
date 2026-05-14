@@ -71,6 +71,24 @@ extern "C" {
 /* Feed/pet the system watchdog from a WASM app.
  * Manifest string: "wdt" */
 #define AKIRA_CAP_WDT         (1U << 25)
+/* Filesystem read access (app sandbox only).
+ * Manifest string: "fs.read" */
+#define AKIRA_CAP_FS_READ     (1U << 26)
+/* Filesystem write/delete/mkdir access (app sandbox only).
+ * Manifest string: "fs.write" */
+#define AKIRA_CAP_FS_WRITE    (1U << 27)
+/* Cryptographic operations (hash, encrypt, random).
+ * Manifest string: "crypto" */
+#define AKIRA_CAP_CRYPTO      (1U << 28)
+/* Real-time clock read access.
+ * Manifest string: "rtc.read" */
+#define AKIRA_CAP_RTC_READ    (1U << 29)
+/* Real-time clock write / alarm set.
+ * Manifest string: "rtc.write" */
+#define AKIRA_CAP_RTC_WRITE   (1U << 30)
+/* Trigger OTA update (elevated privilege).
+ * Manifest string: "ota.trigger" */
+#define AKIRA_CAP_OTA_TRIGGER (1U << 31)
 
 /*
  * Capability check macro using security subsystem.
