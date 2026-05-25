@@ -38,6 +38,9 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
 #include <string.h>
+#include <stdlib.h>
+
+#include "drivers/platform_hal.h"
 
 #if defined(CONFIG_DISPLAY)
 #include <zephyr/drivers/display.h>
@@ -54,19 +57,23 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 #include <settings/settings.h>
 #endif
 
-typedef enum {
-    CMD_GO_HOME = 0,        /* Return to HOME screen (reclaim display) */
-    CMD_APP_STATE_CHANGED,  /* App lifecycle changed — refresh home list */
-    CMD_INSTALL_PROGRESS,   /* Install progress update */
+typedef enum
+{
+    CMD_GO_HOME = 0,       /* Return to HOME screen (reclaim display) */
+    CMD_APP_STATE_CHANGED, /* App lifecycle changed — refresh home list */
+    CMD_INSTALL_PROGRESS,  /* Install progress update */
 } shell_cmd_t;
 
-typedef struct {
+typedef struct
+{
     shell_cmd_t type;
-    union {
+    union
+    {
         /* CMD_INSTALL_PROGRESS */
-        struct {
+        struct
+        {
             char name[APP_NAME_MAX_LEN];
-            int  pct;
+            int pct;
             char msg[64];
         } install;
     };
@@ -93,29 +100,34 @@ static bool g_wasm_active; /* true while a WASM app has the display */
 /* IPC lifecycle listener thread                                       */
 /* ------------------------------------------------------------------ */
 
-#define LIFECYCLE_LISTENER_STACK  1024
-#define LIFECYCLE_TOPIC           "akira.lifecycle"
-#define LIFECYCLE_SUBSCRIBER      "akira_os_shell"
+#define LIFECYCLE_LISTENER_STACK 1024
+#define LIFECYCLE_TOPIC "akira.lifecycle"
+#define LIFECYCLE_SUBSCRIBER "akira_os_shell"
 
 static K_THREAD_STACK_DEFINE(g_lifecycle_stack, LIFECYCLE_LISTENER_STACK);
 static struct k_thread g_lifecycle_thread;
 
 static void lifecycle_thread_fn(void *p1, void *p2, void *p3)
 {
-    ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
+    ARG_UNUSED(p1);
+    ARG_UNUSED(p2);
+    ARG_UNUSED(p3);
 
     int ret = akira_ipc_subscribe(LIFECYCLE_TOPIC, LIFECYCLE_SUBSCRIBER);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Failed to subscribe to lifecycle topic: %d", ret);
         return;
     }
 
     uint8_t buf[CONFIG_AKIRA_IPC_MSG_MAX_SIZE];
 
-    while (true) {
+    while (true)
+    {
         int n = akira_ipc_recv(LIFECYCLE_TOPIC, LIFECYCLE_SUBSCRIBER,
                                buf, sizeof(buf), K_FOREVER);
-        if (n < 0) {
+        if (n < 0)
+        {
             LOG_DBG("lifecycle recv error: %d", n);
             continue;
         }
@@ -134,11 +146,13 @@ void akira_os_shell_notify_install_progress(const char *name, int pct,
 {
     shell_event_t ev = {.type = CMD_INSTALL_PROGRESS};
 
-    if (name) {
+    if (name)
+    {
         strncpy(ev.install.name, name, sizeof(ev.install.name) - 1);
     }
     ev.install.pct = pct;
-    if (msg) {
+    if (msg)
+    {
         strncpy(ev.install.msg, msg, sizeof(ev.install.msg) - 1);
     }
 
@@ -155,22 +169,25 @@ void akira_os_shell_go_home(void)
 /* Shell main thread                                                   */
 /* ------------------------------------------------------------------ */
 
-#define SHELL_THREAD_STACK_SIZE  4096*2
-#define SHELL_THREAD_PRIORITY    10  /* above WASM apps (14), below sys work */
+#define SHELL_THREAD_STACK_SIZE 4096 * 2
+#define SHELL_THREAD_PRIORITY 10 /* above WASM apps (14), below sys work */
 
 static K_THREAD_STACK_DEFINE(g_shell_stack, SHELL_THREAD_STACK_SIZE);
 static struct k_thread g_shell_thread;
 
 /* HOME button long-press threshold */
-#define HOME_LONG_MS  CONFIG_AKIRA_HOME_BUTTON_GPIO_LONG_MS
+#define HOME_LONG_MS CONFIG_AKIRA_HOME_BUTTON_GPIO_LONG_MS
 
 static void shell_thread_fn(void *p1, void *p2, void *p3)
 {
-    ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
+    ARG_UNUSED(p1);
+    ARG_UNUSED(p2);
+    ARG_UNUSED(p3);
 
     /* Claim display — shell owns it from boot */
     int ret = akira_display_claim_shell();
-    if (ret < 0) {
+    if (ret < 0)
+    {
         LOG_ERR("Shell failed to claim display at boot: %d", ret);
         return;
     }
@@ -178,13 +195,16 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 #if defined(CONFIG_DISPLAY)
     /* Enable display output (ST7789V starts blanked) */
     const struct device *_disp_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
-    if (device_is_ready(_disp_dev)) {
+    if (device_is_ready(_disp_dev))
+    {
         display_blanking_off(_disp_dev);
         LOG_INF("Display enabled");
 #if defined(CONFIG_AKIRA_BOOT_ANIMATION)
         boot_anim_run();
 #endif
-    } else {
+    }
+    else
+    {
         LOG_WRN("Display device not ready");
     }
 #endif
@@ -207,40 +227,56 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 
     /* Main event + render loop */
     static uint32_t s_prev_btns;
-    static int64_t  s_home_held_since_ms; /* 0 = not held */
+    static int64_t s_home_held_since_ms; /* 0 = not held */
 
     /* Screen idle-blank — load timeout from settings (0 = disabled) */
     int64_t s_display_timeout_ms = 60000; /* default 60 s */
 #ifdef CONFIG_AKIRA_SETTINGS
     {
+        bool en = true;
         char _sv[16] = "";
-        if (!akira_settings_get("akira/display/timeout_s", _sv, sizeof(_sv))) {
-            int t = atoi(_sv);
-            s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
+        if (!akira_settings_get("akira/display/timeout_en", _sv, sizeof(_sv)))
+            en = (atoi(_sv) != 0);
+        if (en)
+        {
+            memset(_sv, 0, sizeof(_sv));
+            if (!akira_settings_get("akira/display/timeout_s", _sv, sizeof(_sv)))
+            {
+                int t = atoi(_sv);
+                s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
+            }
+        }
+        else
+        {
+            s_display_timeout_ms = 0;
         }
     }
 #endif
-    int64_t s_last_input_ms   = k_uptime_get();
-    bool    s_display_blanked = false;
+    int64_t s_last_input_ms = k_uptime_get();
+    bool s_display_blanked = false;
 
-    while (true) {
+    while (true)
+    {
         uint32_t btns = akira_input_get_bitmask();
-        int64_t  now_ms = k_uptime_get();
+        int64_t now_ms = k_uptime_get();
 
         /* Any button activity resets the idle timer */
-        if (btns) {
+        if (btns)
+        {
             s_last_input_ms = now_ms;
         }
 
         /* Wake display if blanked and a button was just pressed */
-        if (s_display_blanked && btns) {
+        if (s_display_blanked && btns)
+        {
             s_display_blanked = false;
             akira_display_hal_set_blank(false);
 #ifdef CONFIG_AKIRA_SETTINGS
             {
                 char _sv[16] = "";
-                if (!akira_settings_get("akira/display/brightness", _sv, sizeof(_sv))) {
-                    akira_display_hal_set_brightness((uint8_t)atoi(_sv));
+                if (!akira_settings_get("akira/display/brightness", _sv, sizeof(_sv)))
+                {
+                    akira_display_hal_set_brightness((uint8_t)(atoi(_sv) * 255 / 100));
                 }
             }
 #endif
@@ -252,48 +288,64 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 
         /* HOME long-press detection — works regardless of display owner */
         bool home_held = !!(btns & BIT(AKIRA_BTN_HOME));
-        if (home_held && s_home_held_since_ms == 0) {
+        if (home_held && s_home_held_since_ms == 0)
+        {
             s_home_held_since_ms = now_ms;
-        } else if (!home_held) {
+        }
+        else if (!home_held)
+        {
             s_home_held_since_ms = 0;
-        } else if (s_home_held_since_ms &&
-                   (now_ms - s_home_held_since_ms) >= HOME_LONG_MS) {
+        }
+        else if (s_home_held_since_ms &&
+                 (now_ms - s_home_held_since_ms) >= HOME_LONG_MS)
+        {
             /* Long-press threshold crossed — fire once then reset */
             s_home_held_since_ms = 0;
             shell_event_t ev = {.type = CMD_GO_HOME};
             k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
         }
 
-        if (!g_wasm_active) {
+        if (!g_wasm_active)
+        {
             /* Button edge detection → active screen navigation */
             uint32_t just = btns & ~s_prev_btns;
             s_prev_btns = btns;
-            if (just) {
-                if (settings_screen_is_active()) {
+            if (just)
+            {
+                if (settings_screen_is_active())
+                {
                     settings_screen_handle_key(just);
-                } else {
+                }
+                else
+                {
                     home_screen_handle_key(just);
                 }
             }
 
             /* Tick home screen animation every 20 ms */
-            if (!settings_screen_is_active()) {
+            if (!settings_screen_is_active())
+            {
                 home_screen_tick();
             }
 
             /* Status strip updated every 1 s */
             static int64_t s_last_status_ms;
-            if (now_ms - s_last_status_ms >= 1000) {
+            if (now_ms - s_last_status_ms >= 1000)
+            {
                 s_last_status_ms = now_ms;
-                if (settings_screen_is_active()) {
+                if (settings_screen_is_active())
+                {
                     settings_screen_update();
-                } else {
+                }
+                else
+                {
                     home_screen_update_status();
                 }
 
                 /* Idle screen-off check */
                 if (!s_display_blanked && s_display_timeout_ms > 0 &&
-                    (now_ms - s_last_input_ms) >= s_display_timeout_ms) {
+                    (now_ms - s_last_input_ms) >= s_display_timeout_ms)
+                {
                     s_display_blanked = true;
                     akira_display_hal_set_blank(true);
                 }
@@ -301,36 +353,55 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 /* Re-read timeout in case the user just changed it in settings */
 #ifdef CONFIG_AKIRA_SETTINGS
                 {
+                    bool en = true;
                     char _sv[16] = "";
-                    if (!akira_settings_get("akira/display/timeout_s", _sv, sizeof(_sv))) {
-                        int t = atoi(_sv);
-                        s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
+                    if (!akira_settings_get("akira/display/timeout_en", _sv, sizeof(_sv)))
+                        en = (atoi(_sv) != 0);
+                    if (en)
+                    {
+                        memset(_sv, 0, sizeof(_sv));
+                        if (!akira_settings_get("akira/display/timeout_s", _sv, sizeof(_sv)))
+                        {
+                            int t = atoi(_sv);
+                            s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
+                        }
+                    }
+                    else
+                    {
+                        s_display_timeout_ms = 0;
                     }
                 }
 #endif
             }
 
             k_sleep(K_MSEC(20));
-        } else {
+        }
+        else
+        {
             /* Shell dormant while WASM holds display */
             k_sleep(K_MSEC(50));
         }
 
         /* Drain the event queue */
         shell_event_t ev;
-        while (k_msgq_get(&g_shell_msgq, &ev, K_NO_WAIT) == 0) {
-            switch (ev.type) {
+        while (k_msgq_get(&g_shell_msgq, &ev, K_NO_WAIT) == 0)
+        {
+            switch (ev.type)
+            {
 
             case CMD_GO_HOME:
                 LOG_INF("HOME pressed — returning to launcher");
 
                 /* Stop any running WASM app */
-                if (g_wasm_active) {
+                if (g_wasm_active)
+                {
                     app_info_t apps[CONFIG_AKIRA_APP_MAX_INSTALLED];
                     int n = app_manager_list(apps,
-                                ARRAY_SIZE(apps));
-                    for (int i = 0; i < n; i++) {
-                        if (apps[i].state == APP_STATE_RUNNING) {
+                                             ARRAY_SIZE(apps));
+                    for (int i = 0; i < n; i++)
+                    {
+                        if (apps[i].state == APP_STATE_RUNNING)
+                        {
                             app_manager_stop(apps[i].name);
                         }
                     }
@@ -347,30 +418,38 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 {
                     app_info_t apps[CONFIG_AKIRA_APP_MAX_INSTALLED];
                     int n = app_manager_list(apps,
-                                ARRAY_SIZE(apps));
+                                             ARRAY_SIZE(apps));
                     bool any_running = false;
 
-                    for (int i = 0; i < n; i++) {
-                        if (apps[i].state == APP_STATE_RUNNING) {
+                    for (int i = 0; i < n; i++)
+                    {
+                        if (apps[i].state == APP_STATE_RUNNING)
+                        {
                             any_running = true;
                             break;
                         }
                     }
 
-                    if (any_running && !g_wasm_active) {
+                    if (any_running && !g_wasm_active)
+                    {
                         /* App just started — release display to it */
                         g_wasm_active = true;
                         akira_display_release_to_wasm();
                         LOG_INF("Display released to WASM app");
-                    } else if (!any_running && g_wasm_active) {
+                    }
+                    else if (!any_running && g_wasm_active)
+                    {
                         /* All apps stopped — reclaim display */
                         g_wasm_active = false;
                         akira_display_claim_shell();
                         home_screen_refresh();
                         LOG_INF("Display reclaimed by shell (all apps stopped)");
-                    } else {
+                    }
+                    else
+                    {
                         /* Refresh status dots without changing ownership */
-                        if (!g_wasm_active) {
+                        if (!g_wasm_active)
+                        {
                             home_screen_refresh();
                         }
                     }
@@ -378,7 +457,8 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 break;
 
             case CMD_INSTALL_PROGRESS:
-                if (!g_wasm_active) {
+                if (!g_wasm_active)
+                {
                     install_progress_show(ev.install.name,
                                           ev.install.pct,
                                           ev.install.msg);

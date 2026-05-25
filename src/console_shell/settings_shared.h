@@ -15,23 +15,23 @@
 /* ------------------------------------------------------------------ */
 /* Layout constants (must match settings_screen.c geometry)           */
 /* ------------------------------------------------------------------ */
-#define SS_SCR_W    320
-#define SS_SCR_H    240
-#define SS_SBAR_H   24         /* status/header bar height             */
-#define SS_CONT_Y   26         /* content area start y                 */
-#define SS_RIB_Y    216        /* ribbon/footer start y                */
-#define SS_RIB_H    24         /* ribbon height                        */
-#define SS_MENU_X   16         /* menu item left x                     */
-#define SS_MENU_W   288        /* menu item width  (SCR_W - 32)        */
-#define SS_MENU_ITH 32         /* menu item height                     */
+#define SS_SCR_W CONFIG_AKIRA_OS_SHELL_SCREEN_W
+#define SS_SCR_H 240
+#define SS_SBAR_H 24                                    /* status/header bar height             */
+#define SS_CONT_Y 26                                    /* content area start y                 */
+#define SS_RIB_Y 216                                    /* ribbon/footer start y                */
+#define SS_RIB_H 24                                     /* ribbon height                        */
+#define SS_MENU_X 16                                    /* menu item left x                     */
+#define SS_MENU_W (CONFIG_AKIRA_OS_SHELL_SCREEN_W - 32) /* menu item width */
+#define SS_MENU_ITH 32                                  /* menu item height                     */
 
 /* ------------------------------------------------------------------ */
 /* RGB565 palette (matching settings_screen.c defines)                */
 /* ------------------------------------------------------------------ */
-#define SS_C_BLACK      0x0000u
-#define SS_C_WHITE      0xFFFFu
-#define SS_C_GRAY       0x7BEFu
-#define SS_C_DKGRAY     0x39E7u
+#define SS_C_BLACK 0x0000u
+#define SS_C_WHITE 0xFFFFu
+#define SS_C_GRAY 0x7BEFu
+#define SS_C_DKGRAY 0x39E7u
 #define SS_C_GLASS_BODY 0x0000u
 
 /* ------------------------------------------------------------------ */
