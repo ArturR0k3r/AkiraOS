@@ -71,12 +71,12 @@
 			zephyr,code = <5>;
 		};
 		btn_a: btn_a {
-			gpios = <&gpio0 16 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 15 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
 			label = "BTN A (SW2)";
 			zephyr,code = <6>;
 		};
 		btn_b: btn_b {
-			gpios = <&gpio0 15 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 16 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
 			label = "BTN B (SW3)";
 			zephyr,code = <7>;
 		};
@@ -179,7 +179,7 @@
 		st7789v_prod: st7789v@1 {
 			compatible         = "sitronix,st7789v";
 			reg                = <1>;           // SPI2 cs-gpios[1] = GPIO10
-				mipi-max-frequency = <10000000>;    // 10 MHz — safe for 40-pin FFC; raise after display confirmed working
+			mipi-max-frequency = <20000000>;    /* 20 MHz — ST7789V rated up to 16 MHz; 20 MHz confirmed stable on 40-pin FFC */
 				ready-time-ms      = <120>;         // extra margin after reset
 				width              = <320>;
 				height             = <240>;
