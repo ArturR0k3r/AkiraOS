@@ -19,9 +19,9 @@
 #endif
 
 /* ------------------------------------------------------------------ */
-/* Screen geometry (320×240 landscape)                                 */
+/* Screen geometry (landscape — width set by CONFIG_AKIRA_OS_SHELL_SCREEN_W) */
 /* ------------------------------------------------------------------ */
-#define SHELL_SCREEN_W   320
+#define SHELL_SCREEN_W   CONFIG_AKIRA_OS_SHELL_SCREEN_W
 #define SHELL_SCREEN_H   240
 #define SHELL_HEADER_H    32   /* Black top bar (title + nav hints)  */
 #define SHELL_FOOTER_H    30   /* Black bottom bar (button hints)    */
@@ -47,9 +47,9 @@
 #define C_GLASS_HILIT 0x7BEFu   /* glass top-sheen highlight          */
 
 /* ------------------------------------------------------------------ */
-/* Screen geometry (320×240 landscape, shared across all screens)     */
+/* Screen geometry (landscape — width from CONFIG_AKIRA_OS_SHELL_SCREEN_W) */
 /* ------------------------------------------------------------------ */
-#define SCR_W    320
+#define SCR_W    CONFIG_AKIRA_OS_SHELL_SCREEN_W
 #define SCR_H    240
 #define SBAR_H   24    /* status / header bar height                  */
 #define LIST_Y   26    /* content list start y                        */

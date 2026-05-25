@@ -23,8 +23,10 @@ LOG_MODULE_REGISTER(display_hal, LOG_LEVEL_INF);
  * any display (monochrome, colour, any resolution) is handled correctly.
  * Placed in PSRAM when available (akira_malloc_buffer prefers PSRAM). */
 #if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
-static void *conv_buf; /* NULL if no conversion needed */
+static void *conv_buf;        /* NULL if no conversion needed */
+static void *shadow_buf;      /* Shadow of last-sent MONO frame for dirty tracking */
 static size_t conv_buf_size;
+static size_t bytes_per_row;  /* Cached: (width + 7) / 8 — valid only for MONO */
 #endif
 
 /* Display device handle */
@@ -88,10 +90,8 @@ int akira_display_hal_init(void)
     if (display_caps.current_pixel_format == PIXEL_FORMAT_MONO01 ||
         display_caps.current_pixel_format == PIXEL_FORMAT_MONO10)
     {
-        conv_buf_size = ((size_t)display_caps.x_resolution *
-                             display_caps.y_resolution +
-                         7U) /
-                        8U;
+        bytes_per_row = ((size_t)display_caps.x_resolution + 7U) / 8U;
+        conv_buf_size = bytes_per_row * display_caps.y_resolution;
         conv_buf = akira_malloc_buffer(conv_buf_size);
         if (conv_buf == NULL)
         {
@@ -99,7 +99,23 @@ int akira_display_hal_init(void)
             return -ENOMEM;
         }
         memset(conv_buf, 0, conv_buf_size);
-        LOG_INF("MONO conv buf: %zu B at %p", conv_buf_size, conv_buf);
+
+        /* Shadow buffer: copy of the last frame sent to the display.
+         * Dirty tracking: only write scanlines that have changed since the
+         * previous flush, reducing average SPI transfer volume significantly. */
+        shadow_buf = akira_malloc_buffer(conv_buf_size);
+        if (shadow_buf != NULL)
+        {
+            /* Initialise to all-0xFF (guaranteed different from the cleared
+             * conv_buf) so the very first flush sends the whole frame. */
+            memset(shadow_buf, 0xFF, conv_buf_size);
+            LOG_INF("MONO conv+shadow bufs: %zu B each at %p/%p",
+                    conv_buf_size, conv_buf, shadow_buf);
+        }
+        else
+        {
+            LOG_WRN("Shadow buf alloc failed — dirty tracking disabled");
+        }
     }
     /* No conversion buffer needed for RGB565 — framebuffer is already RGB565 */
 
@@ -176,53 +192,105 @@ void akira_display_hal_flush(void)
         /* Convert RGB565 → MONO (1 bit per pixel, LSB-first packing).
          * MONO01: bit=0 black, bit=1 white.
          * MONO10: bit=1 black, bit=0 white (inverted).
-         * Any non-zero RGB565 pixel is treated as "bright" → white. */
+         * Any non-zero RGB565 pixel is treated as "bright" → white.
+         *
+         * Inner loop is unrolled to 8 pixels per iteration — no inner-loop
+         * branch, no bit-index variable, significantly faster than the
+         * generic nested loop. */
         if (conv_buf == NULL)
         {
             LOG_ERR("Conv buffer not allocated");
             return;
         }
-        bool invert = (display_caps.current_pixel_format == PIXEL_FORMAT_MONO10);
-        uint16_t w = display_caps.x_resolution;
-        uint16_t h = display_caps.y_resolution;
-        uint16_t bytes_per_row = (w + 7U) / 8U;
+        const bool invert = (display_caps.current_pixel_format == PIXEL_FORMAT_MONO10);
+        const uint16_t w = display_caps.x_resolution;
+        const uint16_t h = display_caps.y_resolution;
+        const size_t bpr = bytes_per_row; /* cached at init */
 
+        /* --- Step 1: convert RGB565 → packed MONO into conv_buf --- */
         for (uint16_t y = 0; y < h; y++)
         {
             const uint16_t *row = &fb[y * w];
-            uint8_t *dst = &((uint8_t *)conv_buf)[y * bytes_per_row];
-            for (uint16_t bx = 0; bx < bytes_per_row; bx++)
+            uint8_t *dst = &((uint8_t *)conv_buf)[y * bpr];
+
+            for (size_t bx = 0; bx < bpr; bx++)
             {
-                uint8_t packed = 0;
-                uint16_t x_base = bx * 8U;
-                for (uint8_t bit = 0; bit < 8U; bit++)
-                {
-                    uint16_t x = x_base + bit;
-                    if (x >= w)
-                    {
-                        break;
-                    }
-                    bool white = (row[x] != 0x0000U) ^ invert;
-                    if (white)
-                    {
-                        packed |= (uint8_t)(1U << bit); /* LSB-first */
-                    }
-                }
-                dst[bx] = packed;
+                /* 8 pixels per byte, LSB = leftmost pixel */
+                const uint16_t *px = &row[bx * 8U];
+                uint8_t b;
+                b  = (px[0] != 0U) ? 0x01U : 0U;
+                b |= (px[1] != 0U) ? 0x02U : 0U;
+                b |= (px[2] != 0U) ? 0x04U : 0U;
+                b |= (px[3] != 0U) ? 0x08U : 0U;
+                b |= (px[4] != 0U) ? 0x10U : 0U;
+                b |= (px[5] != 0U) ? 0x20U : 0U;
+                b |= (px[6] != 0U) ? 0x40U : 0U;
+                b |= (px[7] != 0U) ? 0x80U : 0U;
+                dst[bx] = invert ? (b ^ 0xFFU) : b;
             }
         }
 
-        struct display_buffer_descriptor desc = {
-            .buf_size = (uint32_t)bytes_per_row * h,
-            .width = w,
-            .height = h,
-            .pitch = w,
-        };
-
-        int ret = display_write(display_dev, 0, 0, &desc, conv_buf);
-        if (ret < 0)
+        /* --- Step 2: dirty-line tracking — only write changed rows --- */
+        if (shadow_buf != NULL)
         {
-            LOG_ERR("Display write failed: %d", ret);
+            const uint8_t *new_frame = (const uint8_t *)conv_buf;
+            const uint8_t *old_frame = (const uint8_t *)shadow_buf;
+            uint16_t y = 0;
+
+            while (y < h)
+            {
+                /* Skip identical lines */
+                if (memcmp(&new_frame[y * bpr], &old_frame[y * bpr], bpr) == 0)
+                {
+                    y++;
+                    continue;
+                }
+
+                /* Find the end of the contiguous dirty region */
+                uint16_t dirty_start = y;
+                uint16_t dirty_end   = y + 1;
+                while (dirty_end < h &&
+                       memcmp(&new_frame[dirty_end * bpr],
+                               &old_frame[dirty_end * bpr], bpr) != 0)
+                {
+                    dirty_end++;
+                }
+
+                /* Write only the dirty region */
+                struct display_buffer_descriptor desc = {
+                    .buf_size = (uint32_t)bpr * (dirty_end - dirty_start),
+                    .width    = w,
+                    .height   = dirty_end - dirty_start,
+                    .pitch    = w,
+                };
+                int ret = display_write(display_dev, 0, dirty_start,
+                                        &desc, &new_frame[dirty_start * bpr]);
+                if (ret < 0)
+                {
+                    LOG_ERR("Display write (y=%u h=%u) failed: %d",
+                            dirty_start, dirty_end - dirty_start, ret);
+                }
+
+                y = dirty_end;
+            }
+
+            /* Update shadow with the frame we just sent */
+            memcpy(shadow_buf, conv_buf, conv_buf_size);
+        }
+        else
+        {
+            /* No shadow buffer — send the entire frame */
+            struct display_buffer_descriptor desc = {
+                .buf_size = (uint32_t)conv_buf_size,
+                .width    = w,
+                .height   = h,
+                .pitch    = w,
+            };
+            int ret = display_write(display_dev, 0, 0, &desc, conv_buf);
+            if (ret < 0)
+            {
+                LOG_ERR("Display write failed: %d", ret);
+            }
         }
     }
     else
@@ -385,6 +453,36 @@ int akira_display_hal_write_raw(int x, int y, int w, int h, const uint16_t *data
 #if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
     if (display_dev == NULL || data == NULL || w <= 0 || h <= 0)
         return -EINVAL;
+
+    /* MONO displays (e.g. Sharp LS0XX) require full-row writes (width ==
+     * panel width) and don't accept partial RGB565 tiles directly.
+     * Route through the framebuffer: blit RGB565 data into the correct
+     * position, then do a full-frame flush (which handles MONO conversion). */
+    if (display_caps.current_pixel_format == PIXEL_FORMAT_MONO01 ||
+        display_caps.current_pixel_format == PIXEL_FORMAT_MONO10)
+    {
+        uint16_t *fb = akira_framebuffer_get();
+        if (!fb)
+            return -ENOMEM;
+
+        int x1 = MAX(x, 0);
+        int y1 = MAX(y, 0);
+        int x2 = MIN(x + w, (int)display_caps.x_resolution);
+        int y2 = MIN(y + h, (int)display_caps.y_resolution);
+
+        for (int py = y1; py < y2; py++)
+        {
+            int span = x2 - x1;
+            if (span <= 0)
+                continue;
+            const uint16_t *src = data + (py - y) * w + (x1 - x);
+            uint16_t *dst = fb + py * display_caps.x_resolution + x1;
+            memcpy(dst, src, (size_t)span * sizeof(uint16_t));
+        }
+
+        akira_display_hal_flush();
+        return 0;
+    }
 
     struct display_buffer_descriptor desc = {
         .buf_size = (uint32_t)((uint32_t)w * (uint32_t)h * 2U),
