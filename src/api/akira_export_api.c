@@ -230,6 +230,9 @@ bool akira_register_native_apis()
 #if defined(CONFIG_AKIRA_APP_SOURCE_SD)
         {"app_install_from_sd", (void *)akira_native_app_install_from_sd, "($)i", NULL},
 #endif
+#if defined(CONFIG_AKIRA_SD_XIP)
+        {"app_run_from_sd", (void *)akira_native_app_run_from_sd, "($)i", NULL},
+#endif
 #endif
 
 /* power.read: battery level/status, mode query */

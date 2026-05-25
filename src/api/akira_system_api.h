@@ -37,25 +37,18 @@ int akira_native_sd_scan_wasm(wasm_exec_env_t exec_env,
                                uint32_t buf_ptr, uint32_t buf_len);
 
 #if defined(CONFIG_AKIRA_APP_SOURCE_SD)
-/**
- * app_install_from_sd(name) → int  (WASM signature: "($)i")
- *
- * Copies /SD:/apps/<name>.wasm into the LittleFS app store and registers it
- * with the app manager, so it appears immediately in the launcher without
- * any reboot or PC connection.
- *
- * @param name  App name string (without .wasm extension, null-terminated)
- * @return 0 on success, negative Zephyr errno on error:
- *   -EACCES  capability "app.control" not granted
- *   -EINVAL  NULL or empty name
- *   -ENOENT  file not found on SD card
- *   -ENOSPC  LittleFS full
- *   -ENODEV  SD card not mounted
- *
- * Capability: "app.control" (AKIRA_CAP_APP_CONTROL)
- */
 int akira_native_app_install_from_sd(wasm_exec_env_t exec_env, const char *name);
 #endif /* CONFIG_AKIRA_APP_SOURCE_SD */
+
+#if defined(CONFIG_AKIRA_SD_XIP)
+/**
+ * app_run_from_sd(name) → int  (WASM signature: "($)i")
+ *
+ * Loads and runs a WASM app directly from SD card without installing it.
+ * The app runs transiently from PSRAM; nothing is written to flash.
+ */
+int akira_native_app_run_from_sd(wasm_exec_env_t exec_env, const char *name);
+#endif /* CONFIG_AKIRA_SD_XIP */
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
 

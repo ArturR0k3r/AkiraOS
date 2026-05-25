@@ -33,16 +33,16 @@
  * @endcode
  * @{
  */
-#define AKIRA_BTN_POWER    0 /**< System power / ON-OFF button */
+#define AKIRA_BTN_POWER 0    /**< System power / ON-OFF button */
 #define AKIRA_BTN_SETTINGS 1 /**< System settings button */
-#define AKIRA_BTN_UP       2 /**< D-pad Up */
-#define AKIRA_BTN_DOWN     3 /**< D-pad Down */
-#define AKIRA_BTN_LEFT     4 /**< D-pad Left */
-#define AKIRA_BTN_RIGHT    5 /**< D-pad Right */
-#define AKIRA_BTN_A        6 /**< Face button A */
-#define AKIRA_BTN_B        7 /**< Face button B */
-#define AKIRA_BTN_X        8 /**< Face button X */
-#define AKIRA_BTN_Y        9 /**< Face button Y */
+#define AKIRA_BTN_UP 2       /**< D-pad Up */
+#define AKIRA_BTN_DOWN 3     /**< D-pad Down */
+#define AKIRA_BTN_LEFT 4     /**< D-pad Left */
+#define AKIRA_BTN_RIGHT 5    /**< D-pad Right */
+#define AKIRA_BTN_A 6        /**< Face button A */
+#define AKIRA_BTN_B 7        /**< Face button B */
+#define AKIRA_BTN_X 8        /**< Face button X */
+#define AKIRA_BTN_Y 9        /**< Face button Y */
 /** @} */
 
 /** Number of buttons on the AkiraConsole. */
