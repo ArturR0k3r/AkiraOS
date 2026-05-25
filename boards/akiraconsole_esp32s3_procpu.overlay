@@ -158,7 +158,7 @@
 
         st7789v_akiraconsole: st7789v@1 {
             compatible = "sitronix,st7789v";
-            mipi-max-frequency = <1600000000>;
+            mipi-max-frequency = <16000000000>;
             reg = <1>;
             width = <320>;
             height = <240>;
