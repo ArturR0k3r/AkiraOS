@@ -32,6 +32,10 @@ LOG_MODULE_REGISTER(akira_system, CONFIG_AKIRA_LOG_LEVEL);
 #include "../connectivity/storage/sd_manager.h"
 #endif
 
+#if defined(CONFIG_AKIRA_SD_XIP)
+#include "../runtime/app_manager/app_manager.h"
+#endif
+
 /* SD card WASM app directory. */
 #define SD_APPS_PATH "/SD:/apps"
 
@@ -92,14 +96,21 @@ int akira_native_sd_scan_wasm(wasm_exec_env_t exec_env,
             continue; /* skip subdirectories */
         }
 
-        /* Check for .wasm extension (case-sensitive). */
+        /* Check for .wasm/.WASM or .aot/.AOT extension (case-insensitive).
+         * FatFS may return filenames in uppercase when LFN is disabled. */
         size_t name_len = strlen(entry.name);
-        if (name_len < 5 ||
-            entry.name[name_len - 5] != '.' ||
-            entry.name[name_len - 4] != 'w' ||
-            entry.name[name_len - 3] != 'a' ||
-            entry.name[name_len - 2] != 's' ||
-            entry.name[name_len - 1] != 'm') {
+        bool has_wasm = name_len > 5 &&
+            entry.name[name_len - 5] == '.' &&
+            ((entry.name[name_len - 4] | 0x20) == 'w') &&
+            ((entry.name[name_len - 3] | 0x20) == 'a') &&
+            ((entry.name[name_len - 2] | 0x20) == 's') &&
+            ((entry.name[name_len - 1] | 0x20) == 'm');
+        bool has_aot = name_len > 4 &&
+            entry.name[name_len - 4] == '.' &&
+            ((entry.name[name_len - 3] | 0x20) == 'a') &&
+            ((entry.name[name_len - 2] | 0x20) == 'o') &&
+            ((entry.name[name_len - 1] | 0x20) == 't');
+        if (!has_wasm && !has_aot) {
             continue;
         }
 
@@ -152,5 +163,29 @@ int akira_native_app_install_from_sd(wasm_exec_env_t exec_env, const char *name)
     return ret;
 }
 #endif /* CONFIG_AKIRA_APP_SOURCE_SD */
+
+#if defined(CONFIG_AKIRA_SD_XIP)
+/*
+ * app_run_from_sd(name) → int  (WASM signature: "($)i")
+ *
+ * Loads and runs a WASM app directly from SD card without installing it.
+ * The app is executed transiently in PSRAM — nothing is written to flash.
+ */
+int akira_native_app_run_from_sd(wasm_exec_env_t exec_env, const char *name)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_CONTROL, -EACCES);
+
+    if (!name || name[0] == '\0') {
+        return -EINVAL;
+    }
+
+    LOG_INF("app_run_from_sd: running '%s' from SD", name);
+    int ret = app_manager_run_from_sd(name);
+    if (ret < 0) {
+        LOG_WRN("app_run_from_sd: failed (%d) for '%s'", ret, name);
+    }
+    return ret;
+}
+#endif /* CONFIG_AKIRA_SD_XIP */
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
