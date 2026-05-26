@@ -37,13 +37,14 @@ typedef struct {
  * @brief Button ID constants — match the zephyr,code values in the DTS overlay.
  * Bit N of akira_input_get_bitmask() is set when the button with code N is held.
  */
+#define AKIRA_BTN_HOME  1   /**< Home/OK button (GPIO0, active-low pull-up) */
 #define AKIRA_BTN_UP    2
 #define AKIRA_BTN_DOWN  3
 #define AKIRA_BTN_LEFT  4
 #define AKIRA_BTN_RIGHT 5
 #define AKIRA_BTN_A     6   /**< Confirm / launch */
 #define AKIRA_BTN_B     7   /**< Back / cancel */
-#define AKIRA_BTN_X     8   /**< HOME (long-press = go home) */
+#define AKIRA_BTN_X     8   /**< HOME long-press = go home (alias: AKIRA_BTN_HOME) */
 #define AKIRA_BTN_Y     9   /**< Context menu / alternate action */
 
 /* ── Native (non-WASM) API ───────────────────────────────────────────────── */
