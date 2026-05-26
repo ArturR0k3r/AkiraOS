@@ -57,7 +57,7 @@ typedef struct
     uint32_t size;
 } sd_entry_t;
 
-static sd_entry_t g_entries[MAX_SD_APPS];
+static sd_entry_t g_entries[MAX_SD_APPS] __attribute__((section(".ext_ram.bss")));
 static int g_entry_count;
 static int g_sel;
 static int g_scroll;

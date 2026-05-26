@@ -20,7 +20,7 @@ LOG_MODULE_REGISTER(akira_wifi_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/net/net_mgmt.h>
 #include <zephyr/net/wifi_mgmt.h>
 #define WIFI_MAX_NETWORKS 16
-static struct wifi_scan_result g_scan[WIFI_MAX_NETWORKS];
+static struct wifi_scan_result g_scan[WIFI_MAX_NETWORKS] __attribute__((section(".ext_ram.bss")));
 static int g_scan_count;
 static struct k_sem g_scan_done;
 static void on_wifi_event(struct net_mgmt_event_callback *cb, uint32_t ev, struct net_if *iface)
@@ -68,7 +68,7 @@ static void lc_bar(int x, int y, int w, int h, int pct) {
 #define SSID_MAX 33
 #define PASS_MAX 64
 
-static char g_ssid_list[16][SSID_MAX];
+static char g_ssid_list[16][SSID_MAX] __attribute__((section(".ext_ram.bss")));
 static int  g_ssid_count;
 static int  g_sel, g_scroll;
 

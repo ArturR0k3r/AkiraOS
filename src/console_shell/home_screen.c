@@ -333,7 +333,7 @@ static const ui_tile_t BUILTINS[BUILTIN_COUNT] = {
 };
 
 #define MAX_ALL_TILES (CONFIG_AKIRA_APP_MAX_INSTALLED + BUILTIN_COUNT)
-static ui_tile_t g_all_tiles[MAX_ALL_TILES];
+static ui_tile_t g_all_tiles[MAX_ALL_TILES] __attribute__((section(".ext_ram.bss")));
 static int g_total_tiles;
 static int g_last_n_installed;
 

@@ -17,7 +17,7 @@ LOG_MODULE_REGISTER(akira_apps_screen, CONFIG_AKIRA_LOG_LEVEL);
 
 #define MAX_APPS CONFIG_AKIRA_APP_MAX_INSTALLED
 
-static app_info_t g_apps[MAX_APPS];
+static app_info_t g_apps[MAX_APPS] __attribute__((section(".ext_ram.bss")));
 static int g_count;
 static int g_sel, g_scroll;
 
