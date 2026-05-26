@@ -64,10 +64,10 @@ static struct bt_uuid_128 status_uuid  = BT_UUID_INIT_128(COMPANION_STATUS_UUID)
 
 #define CHAR_BUF_SIZE 244
 
-static uint8_t s_cmd_buf[CHAR_BUF_SIZE];
-static uint8_t s_resp_buf[CHAR_BUF_SIZE];
-static uint8_t s_data_dn_buf[CHAR_BUF_SIZE];
-static uint8_t s_status_buf[CHAR_BUF_SIZE];
+static uint8_t s_cmd_buf[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
+static uint8_t s_resp_buf[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
+static uint8_t s_data_dn_buf[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
+static uint8_t s_status_buf[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
 
 /* CCC descriptors for NOTIFY characteristics */
 static struct bt_gatt_ccc_cfg s_resp_ccc[BT_GATT_CCC_MAX];
@@ -82,7 +82,7 @@ static bool s_initialised;
 static struct bt_conn *s_conn;   /* current connection, NULL if not connected */
 
 /* Pending command — written by CMD_CHAR callback, consumed by cmd_work */
-static uint8_t s_pending_cmd[CHAR_BUF_SIZE];
+static uint8_t s_pending_cmd[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
 static uint16_t s_pending_cmd_len;
 static struct k_work s_cmd_work;
 

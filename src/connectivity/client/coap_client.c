@@ -51,9 +51,9 @@ static struct observe_entry observers[COAP_MAX_OBSERVERS];
 static uint16_t message_id = 0;
 
 /* DTLS PSK credentials */
-static uint8_t psk_key[64];
+static uint8_t psk_key[64] __attribute__((section(".ext_ram.bss")));
 static size_t psk_key_len = 0;
-static char psk_identity[64];
+static char psk_identity[64] __attribute__((section(".ext_ram.bss")));
 
 /*===========================================================================*/
 /* Private Functions                                                         */

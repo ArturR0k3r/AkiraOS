@@ -34,7 +34,7 @@ static struct
 } crypto_ctx = {
     .initialized = false};
 
-static uint8_t ENCRYPTION_KEY[32];
+static uint8_t ENCRYPTION_KEY[32] __attribute__((section(".ext_ram.bss")));
 
 static int parse_hex_key(void)
 {
