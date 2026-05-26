@@ -64,7 +64,7 @@ static int g_scroll;
 static bool g_active;
 
 /* ---- Install work ----------------------------------------------- */
-static char g_install_path[128];
+static char g_install_path[128] __attribute__((section(".ext_ram.bss")));
 
 static void do_install_work(struct k_work *work)
 {

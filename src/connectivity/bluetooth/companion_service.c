@@ -64,10 +64,10 @@ static struct bt_uuid_128 status_uuid  = BT_UUID_INIT_128(COMPANION_STATUS_UUID)
 
 #define CHAR_BUF_SIZE 244
 
-static uint8_t AKIRA_BULK_BSS s_cmd_buf[CHAR_BUF_SIZE];
-static uint8_t AKIRA_BULK_BSS s_resp_buf[CHAR_BUF_SIZE];
-static uint8_t AKIRA_BULK_BSS s_data_dn_buf[CHAR_BUF_SIZE];
-static uint8_t AKIRA_BULK_BSS s_status_buf[CHAR_BUF_SIZE];
+static uint8_t s_cmd_buf[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
+static uint8_t s_resp_buf[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
+static uint8_t s_data_dn_buf[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
+static uint8_t s_status_buf[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
 
 /* CCC descriptors for NOTIFY characteristics */
 static struct bt_gatt_ccc_cfg s_resp_ccc[BT_GATT_CCC_MAX];
@@ -82,9 +82,8 @@ static bool s_initialised;
 static struct bt_conn *s_conn;   /* current connection, NULL if not connected */
 
 /* Pending command — written by CMD_CHAR callback, consumed by cmd_work */
-static uint8_t AKIRA_BULK_BSS s_pending_cmd[CHAR_BUF_SIZE];
+static uint8_t s_pending_cmd[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
 static uint16_t s_pending_cmd_len;
-static struct k_spinlock s_cmd_lock;
 static struct k_work s_cmd_work;
 
 /* Active bulk transfer state */
@@ -652,11 +651,12 @@ static void cmd_work_handler(struct k_work *work)
     char buf[CHAR_BUF_SIZE];
     uint16_t len;
 
-    k_spinlock_key_t key = k_spin_lock(&s_cmd_lock);
+    /* Disable BT IRQ briefly to snapshot the pending command */
+    unsigned int key = irq_lock();
     len = s_pending_cmd_len;
     memcpy(buf, s_pending_cmd, len);
     s_pending_cmd_len = 0;
-    k_spin_unlock(&s_cmd_lock, key);
+    irq_unlock(key);
 
     if (len == 0) {
         return;
@@ -735,10 +735,10 @@ static ssize_t cmd_write(struct bt_conn *conn,
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
     }
 
-    k_spinlock_key_t irq_key = k_spin_lock(&s_cmd_lock);
+    unsigned int irq_key = irq_lock();
     memcpy(s_pending_cmd, buf, len);
     s_pending_cmd_len = len;
-    k_spin_unlock(&s_cmd_lock, irq_key);
+    irq_unlock(irq_key);
 
     k_work_submit(&s_cmd_work);
     return (ssize_t)len;
