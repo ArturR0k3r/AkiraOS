@@ -2,6 +2,7 @@
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/spi/spi.h>
 #include <zephyr/dt-bindings/mipi_dbi/mipi_dbi.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
 
 // ============================================================================
 // PSRAM Configuration - ESP32-S3 N16R8 (8MB OPI PSRAM)
@@ -115,6 +116,21 @@
     channel0@0 {
         reg = <0x0>;
         timer = <0>;
+    };
+};
+
+// Backlight LED device for PWM control
+/ {
+    backlight: backlight {
+        compatible = "pwm-leds";
+        bl_pwm: bl_pwm {
+            pwms = <&ledc0 0 PWM_HZ(10000) PWM_POLARITY_NORMAL>;
+            label = "Display Backlight";
+        };
+    };
+
+    aliases {
+        pwm-backlight0 = &backlight;
     };
 };
 
