@@ -1863,7 +1863,7 @@ config AKIRA_BOOT_SHELL_RESTART
 
 config AKIRA_OS_SHELL
     bool "Enable AkiraConsole native OS shell"
-    default n
+    default y
     depends on DISPLAY
     select AKIRA_APP_MANAGER
     help
