@@ -39,8 +39,13 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/init.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #include "drivers/platform_hal.h"
+#include <api/akira_display_api.h>
+#ifdef CONFIG_AKIRA_SD_HOTPLUG
+#include <storage/sd_card.h>
+#endif
 
 #if defined(CONFIG_DISPLAY)
 #include <zephyr/drivers/display.h>
@@ -62,6 +67,7 @@ typedef enum
     CMD_GO_HOME = 0,       /* Return to HOME screen (reclaim display) */
     CMD_APP_STATE_CHANGED, /* App lifecycle changed — refresh home list */
     CMD_INSTALL_PROGRESS,  /* Install progress update */
+    CMD_SD_CARD_EVENT,     /* SD card inserted/removed */
 } shell_cmd_t;
 
 typedef struct
@@ -76,6 +82,11 @@ typedef struct
             int pct;
             char msg[64];
         } install;
+        /* CMD_SD_CARD_EVENT */
+        struct
+        {
+            bool present;
+        } sd;
     };
 } shell_event_t;
 
@@ -95,6 +106,101 @@ K_MSGQ_DEFINE(g_shell_msgq,
 /* ------------------------------------------------------------------ */
 
 static bool g_wasm_active; /* true while a WASM app has the display */
+
+/* SD popup state */
+static bool    g_sd_popup_active;
+static bool    g_sd_popup_inserted;   /* true=insert, false=removal */
+static bool    g_sd_popup_apps_ready; /* apps registered, dismiss when min time elapses */
+static int     g_sd_popup_dots;     /* 0-3 cycling dot count */
+static int     g_sd_popup_tick;     /* counts 20ms ticks for dot advance */
+static int64_t g_sd_popup_dismiss_ms; /* non-zero = auto-dismiss at this uptime */
+static int64_t g_sd_popup_shown_ms;   /* uptime when popup was shown */
+
+#define SD_POPUP_DOT_TICKS  15   /* advance dots every 300ms */
+#define SD_POPUP_REMOVE_MS  2000 /* removal popup duration */
+#define SD_POPUP_MIN_MS     800  /* minimum visible time before insert popup dismisses */
+#define SD_POPUP_W          240
+#define SD_POPUP_H          70
+#define SD_POPUP_X          ((SCR_W - SD_POPUP_W) / 2)
+#define SD_POPUP_Y          ((SCR_H - SD_POPUP_H) / 2)
+
+static void sd_popup_draw(void)
+{
+    int px = SD_POPUP_X;
+    int py = SD_POPUP_Y;
+
+    /* Panel: black bg + white double outline (install_progress style) */
+    akira_display_rect(px, py, SD_POPUP_W, SD_POPUP_H, C_BLACK);
+    akira_display_rect_outline(px,     py,     SD_POPUP_W,     SD_POPUP_H,     C_WHITE);
+    akira_display_rect_outline(px + 1, py + 1, SD_POPUP_W - 2, SD_POPUP_H - 2, C_WHITE);
+
+    /* Title */
+    akira_display_text(px + 8, py + 8, "SD Card", C_WHITE);
+    akira_display_hline(px + 8, py + 20, SD_POPUP_W - 16, C_WHITE);
+
+    if (g_sd_popup_inserted) {
+        char line[48];
+        snprintf(line, sizeof(line), "Loading apps%.*s", g_sd_popup_dots, "...");
+        akira_display_text(px + 8, py + 30, line, C_WHITE);
+    } else {
+        akira_display_text(px + 8, py + 30, "Removed", C_WHITE);
+    }
+
+    akira_display_flush();
+}
+
+static void sd_popup_show(bool inserted)
+{
+    g_sd_popup_active    = true;
+    g_sd_popup_inserted  = inserted;
+    g_sd_popup_dots      = 0;
+    g_sd_popup_tick      = 0;
+    g_sd_popup_shown_ms  = k_uptime_get();
+    g_sd_popup_dismiss_ms = inserted ? 0
+                          : (g_sd_popup_shown_ms + SD_POPUP_REMOVE_MS);
+    sd_popup_draw();
+}
+
+static void sd_popup_dismiss(void)
+{
+    g_sd_popup_active     = false;
+    g_sd_popup_dismiss_ms = 0;
+}
+
+static void sd_popup_tick_fn(void)
+{
+    if (!g_sd_popup_active) {
+        return;
+    }
+
+    int64_t now = k_uptime_get();
+
+    /* Deferred dismiss: apps ready but min time hadn't elapsed yet */
+    if (g_sd_popup_inserted && g_sd_popup_apps_ready &&
+        (now - g_sd_popup_shown_ms) >= SD_POPUP_MIN_MS) {
+        g_sd_popup_apps_ready = false;
+        sd_popup_dismiss();
+        home_screen_refresh();
+        return;
+    }
+
+    /* Auto-dismiss removal popup */
+    if (g_sd_popup_dismiss_ms && now >= g_sd_popup_dismiss_ms) {
+        sd_popup_dismiss();
+        home_screen_refresh();
+        return;
+    }
+
+    /* Advance dots every SD_POPUP_DOT_TICKS × 20ms — redraw only on change */
+    if (g_sd_popup_inserted) {
+        g_sd_popup_tick++;
+        if (g_sd_popup_tick >= SD_POPUP_DOT_TICKS) {
+            g_sd_popup_tick = 0;
+            g_sd_popup_dots = (g_sd_popup_dots + 1) % 4;
+            sd_popup_draw();
+        }
+    }
+}
 
 /* ------------------------------------------------------------------ */
 /* IPC lifecycle listener thread                                       */
@@ -173,6 +279,8 @@ void akira_os_shell_notify_app_changed(void)
 
 void akira_shell_set_wasm_launching(void)
 {
+    akira_display_clear(C_BLACK);
+    akira_display_flush();
     g_wasm_active = true;
     akira_display_release_to_wasm();
 }
@@ -352,11 +460,19 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 }
             }
 
-            /* Tick home screen animation every 20 ms */
-            if (!settings_screen_is_active())
+            /* Tick home screen animation every 20 ms (skip if SD popup active) */
+            if (!settings_screen_is_active()
+#ifdef CONFIG_AKIRA_SD_HOTPLUG
+                && !g_sd_popup_active
+#endif
+                )
             {
                 home_screen_tick();
             }
+
+#ifdef CONFIG_AKIRA_SD_HOTPLUG
+            sd_popup_tick_fn();
+#endif
 
             /* Status strip updated every 1 s */
             static int64_t s_last_status_ms;
@@ -480,9 +596,18 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                     }
                     else
                     {
-                        /* Refresh status dots without changing ownership */
                         if (!g_wasm_active)
                         {
+#ifdef CONFIG_AKIRA_SD_HOTPLUG
+                            if (g_sd_popup_active && g_sd_popup_inserted) {
+                                if ((k_uptime_get() - g_sd_popup_shown_ms) >= SD_POPUP_MIN_MS) {
+                                    sd_popup_dismiss();
+                                } else {
+                                    /* Too soon — let tick dismiss once min time passes */
+                                    g_sd_popup_apps_ready = true;
+                                }
+                            }
+#endif
                             home_screen_refresh();
                         }
                     }
@@ -498,6 +623,14 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 }
                 break;
 
+#ifdef CONFIG_AKIRA_SD_HOTPLUG
+            case CMD_SD_CARD_EVENT:
+                if (!g_wasm_active) {
+                    sd_popup_show(ev.sd.present);
+                }
+                break;
+#endif
+
             default:
                 break;
             }
@@ -509,8 +642,35 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 /* SYS_INIT registration                                               */
 /* ------------------------------------------------------------------ */
 
+#ifdef CONFIG_AKIRA_SD_HOTPLUG
+/* Pre-insert: fires before init — show loading popup immediately */
+static void shell_sd_pre_insert_cb(bool present, void *user_data)
+{
+    ARG_UNUSED(user_data); ARG_UNUSED(present);
+    shell_event_t ev = {.type = CMD_SD_CARD_EVENT, .sd = {.present = true}};
+    k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
+}
+
+/* Post-hotplug: fires after init+deinit — show removal popup */
+static void shell_sd_hotplug_cb(bool present, void *user_data)
+{
+    ARG_UNUSED(user_data);
+    if (!present) {
+        shell_event_t ev = {.type = CMD_SD_CARD_EVENT, .sd = {.present = false}};
+        k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
+    }
+    /* Insert: popup already shown via pre_insert_cb; dismiss handled by
+     * CMD_APP_STATE_CHANGED when sd_manager finishes registering apps. */
+}
+#endif
+
 static int shell_init(void)
 {
+#ifdef CONFIG_AKIRA_SD_HOTPLUG
+    akira_sd_card_register_pre_insert_cb(shell_sd_pre_insert_cb, NULL);
+    akira_sd_card_register_hotplug_cb(shell_sd_hotplug_cb, NULL);
+#endif
+
     k_thread_create(&g_shell_thread,
                     g_shell_stack,
                     K_THREAD_STACK_SIZEOF(g_shell_stack),
