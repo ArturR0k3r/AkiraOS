@@ -190,9 +190,26 @@ void akira_display_hal_flush(void)
     const uint16_t w = display_caps.x_resolution;
     const uint16_t h = display_caps.y_resolution;
 
-    /* ══════════════════════════════════════════════════════════════════════
-     *  MONO01 / MONO10
-     * ══════════════════════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════════════════════
+ *  MONO01 / MONO10
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/* PX_WHITE(p): perceptual luminance threshold for RGB565 pixel p.
+ *
+ * Coefficients fold the 8-bit channel scaling into the weights so we
+ * work directly on the raw R5 G6 B5 channel values (no division needed):
+ *   R8 = R5 * 8  →  coeff 77  * 8  = 616
+ *   G8 = G6 * 4  →  coeff 150 * 4  = 600
+ *   B8 = B5 * 8  →  coeff 29  * 8  = 232
+ *
+ * White (31,63,31) → lum = 64088 >> 8 = 250 > 128  → white ✓
+ * Black (0,0,0)    → lum = 0            < 128  → black ✓
+ * Cyan  (0,63,31)  → lum = 44992 >> 8 = 175   → white ✓  (accent)
+ * Dark gray 0x2104 → lum ≈ 32           → black ✓  (header bars)
+ */
+#define PX_WHITE(p) \
+    (((((p) >> 11 & 0x1FU) * 616U + ((p) >> 5 & 0x3FU) * 600U + ((p) & 0x1FU) * 232U) >> 8U) >= 128U)
+
     if (display_caps.current_pixel_format == PIXEL_FORMAT_MONO01 ||
         display_caps.current_pixel_format == PIXEL_FORMAT_MONO10)
     {
@@ -353,6 +370,8 @@ void akira_display_hal_flush(void)
             }
         }
     }
+#undef PX_WHITE
+
     /* ══════════════════════════════════════════════════════════════════════
      *  RGB565 / other colour formats — direct framebuffer passthrough
      * ══════════════════════════════════════════════════════════════════════ */
@@ -390,8 +409,8 @@ void akira_display_hal_clear(void)
     {
         memset(fb, 0,
                (size_t)display_caps.x_resolution *
-               (size_t)display_caps.y_resolution *
-               sizeof(uint16_t));
+                   (size_t)display_caps.y_resolution *
+                   sizeof(uint16_t));
         akira_display_hal_flush();
     }
 #endif
