@@ -155,6 +155,8 @@ LOG_MODULE_REGISTER(akira_cc1121, LOG_LEVEL_INF);
 #define CC1121_DT_BITRATE    DT_PROP_OR(CC1121_NODE, akira_default_bitrate_bps,   4800)
 #define CC1121_DT_XOSC_HZ    DT_PROP_OR(CC1121_NODE, akira_xosc_frequency_hz,     32000000)
 
+static int cc1121_set_power(int8_t dbm);
+
 static struct {
     bool initialized;
     struct spi_dt_spec spi;
