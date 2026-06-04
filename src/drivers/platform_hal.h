@@ -226,6 +226,15 @@ int akira_display_hal_init(void);
 void akira_display_hal_flush(void);
 
 /**
+ * @brief Clear framebuffer to black and flush to display
+ *
+ * Convenience function for display-hal consumers that do not include
+ * <zephyr/drivers/display.h>.  Zeroes the entire RGB565 framebuffer and
+ * calls akira_display_hal_flush().  Safe to call before launching a WASM app.
+ */
+void akira_display_hal_clear(void);
+
+/**
  * @brief Get display capabilities
  * @param caps Pointer to capabilities structure to fill
  * @return 0 on success, negative errno on error
