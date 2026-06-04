@@ -48,7 +48,7 @@
 		btn_ok: btn_ok {
 			gpios = <&gpio0 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BTN OK (BOOT / SW10)";
-			zephyr,code = <INPUT_KEY_0>;
+			zephyr,code = <1>; /* AKIRA_BTN_HOME = 1; INPUT_KEY_0 = 11, wrong value */
 		};
 		btn_up: btn_up {
 			gpios = <&gpio0 4 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
@@ -275,7 +275,7 @@
 		#gpio-cells   = <2>;
 		ngpios        = <8>;
 		int-gpios     = <&gpio1 15 GPIO_ACTIVE_LOW>; // IO_INT = GPIO47 (gpio1 pin 15)
-		status        = "disabled"; // enabled in overlay for app build only
+		status        = "okay"; // enabled in overlay for app build only
 	};
 
 	// -------------------------------------------------------------------------
@@ -344,7 +344,7 @@
 		// Disabled here for MCUboot; enabled by app overlay.
 		compatible = "bosch,bme280";
 		reg        = <0x77>;
-		status     = "disabled"; // enabled in overlay for app build only
+		status     = "okay"; // enabled in overlay for app build only
 	};
 
 	// -------------------------------------------------------------------------

@@ -454,6 +454,27 @@ extern "C"
                                   const uint8_t *pkg, size_t pkg_len,
                                   app_source_t source);
 
+    /**
+     * @brief Register apps found in /SD:/apps/ as in-memory registry entries.
+     *
+     * Scans the SD card and adds APP_SOURCE_SD entries to g_registry without
+     * copying binaries to flash.  Skips names already in the registry.
+     * Call after SD card is mounted (e.g. from hotplug callback).
+     *
+     * @return Number of apps registered, negative on error.
+     */
+    int app_manager_register_sd_apps(void);
+
+    /**
+     * @brief Remove all APP_SOURCE_SD entries from the in-memory registry.
+     *
+     * Stops any running SD apps before removing them.  Does not touch flash.
+     * Call when SD card is removed.
+     *
+     * @return Number of apps removed, negative on error.
+     */
+    int app_manager_unregister_sd_apps(void);
+
 #ifdef __cplusplus
 }
 #endif

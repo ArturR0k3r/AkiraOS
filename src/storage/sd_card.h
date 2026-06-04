@@ -21,6 +21,7 @@
  */
 
 #include <stdbool.h>
+#include <zephyr/kernel.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,6 +52,12 @@ bool akira_sd_card_is_present(void);
  * Call akira_sd_card_init() to re-mount.
  */
 void akira_sd_card_deinit(void);
+void akira_sd_card_deinit_force(void);
+
+#ifdef CONFIG_AKIRA_SD_HOTPLUG
+typedef void (*akira_sd_hotplug_cb_t)(bool present, void *user_data);
+void akira_sd_card_register_hotplug_cb(akira_sd_hotplug_cb_t cb, void *user_data);
+#endif
 
 #else /* !CONFIG_AKIRA_SD_CARD */
 

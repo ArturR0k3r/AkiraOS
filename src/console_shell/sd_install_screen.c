@@ -35,6 +35,8 @@ LOG_MODULE_REGISTER(akira_sd_install, CONFIG_AKIRA_LOG_LEVEL);
 #include <runtime/app_manager/app_manager.h>
 #include <storage/fs_manager.h>
 #include <storage/sd_card.h>
+#include "display_ownership.h"
+#include "akira_os_shell.h"
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
@@ -71,12 +73,20 @@ static void do_install_work(struct k_work *work)
     ARG_UNUSED(work);
     LOG_INF("SD XIP: running %s", g_install_path);
 
+    /* Shell already released display in akira_shell_set_wasm_launching().
+     * Flush a blank frame so display SPI config is re-asserted before
+     * the app's first draw call. */
+    akira_display_clear(C_BLACK);
+    akira_display_flush();
+
     int ret = app_manager_run_from_sd(g_install_path);
+
     if (ret < 0)
     {
         LOG_ERR("SD XIP failed: %d", ret);
+        akira_display_claim_shell();
+        home_screen_load();
     }
-    home_screen_load();
 }
 
 K_WORK_DEFINE(g_sd_install_work, do_install_work);
@@ -197,6 +207,7 @@ static void scan_sd(void)
            fs_readdir(&dir, &entry) == 0 &&
            entry.name[0] != '\0')
     {
+        LOG_INF("Found SD entry: %s (type %d, size %zu)", entry.name, entry.type, entry.size);
         int nl = (int)strlen(entry.name);
         bool is_wasm = (nl >= 6 && strcasecmp(&entry.name[nl - 5], ".wasm") == 0);
         bool is_aot = (nl >= 5 && strcasecmp(&entry.name[nl - 4], ".aot") == 0);
@@ -273,7 +284,7 @@ void sd_install_screen_load(void)
     draw_screen();
 
     /* Blocking event loop — returns when B pressed or install triggered */
-    uint32_t prev_btns = 0;
+    uint32_t prev_btns = akira_input_get_bitmask();
 
     while (g_active)
     {
@@ -314,6 +325,9 @@ void sd_install_screen_load(void)
             {
                 strncpy(g_install_path, g_entries[g_sel].path,
                         sizeof(g_install_path) - 1);
+                /* Silence shell before work item fires — prevents home screen
+                 * drawing into the gap between A-press and app start. */
+                akira_shell_set_wasm_launching();
                 k_work_submit(&g_sd_install_work);
                 g_active = false;
             }

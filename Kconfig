@@ -939,6 +939,21 @@ config AKIRA_SD_INIT_PRIORITY
       AKIRA_FS_INIT_PRIORITY (default 40) so the SD mount is complete before
       fs_manager queries disk availability.
 
+
+config AKIRA_SD_HOTPLUG
+    bool "Enable SD card hotplug detection via TCA6408 P7 I2C poll"
+    default n
+    depends on AKIRA_SD_CARD && GPIO
+    help
+      Polls TCA6408 P7 (SD_DET, active-low) via I2C at POLL_MS interval.
+      Pure I2C — no SPI, no display impact (~100µs per check at 400kHz).
+      Fires akira_sd_hotplug_cb_t callbacks on insertion/removal.
+
+config AKIRA_SD_HOTPLUG_POLL_MS
+    int "SD hotplug poll interval (ms)"
+    default 500
+    depends on AKIRA_SD_HOTPLUG
+
 endmenu # SD Card
 
 menu "App Manager"
@@ -1721,7 +1736,7 @@ config AKIRA_HOME_BUTTON_GPIO
 
 config AKIRA_HOME_BUTTON_GPIO_LONG_MS
     int "Long-press duration threshold for HOME button (ms)"
-    default 500
+    default 1000
     depends on AKIRA_OS_SHELL
     help
       How long the HOME button must be held before the OS shell intercepts

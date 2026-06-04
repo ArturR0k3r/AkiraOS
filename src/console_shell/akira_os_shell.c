@@ -165,6 +165,18 @@ void akira_os_shell_go_home(void)
     k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
 }
 
+void akira_os_shell_notify_app_changed(void)
+{
+    shell_event_t ev = {.type = CMD_APP_STATE_CHANGED};
+    k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
+}
+
+void akira_shell_set_wasm_launching(void)
+{
+    g_wasm_active = true;
+    akira_display_release_to_wasm();
+}
+
 /* ------------------------------------------------------------------ */
 /* Shell main thread                                                   */
 /* ------------------------------------------------------------------ */
@@ -228,6 +240,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
     /* Main event + render loop */
     static uint32_t s_prev_btns;
     static int64_t s_home_held_since_ms; /* 0 = not held */
+    static bool    s_home_fired;         /* true = fired this press, wait for release */
 
     /* Screen idle-blank — load timeout from settings (0 = disabled) */
     int64_t s_display_timeout_ms = 60000; /* default 60 s */
@@ -288,19 +301,20 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 
         /* HOME long-press detection — works regardless of display owner */
         bool home_held = !!(btns & BIT(AKIRA_BTN_HOME));
-        if (home_held && s_home_held_since_ms == 0)
+        if (!home_held)
+        {
+            s_home_held_since_ms = 0;
+            s_home_fired = false;
+        }
+        else if (!s_home_fired && s_home_held_since_ms == 0)
         {
             s_home_held_since_ms = now_ms;
         }
-        else if (!home_held)
-        {
-            s_home_held_since_ms = 0;
-        }
-        else if (s_home_held_since_ms &&
+        else if (!s_home_fired && s_home_held_since_ms &&
                  (now_ms - s_home_held_since_ms) >= HOME_LONG_MS)
         {
-            /* Long-press threshold crossed — fire once then reset */
-            s_home_held_since_ms = 0;
+            /* Fire once — s_home_fired blocks re-trigger until button released */
+            s_home_fired = true;
             shell_event_t ev = {.type = CMD_GO_HOME};
             k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
         }
@@ -312,6 +326,22 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             s_prev_btns = btns;
             if (just)
             {
+                static const char *const btn_names[] = {
+                    [AKIRA_BTN_HOME]  = "HOME",
+                    [AKIRA_BTN_UP]    = "UP",
+                    [AKIRA_BTN_DOWN]  = "DOWN",
+                    [AKIRA_BTN_LEFT]  = "LEFT",
+                    [AKIRA_BTN_RIGHT] = "RIGHT",
+                    [AKIRA_BTN_A]     = "A",
+                    [AKIRA_BTN_B]     = "B",
+                    [AKIRA_BTN_X]     = "X",
+                    [AKIRA_BTN_Y]     = "Y",
+                };
+                for (int _b = 0; _b < (int)ARRAY_SIZE(btn_names); _b++) {
+                    if ((just & BIT(_b)) && btn_names[_b]) {
+                        LOG_INF("BTN: %s", btn_names[_b]);
+                    }
+                }
                 if (settings_screen_is_active())
                 {
                     settings_screen_handle_key(just);
@@ -378,7 +408,10 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
         }
         else
         {
-            /* Shell dormant while WASM holds display */
+            /* Shell dormant while WASM holds display.
+             * Keep s_prev_btns current so edge detection is clean
+             * when the app exits and shell reclaims the display. */
+            s_prev_btns = btns;
             k_sleep(K_MSEC(50));
         }
 

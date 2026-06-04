@@ -5,6 +5,7 @@
 
 #include "sd_manager.h"
 #include <runtime/app_manager/app_manager.h>
+#include <console_shell/akira_os_shell.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/fs/fs.h>
@@ -46,8 +47,43 @@ static void notify_state_change(sd_state_t new_state)
     }
 }
 
+#ifdef CONFIG_AKIRA_SD_HOTPLUG
+static void sd_manager_hotplug_cb(bool present, void *user_data)
+{
+    ARG_UNUSED(user_data);
+    if (present) {
+        fs_manager_reinit_sd();
+        notify_state_change(SD_STATE_MOUNTED);
+        app_manager_register_sd_apps();
+    } else {
+        app_manager_unregister_sd_apps();
+        notify_state_change(SD_STATE_UNMOUNTED);
+    }
+    akira_os_shell_notify_app_changed();
+}
+#endif
+
+static void sd_state_log_cb(sd_state_t state, void *user_data)
+{
+    ARG_UNUSED(user_data);
+    static const char *const names[] = {"UNMOUNTED", "MOUNTED", "ERROR"};
+    LOG_INF("SD state → %s", names[state]);
+}
+
 int sd_manager_init(void)
 {
+#ifdef CONFIG_AKIRA_SD_HOTPLUG
+    akira_sd_card_register_hotplug_cb(sd_manager_hotplug_cb, NULL);
+#endif
+    sd_manager_register_callback(sd_state_log_cb, NULL);
+
+    /* If card was present at boot, register apps now */
+    if (akira_sd_card_is_present()) {
+        LOG_INF("SD card detected at boot");
+        notify_state_change(SD_STATE_MOUNTED);
+        app_manager_register_sd_apps();
+    }
+
     LOG_INF("SD Manager initialized");
     return 0;
 }
