@@ -73,7 +73,7 @@ static void sd_state_log_cb(sd_state_t state, void *user_data)
 int sd_manager_init(void)
 {
 #ifdef CONFIG_AKIRA_SD_HOTPLUG
-    akira_sd_card_register_hotplug_cb(sd_manager_hotplug_cb, NULL);
+    akira_sd_card_register_hotplug_cb(sd_manager_hotplug_cb, NULL); /* slot 0 */
 #endif
     sd_manager_register_callback(sd_state_log_cb, NULL);
 

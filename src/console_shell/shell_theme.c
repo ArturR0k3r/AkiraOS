@@ -35,11 +35,11 @@ lv_style_t g_style_separator;
 
 /* ------------------------------------------------------------------ */
 
-void akira_shell_theme_init(void)
+void shell_theme_init(void)
 {
     /* ------ Screen (full white canvas) ------ */
     lv_style_init(&g_style_screen);
-    lv_style_set_bg_color(&g_style_screen, SHELL_COLOR_BG);
+    lv_style_set_bg_color(&g_style_screen, lv_color_white());
     lv_style_set_bg_opa(&g_style_screen, LV_OPA_COVER);
     lv_style_set_pad_all(&g_style_screen, 0);
     lv_style_set_border_width(&g_style_screen, 0);
@@ -47,9 +47,9 @@ void akira_shell_theme_init(void)
 
     /* ------ Header bar (black, white text, Montserrat 20) ------ */
     lv_style_init(&g_style_header);
-    lv_style_set_bg_color(&g_style_header, SHELL_COLOR_HEADER_BG);
+    lv_style_set_bg_color(&g_style_header, lv_color_black());
     lv_style_set_bg_opa(&g_style_header, LV_OPA_COVER);
-    lv_style_set_text_color(&g_style_header, SHELL_COLOR_HEADER_TXT);
+    lv_style_set_text_color(&g_style_header, lv_color_white());
     lv_style_set_text_font(&g_style_header, SHELL_FONT_LARGE);
     lv_style_set_pad_hor(&g_style_header, 10);
     lv_style_set_pad_ver(&g_style_header, 0);
@@ -58,9 +58,9 @@ void akira_shell_theme_init(void)
 
     /* ------ Footer bar (black, white text, Montserrat 14) ------ */
     lv_style_init(&g_style_footer);
-    lv_style_set_bg_color(&g_style_footer, SHELL_COLOR_HEADER_BG);
+    lv_style_set_bg_color(&g_style_footer, lv_color_black());
     lv_style_set_bg_opa(&g_style_footer, LV_OPA_COVER);
-    lv_style_set_text_color(&g_style_footer, SHELL_COLOR_HEADER_TXT);
+    lv_style_set_text_color(&g_style_footer, lv_color_white());
     lv_style_set_text_font(&g_style_footer, SHELL_FONT_SMALL);
     lv_style_set_pad_hor(&g_style_footer, 10);
     lv_style_set_pad_ver(&g_style_footer, 0);
@@ -69,15 +69,15 @@ void akira_shell_theme_init(void)
 
     /* ------ List item (white bg, black text, Montserrat 20, 44 px tall) ------ */
     lv_style_init(&g_style_list_item);
-    lv_style_set_bg_color(&g_style_list_item, SHELL_COLOR_BG);
+    lv_style_set_bg_color(&g_style_list_item, lv_color_white());
     lv_style_set_bg_opa(&g_style_list_item, LV_OPA_COVER);
-    lv_style_set_text_color(&g_style_list_item, SHELL_COLOR_TEXT);
+    lv_style_set_text_color(&g_style_list_item, lv_color_black());
     lv_style_set_text_font(&g_style_list_item, SHELL_FONT_LARGE);
     lv_style_set_pad_hor(&g_style_list_item, 12);
     lv_style_set_pad_ver(&g_style_list_item, 10);
     lv_style_set_border_width(&g_style_list_item, 0);
     lv_style_set_border_side(&g_style_list_item, LV_BORDER_SIDE_BOTTOM);
-    lv_style_set_border_color(&g_style_list_item, SHELL_COLOR_SEPARATOR);
+    lv_style_set_border_color(&g_style_list_item, lv_color_hex(0xD6BAu));
     lv_style_set_border_width(&g_style_list_item, 1);
     lv_style_set_radius(&g_style_list_item, 0);
     lv_style_set_min_height(&g_style_list_item, 44);
@@ -85,9 +85,9 @@ void akira_shell_theme_init(void)
 
     /* ------ Selected/focused row (inverted: black bg, white text) ------ */
     lv_style_init(&g_style_selected);
-    lv_style_set_bg_color(&g_style_selected, SHELL_COLOR_SELECTED_BG);
+    lv_style_set_bg_color(&g_style_selected, lv_color_black());
     lv_style_set_bg_opa(&g_style_selected, LV_OPA_COVER);
-    lv_style_set_text_color(&g_style_selected, SHELL_COLOR_SELECTED_TXT);
+    lv_style_set_text_color(&g_style_selected, lv_color_white());
     lv_style_set_text_font(&g_style_selected, SHELL_FONT_LARGE);
     lv_style_set_pad_hor(&g_style_selected, 12);
     lv_style_set_pad_ver(&g_style_selected, 10);
@@ -98,16 +98,16 @@ void akira_shell_theme_init(void)
 
     /* ------ Card (rounded white panel with 1 px border) ------ */
     lv_style_init(&g_style_card);
-    lv_style_set_bg_color(&g_style_card, SHELL_COLOR_BG);
+    lv_style_set_bg_color(&g_style_card, lv_color_white());
     lv_style_set_bg_opa(&g_style_card, LV_OPA_COVER);
-    lv_style_set_border_color(&g_style_card, SHELL_COLOR_SEPARATOR);
+    lv_style_set_border_color(&g_style_card, lv_color_hex(0xD6BAu));
     lv_style_set_border_width(&g_style_card, 1);
     lv_style_set_radius(&g_style_card, 6);
     lv_style_set_pad_all(&g_style_card, 8);
 
     /* ------ Separator (thin horizontal line) ------ */
     lv_style_init(&g_style_separator);
-    lv_style_set_bg_color(&g_style_separator, SHELL_COLOR_SEPARATOR);
+    lv_style_set_bg_color(&g_style_separator, lv_color_hex(0xD6BAu));
     lv_style_set_bg_opa(&g_style_separator, LV_OPA_COVER);
     lv_style_set_height(&g_style_separator, 1);
     lv_style_set_border_width(&g_style_separator, 0);

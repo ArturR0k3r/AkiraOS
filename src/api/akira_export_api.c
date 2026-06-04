@@ -249,10 +249,10 @@ bool akira_register_native_apis()
 #endif
 
         /* input.read: button bitmask and edge events */
-        #ifdef CONFIG_AKIRA_WASM_INPUT
+#ifdef CONFIG_AKIRA_WASM_INPUT
         {"input_get_buttons", (void *)akira_native_input_get_buttons, "()i",   NULL},
         {"input_poll_event",  (void *)akira_native_input_poll_event,  "(*~)i", NULL},
-        #endif
+#endif
 
 /* system: privileged SD card scan (requires app.control cap) */
 #ifdef CONFIG_AKIRA_SYSTEM_API

@@ -1087,6 +1087,11 @@ config AKIRA_SD_HOTPLUG_POLL_MS
     default 500
     depends on AKIRA_SD_HOTPLUG
 
+config AKIRA_SD_HOTPLUG_MAX_CBS
+    int "Maximum SD hotplug callbacks"
+    default 4
+    depends on AKIRA_SD_HOTPLUG
+
 endmenu # SD Card
 
 menu "App Manager"

@@ -54,8 +54,17 @@ static struct fs_mount_t g_sd_mount = {
 #define SD_DET_NODE  DT_NODELABEL(tca6408)
 #define SD_DET_PIN   7   /* P7 = SD_DET, active-low = card present */
 
-static akira_sd_hotplug_cb_t g_hotplug_cb;
-static void                 *g_hotplug_user;
+typedef struct {
+    akira_sd_hotplug_cb_t cb;
+    void                 *user_data;
+} hotplug_entry_t;
+
+static hotplug_entry_t g_hotplug_cbs[CONFIG_AKIRA_SD_HOTPLUG_MAX_CBS];
+
+/* Pre-insert callback — fires before akira_sd_card_init() so UI can show
+ * a loading indicator immediately when card is detected. */
+static akira_sd_hotplug_cb_t g_pre_insert_cb;
+static void                 *g_pre_insert_user;
 static const struct device  *g_tca_dev;
 static int                   g_last_det  = -1;    /* -1 = unknown */
 static bool                  g_event_pending;     /* guard against double-submit */
@@ -77,17 +86,26 @@ static void sd_event_work_fn(struct k_work *work)
 
     if (present && !g_mounted) {
         LOG_INF("SD hotplug: card inserted");
+        if (g_pre_insert_cb) {
+            g_pre_insert_cb(true, g_pre_insert_user);
+        }
         int ret = akira_sd_card_init();
         if (ret < 0) {
             LOG_ERR("SD hotplug mount failed: %d", ret);
-        } else if (g_hotplug_cb) {
-            g_hotplug_cb(true, g_hotplug_user);
+        } else {
+            for (int i = 0; i < CONFIG_AKIRA_SD_HOTPLUG_MAX_CBS; i++) {
+                if (g_hotplug_cbs[i].cb) {
+                    g_hotplug_cbs[i].cb(true, g_hotplug_cbs[i].user_data);
+                }
+            }
         }
     } else if (!present && g_mounted) {
         LOG_INF("SD hotplug: card removed");
         akira_sd_card_deinit_force();
-        if (g_hotplug_cb) {
-            g_hotplug_cb(false, g_hotplug_user);
+        for (int i = 0; i < CONFIG_AKIRA_SD_HOTPLUG_MAX_CBS; i++) {
+            if (g_hotplug_cbs[i].cb) {
+                g_hotplug_cbs[i].cb(false, g_hotplug_cbs[i].user_data);
+            }
         }
     }
 }
@@ -116,10 +134,34 @@ reschedule:
                       K_MSEC(CONFIG_AKIRA_SD_HOTPLUG_POLL_MS));
 }
 
-void akira_sd_card_register_hotplug_cb(akira_sd_hotplug_cb_t cb, void *user_data)
+int akira_sd_card_register_hotplug_cb(akira_sd_hotplug_cb_t cb, void *user_data)
 {
-    g_hotplug_cb   = cb;
-    g_hotplug_user = user_data;
+    for (int i = 0; i < CONFIG_AKIRA_SD_HOTPLUG_MAX_CBS; i++) {
+        if (!g_hotplug_cbs[i].cb) {
+            g_hotplug_cbs[i].cb        = cb;
+            g_hotplug_cbs[i].user_data = user_data;
+            return 0;
+        }
+    }
+    LOG_WRN("SD hotplug: no free callback slots");
+    return -ENOMEM;
+}
+
+void akira_sd_card_unregister_hotplug_cb(akira_sd_hotplug_cb_t cb)
+{
+    for (int i = 0; i < CONFIG_AKIRA_SD_HOTPLUG_MAX_CBS; i++) {
+        if (g_hotplug_cbs[i].cb == cb) {
+            g_hotplug_cbs[i].cb        = NULL;
+            g_hotplug_cbs[i].user_data = NULL;
+            return;
+        }
+    }
+}
+
+void akira_sd_card_register_pre_insert_cb(akira_sd_hotplug_cb_t cb, void *user_data)
+{
+    g_pre_insert_cb   = cb;
+    g_pre_insert_user = user_data;
 }
 
 static int hotplug_init(void)

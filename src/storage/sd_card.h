@@ -56,7 +56,10 @@ void akira_sd_card_deinit_force(void);
 
 #ifdef CONFIG_AKIRA_SD_HOTPLUG
 typedef void (*akira_sd_hotplug_cb_t)(bool present, void *user_data);
-void akira_sd_card_register_hotplug_cb(akira_sd_hotplug_cb_t cb, void *user_data);
+int  akira_sd_card_register_hotplug_cb(akira_sd_hotplug_cb_t cb, void *user_data);
+void akira_sd_card_unregister_hotplug_cb(akira_sd_hotplug_cb_t cb);
+/* Fires before akira_sd_card_init() — use for UI loading indicators. */
+void akira_sd_card_register_pre_insert_cb(akira_sd_hotplug_cb_t cb, void *user_data);
 #endif
 
 #else /* !CONFIG_AKIRA_SD_CARD */
