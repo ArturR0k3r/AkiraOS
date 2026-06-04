@@ -23,10 +23,10 @@ LOG_MODULE_REGISTER(display_hal, LOG_LEVEL_INF);
  * any display (monochrome, colour, any resolution) is handled correctly.
  * Placed in PSRAM when available (akira_malloc_buffer prefers PSRAM). */
 #if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
-static void *conv_buf;        /* NULL if no conversion needed */
-static void *shadow_buf;      /* Shadow of last-sent MONO frame for dirty tracking */
+static void *conv_buf;   /* NULL if no conversion needed */
+static void *shadow_buf; /* Shadow of last-sent MONO frame for dirty tracking */
 static size_t conv_buf_size;
-static size_t bytes_per_row;  /* Cached: (width + 7) / 8 — valid only for MONO */
+static size_t bytes_per_row; /* Cached: (width + 7) / 8 — valid only for MONO */
 #endif
 
 /* Display device handle */
@@ -173,141 +173,226 @@ int akira_display_hal_init(void)
 void akira_display_hal_flush(void)
 {
 #if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
+
     if (display_dev == NULL)
     {
         LOG_ERR("Display not initialized");
         return;
     }
 
-    uint16_t *fb = akira_framebuffer_get();
+    uint16_t *const fb = akira_framebuffer_get();
     if (fb == NULL)
     {
         LOG_ERR("Framebuffer is NULL");
         return;
     }
 
+    const uint16_t w = display_caps.x_resolution;
+    const uint16_t h = display_caps.y_resolution;
+
+    /* ══════════════════════════════════════════════════════════════════════
+     *  MONO01 / MONO10
+     * ══════════════════════════════════════════════════════════════════════ */
     if (display_caps.current_pixel_format == PIXEL_FORMAT_MONO01 ||
         display_caps.current_pixel_format == PIXEL_FORMAT_MONO10)
     {
-        /* Convert RGB565 → MONO (1 bit per pixel, LSB-first packing).
-         * MONO01: bit=0 black, bit=1 white.
-         * MONO10: bit=1 black, bit=0 white (inverted).
-         * Any non-zero RGB565 pixel is treated as "bright" → white.
-         *
-         * Inner loop is unrolled to 8 pixels per iteration — no inner-loop
-         * branch, no bit-index variable, significantly faster than the
-         * generic nested loop. */
         if (conv_buf == NULL)
         {
-            LOG_ERR("Conv buffer not allocated");
+            LOG_ERR("conv_buf not allocated");
             return;
         }
+
         const bool invert = (display_caps.current_pixel_format == PIXEL_FORMAT_MONO10);
-        const uint16_t w = display_caps.x_resolution;
-        const uint16_t h = display_caps.y_resolution;
-        const size_t bpr = bytes_per_row; /* cached at init */
+        const size_t bpr = bytes_per_row;
+        const size_t full_bx = (size_t)w >> 3U;             /* complete 8-px groups   */
+        const uint8_t tail_w = (uint8_t)((uint16_t)w & 7U); /* leftover pixels [0..7] */
 
-        /* --- Step 1: convert RGB565 → packed MONO into conv_buf --- */
-        for (uint16_t y = 0; y < h; y++)
+        uint8_t *restrict mono = (uint8_t *)conv_buf;
+        uint8_t *restrict shad = (uint8_t *)shadow_buf; /* may be NULL */
+
+        /* ── 1. RGB565 → packed MONO (LSB = leftmost pixel) ─────────────── */
+        for (uint16_t y = 0U; y < h; y++)
         {
-            const uint16_t *row = &fb[y * w];
-            uint8_t *dst = &((uint8_t *)conv_buf)[y * bpr];
+            const uint16_t *restrict row = &fb[(size_t)y * w];
+            uint8_t *restrict dst = &mono[(size_t)y * bpr];
 
-            for (size_t bx = 0; bx < bpr; bx++)
+            for (size_t bx = 0U; bx < full_bx; bx++)
             {
-                /* 8 pixels per byte, LSB = leftmost pixel */
                 const uint16_t *px = &row[bx * 8U];
-                uint8_t b;
-                b  = (px[0] != 0U) ? 0x01U : 0U;
-                b |= (px[1] != 0U) ? 0x02U : 0U;
-                b |= (px[2] != 0U) ? 0x04U : 0U;
-                b |= (px[3] != 0U) ? 0x08U : 0U;
-                b |= (px[4] != 0U) ? 0x10U : 0U;
-                b |= (px[5] != 0U) ? 0x20U : 0U;
-                b |= (px[6] != 0U) ? 0x40U : 0U;
-                b |= (px[7] != 0U) ? 0x80U : 0U;
-                dst[bx] = invert ? (b ^ 0xFFU) : b;
+                const uint8_t b = (uint8_t)(((uint8_t)PX_WHITE(px[0]) << 0U) | ((uint8_t)PX_WHITE(px[1]) << 1U) |
+                                            ((uint8_t)PX_WHITE(px[2]) << 2U) | ((uint8_t)PX_WHITE(px[3]) << 3U) |
+                                            ((uint8_t)PX_WHITE(px[4]) << 4U) | ((uint8_t)PX_WHITE(px[5]) << 5U) |
+                                            ((uint8_t)PX_WHITE(px[6]) << 6U) | ((uint8_t)PX_WHITE(px[7]) << 7U));
+                dst[bx] = invert ? (uint8_t)(b ^ 0xFFU) : b;
+            }
+
+            if (tail_w != 0U)
+            {
+                /* Partial last byte — unused high bits remain 0 */
+                const uint16_t *px = &row[full_bx * 8U];
+                uint8_t b = 0U;
+                for (uint8_t bit = 0U; bit < tail_w; bit++)
+                {
+                    b |= (uint8_t)((uint8_t)PX_WHITE(px[bit]) << bit);
+                }
+                dst[full_bx] = invert ? (uint8_t)(b ^ 0xFFU) : b;
             }
         }
 
-        /* --- Step 2: dirty-line tracking — only write changed rows --- */
-        if (shadow_buf != NULL)
+        /* ── 2. Dirty-rect detection → one display_write per frame ─────── */
+        if (shad != NULL)
         {
-            const uint8_t *new_frame = (const uint8_t *)conv_buf;
-            const uint8_t *old_frame = (const uint8_t *)shadow_buf;
-            uint16_t y = 0;
+            const uint8_t *restrict nf = mono;
+            const uint8_t *restrict of = shad;
 
-            while (y < h)
+            /*
+             * Accumulate a bounding rect over all changed bytes at
+             * byte-column granularity (8 px per column) — no bit extraction
+             * needed when handing the sub-buffer to display_write.
+             *
+             * One display_write call per frame, covering the minimum dirty
+             * bounding box.  Optimal for localised motion (game sprites,
+             * animated widgets).  For non-adjacent multi-region changes
+             * (e.g. top-left + bottom-right simultaneously), dirty spans
+             * transfer fewer raw bytes — switch strategy if that's typical.
+             */
+            uint16_t dy0 = h; /* dirty row range [dy0, dy1) */
+            uint16_t dy1 = 0U;
+            size_t dbx0 = bpr; /* dirty byte-col range [dbx0, dbx1) */
+            size_t dbx1 = 0U;
+
+            for (uint16_t y = 0U; y < h; y++)
             {
-                /* Skip identical lines */
-                if (memcmp(&new_frame[y * bpr], &old_frame[y * bpr], bpr) == 0)
+                const uint8_t *nr = &nf[(size_t)y * bpr];
+                const uint8_t *or_ = &of[(size_t)y * bpr];
+
+                if (memcmp(nr, or_, bpr) == 0)
                 {
-                    y++;
                     continue;
                 }
 
-                /* Find the end of the contiguous dirty region */
-                uint16_t dirty_start = y;
-                uint16_t dirty_end   = y + 1;
-                while (dirty_end < h &&
-                       memcmp(&new_frame[dirty_end * bpr],
-                               &old_frame[dirty_end * bpr], bpr) != 0)
+                if (y < dy0)
                 {
-                    dirty_end++;
+                    dy0 = y;
                 }
+                dy1 = y + 1U;
 
-                /* Write only the dirty region */
-                struct display_buffer_descriptor desc = {
-                    .buf_size = (uint32_t)bpr * (dirty_end - dirty_start),
-                    .width    = w,
-                    .height   = dirty_end - dirty_start,
-                    .pitch    = w,
-                };
-                int ret = display_write(display_dev, 0, dirty_start,
-                                        &desc, &new_frame[dirty_start * bpr]);
-                if (ret < 0)
+                size_t bx0 = 0U;
+                while (bx0 < bpr && nr[bx0] == or_[bx0])
                 {
-                    LOG_ERR("Display write (y=%u h=%u) failed: %d",
-                            dirty_start, dirty_end - dirty_start, ret);
+                    bx0++;
                 }
+                size_t bx1 = bpr - 1U;
+                while (bx1 > bx0 && nr[bx1] == or_[bx1])
+                {
+                    bx1--;
+                }
+                bx1++; /* make exclusive */
 
-                y = dirty_end;
+                if (bx0 < dbx0)
+                {
+                    dbx0 = bx0;
+                }
+                if (bx1 > dbx1)
+                {
+                    dbx1 = bx1;
+                }
             }
 
-            /* Update shadow with the frame we just sent */
-            memcpy(shadow_buf, conv_buf, conv_buf_size);
+            if (dy1 == 0U)
+            {
+                return;
+            } /* frame identical — nothing to do */
+
+            const uint16_t rx = (uint16_t)(dbx0 * 8U);
+            const uint16_t rw = (uint16_t)(MIN(dbx1 * 8U, (size_t)w) - (size_t)rx);
+            const uint16_t rh = dy1 - dy0;
+            const size_t dc = dbx1 - dbx0; /* dirty byte-columns */
+
+            /*
+             * pitch = w lets the driver stride bpr bytes/row through the
+             * full-width packed buffer while writing only the [dbx0, dbx1)
+             * column slice.  buf_size = (rh-1)*bpr + dc is the exact byte
+             * range accessed via the pitch stride (verified in-bounds:
+             * last byte = (dy1-1)*bpr + dbx1 - 1 ≤ h*bpr - 1).
+             */
+            struct display_buffer_descriptor desc = {
+                .buf_size = (uint32_t)(rh - 1U) * (uint32_t)bpr + (uint32_t)dc,
+                .width = rw,
+                .height = rh,
+                .pitch = w,
+            };
+            int ret = display_write(display_dev, rx, dy0, &desc,
+                                    &nf[(size_t)dy0 * bpr + dbx0]);
+            if (ret < 0)
+            {
+                LOG_ERR("display_write(mono x=%u y=%u %ux%u) -> %d",
+                        rx, dy0, rw, rh, ret);
+            }
+
+            /* Commit shadow — only the bytes inside the dirty bounding rect */
+            for (uint16_t y = dy0; y < dy1; y++)
+            {
+                memcpy(&shad[(size_t)y * bpr + dbx0],
+                       &mono[(size_t)y * bpr + dbx0], dc);
+            }
         }
         else
         {
-            /* No shadow buffer — send the entire frame */
+            /* No shadow — unconditional full-frame write */
             struct display_buffer_descriptor desc = {
                 .buf_size = (uint32_t)conv_buf_size,
-                .width    = w,
-                .height   = h,
-                .pitch    = w,
+                .width = w,
+                .height = h,
+                .pitch = w,
             };
-            int ret = display_write(display_dev, 0, 0, &desc, conv_buf);
+            int ret = display_write(display_dev, 0, 0, &desc, mono);
             if (ret < 0)
             {
-                LOG_ERR("Display write failed: %d", ret);
+                LOG_ERR("display_write(mono full) -> %d", ret);
             }
         }
     }
+    /* ══════════════════════════════════════════════════════════════════════
+     *  RGB565 / other colour formats — direct framebuffer passthrough
+     * ══════════════════════════════════════════════════════════════════════ */
     else
     {
-        /* RGB565 and other colour formats — send framebuffer directly */
         struct display_buffer_descriptor desc = {
-            .buf_size = display_caps.x_resolution * display_caps.y_resolution * 2U,
-            .width = display_caps.x_resolution,
-            .height = display_caps.y_resolution,
-            .pitch = display_caps.x_resolution,
+            .buf_size = (uint32_t)w * (uint32_t)h * 2U,
+            .width = w,
+            .height = h,
+            .pitch = w,
         };
-
         int ret = display_write(display_dev, 0, 0, &desc, fb);
         if (ret < 0)
         {
-            LOG_ERR("Display write failed: %d", ret);
+            LOG_ERR("display_write(rgb565 full) -> %d", ret);
         }
+    }
+
+#endif /* DT_NODE_EXISTS(DT_CHOSEN(zephyr_display)) */
+}
+
+/**
+ * @brief Clear framebuffer to black and flush to display.
+ *
+ * Zeroes the entire RGB565 framebuffer and calls akira_display_hal_flush().
+ * Called by the runtime before launching each WASM app so no leftover pixels
+ * from the previous app are visible during startup.
+ * Does not require callers to include <zephyr/drivers/display.h>.
+ */
+void akira_display_hal_clear(void)
+{
+#if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
+    uint16_t *fb = akira_framebuffer_get();
+    if (fb != NULL && display_caps.x_resolution > 0 && display_caps.y_resolution > 0)
+    {
+        memset(fb, 0,
+               (size_t)display_caps.x_resolution *
+               (size_t)display_caps.y_resolution *
+               sizeof(uint16_t));
+        akira_display_hal_flush();
     }
 #endif
 }
