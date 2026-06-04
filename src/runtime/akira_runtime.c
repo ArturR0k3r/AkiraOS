@@ -687,6 +687,26 @@ static void wasm_app_thread_fn(void *p1, void *p2, void *p3)
     k_sem_give(&app->sem_start);
 
     /* ------ Step 3: Execute ------ */
+
+    /* Clear the display to black before every app launch so no leftover
+     * pixels from the previous app are visible during the new app's init. */
+    {
+        uint16_t *fb = akira_framebuffer_get();
+        if (fb != NULL)
+        {
+            struct display_capabilities caps = {0};
+            akira_display_hal_get_capabilities(&caps);
+            if (caps.x_resolution > 0 && caps.y_resolution > 0)
+            {
+                memset(fb, 0,
+                       (size_t)caps.x_resolution *
+                       (size_t)caps.y_resolution *
+                       sizeof(uint16_t));
+                akira_display_hal_flush();
+            }
+        }
+    }
+
     sandbox_exec_begin(&app->sandbox);
     perf_exec_begin(&app->perf);
 
