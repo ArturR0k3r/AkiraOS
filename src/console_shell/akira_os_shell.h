@@ -46,6 +46,25 @@ void akira_os_shell_notify_install_progress(const char *name, int pct,
  */
 void akira_os_shell_go_home(void);
 
+/**
+ * @brief Notify the shell that the app registry changed.
+ *
+ * Posts CMD_APP_STATE_CHANGED so the home screen refreshes its tile list.
+ * Safe to call from any thread (e.g. SD hotplug callback).
+ */
+void akira_os_shell_notify_app_changed(void);
+
+/**
+ * @brief Pre-empt the shell into WASM-dormant mode before an SD XIP launch.
+ *
+ * Sets g_wasm_active and releases the display in one atomic step, so the
+ * shell thread goes dormant immediately when sd_install_screen_load() returns
+ * — before the app is actually running and CMD_APP_STATE_CHANGED arrives.
+ *
+ * Must be called from the shell thread (sd_install_screen_load context).
+ */
+void akira_shell_set_wasm_launching(void);
+
 #ifdef __cplusplus
 }
 #endif

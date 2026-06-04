@@ -556,6 +556,22 @@ int akira_native_display_get_size(wasm_exec_env_t exec_env, int32_t *w_out, int3
     return 0;
 }
 
+int akira_native_display_get_width(wasm_exec_env_t exec_env)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, 0);
+    int w = 0, h = 0;
+    akira_display_get_size(&w, &h);
+    return w;
+}
+
+int akira_native_display_get_height(wasm_exec_env_t exec_env)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, 0);
+    int w = 0, h = 0;
+    akira_display_get_size(&w, &h);
+    return h;
+}
+
 /* Phase 3.5 native wrappers */
 
 int akira_native_display_line(wasm_exec_env_t exec_env,

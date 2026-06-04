@@ -173,6 +173,8 @@ static int save_app_binary(const char *name, const void *binary, size_t size);
 static int delete_app_binary(const char *name);
 static void set_app_state(app_entry_t *app, app_state_t new_state);
 static void restart_work_handler(struct k_work *work);
+
+#define SD_APPS_DIR "/SD:/apps"
 static int ensure_dirs_exist(void);
 static void app_manager_on_runtime_exit(int slot, int exit_code);
 
@@ -326,19 +328,17 @@ int app_manager_install(const char *name, const void *binary, size_t size,
         /* Update existing app */
         LOG_INF("Updating existing app: %s", app_name);
 
-        /* Zero container_id under the lock first so a second concurrent install
-         * thread will see -1 and skip the destroy even if akira_runtime_stop()
-         * momentarily drops g_registry_mutex internally. */
-        int old_cid = existing->container_id;
-        existing->container_id = -1;
-
-        if (old_cid >= 0)
+        /* Stop if running */
+        if (existing->state == APP_STATE_RUNNING && existing->container_id >= 0)
         {
-            if (existing->state == APP_STATE_RUNNING)
-            {
-                akira_runtime_stop(old_cid);
-            }
-            akira_runtime_destroy(old_cid);
+            akira_runtime_stop(existing->container_id);
+        }
+
+        /* Destroy old container */
+        if (existing->container_id >= 0)
+        {
+            akira_runtime_destroy(existing->container_id);
+            existing->container_id = -1;
         }
     }
     else
@@ -460,10 +460,9 @@ int app_manager_install_from_path(const char *path)
     strncpy(name, filename, APP_NAME_MAX_LEN - 1);
     name[APP_NAME_MAX_LEN - 1] = '\0';
 
-    /* Remove .wasm or .aot or .akpkg extension */
+    /* Remove .wasm or .aot extension */
     char *ext = strstr(name, ".wasm");
     if (!ext) ext = strstr(name, ".aot");
-    if (!ext) ext = strstr(name, ".akpkg");
     if (ext)
     {
         *ext = '\0';
@@ -478,13 +477,6 @@ int app_manager_install_from_path(const char *path)
     else if (strstr(path, "/usb/"))
     {
         source = APP_SOURCE_USB;
-    }
-
-    /* Detect .akpkg (gzip-compressed tar) and route through the akpkg installer */
-    if (akpkg_is_gzip(buffer, (size_t)bytes_read)) {
-        int r = app_manager_install_akpkg(name, APP_NAME_MAX_LEN, buffer, (size_t)bytes_read, source);
-        akira_free_buffer(buffer);
-        return r;
     }
 
     /* Try to load manifest — heap-allocate to avoid blowing the shell stack */
@@ -622,14 +614,26 @@ int app_manager_start(const char *name)
     /* Load app binary if not loaded */
     if (app->container_id < 0)
     {
-        /* Read binary from storage (flash or RAM fallback)
-         * Try .aot first (faster), fall back to .wasm */
         char path[APP_PATH_MAX_LEN];
-        snprintf(path, sizeof(path), "%s/%03d_%s.aot",
-                 APPS_DIR, app->id, app->name);
-        if (!fs_manager_exists(path)) {
-            snprintf(path, sizeof(path), "%s/%03d_%s.wasm",
+        if (app->source == APP_SOURCE_SD) {
+            /* SD app — read directly from card, try .aot first */
+            snprintf(path, sizeof(path), "%s/%s.aot", SD_APPS_DIR, app->name);
+            if (!fs_manager_exists(path)) {
+                snprintf(path, sizeof(path), "%s/%s.wasm", SD_APPS_DIR, app->name);
+            }
+            if (!fs_manager_exists(path)) {
+                k_mutex_unlock(&g_registry_mutex);
+                LOG_ERR("SD app not found (card removed?): %s", app->name);
+                return -ENOENT;
+            }
+        } else {
+            /* Flash app — read from persistent storage */
+            snprintf(path, sizeof(path), "%s/%03d_%s.aot",
                      APPS_DIR, app->id, app->name);
+            if (!fs_manager_exists(path)) {
+                snprintf(path, sizeof(path), "%s/%03d_%s.wasm",
+                         APPS_DIR, app->id, app->name);
+            }
         }
 
         /* Use PSRAM-preferred allocator — app binaries can be 100+ KB */
@@ -1377,20 +1381,6 @@ static int registry_load(void)
         return -EINVAL;
     }
 
-    /* Verify CRC: temporarily zero the crc field, compute, restore */
-    if (header->crc != 0)
-    {
-        uint32_t stored_crc = header->crc;
-        header->crc = 0;
-        uint32_t computed = crc32_ieee(buffer, read);
-        header->crc = stored_crc;
-        if (computed != stored_crc)
-        {
-            LOG_WRN("Registry CRC mismatch (stored=0x%08x computed=0x%08x)", stored_crc, computed);
-            return -EIO;
-        }
-    }
-
     /* Read entries */
     int count = header->app_count;
     if (count > CONFIG_AKIRA_APP_MAX_INSTALLED)
@@ -1426,31 +1416,28 @@ static int registry_save(void)
     uint8_t buffer[sizeof(registry_header_t) + CONFIG_AKIRA_APP_MAX_INSTALLED * sizeof(app_entry_t)];
     size_t offset = 0;
 
-    /* Write header with crc=0 placeholder; will be patched after entries are written */
-    registry_header_t header = {
-        .magic = REGISTRY_MAGIC,
-        .version = REGISTRY_VERSION,
-        .app_count = g_app_count,
-        .reserved = 0,
-        .crc = 0,
-    };
-
-    memcpy(buffer, &header, sizeof(header));
-    offset += sizeof(header);
-
-    /* Write entries (only valid ones) */
+    /* Write entries — skip SD-source apps (in-memory only, not persisted) */
+    uint8_t saved_count = 0;
+    offset += sizeof(registry_header_t);
     for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++)
     {
-        if (g_registry[i].name[0] != '\0')
+        if (g_registry[i].name[0] != '\0' &&
+            g_registry[i].source != APP_SOURCE_SD)
         {
             memcpy(buffer + offset, &g_registry[i], sizeof(app_entry_t));
             offset += sizeof(app_entry_t);
+            saved_count++;
         }
     }
 
-    /* Patch CRC over the entire serialized payload (header crc field = 0) */
-    uint32_t crc = crc32_ieee(buffer, offset);
-    ((registry_header_t *)buffer)->crc = crc;
+    registry_header_t header = {
+        .magic = REGISTRY_MAGIC,
+        .version = REGISTRY_VERSION,
+        .app_count = saved_count,
+        .reserved = 0,
+        .crc = 0,
+    };
+    memcpy(buffer, &header, sizeof(header));
 
     /* Save using fs_manager (handles RAM fallback) */
     ssize_t written = fs_manager_write_file(REGISTRY_PATH, buffer, offset);
@@ -2016,4 +2003,111 @@ int app_manager_install_akpkg(char *name, size_t name_size,
                 app_name, app_id, wasm_size);
     }
     return app_id;
+}
+
+/* ===== SD Registry ===== */
+
+int app_manager_register_sd_apps(void)
+{
+    if (!g_initialized) {
+        return -EINVAL;
+    }
+
+    struct fs_dir_t dir;
+    fs_dir_t_init(&dir);
+
+    int ret = fs_opendir(&dir, SD_APPS_DIR);
+    if (ret < 0) {
+        LOG_WRN("SD apps dir not accessible: %d", ret);
+        return ret;
+    }
+
+    int registered = 0;
+    struct fs_dirent entry;
+
+    while (fs_readdir(&dir, &entry) == 0 && entry.name[0] != '\0') {
+        LOG_INF("SD entry: name=%s type=%d size=%zu", entry.name, entry.type, entry.size);
+        int nl = (int)strlen(entry.name);
+        bool is_wasm = (nl >= 6 && strcasecmp(&entry.name[nl - 5], ".wasm") == 0);
+        bool is_aot  = (nl >= 5 && strcasecmp(&entry.name[nl - 4], ".aot")  == 0);
+        if (entry.type != FS_DIR_ENTRY_FILE || (!is_wasm && !is_aot)) {
+            continue;
+        }
+
+        /* Strip extension to get name */
+        char name[APP_NAME_MAX_LEN];
+        strncpy(name, entry.name, sizeof(name) - 1);
+        name[sizeof(name) - 1] = '\0';
+        char *ext = strrchr(name, '.');
+        if (ext) { *ext = '\0'; }
+
+        k_mutex_lock(&g_registry_mutex, K_FOREVER);
+
+        /* Skip if already in registry (flash-installed or already registered) */
+        if (find_app_by_name(name) != NULL) {
+            k_mutex_unlock(&g_registry_mutex);
+            continue;
+        }
+
+        app_entry_t *slot = find_free_slot();
+        if (!slot) {
+            k_mutex_unlock(&g_registry_mutex);
+            LOG_WRN("SD register: registry full, skipping %s", name);
+            break;
+        }
+
+        memset(slot, 0, sizeof(*slot));
+        strncpy(slot->name, name, APP_NAME_MAX_LEN - 1);
+        slot->source       = APP_SOURCE_SD;
+        slot->state        = APP_STATE_INSTALLED;
+        slot->size         = (uint32_t)entry.size;
+        slot->container_id = -1;
+        slot->id           = 0; /* not persisted — no flash ID needed */
+        g_app_count++;
+        registered++;
+
+        k_mutex_unlock(&g_registry_mutex);
+        LOG_INF("SD app registered: %s (%u bytes)", name, (unsigned)entry.size);
+    }
+
+    fs_closedir(&dir);
+    LOG_INF("SD register: %d app(s) added", registered);
+    return registered;
+}
+
+int app_manager_unregister_sd_apps(void)
+{
+    if (!g_initialized) {
+        return -EINVAL;
+    }
+
+    int removed = 0;
+
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
+
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++) {
+        if (g_registry[i].name[0] == '\0' ||
+            g_registry[i].source != APP_SOURCE_SD) {
+            continue;
+        }
+
+        /* Stop and destroy if running */
+        if (g_registry[i].container_id >= 0) {
+            int cid = g_registry[i].container_id;
+            g_registry[i].container_id = -1;
+            k_mutex_unlock(&g_registry_mutex);
+            akira_runtime_stop(cid);
+            akira_runtime_destroy(cid);
+            k_mutex_lock(&g_registry_mutex, K_FOREVER);
+        }
+
+        LOG_INF("SD app unregistered: %s", g_registry[i].name);
+        memset(&g_registry[i], 0, sizeof(g_registry[i]));
+        g_app_count--;
+        removed++;
+    }
+
+    k_mutex_unlock(&g_registry_mutex);
+    LOG_INF("SD unregister: %d app(s) removed", removed);
+    return removed;
 }

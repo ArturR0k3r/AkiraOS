@@ -64,6 +64,8 @@ int akira_native_display_text(wasm_exec_env_t exec_env, int32_t x, int32_t y, co
 int akira_native_display_text_large(wasm_exec_env_t exec_env, int x, int y, const char *text, uint32_t color);
 int akira_native_display_flush(wasm_exec_env_t exec_env);
 int akira_native_display_get_size(wasm_exec_env_t exec_env, int32_t *w_out, int32_t *h_out);
+int akira_native_display_get_width(wasm_exec_env_t exec_env);
+int akira_native_display_get_height(wasm_exec_env_t exec_env);
 
 /* Phase 3.5 native wrappers */
 int akira_native_display_line(wasm_exec_env_t exec_env, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t color);

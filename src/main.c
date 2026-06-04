@@ -24,6 +24,9 @@
 #ifdef CONFIG_AKIRA_APP_MANAGER
 #include <runtime/app_manager/app_manager.h>
 #endif
+#ifdef CONFIG_AKIRA_SD_CARD
+#include <connectivity/storage/sd_manager.h>
+#endif
 #ifdef CONFIG_AKIRA_INPUT_API
 #include <api/akira_input_api.h>
 #endif
@@ -245,6 +248,10 @@ int main(void)
 
 #ifdef CONFIG_AKIRA_APP_MANAGER
     app_manager_init();
+#endif
+
+#ifdef CONFIG_AKIRA_SD_CARD
+    sd_manager_init();
 #endif
 
 #ifdef CONFIG_AKIRA_INPUT_API
