@@ -14,6 +14,14 @@ include: spi-device.yaml
 
 properties:
 
+  cs-gpios:
+    type: phandle-array
+    required: false
+    description: |
+      GPIO used as chip-select (active low). Required when the driver
+      manages CS directly rather than relying solely on the SPI bus
+      cs-gpios mechanism (e.g. on AkiraConsole Production: TCA6408 P3).
+
   reset-gpios:
     type: phandle-array
     required: false
