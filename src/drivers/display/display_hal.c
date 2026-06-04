@@ -260,86 +260,50 @@ void akira_display_hal_flush(void)
              * (e.g. top-left + bottom-right simultaneously), dirty spans
              * transfer fewer raw bytes — switch strategy if that's typical.
              */
-            uint16_t dy0 = h; /* dirty row range [dy0, dy1) */
+            /* Sharp LS0XX requires every display_write to start at x=0
+             * with the full panel width.  Partial-column writes are rejected
+             * with -EINVAL ("Width not a multiple of 400").
+             *
+             * Strategy: track dirty *rows* only, then write the full-width
+             * row slice [dy0, dy1) in a single call — x=0, width=w always.
+             */
+            uint16_t dy0 = h;
             uint16_t dy1 = 0U;
-            size_t dbx0 = bpr; /* dirty byte-col range [dbx0, dbx1) */
-            size_t dbx1 = 0U;
 
             for (uint16_t y = 0U; y < h; y++)
             {
-                const uint8_t *nr = &nf[(size_t)y * bpr];
-                const uint8_t *or_ = &of[(size_t)y * bpr];
-
-                if (memcmp(nr, or_, bpr) == 0)
+                if (memcmp(&nf[(size_t)y * bpr], &of[(size_t)y * bpr], bpr) != 0)
                 {
-                    continue;
-                }
-
-                if (y < dy0)
-                {
-                    dy0 = y;
-                }
-                dy1 = y + 1U;
-
-                size_t bx0 = 0U;
-                while (bx0 < bpr && nr[bx0] == or_[bx0])
-                {
-                    bx0++;
-                }
-                size_t bx1 = bpr - 1U;
-                while (bx1 > bx0 && nr[bx1] == or_[bx1])
-                {
-                    bx1--;
-                }
-                bx1++; /* make exclusive */
-
-                if (bx0 < dbx0)
-                {
-                    dbx0 = bx0;
-                }
-                if (bx1 > dbx1)
-                {
-                    dbx1 = bx1;
+                    if (y < dy0) { dy0 = y; }
+                    dy1 = y + 1U;
                 }
             }
 
             if (dy1 == 0U)
             {
-                return;
-            } /* frame identical — nothing to do */
+                return; /* frame identical — nothing to send */
+            }
 
-            const uint16_t rx = (uint16_t)(dbx0 * 8U);
-            const uint16_t rw = (uint16_t)(MIN(dbx1 * 8U, (size_t)w) - (size_t)rx);
             const uint16_t rh = dy1 - dy0;
-            const size_t dc = dbx1 - dbx0; /* dirty byte-columns */
 
-            /*
-             * pitch = w lets the driver stride bpr bytes/row through the
-             * full-width packed buffer while writing only the [dbx0, dbx1)
-             * column slice.  buf_size = (rh-1)*bpr + dc is the exact byte
-             * range accessed via the pitch stride (verified in-bounds:
-             * last byte = (dy1-1)*bpr + dbx1 - 1 ≤ h*bpr - 1).
-             */
+            /* Full-width write: x=0, width=w (required by Sharp ls0xx driver) */
             struct display_buffer_descriptor desc = {
-                .buf_size = (uint32_t)(rh - 1U) * (uint32_t)bpr + (uint32_t)dc,
-                .width = rw,
-                .height = rh,
-                .pitch = w,
+                .buf_size = (uint32_t)rh * (uint32_t)bpr,
+                .width    = w,
+                .height   = rh,
+                .pitch    = w,
             };
-            int ret = display_write(display_dev, rx, dy0, &desc,
-                                    &nf[(size_t)dy0 * bpr + dbx0]);
+            int ret = display_write(display_dev, 0, dy0, &desc,
+                                    &nf[(size_t)dy0 * bpr]);
             if (ret < 0)
             {
-                LOG_ERR("display_write(mono x=%u y=%u %ux%u) -> %d",
-                        rx, dy0, rw, rh, ret);
+                LOG_ERR("display_write(mono y=%u h=%u) -> %d", dy0, rh, ret);
             }
 
-            /* Commit shadow — only the bytes inside the dirty bounding rect */
-            for (uint16_t y = dy0; y < dy1; y++)
-            {
-                memcpy(&shad[(size_t)y * bpr + dbx0],
-                       &mono[(size_t)y * bpr + dbx0], dc);
-            }
+            /* Commit shadow for the rows we just sent */
+            memcpy(&shad[(size_t)dy0 * bpr],
+                   &mono[(size_t)dy0 * bpr],
+                   (size_t)rh * bpr);
         }
         else
         {
