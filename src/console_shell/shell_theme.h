@@ -14,9 +14,6 @@
 #ifndef SHELL_THEME_H
 #define SHELL_THEME_H
 
-#if defined(CONFIG_LVGL)
-#include <lvgl.h>
-#endif
 
 /* ------------------------------------------------------------------ */
 /* Screen geometry (landscape — width set by CONFIG_AKIRA_OS_SHELL_SCREEN_W) */
@@ -76,63 +73,5 @@
 /* ------------------------------------------------------------------ */
 /* LVGL styles (shared across all settings sub-screens)                */
 /* ------------------------------------------------------------------ */
-
-#if defined(CONFIG_LVGL)
-
-/** Small text font (Montserrat 14) */
-#define SHELL_FONT_SMALL  (&lv_font_montserrat_14)
-
-/** Large text font (Montserrat 20) */
-#define SHELL_FONT_LARGE  (&lv_font_montserrat_20)
-
-/** LVGL-typed colors for use with lv_obj_set_style_* API */
-#define SHELL_LVGL_COLOR_BG      lv_color_white()
-#define SHELL_LVGL_COLOR_FG      lv_color_black()
-#define SHELL_LVGL_COLOR_SUBTEXT lv_color_make(0x80, 0x80, 0x80)
-#define SHELL_COLOR_SUBTEXT      SHELL_LVGL_COLOR_SUBTEXT
-
-/* RGB565 colors as lv_color_t (for LVGL style API) */
-#define SHELL_LVGL_C_BLACK    lv_color_hex(0x0000u)
-#define SHELL_LVGL_C_WHITE    lv_color_hex(0xFFFFu)
-#define SHELL_LVGL_C_GRAY     lv_color_hex(0x7BEFu)
-#define SHELL_LVGL_C_LTGRAY   lv_color_hex(0xD6BAu)
-
-/** White-background screen style */
-extern lv_style_t g_style_screen;
-
-/** List-item row style (white bg, dark text, padding) */
-extern lv_style_t g_style_list_item;
-
-/** Dialog card style (white bg, thin border) */
-extern lv_style_t g_style_card;
-
-/** Horizontal separator line style */
-extern lv_style_t g_style_separator;
-
-/**
- * @brief Initialise shared shell LVGL styles.  Call once before any
- *        settings sub-screen is created.
- */
-void shell_theme_init(void);
-
-/**
- * @brief Attach a black title bar to @p parent.
- * @param parent  Screen object.
- * @param title   Text to display in the header.
- * @return Header object reference.
- */
-lv_obj_t *shell_theme_make_header(lv_obj_t *parent, const char *title);
-
-/**
- * @brief Attach a black hint bar to @p parent.
- * @param parent      Screen object.
- * @param left_hint   Left-side button hint (e.g. "B:Back").
- * @param right_hint  Right-side button hint (e.g. "A:OK").
- * @return Footer object reference.
- */
-lv_obj_t *shell_theme_make_footer(lv_obj_t *parent, const char *left_hint,
-                              const char *right_hint);
-
-#endif /* CONFIG_LVGL */
 
 #endif /* SHELL_THEME_H */

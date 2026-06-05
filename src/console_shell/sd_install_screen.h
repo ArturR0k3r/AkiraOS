@@ -11,9 +11,6 @@
 #ifndef SD_INSTALL_SCREEN_H
 #define SD_INSTALL_SCREEN_H
 
-#if defined(CONFIG_LVGL)
-#include <lvgl.h>
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -32,5 +29,4 @@ void sd_install_screen_load(void);
 }
 #endif
 
-#endif /* CONFIG_LVGL */
 #endif /* SD_INSTALL_SCREEN_H */

@@ -2,6 +2,7 @@
 #include "akira_storage_api.h"
 #include "akira_net_api.h"
 #include "akira_power_api.h"
+#include "akira_rf_api.h"
 #ifdef CONFIG_AKIRA_WASM_INPUT
 #include "akira_input_api.h"
 #endif
@@ -114,6 +115,10 @@ bool akira_register_native_apis()
         {"wifi_scan_aps",  (void *)akira_native_wifi_scan_aps,  "(*~)i",      NULL},
         /* 802.11 deauth frame injector — requires wifi.inject capability */
         {"wifi_deauth",    (void *)akira_native_wifi_deauth,    "(**iii)i",   NULL},
+#endif
+
+#ifdef CONFIG_WIFI
+        {"wifi_scan_rssi", (void *)akira_native_wifi_scan_rssi, "(ii)i", NULL},
 #endif
 
 #if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_SENSOR)
