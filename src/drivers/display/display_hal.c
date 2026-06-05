@@ -176,7 +176,6 @@ void akira_display_hal_flush(void)
 
     if (display_dev == NULL)
     {
-        LOG_ERR("Display not initialized");
         return;
     }
 
@@ -414,7 +413,6 @@ int akira_display_hal_set_rotation(uint8_t rotation)
 #if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
     if (display_dev == NULL)
     {
-        LOG_ERR("Display not initialized");
         return -ENODEV;
     }
 

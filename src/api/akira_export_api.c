@@ -2,6 +2,7 @@
 #include "akira_storage_api.h"
 #include "akira_net_api.h"
 #include "akira_power_api.h"
+#include "akira_rf_api.h"
 #ifdef CONFIG_AKIRA_WASM_INPUT
 #include "akira_input_api.h"
 #endif
@@ -90,6 +91,10 @@ bool akira_register_native_apis()
         {"rf_set_power", (void *)akira_native_rf_set_power, "(i)i", NULL},
         {"rf_get_rssi", (void *)akira_native_rf_get_rssi, "()i", NULL},
         {"rf_send", (void *)akira_native_rf_send, "(*i)i", NULL},
+#endif
+
+#ifdef CONFIG_WIFI
+        {"wifi_scan_rssi", (void *)akira_native_wifi_scan_rssi, "(ii)i", NULL},
 #endif
 
 #if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_SENSOR)

@@ -18,6 +18,7 @@
 #include <zephyr/fs/fs.h>
 #include <zephyr/sys/crc.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <stdio.h>
 

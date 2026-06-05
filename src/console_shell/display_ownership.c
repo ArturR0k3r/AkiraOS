@@ -15,10 +15,6 @@ LOG_MODULE_REGISTER(akira_display_own, CONFIG_AKIRA_LOG_LEVEL);
 #include "display_ownership.h"
 #include <zephyr/kernel.h>
 
-#if defined(CONFIG_LVGL)
-#include <lvgl.h>
-#endif
-
 /* Mutex protecting g_owner transitions */
 static K_MUTEX_DEFINE(g_display_mutex);
 

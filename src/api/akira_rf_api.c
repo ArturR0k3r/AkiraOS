@@ -11,6 +11,12 @@
 #include "../drivers/rf/lr1121.h"
 #include <lib/mem_helper.h>
 
+#ifdef CONFIG_WIFI
+#include <zephyr/net/net_if.h>
+#include <zephyr/net/net_mgmt.h>
+#include <zephyr/net/wifi_mgmt.h>
+#endif
+
 LOG_MODULE_REGISTER(akira_rf_api, CONFIG_AKIRA_LOG_LEVEL);
 
 /* Protects g_active_chip, g_active_driver, and rf_framework_initialized.
@@ -396,5 +402,108 @@ int akira_native_rf_set_power(wasm_exec_env_t exec_env, int8_t dbm)
     return -ENOSYS;
 #endif
 }
+
+#ifdef CONFIG_WIFI
+
+#define WIFI_SCAN_MAX_CHANNELS 14
+#define WIFI_SCAN_TIMEOUT_MS   5000
+
+struct wifi_scan_ctx {
+    int8_t  rssi[WIFI_SCAN_MAX_CHANNELS];
+    uint8_t seen[WIFI_SCAN_MAX_CHANNELS];
+    struct k_sem done;
+};
+
+static struct wifi_scan_ctx g_wifi_scan_ctx;
+static struct net_mgmt_event_callback g_wifi_scan_cb;
+static bool g_wifi_scan_cb_reg;
+
+static void wifi_scan_event_handler(struct net_mgmt_event_callback *cb,
+                                     uint64_t event, struct net_if *iface)
+{
+    ARG_UNUSED(cb);
+    ARG_UNUSED(iface);
+
+    if (event == NET_EVENT_WIFI_SCAN_RESULT) {
+        const struct wifi_scan_result *entry =
+            (const struct wifi_scan_result *)cb->info;
+        if (entry && entry->channel >= 1 &&
+            entry->channel <= WIFI_SCAN_MAX_CHANNELS) {
+            int ch = entry->channel - 1;
+            /* Keep the strongest RSSI per channel */
+            if (!g_wifi_scan_ctx.seen[ch] ||
+                entry->rssi > g_wifi_scan_ctx.rssi[ch]) {
+                g_wifi_scan_ctx.rssi[ch] = entry->rssi;
+                g_wifi_scan_ctx.seen[ch] = 1;
+            }
+        }
+    } else if (event == NET_EVENT_WIFI_SCAN_DONE) {
+        k_sem_give(&g_wifi_scan_ctx.done);
+    }
+}
+
+int akira_native_wifi_scan_rssi(wasm_exec_env_t exec_env,
+                                 uint32_t buf_ptr, uint32_t buf_len)
+{
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    if (!module_inst) {
+        return -1;
+    }
+
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+
+    if (buf_len < WIFI_SCAN_MAX_CHANNELS) {
+        return -EINVAL;
+    }
+
+    int8_t *dst = (int8_t *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+    if (!dst) {
+        return -EFAULT;
+    }
+
+    struct net_if *iface = net_if_get_default();
+    if (!iface) {
+        LOG_ERR("wifi_scan_rssi: no default interface");
+        return -ENODEV;
+    }
+
+    /* Reset scan context */
+    (void)memset(g_wifi_scan_ctx.rssi, -100, sizeof(g_wifi_scan_ctx.rssi));
+    (void)memset(g_wifi_scan_ctx.seen, 0, sizeof(g_wifi_scan_ctx.seen));
+    k_sem_init(&g_wifi_scan_ctx.done, 0, 1);
+
+    /* Register net_mgmt callback if not already registered */
+    if (!g_wifi_scan_cb_reg) {
+        net_mgmt_init_event_callback(&g_wifi_scan_cb,
+                                     wifi_scan_event_handler,
+                                     NET_EVENT_WIFI_SCAN_RESULT |
+                                     NET_EVENT_WIFI_SCAN_DONE);
+        net_mgmt_add_event_callback(&g_wifi_scan_cb);
+        g_wifi_scan_cb_reg = true;
+    }
+
+    LOG_INF("Starting WiFi scan for spectrum analysis");
+
+    int ret = net_mgmt(NET_REQUEST_WIFI_SCAN, iface, NULL, 0);
+    if (ret) {
+        LOG_ERR("WiFi scan request failed: %d", ret);
+        return ret;
+    }
+
+    /* Wait for scan to complete */
+    ret = k_sem_take(&g_wifi_scan_ctx.done, K_MSEC(WIFI_SCAN_TIMEOUT_MS));
+    if (ret) {
+        LOG_WRN("WiFi scan timed out, returning partial results");
+    }
+
+    /* Copy results to WASM buffer */
+    for (int i = 0; i < WIFI_SCAN_MAX_CHANNELS; i++) {
+        dst[i] = g_wifi_scan_ctx.rssi[i];
+    }
+
+    return WIFI_SCAN_MAX_CHANNELS;
+}
+
+#endif /* CONFIG_WIFI */
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */

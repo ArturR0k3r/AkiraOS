@@ -690,7 +690,9 @@ static void wasm_app_thread_fn(void *p1, void *p2, void *p3)
 
     /* Clear the display to black before every app launch so no leftover
      * pixels from the previous app are visible during the new app's init. */
+#if defined(CONFIG_DISPLAY)
     akira_display_hal_clear();
+#endif
 
     sandbox_exec_begin(&app->sandbox);
     perf_exec_begin(&app->perf);

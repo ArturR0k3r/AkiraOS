@@ -79,6 +79,7 @@ static void do_install_work(struct k_work *work)
     akira_display_clear(C_BLACK);
     akira_display_flush();
 
+#if defined(CONFIG_AKIRA_SD_XIP)
     int ret = app_manager_run_from_sd(g_install_path);
 
     if (ret < 0)
@@ -87,6 +88,11 @@ static void do_install_work(struct k_work *work)
         akira_display_claim_shell();
         home_screen_load();
     }
+#else
+    LOG_ERR("SD XIP not enabled");
+    akira_display_claim_shell();
+    home_screen_load();
+#endif
 }
 
 K_WORK_DEFINE(g_sd_install_work, do_install_work);
