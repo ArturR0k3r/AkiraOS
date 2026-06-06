@@ -205,7 +205,8 @@ void akira_display_hal_flush(void)
             return;
         }
 
-        const bool invert = (display_caps.current_pixel_format == PIXEL_FORMAT_MONO10);
+        const bool invert = (display_caps.current_pixel_format == PIXEL_FORMAT_MONO10) ||
+                            IS_ENABLED(CONFIG_AKIRA_SHARP_INVERT_COLORS);
         const size_t bpr = bytes_per_row;
         const size_t full_bx = (size_t)w >> 3U;             /* complete 8-px groups   */
         const uint8_t tail_w = (uint8_t)((uint16_t)w & 7U); /* leftover pixels [0..7] */

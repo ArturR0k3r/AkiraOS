@@ -248,6 +248,15 @@ config AKIRA_SHARP_DISPLAY
         and overrides SCS chip-select polarity to ACTIVE_HIGH.
         Set CONFIG_LS0XX=y alongside this to enable the Zephyr display driver.
 
+  config AKIRA_SHARP_INVERT_COLORS
+      bool "Invert Sharp display colors (black↔white)"
+      default n
+      depends on AKIRA_SHARP_DISPLAY
+      help
+        XOR every packed MONO byte before sending to the Sharp LS0XX panel,
+        swapping black and white. Applied in display_hal.c during RGB565→MONO
+        conversion — no changes to the Zephyr driver required.
+
 endmenu
 menu "PSRAM / External RAM options"
 
@@ -973,7 +982,7 @@ config AKIRA_APP_MANAGER
 config AKIRA_APP_MAX_INSTALLED
     int "Maximum installed apps"
     default 8
-    range 4 16
+    range 4 64
     depends on AKIRA_APP_MANAGER
     help
       Maximum number of WASM apps that can be installed.
