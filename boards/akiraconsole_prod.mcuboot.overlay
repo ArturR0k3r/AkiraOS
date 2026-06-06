@@ -1,0 +1,25 @@
+/*
+ * SPDX-FileCopyrightText: 2025 Akira Technology
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * MCUboot overlay for akiraconsole_prod (ESP32-S3).
+ *
+ * The board DTS has i2c0 and tca6408 (nxp,pca9538) enabled. Both pull in
+ * drivers that reference Zephyr kernel semaphores and work queues
+ * (k_sem_take/give, k_work_init/submit), which are not present in MCUboot's
+ * scheduler-less build, causing linker errors. Disable them here; the app
+ * overlay re-enables them under #ifndef CONFIG_MCUBOOT.
+ *
+ * spi2 is disabled because its cs-gpios reference tca6408 GPIO pins. With
+ * the expander disabled, spi2 init would fail trying to acquire those GPIO
+ * handles. MCUboot uses only internal flash; no SPI peripheral is needed.
+ *
+ * WiFi and Bluetooth are disabled to keep IRAM within MCUboot's budget,
+ * matching the pattern used for esp32c6_devkitc.
+ */
+
+&i2c0         { status = "disabled"; };
+&tca6408      { status = "disabled"; };
+&spi2         { status = "disabled"; };
+&wifi         { status = "disabled"; };
+&esp32_bt_hci { status = "disabled"; };
