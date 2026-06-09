@@ -381,7 +381,7 @@
 //   [1] GPIO10     — TFT_CS  — ST7789V / ILI9341 display (J7)
 //                            — Sharp LS027B7DH01 SCS (J4) when CONFIG_AKIRA_SHARP_DISPLAY=y
 //   [2] GPIO14     — SD_CS   — microSD card (Molex 503398-1892, J1)
-//   [3] TCA6408 P1 — CC_CS   — CC1121RHB Sub-GHz transceiver
+//   [3] TCA6408 P3 — CC_CS   — CC1121RHB Sub-GHz transceiver
 //
 // The Sharp Memory LCD SCS is active-HIGH (unusual). When using Sharp (J4)
 // instead of TFT (J7), the overlay overrides cs-gpios[1] to GPIO_ACTIVE_HIGH
@@ -417,10 +417,10 @@
 	lr2021: lr2021@0 {
 		compatible        = "semtech,lr2021";
 		reg               = <0>;
-		spi-max-frequency = <10000000>;
+		spi-max-frequency = <1000000>;
 		cs-gpios          = <&tca6408 6 GPIO_ACTIVE_LOW>;   // LR_CS via P6
 		reset-gpios       = <&tca6408 4 GPIO_ACTIVE_LOW>;   // RF_RST via P4
-		busy-gpios        = <&tca6408 5 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>; // LR_BUSY via P5
+		busy-gpios        = <&tca6408 5 GPIO_ACTIVE_HIGH>; // LR_BUSY via P5 (TCA6408 has no internal pulls)
 		irq-gpios         = <&gpio1 16 GPIO_ACTIVE_HIGH>;   // LR_INT = GPIO48 (gpio1 pin 16)
 		irq-dio           = <5>;                            // LR_INT routed from LR2021 DIO5
 		status            = "okay";
@@ -429,7 +429,7 @@
 	// -------------------------------------------------------------------------
 	// microSD card — SPI-SDHC (Molex 503398-1892, J1)
 	// CS     → GPIO14 (SD_CS)             [cs-gpios index 2]
-	// SD_DET → TCA6408 P5 (active low = card present)
+	// SD_DET → TCA6408 P7 (active low = card present)
 	// -------------------------------------------------------------------------
 	spi_sdhc0: sdhc@2 {
 		compatible        = "zephyr,sdhc-spi-slot";

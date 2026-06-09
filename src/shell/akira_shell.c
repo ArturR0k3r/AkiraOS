@@ -1864,7 +1864,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(system_cmds,
                                SHELL_CMD(reboot, NULL, "Reboot system [delay_seconds]", cmd_reboot),
                                SHELL_SUBCMD_SET_END);
 
-#ifdef CONFIG_GPIO
+#ifdef CONFIG_GPIO342134213
 SHELL_STATIC_SUBCMD_SET_CREATE(gpio_cmds,
                                SHELL_CMD(read, NULL, "Read GPIO pin state", cmd_gpio_read),
                                SHELL_CMD(configure, NULL, "Configure GPIO pin", cmd_gpio_configure),
@@ -1882,7 +1882,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(debug_cmds,
                                SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(sys, &system_cmds, "System management commands", NULL);
-#ifdef CONFIG_GPIO
+#ifdef CONFIG_GPIO123123
 SHELL_CMD_REGISTER(gpio, &gpio_cmds, "GPIO control commands", NULL);
 #endif
 SHELL_CMD_REGISTER(debug, &debug_cmds, "Debug and diagnostic commands", NULL);

@@ -533,6 +533,10 @@ if(CONFIG_AKIRA_MODULE_RF)
         target_sources(app PRIVATE src/drivers/rf/lr1121.c)
     endif()
 
+    if(CONFIG_AKIRA_LR2021)
+        target_sources(app PRIVATE src/drivers/rf/lr2021.c)
+    endif()
+
     if(CONFIG_AKIRA_CC1101)
         target_sources(app PRIVATE src/drivers/rf/cc1101.c)
     endif()

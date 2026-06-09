@@ -6,14 +6,14 @@
 #ifndef LR2021_H
 #define LR2021_H
 
-#include "connectivity/radio_interface.h"
+#include "rf_framework.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/** @brief Get the LR2021 radio handle */
-radio_handle_t *lr2021_get_handle(void);
+/** @brief Get the LR2021 driver instance */
+const struct akira_rf_driver *lr2021_get_driver(void);
 
 #ifdef __cplusplus
 }
