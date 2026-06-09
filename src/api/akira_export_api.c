@@ -104,21 +104,19 @@ bool akira_register_native_apis()
         {"rf_set_spreading_factor",(void *)akira_native_rf_set_spreading_factor,"(i)i",    NULL},
         {"rf_set_bandwidth",       (void *)akira_native_rf_set_bandwidth,       "(i)i",    NULL},
         {"rf_set_coding_rate",     (void *)akira_native_rf_set_coding_rate,     "(i)i",    NULL},
-        /* Raw OOK/ASK signal capture and replay (CC1101 / CC1121) */
+        /* Raw OOK/ASK signal capture and replay */
         {"rf_raw_capture",         (void *)akira_native_rf_raw_capture,         "(iii)i",  NULL},
         {"rf_raw_replay",          (void *)akira_native_rf_raw_replay,          "(iii)i",  NULL},
 #endif
-#if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
-        /* Passive 802.11 spectrum scan — per-channel max RSSI */
+#if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_WIFI)
+        /* Passive 802.11 spectrum scan -- per-channel max RSSI */
         {"wifi_scan_rssi", (void *)akira_native_wifi_scan_rssi, "(ii)i",      NULL},
-        /* Passive 802.11 AP scan — full SSID/BSSID/channel/RSSI/security records */
+        /* Passive 802.11 AP scan -- full SSID/BSSID/channel/RSSI/security records */
         {"wifi_scan_aps",  (void *)akira_native_wifi_scan_aps,  "(*~)i",      NULL},
-        /* 802.11 deauth frame injector — requires wifi.inject capability */
-        {"wifi_deauth",    (void *)akira_native_wifi_deauth,    "(**iii)i",   NULL},
 #endif
-
-#ifdef CONFIG_WIFI
-        {"wifi_scan_rssi", (void *)akira_native_wifi_scan_rssi, "(ii)i", NULL},
+#if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_WIFI) && (defined(CONFIG_SOC_SERIES_ESP32S3) || defined(CONFIG_SOC_SERIES_ESP32))
+        /* 802.11 deauth frame injector -- requires wifi.inject capability */
+        {"wifi_deauth",    (void *)akira_native_wifi_deauth,    "(**iii)i",   NULL},
 #endif
 
 #if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_SENSOR)

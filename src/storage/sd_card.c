@@ -70,7 +70,7 @@ static int                   g_last_det  = -1;    /* -1 = unknown */
 static bool                  g_event_pending;     /* guard against double-submit */
 
 /* Dedicated work queue — fs_unmount + registry ops need ~3KB stack */
-#define SD_EVENT_WQ_STACK  3072
+#define SD_EVENT_WQ_STACK  4192
 #define SD_EVENT_WQ_PRIO   11
 
 K_THREAD_STACK_DEFINE(g_sd_event_stack, SD_EVENT_WQ_STACK);

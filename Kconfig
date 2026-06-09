@@ -296,13 +296,13 @@ config AKIRA_MODULE_RF
     help
       Enable RF module (compile RF framework and drivers). Useful to disable on constrained boards.
 
-config AKIRA_LR1121
-    bool "Enable LR1121 LoRa driver (legacy)"
+config AKIRA_RF_FRAMEWORK
+    bool "Enable unified RF framework"
     default n
-    depends on SPI && GPIO && AKIRA_RADIO_MANAGER
+    depends on AKIRA_MODULE_RF
     help
-      Enable Semtech LR1121 multi-band LoRa transceiver (legacy).
-      Use AKIRA_LR2021 for AkiraConsole Production hardware.
+      Enable the unified RF driver framework that provides
+      a common API for multiple RF chips.
 
 config AKIRA_LR2021
     bool "Enable LR2021 LoRa Plus driver (AkiraConsole Production)"
@@ -314,35 +314,19 @@ config AKIRA_LR2021
       Supports LoRa, FSK, FLRC, BPSK, BLE PHY, O-QPSK modulations.
       Used on AkiraConsole Production via TCA6408 GPIO expander.
 
-config AKIRA_CC1101
-    bool "Enable CC1101 Sub-GHz driver"
-    default n
-    depends on SPI && GPIO && AKIRA_RADIO_MANAGER
-    help
-      Enable TI CC1101 Sub-GHz transceiver driver.
-      Supports 300-928MHz frequency range.
-
-config AKIRA_LR2021
-    bool "Enable LR2021 LoRa Plus driver"
-    default n
-    depends on SPI && GPIO && AKIRA_RADIO_MANAGER
-    help
-      Enable Semtech LR2021 LoRa Plus transceiver.
-      Fourth-generation LoRa IP, multi-band Sub-GHz + 2.4 GHz.
-      Supports LoRa, FSK, FLRC, BPSK, BLE PHY, O-QPSK modulations.
-
 config AKIRA_CC1121
-    bool "Enable CC1121 Sub-GHz driver"
+    bool "Enable CC1121 Sub-GHz driver (AkiraConsole Production)"
     default n
-    depends on SPI && GPIO && AKIRA_RADIO_MANAGER
+    depends on SPI && GPIO && AKIRA_RF_FRAMEWORK
     help
       Enable TI CC1121RHB high-performance Sub-GHz transceiver driver.
       Covers 315/433/868/915 MHz bands, narrowband FSK/OOK.
+      Used on AkiraConsole Production via TCA6408 GPIO expander CS.
 
 config AKIRA_RF_RX_DAEMON
     bool "Enable RF RX background daemon"
     default y
-    depends on AKIRA_RADIO_MANAGER
+    depends on AKIRA_RF_FRAMEWORK
     help
       Runs a background thread that polls the active RF driver and enqueues
       received packets. Callers use akira_rf_recv_pop() instead of the

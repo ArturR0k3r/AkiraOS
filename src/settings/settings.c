@@ -454,7 +454,7 @@ static int settings_get_id(const char *key)
         ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
         if (ret < 0)
         {
-            LOG_INF("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
+            LOG_WRN("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
             return ret;
         }
         settings_entry_t entry;
@@ -468,7 +468,7 @@ static int settings_get_id(const char *key)
                     /* Hole: this slot was deleted or never written — skip it */
                     continue;
                 }
-                LOG_INF("Failed to read entry at index: %d (%d)", i, ret);
+                LOG_WRN("Failed to read entry at index: %d (%d)", i, ret);
                 return ret;
             }
             if (strcmp(entry.key, key) == 0)
@@ -935,7 +935,7 @@ static int settings_set(const char *key, const char *value, uint8_t is_encrypted
         ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
         if (ret < 0)
         {
-            LOG_INF("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
+            LOG_WRN("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
             if (b64_value)
                 k_free(b64_value);
             return ret;
@@ -1426,7 +1426,7 @@ int akira_settings_set(const char *key, const char *value, uint8_t is_encrypted)
 
     if (result == 0)
     {
-        LOG_INF("Set: %s = %s", key, value);
+        LOG_DBG("Set: %s = %s", key, value);
     }
     return result;
 }
@@ -1509,7 +1509,7 @@ int akira_settings_delete(const char *key)
 
     if (result == 0)
     {
-        LOG_INF("Deleted: %s", key);
+        LOG_DBG("Deleted: %s", key);
     }
     return result;
 }
@@ -1547,7 +1547,7 @@ int akira_settings_clear(void)
 
     if (result == 0)
     {
-        LOG_INF("Cleared");
+        LOG_DBG("Cleared");
     }
     return result;
 }
@@ -1568,7 +1568,7 @@ int akira_settings_list(settings_iterator_t *iter)
             ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
             if (ret < 0)
             {
-                LOG_INF("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
+                LOG_WRN("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
                 return ret;
             }
             iter->count = counter;
