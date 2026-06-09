@@ -15,7 +15,7 @@
 };
 
 // ============================================================================
-// SPI2 Configuration for LR1121 LoRa Transceiver and ST7789 Display
+// SPI2 Configuration for ST7789 Display
 // ============================================================================
 &pinctrl
 {
@@ -63,26 +63,12 @@
     status = "okay";
     pinctrl-0 = <&spim2_default>;
     pinctrl-names = "default";
-    clock-frequency = <1600000000>; // For display (LR1121 will override with its own max)
-    
-    // CS GPIO array: GPIO38 for LR1121, GPIO10 for ST7789, GPIO14 for SD card
-    cs-gpios = <&gpio1 6 GPIO_ACTIVE_LOW>,  // CS0: GPIO38 for LR1121
+    clock-frequency = <1600000000>; // For display
+
+    // CS GPIO array: CS0 unused, GPIO10 for ST7789, GPIO14 for SD card
+    cs-gpios = <&gpio1 6 GPIO_ACTIVE_LOW>,  // CS0: unused
                <&gpio0 10 GPIO_ACTIVE_LOW>, // CS1: GPIO10 for ST7789 display
                <&gpio0 14 GPIO_ACTIVE_LOW>; // CS2: GPIO14 for SD card (SD_CS)
-
-    // LR1121 as child of SPI2
-    lr1121_config: lr1121@0 {
-        compatible = "semtech,lr1121";
-        reg = <0>; // Chip select 0 (GPIO38)
-        status = "okay";
-        label = "LR1121";
-        spi-max-frequency = <10000000>; // 10 MHz max
-        cs-gpios = <&gpio1 6 GPIO_ACTIVE_LOW>;      // GPIO38 (on DIY version is GPIO37 but this is conf) - required by LR1121 binding
-        reset-gpios = <&gpio0 0 GPIO_ACTIVE_LOW>;   // GPIO0
-        busy-gpios = <&gpio1 4 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>; // GPIO36 (36-32=4)
-        // IRQ optional - uncomment if connected:
-        // irq-gpios = <&gpio1 3 GPIO_ACTIVE_HIGH>;  // GPIO35 (35-32=3)
-    };
 
     // ========================================================================
     // SD Card — SPI-SDHC via CS2 (GPIO14)

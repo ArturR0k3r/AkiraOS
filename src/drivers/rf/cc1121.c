@@ -1053,7 +1053,7 @@ static void cc1121_set_rx_callback(rf_rx_callback_t cb)
 
 static const struct akira_rf_driver cc1121_driver = {
     .name              = "CC1121",
-    .type              = RF_CHIP_CC1101, /* Reuse enum slot; CC1121 replaces CC1101 */
+    .type              = RF_CHIP_CC1121,
     .init              = cc1121_init,
     .deinit            = cc1121_deinit,
     .set_mode          = cc1121_set_mode,

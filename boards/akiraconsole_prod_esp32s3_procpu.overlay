@@ -43,9 +43,6 @@
 };
 &bme280  { status = "okay"; };  // bosch,bme280 (I2C addr 0x77)
 
-// lr1121.c driver uses DT_NODELABEL(lr1121_config); expose the lr2021 node under that alias
-lr1121_config: &lr2021 {};
-
 // cc1121.c driver uses GPIO_DT_SPEC_GET(CC1121_NODE, cs_gpios) — add cs-gpios to the node
 &cc1121 {
 	cs-gpios = <&tca6408 3 GPIO_ACTIVE_LOW>;  // CC_CS → TCA6408 P3
