@@ -23,6 +23,7 @@ LOG_MODULE_REGISTER(akira_power_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 #include "power_manager.h"
 #include <zephyr/kernel.h>
+#include <zephyr/init.h>
 #include <zephyr/pm/pm.h>
 #include <zephyr/pm/state.h>
 #include <string.h>
@@ -126,7 +127,22 @@ int power_manager_init(void)
         LOG_WRN("Fuel gauge device not ready — battery readout unavailable");
         g_pm.fuel_gauge = NULL;
     } else {
-        LOG_INF("Fuel gauge: %s", g_pm.fuel_gauge->name);
+        /* Probe SOC immediately — this log is at APPLICATION level and always
+         * visible in the terminal, unlike the POST_KERNEL driver init messages. */
+        union fuel_gauge_prop_val soc_val = {0};
+        int probe_ret = fuel_gauge_get_prop(g_pm.fuel_gauge,
+                                            FUEL_GAUGE_RELATIVE_STATE_OF_CHARGE,
+                                            &soc_val);
+        if (probe_ret == 0) {
+            LOG_INF("Fuel gauge: %s — SoC=%u%%",
+                    g_pm.fuel_gauge->name,
+                    (unsigned)soc_val.relative_state_of_charge);
+        } else {
+            LOG_WRN("Fuel gauge: %s found but not responding (err=%d) — "
+                    "check battery connector J8",
+                    g_pm.fuel_gauge->name, probe_ret);
+            /* Keep g_pm.fuel_gauge set so periodic retries can recover. */
+        }
     }
 #endif
 
@@ -296,7 +312,7 @@ int akira_pm_get_battery_level(uint8_t *percent)
             *percent = (uint8_t)val.relative_state_of_charge;
             return 0;
         }
-        LOG_WRN("Fuel gauge SoC read failed: %d", ret);
+        LOG_DBG("Fuel gauge SoC read failed: %d", ret);
     }
 #endif
 
@@ -474,3 +490,10 @@ akira_power_policy_t akira_pm_get_aggregate_policy(void)
     }
     return agg;
 }
+
+/* Auto-init at APPLICATION level so the fuel gauge I2C device is ready. */
+static int power_manager_sys_init(void)
+{
+    return power_manager_init();
+}
+SYS_INIT(power_manager_sys_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);

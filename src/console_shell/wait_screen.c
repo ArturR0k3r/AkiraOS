@@ -50,7 +50,8 @@ static void draw_centred_small(int y, const char *s, uint16_t col)
 {
     int tw = (int)strlen(s) * 8;
     int x = (SCR_W - tw) / 2;
-    if (x < 0) x = 0;
+    if (x < 0)
+        x = 0;
     akira_display_text(x, y, s, col);
 }
 
@@ -58,28 +59,34 @@ static void draw_centred_large(int y, const char *s, uint16_t col)
 {
     int tw = (int)strlen(s) * 11; /* akira_display_text_large uses 11px per char */
     int x = (SCR_W - tw) / 2;
-    if (x < 0) x = 0;
+    if (x < 0)
+        x = 0;
     akira_display_text_large(x, y, s, col);
 }
 
 static void build_time_str(char *buf, size_t len)
 {
     int64_t epoch = akira_time_get_epoch();
-    if (akira_time_is_set()) {
+    if (akira_time_is_set())
+    {
         int64_t local = epoch + (int64_t)akira_time_get_tz_offset_s();
         int64_t day_sec = local % 86400;
-        if (day_sec < 0) day_sec += 86400;
+        if (day_sec < 0)
+            day_sec += 86400;
         snprintf(buf, len, "%02u:%02u:%02u",
                  (unsigned)(day_sec / 3600),
                  (unsigned)((day_sec % 3600) / 60),
                  (unsigned)(day_sec % 60));
-    } else {
+    }
+    else
+    {
         uint32_t s = (uint32_t)epoch;
         snprintf(buf, len, "%02u:%02u:%02u",
                  (s / 3600U) % 24U, (s % 3600U) / 60U, s % 60U);
     }
 }
 
+/* Full redraw — used only on enter so static labels are drawn once. */
 static void draw_frame(void)
 {
     char time_str[10];
@@ -90,7 +97,8 @@ static void draw_frame(void)
 #ifdef CONFIG_AKIRA_POWER_MANAGER
     {
         uint8_t pct = 0;
-        if (akira_pm_get_battery_level(&pct) == 0) {
+        if (akira_pm_get_battery_level(&pct) == 0)
+        {
             snprintf(batt_str, sizeof(batt_str), "%u%%", (unsigned)pct);
         }
     }
@@ -101,11 +109,44 @@ static void draw_frame(void)
     draw_centred_small(10, "POWER SAVE", C_DKGRAY);
     draw_centred_large(96, time_str, C_WHITE);
 
-    if (batt_str[0]) {
+    if (batt_str[0])
+    {
         draw_centred_small(130, batt_str, C_DKGRAY);
     }
 
     draw_centred_small(220, "Press any button to wake", C_DKGRAY);
+
+    akira_display_flush();
+}
+
+/* Incremental update — only repaint time and battery to avoid full-screen blink. */
+static void draw_dynamic(void)
+{
+    char time_str[10];
+    char batt_str[8] = "";
+
+    build_time_str(time_str, sizeof(time_str));
+
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+    {
+        uint8_t pct = 0;
+        if (akira_pm_get_battery_level(&pct) == 0)
+        {
+            snprintf(batt_str, sizeof(batt_str), "%u%%", (unsigned)pct);
+        }
+    }
+#endif
+
+    /* Erase time row (FONT_11X18 = 18px tall, centred at y=96). */
+    akira_display_rect(0, 96, SCR_W, 18, C_BLACK);
+    draw_centred_large(96, time_str, C_WHITE);
+
+    /* Erase battery row (FONT_7X10 = 10px tall, centred at y=130). */
+    akira_display_rect(0, 130, SCR_W, 10, C_BLACK);
+    if (batt_str[0])
+    {
+        draw_centred_small(130, batt_str, C_DKGRAY);
+    }
 
     akira_display_flush();
 }
@@ -121,7 +162,8 @@ void wait_screen_enter(void)
 #ifdef CONFIG_AKIRA_SETTINGS
     {
         char sv[16] = "";
-        if (!akira_settings_get("akira/display/brightness", sv, sizeof(sv))) {
+        if (!akira_settings_get("akira/display/brightness", sv, sizeof(sv)))
+        {
             int pct = atoi(sv);
             s_saved_brightness = (uint8_t)((pct * 255 + 50) / 100);
         }
@@ -142,7 +184,7 @@ void wait_screen_enter(void)
 
 void wait_screen_update(void)
 {
-    draw_frame();
+    draw_dynamic();
 }
 
 void wait_screen_exit(void)
@@ -155,10 +197,13 @@ void wait_screen_exit(void)
 #ifdef CONFIG_AKIRA_SETTINGS
     {
         char sv[16] = "";
-        if (!akira_settings_get("akira/display/brightness", sv, sizeof(sv))) {
+        if (!akira_settings_get("akira/display/brightness", sv, sizeof(sv)))
+        {
             int pct = atoi(sv);
             akira_display_hal_set_brightness((uint8_t)((pct * 255 + 50) / 100));
-        } else {
+        }
+        else
+        {
             akira_display_hal_set_brightness(s_saved_brightness);
         }
     }

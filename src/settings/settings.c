@@ -1471,7 +1471,7 @@ int akira_settings_get(const char *key, char *value, size_t max_len)
 
     if (result == 0)
     {
-        LOG_INF("GET: %s = %s", key, value);
+        LOG_DBG("GET: %s = %s", key, value);
     }
     return result;
 }

@@ -109,21 +109,21 @@ K_MSGQ_DEFINE(g_shell_msgq,
 static bool g_wasm_active; /* true while a WASM app has the display */
 
 /* SD popup state */
-static bool    g_sd_popup_active;
-static bool    g_sd_popup_inserted;   /* true=insert, false=removal */
-static bool    g_sd_popup_apps_ready; /* apps registered, dismiss when min time elapses */
-static int     g_sd_popup_dots;     /* 0-3 cycling dot count */
-static int     g_sd_popup_tick;     /* counts 20ms ticks for dot advance */
+static bool g_sd_popup_active;
+static bool g_sd_popup_inserted;      /* true=insert, false=removal */
+static bool g_sd_popup_apps_ready;    /* apps registered, dismiss when min time elapses */
+static int g_sd_popup_dots;           /* 0-3 cycling dot count */
+static int g_sd_popup_tick;           /* counts 20ms ticks for dot advance */
 static int64_t g_sd_popup_dismiss_ms; /* non-zero = auto-dismiss at this uptime */
 static int64_t g_sd_popup_shown_ms;   /* uptime when popup was shown */
 
-#define SD_POPUP_DOT_TICKS  15   /* advance dots every 300ms */
-#define SD_POPUP_REMOVE_MS  2000 /* removal popup duration */
-#define SD_POPUP_MIN_MS     800  /* minimum visible time before insert popup dismisses */
-#define SD_POPUP_W          240
-#define SD_POPUP_H          70
-#define SD_POPUP_X          ((SCR_W - SD_POPUP_W) / 2)
-#define SD_POPUP_Y          ((SCR_H - SD_POPUP_H) / 2)
+#define SD_POPUP_DOT_TICKS 15   /* advance dots every 300ms */
+#define SD_POPUP_REMOVE_MS 2000 /* removal popup duration */
+#define SD_POPUP_MIN_MS 800     /* minimum visible time before insert popup dismisses */
+#define SD_POPUP_W 240
+#define SD_POPUP_H 70
+#define SD_POPUP_X ((SCR_W - SD_POPUP_W) / 2)
+#define SD_POPUP_Y ((SCR_H - SD_POPUP_H) / 2)
 
 static void sd_popup_draw(void)
 {
@@ -132,18 +132,21 @@ static void sd_popup_draw(void)
 
     /* Panel: black bg + white double outline (install_progress style) */
     akira_display_rect(px, py, SD_POPUP_W, SD_POPUP_H, C_BLACK);
-    akira_display_rect_outline(px,     py,     SD_POPUP_W,     SD_POPUP_H,     C_WHITE);
+    akira_display_rect_outline(px, py, SD_POPUP_W, SD_POPUP_H, C_WHITE);
     akira_display_rect_outline(px + 1, py + 1, SD_POPUP_W - 2, SD_POPUP_H - 2, C_WHITE);
 
     /* Title */
     akira_display_text(px + 8, py + 8, "SD Card", C_WHITE);
     akira_display_hline(px + 8, py + 20, SD_POPUP_W - 16, C_WHITE);
 
-    if (g_sd_popup_inserted) {
+    if (g_sd_popup_inserted)
+    {
         char line[48];
         snprintf(line, sizeof(line), "Loading apps%.*s", g_sd_popup_dots, "...");
         akira_display_text(px + 8, py + 30, line, C_WHITE);
-    } else {
+    }
+    else
+    {
         akira_display_text(px + 8, py + 30, "Removed", C_WHITE);
     }
 
@@ -152,25 +155,26 @@ static void sd_popup_draw(void)
 
 static void sd_popup_show(bool inserted)
 {
-    g_sd_popup_active    = true;
-    g_sd_popup_inserted  = inserted;
-    g_sd_popup_dots      = 0;
-    g_sd_popup_tick      = 0;
-    g_sd_popup_shown_ms  = k_uptime_get();
+    g_sd_popup_active = true;
+    g_sd_popup_inserted = inserted;
+    g_sd_popup_dots = 0;
+    g_sd_popup_tick = 0;
+    g_sd_popup_shown_ms = k_uptime_get();
     g_sd_popup_dismiss_ms = inserted ? 0
-                          : (g_sd_popup_shown_ms + SD_POPUP_REMOVE_MS);
+                                     : (g_sd_popup_shown_ms + SD_POPUP_REMOVE_MS);
     sd_popup_draw();
 }
 
 static void sd_popup_dismiss(void)
 {
-    g_sd_popup_active     = false;
+    g_sd_popup_active = false;
     g_sd_popup_dismiss_ms = 0;
 }
 
 static void sd_popup_tick_fn(void)
 {
-    if (!g_sd_popup_active) {
+    if (!g_sd_popup_active)
+    {
         return;
     }
 
@@ -178,7 +182,8 @@ static void sd_popup_tick_fn(void)
 
     /* Deferred dismiss: apps ready but min time hadn't elapsed yet */
     if (g_sd_popup_inserted && g_sd_popup_apps_ready &&
-        (now - g_sd_popup_shown_ms) >= SD_POPUP_MIN_MS) {
+        (now - g_sd_popup_shown_ms) >= SD_POPUP_MIN_MS)
+    {
         g_sd_popup_apps_ready = false;
         sd_popup_dismiss();
         home_screen_refresh();
@@ -186,16 +191,19 @@ static void sd_popup_tick_fn(void)
     }
 
     /* Auto-dismiss removal popup */
-    if (g_sd_popup_dismiss_ms && now >= g_sd_popup_dismiss_ms) {
+    if (g_sd_popup_dismiss_ms && now >= g_sd_popup_dismiss_ms)
+    {
         sd_popup_dismiss();
         home_screen_refresh();
         return;
     }
 
     /* Advance dots every SD_POPUP_DOT_TICKS × 20ms — redraw only on change */
-    if (g_sd_popup_inserted) {
+    if (g_sd_popup_inserted)
+    {
         g_sd_popup_tick++;
-        if (g_sd_popup_tick >= SD_POPUP_DOT_TICKS) {
+        if (g_sd_popup_tick >= SD_POPUP_DOT_TICKS)
+        {
             g_sd_popup_tick = 0;
             g_sd_popup_dots = (g_sd_popup_dots + 1) % 4;
             sd_popup_draw();
@@ -349,10 +357,10 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
     /* Main event + render loop */
     static uint32_t s_prev_btns;
     static int64_t s_home_held_since_ms; /* 0 = not held */
-    static bool    s_home_fired;         /* true = fired this press, wait for release */
+    static bool s_home_fired;            /* true = fired this press, wait for release */
 
     /* Screen idle wait — load timeout from settings (0 = disabled) */
-    int64_t s_display_timeout_ms = 300000; /* default 300 s (5 min) */
+    int64_t s_display_timeout_ms = 180000; /* default 3 min */
 #ifdef CONFIG_AKIRA_SETTINGS
     {
         bool en = true;
@@ -369,8 +377,8 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             }
             else
             {
-                /* Key not set yet — keep 300 s default */
-                s_display_timeout_ms = 300000;
+                /* Key not set yet — keep 180 s default */
+                s_display_timeout_ms = 180000;
             }
         }
         else
@@ -387,20 +395,29 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
         uint32_t btns = akira_input_get_bitmask();
         int64_t now_ms = k_uptime_get();
 
-        /* Any button activity resets the idle timer */
+        /* Edge detection — must be computed before any continue/branch that
+         * might skip the s_prev_btns update inside the !g_wasm_active block.
+         * Doing it here ensures s_prev_btns is always in sync every tick. */
+        uint32_t just_pressed = btns & ~s_prev_btns;
+        s_prev_btns = btns;
+
+        /* Any held button resets the idle timer */
         if (btns)
         {
             s_last_input_ms = now_ms;
         }
 
-        /* Wake from wait screen if a button was just pressed */
-        if (s_display_blanked && btns)
+        /* Wake from wait screen — edge detection only (just_pressed), NOT
+         * level (btns).  Using btns here would cause spurious wakes: during
+         * wait_screen_enter()'s draw the shell thread yields for I2C retries,
+         * and any noise/bounce processed by the input thread in that window
+         * would leave stale bits in g_btn_state that persist into the next
+         * iteration and fire the level check incorrectly. */
+        if (s_display_blanked && just_pressed)
         {
             s_display_blanked = false;
             wait_screen_exit();
             home_screen_refresh();
-            /* Swallow this press so navigation doesn't fire while waking */
-            s_prev_btns = btns;
             k_sleep(K_MSEC(20));
             continue;
         }
@@ -427,34 +444,34 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 
         if (!g_wasm_active)
         {
-            /* Button edge detection → active screen navigation */
-            uint32_t just = btns & ~s_prev_btns;
-            s_prev_btns = btns;
-            if (just)
+            /* s_prev_btns and just_pressed already computed at loop top. */
+            if (just_pressed)
             {
                 static const char *const btn_names[] = {
-                    [AKIRA_BTN_HOME]  = "HOME",
-                    [AKIRA_BTN_UP]    = "UP",
-                    [AKIRA_BTN_DOWN]  = "DOWN",
-                    [AKIRA_BTN_LEFT]  = "LEFT",
+                    [AKIRA_BTN_HOME] = "HOME",
+                    [AKIRA_BTN_UP] = "UP",
+                    [AKIRA_BTN_DOWN] = "DOWN",
+                    [AKIRA_BTN_LEFT] = "LEFT",
                     [AKIRA_BTN_RIGHT] = "RIGHT",
-                    [AKIRA_BTN_A]     = "A",
-                    [AKIRA_BTN_B]     = "B",
-                    [AKIRA_BTN_X]     = "X",
-                    [AKIRA_BTN_Y]     = "Y",
+                    [AKIRA_BTN_A] = "A",
+                    [AKIRA_BTN_B] = "B",
+                    [AKIRA_BTN_X] = "X",
+                    [AKIRA_BTN_Y] = "Y",
                 };
-                for (int _b = 0; _b < (int)ARRAY_SIZE(btn_names); _b++) {
-                    if ((just & BIT(_b)) && btn_names[_b]) {
+                for (int _b = 0; _b < (int)ARRAY_SIZE(btn_names); _b++)
+                {
+                    if ((just_pressed & BIT(_b)) && btn_names[_b])
+                    {
                         LOG_INF("BTN: %s", btn_names[_b]);
                     }
                 }
                 if (settings_screen_is_active())
                 {
-                    settings_screen_handle_key(just);
+                    settings_screen_handle_key(just_pressed);
                 }
                 else
                 {
-                    home_screen_handle_key(just);
+                    home_screen_handle_key(just_pressed);
                 }
             }
 
@@ -463,7 +480,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 #ifdef CONFIG_AKIRA_SD_HOTPLUG
                 && !g_sd_popup_active
 #endif
-                )
+            )
             {
                 home_screen_tick();
             }
@@ -496,33 +513,47 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 {
                     s_display_blanked = true;
                     wait_screen_enter();
+                    /* Drain button noise accumulated during wait_screen_enter's
+                     * I2C + SPI flush.  Without this, the next loop iteration
+                     * computes just_pressed against s_prev_btns=0, sees the
+                     * noise bits as a fresh edge, and immediately wakes. */
+                    s_prev_btns = akira_input_get_bitmask();
                 }
 
-                /* Re-read timeout in case the user just changed it in settings */
+                /* Re-read timeout only when the user returns from settings.
+                 * Polling NVS every second floods the log with GET messages. */
 #ifdef CONFIG_AKIRA_SETTINGS
-                if (!s_display_blanked)
                 {
-                    bool en = true;
-                    char _sv[16] = "";
-                    if (!akira_settings_get("akira/display/timeout_en", _sv, sizeof(_sv)))
-                        en = (atoi(_sv) != 0);
-                    if (en)
+                    static bool s_settings_was_active;
+                    bool _settings_now = settings_screen_is_active();
+                    if (s_settings_was_active && !_settings_now)
                     {
-                        memset(_sv, 0, sizeof(_sv));
-                        if (!akira_settings_get("akira/display/timeout_s", _sv, sizeof(_sv)))
+                        bool en = true;
+                        char _sv[16] = "";
+                        if (!akira_settings_get("akira/display/timeout_en",
+                                                _sv, sizeof(_sv)))
+                            en = (atoi(_sv) != 0);
+                        if (en)
                         {
-                            int t = atoi(_sv);
-                            s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
+                            memset(_sv, 0, sizeof(_sv));
+                            if (!akira_settings_get("akira/display/timeout_s",
+                                                    _sv, sizeof(_sv)))
+                            {
+                                int t = atoi(_sv);
+                                s_display_timeout_ms =
+                                    (t > 0) ? (int64_t)t * 1000 : 0;
+                            }
+                            else
+                            {
+                                s_display_timeout_ms = 180000;
+                            }
                         }
                         else
                         {
-                            s_display_timeout_ms = 300000;
+                            s_display_timeout_ms = 0;
                         }
                     }
-                    else
-                    {
-                        s_display_timeout_ms = 0;
-                    }
+                    s_settings_was_active = _settings_now;
                 }
 #endif
             }
@@ -532,9 +563,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
         else
         {
             /* Shell dormant while WASM holds display.
-             * Keep s_prev_btns current so edge detection is clean
-             * when the app exits and shell reclaims the display. */
-            s_prev_btns = btns;
+             * s_prev_btns is already updated at the top of the loop. */
             k_sleep(K_MSEC(50));
         }
 
@@ -606,10 +635,14 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                         if (!g_wasm_active)
                         {
 #ifdef CONFIG_AKIRA_SD_HOTPLUG
-                            if (g_sd_popup_active && g_sd_popup_inserted) {
-                                if ((k_uptime_get() - g_sd_popup_shown_ms) >= SD_POPUP_MIN_MS) {
+                            if (g_sd_popup_active && g_sd_popup_inserted)
+                            {
+                                if ((k_uptime_get() - g_sd_popup_shown_ms) >= SD_POPUP_MIN_MS)
+                                {
                                     sd_popup_dismiss();
-                                } else {
+                                }
+                                else
+                                {
                                     /* Too soon — let tick dismiss once min time passes */
                                     g_sd_popup_apps_ready = true;
                                 }
@@ -632,7 +665,8 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 
 #ifdef CONFIG_AKIRA_SD_HOTPLUG
             case CMD_SD_CARD_EVENT:
-                if (!g_wasm_active) {
+                if (!g_wasm_active)
+                {
                     sd_popup_show(ev.sd.present);
                 }
                 break;
@@ -653,7 +687,8 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 /* Pre-insert: fires before init — show loading popup immediately */
 static void shell_sd_pre_insert_cb(bool present, void *user_data)
 {
-    ARG_UNUSED(user_data); ARG_UNUSED(present);
+    ARG_UNUSED(user_data);
+    ARG_UNUSED(present);
     shell_event_t ev = {.type = CMD_SD_CARD_EVENT, .sd = {.present = true}};
     k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
 }
@@ -662,7 +697,8 @@ static void shell_sd_pre_insert_cb(bool present, void *user_data)
 static void shell_sd_hotplug_cb(bool present, void *user_data)
 {
     ARG_UNUSED(user_data);
-    if (!present) {
+    if (!present)
+    {
         shell_event_t ev = {.type = CMD_SD_CARD_EVENT, .sd = {.present = false}};
         k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
     }
