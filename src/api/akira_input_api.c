@@ -24,6 +24,7 @@ LOG_MODULE_REGISTER(akira_input, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/input/input.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/atomic.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <errno.h>
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
@@ -36,6 +37,9 @@ LOG_MODULE_REGISTER(akira_input, CONFIG_AKIRA_LOG_LEVEL);
 /* Atomic bitmask: bit N = (1 << zephyr,code) for button N.  Updated in ISR
  * context via atomic_or/and — safe to read from any thread without locking. */
 static atomic_t g_btn_state;
+
+/* Latest absolute dial position (INPUT_ABS_WHEEL, 0–255). */
+static atomic_t g_dial_value;
 
 /* Ring buffer: up to 16 unprocessed edge events (press + release pairs). */
 #define EVT_QUEUE_LEN 16
@@ -59,6 +63,12 @@ K_MSGQ_DEFINE(g_event_queue, sizeof(akira_input_event_t), EVT_QUEUE_LEN, 4);
 static void akira_input_cb(struct input_event *evt, void *user_data)
 {
     ARG_UNUSED(user_data);
+
+    if (evt->type == INPUT_EV_ABS && evt->code == INPUT_ABS_WHEEL) {
+        /* Dial position update — store atomically (0–255). */
+        atomic_set(&g_dial_value, (atomic_val_t)(evt->value & 0xFF));
+        return;
+    }
 
     if (evt->type != INPUT_EV_KEY) {
         return;
@@ -91,6 +101,7 @@ INPUT_CALLBACK_DEFINE(NULL, akira_input_cb, NULL);
 void akira_input_init(void)
 {
     atomic_set(&g_btn_state, 0);
+    atomic_set(&g_dial_value, 0);
     k_msgq_purge(&g_event_queue);
     LOG_INF("Input API initialized (queue depth=%d)", EVT_QUEUE_LEN);
 }
@@ -107,6 +118,11 @@ int akira_input_poll_event(akira_input_event_t *evt_out)
     }
     /* k_msgq_get returns 0 on success, -EAGAIN (or -ENOMSG) if empty. */
     return k_msgq_get(&g_event_queue, evt_out, K_NO_WAIT);
+}
+
+int akira_input_get_dial(void)
+{
+    return (int)(uint8_t)atomic_get(&g_dial_value);
 }
 
 /* ── WASM native exports ─────────────────────────────────────────────────── */
@@ -173,6 +189,20 @@ int akira_native_input_poll_event(wasm_exec_env_t exec_env,
     }
     /* -EAGAIN from k_msgq_get → queue empty → return 0 to caller. */
     return 0;
+}
+
+/*
+ * input_get_dial() → int  (WASM signature: "()i")
+ *
+ * Returns the latest dial (rotary encoder) position as an integer in
+ * the range 0–255.  The value is updated every ~50 ms by the PWM-dial
+ * driver and is always safe to poll without draining a queue.
+ * Capability: "input.read" (AKIRA_CAP_INPUT_READ)
+ */
+int akira_native_input_get_dial(wasm_exec_env_t exec_env)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_INPUT_READ, -EPERM);
+    return akira_input_get_dial();
 }
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */

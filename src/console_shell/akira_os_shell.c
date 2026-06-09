@@ -34,6 +34,7 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 #include "settings_screen.h"
 #include "shell_theme.h"
 #include "install_progress_screen.h"
+#include "wait_screen.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
@@ -350,8 +351,8 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
     static int64_t s_home_held_since_ms; /* 0 = not held */
     static bool    s_home_fired;         /* true = fired this press, wait for release */
 
-    /* Screen idle-blank — load timeout from settings (0 = disabled) */
-    int64_t s_display_timeout_ms = 60000; /* default 60 s */
+    /* Screen idle wait — load timeout from settings (0 = disabled) */
+    int64_t s_display_timeout_ms = 300000; /* default 300 s (5 min) */
 #ifdef CONFIG_AKIRA_SETTINGS
     {
         bool en = true;
@@ -365,6 +366,11 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             {
                 int t = atoi(_sv);
                 s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
+            }
+            else
+            {
+                /* Key not set yet — keep 300 s default */
+                s_display_timeout_ms = 300000;
             }
         }
         else
@@ -387,20 +393,12 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             s_last_input_ms = now_ms;
         }
 
-        /* Wake display if blanked and a button was just pressed */
+        /* Wake from wait screen if a button was just pressed */
         if (s_display_blanked && btns)
         {
             s_display_blanked = false;
-            akira_display_hal_set_blank(false);
-#ifdef CONFIG_AKIRA_SETTINGS
-            {
-                char _sv[16] = "";
-                if (!akira_settings_get("akira/display/brightness", _sv, sizeof(_sv)))
-                {
-                    akira_display_hal_set_brightness((uint8_t)(atoi(_sv) * 255 / 100));
-                }
-            }
-#endif
+            wait_screen_exit();
+            home_screen_refresh();
             /* Swallow this press so navigation doesn't fire while waking */
             s_prev_btns = btns;
             k_sleep(K_MSEC(20));
@@ -474,12 +472,16 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             sd_popup_tick_fn();
 #endif
 
-            /* Status strip updated every 1 s */
+            /* Status strip / wait screen updated every 1 s */
             static int64_t s_last_status_ms;
             if (now_ms - s_last_status_ms >= 1000)
             {
                 s_last_status_ms = now_ms;
-                if (settings_screen_is_active())
+                if (s_display_blanked)
+                {
+                    wait_screen_update();
+                }
+                else if (settings_screen_is_active())
                 {
                     settings_screen_update();
                 }
@@ -488,16 +490,17 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                     home_screen_update_status();
                 }
 
-                /* Idle screen-off check */
+                /* Idle wait-screen check */
                 if (!s_display_blanked && s_display_timeout_ms > 0 &&
                     (now_ms - s_last_input_ms) >= s_display_timeout_ms)
                 {
                     s_display_blanked = true;
-                    akira_display_hal_set_blank(true);
+                    wait_screen_enter();
                 }
 
                 /* Re-read timeout in case the user just changed it in settings */
 #ifdef CONFIG_AKIRA_SETTINGS
+                if (!s_display_blanked)
                 {
                     bool en = true;
                     char _sv[16] = "";
@@ -510,6 +513,10 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                         {
                             int t = atoi(_sv);
                             s_display_timeout_ms = (t > 0) ? (int64_t)t * 1000 : 0;
+                        }
+                        else
+                        {
+                            s_display_timeout_ms = 300000;
                         }
                     }
                     else

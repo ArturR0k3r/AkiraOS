@@ -46,8 +46,14 @@ typedef struct
 #define AKIRA_BTN_RIGHT 5
 #define AKIRA_BTN_A 6 /**< Confirm / launch */
 #define AKIRA_BTN_B 7 /**< Back / cancel */
-#define AKIRA_BTN_X 8 /**<  */
+#define AKIRA_BTN_X 8
 #define AKIRA_BTN_Y 9 /**< Context menu / alternate action */
+
+/**
+ * @brief Maximum dial axis value returned by akira_input_get_dial().
+ * The dial reports 0 (fully counter-clockwise) to 255 (fully clockwise).
+ */
+#define AKIRA_DIAL_MAX 255
 
 /* ── Native (non-WASM) API ───────────────────────────────────────────────── */
 
@@ -76,6 +82,16 @@ uint32_t akira_input_get_bitmask(void);
 
 int akira_input_poll_event(akira_input_event_t *evt_out);
 
+/**
+ * @brief Return the current dial (rotary encoder) position.
+ *
+ * The akira,pwm-dial driver fires INPUT_ABS_WHEEL axis events which are
+ * captured here and stored atomically.  The returned value is 0 when the
+ * knob is at the counter-clockwise stop and AKIRA_DIAL_MAX (255) at the
+ * clockwise stop.  Returns 0 if no dial hardware is present.
+ */
+int akira_input_get_dial(void);
+
 #else /* !CONFIG_AKIRA_INPUT_API — stubs for targets without gpio-keys (e.g. native_sim) */
 
 static inline void akira_input_init(void) {}
@@ -85,6 +101,7 @@ static inline int akira_input_poll_event(akira_input_event_t *evt_out)
     (void)evt_out;
     return -EAGAIN;
 }
+static inline int akira_input_get_dial(void) { return 0; }
 
 #endif /* CONFIG_AKIRA_INPUT_API */
 
@@ -106,6 +123,13 @@ int akira_native_input_get_buttons(wasm_exec_env_t exec_env);
  */
 int akira_native_input_poll_event(wasm_exec_env_t exec_env,
                                   uint32_t evt_ptr, uint32_t evt_len);
+
+/**
+ * WASM signature: ()i
+ * Returns the current dial position (0–255).
+ * Requires capability: AKIRA_CAP_INPUT_READ ("input.read")
+ */
+int akira_native_input_get_dial(wasm_exec_env_t exec_env);
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
 

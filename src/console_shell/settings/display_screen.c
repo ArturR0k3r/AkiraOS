@@ -33,7 +33,7 @@ typedef enum
 } disp_item_t;
 
 static int g_brightness = BRIGHT_MAX;
-static int g_timeout = 60;
+static int g_timeout = 300;
 static bool g_timeout_en = true;
 
 static void apply_brightness(int v)

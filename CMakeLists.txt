@@ -810,6 +810,7 @@ endif()
 if(CONFIG_AKIRA_OS_SHELL)
     target_sources(app PRIVATE
         src/console_shell/akira_os_shell.c
+        src/console_shell/wait_screen.c
         src/console_shell/display_ownership.c
         src/console_shell/home_screen.c
         src/console_shell/shell_theme.c

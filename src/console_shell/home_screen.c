@@ -385,7 +385,7 @@ static void anim_start_pop(anim_t *a)
 
 /* ---- Clock / battery / connectivity ----------------------------- */
 static char g_time_str[10] = "00:00:00";
-static char g_batt_str[8] = "100%";
+static char g_batt_str[8] = "--";
 static bool g_wifi_conn;
 static bool g_bt_conn;
 static bool g_sntp_done; /* true once SNTP sync succeeded or gave up   */
@@ -1181,6 +1181,8 @@ void home_screen_refresh(void)
     g_sntp_retries = 0;
 #endif
     g_visible = true;
+    /* Read battery, clock, and connectivity now so first frame is accurate. */
+    home_screen_update_status();
     g_dirty = true;
     full_redraw();
 }
