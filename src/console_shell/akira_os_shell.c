@@ -401,8 +401,12 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
         uint32_t just_pressed = btns & ~s_prev_btns;
         s_prev_btns = btns;
 
-        /* Any held button resets the idle timer */
-        if (btns)
+        /* Reset the idle timer on real press edges (just_pressed), NOT the raw
+         * level (btns).  A press can leave a stale bit set in g_btn_state that
+         * persists for many ticks; a level check would then reset the timer
+         * every tick forever, so the wait screen would never re-arm after the
+         * first wake.  Same edge-vs-level reasoning as the wake path below. */
+        if (just_pressed)
         {
             s_last_input_ms = now_ms;
         }
@@ -475,8 +479,10 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 }
             }
 
-            /* Tick home screen animation every 20 ms (skip if SD popup active) */
-            if (!settings_screen_is_active()
+            /* Tick home screen animation every 20 ms (skip if SD popup active
+             * or the idle wait screen is up — otherwise the home animation
+             * repaints over the wait screen and flickers). */
+            if (!s_display_blanked && !settings_screen_is_active()
 #ifdef CONFIG_AKIRA_SD_HOTPLUG
                 && !g_sd_popup_active
 #endif
@@ -519,44 +525,46 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                      * noise bits as a fresh edge, and immediately wakes. */
                     s_prev_btns = akira_input_get_bitmask();
                 }
+            }
 
-                /* Re-read timeout only when the user returns from settings.
-                 * Polling NVS every second floods the log with GET messages. */
+            /* Re-read the idle timeout the instant the user leaves settings.
+             * Done every iteration (not inside the 1 s tick) so a quick
+             * in-and-out can't miss the active->inactive edge.  The NVS read
+             * only runs on that transition, so it won't flood the log. */
 #ifdef CONFIG_AKIRA_SETTINGS
+            {
+                static bool s_settings_was_active;
+                bool _settings_now = settings_screen_is_active();
+                if (s_settings_was_active && !_settings_now)
                 {
-                    static bool s_settings_was_active;
-                    bool _settings_now = settings_screen_is_active();
-                    if (s_settings_was_active && !_settings_now)
+                    bool en = true;
+                    char _sv[16] = "";
+                    if (!akira_settings_get("akira/display/timeout_en",
+                                            _sv, sizeof(_sv)))
+                        en = (atoi(_sv) != 0);
+                    if (en)
                     {
-                        bool en = true;
-                        char _sv[16] = "";
-                        if (!akira_settings_get("akira/display/timeout_en",
+                        memset(_sv, 0, sizeof(_sv));
+                        if (!akira_settings_get("akira/display/timeout_s",
                                                 _sv, sizeof(_sv)))
-                            en = (atoi(_sv) != 0);
-                        if (en)
                         {
-                            memset(_sv, 0, sizeof(_sv));
-                            if (!akira_settings_get("akira/display/timeout_s",
-                                                    _sv, sizeof(_sv)))
-                            {
-                                int t = atoi(_sv);
-                                s_display_timeout_ms =
-                                    (t > 0) ? (int64_t)t * 1000 : 0;
-                            }
-                            else
-                            {
-                                s_display_timeout_ms = 180000;
-                            }
+                            int t = atoi(_sv);
+                            s_display_timeout_ms =
+                                (t > 0) ? (int64_t)t * 1000 : 0;
                         }
                         else
                         {
-                            s_display_timeout_ms = 0;
+                            s_display_timeout_ms = 180000;
                         }
                     }
-                    s_settings_was_active = _settings_now;
+                    else
+                    {
+                        s_display_timeout_ms = 0;
+                    }
                 }
-#endif
+                s_settings_was_active = _settings_now;
             }
+#endif
 
             k_sleep(K_MSEC(20));
         }
