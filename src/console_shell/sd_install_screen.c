@@ -198,6 +198,9 @@ static void scan_sd(void)
 {
     g_entry_count = 0;
 
+    /* Decompress any .akpkg archives into plain .wasm/.aot first. */
+    app_manager_extract_sd_akpkgs(SD_APPS_DIR);
+
     struct fs_dir_t dir;
     fs_dir_t_init(&dir);
 

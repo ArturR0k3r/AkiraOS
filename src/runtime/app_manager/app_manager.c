@@ -2006,6 +2006,150 @@ int app_manager_install_akpkg(char *name, size_t name_size,
     return app_id;
 }
 
+/* ===== SD .akpkg extraction ===== */
+
+#define MAX_SD_AKPKGS   16
+#define AKPKG_MAX_ISIZE (4u * 1024u * 1024u)
+
+int app_manager_extract_sd_akpkgs(const char *dir)
+{
+    if (!dir) {
+        return -EINVAL;
+    }
+
+    /* Phase 1: collect .akpkg filenames before touching the directory.
+     * Writing/deleting files while an fs_dir_t is open mid-readdir is unsafe
+     * on FAT, so we snapshot the names first, then close the handle. */
+    struct fs_dir_t d;
+    fs_dir_t_init(&d);
+    int ret = fs_opendir(&d, dir);
+    if (ret < 0) {
+        return ret; /* dir absent (no card / no apps dir) — nothing to do */
+    }
+
+    /* Heap-allocate the filename scratch list (PSRAM-preferred) rather than a
+     * static buffer — DRAM BSS is tight on this target. */
+    char (*names)[64] = akira_malloc_buffer(MAX_SD_AKPKGS * 64);
+    if (!names) {
+        fs_closedir(&d);
+        return -ENOMEM;
+    }
+
+    int n = 0;
+    struct fs_dirent entry;
+    while (n < MAX_SD_AKPKGS &&
+           fs_readdir(&d, &entry) == 0 && entry.name[0] != '\0') {
+        int nl = (int)strlen(entry.name);
+        if (entry.type == FS_DIR_ENTRY_FILE &&
+            nl >= 7 && strcasecmp(&entry.name[nl - 6], ".akpkg") == 0) {
+            strncpy(names[n], entry.name, sizeof(names[0]) - 1);
+            names[n][sizeof(names[0]) - 1] = '\0';
+            n++;
+        }
+    }
+    fs_closedir(&d);
+
+    /* Phase 2: decompress each archive and write its contents back to the card
+     * as plain <base>.wasm/.aot + <base>.json, then delete the archive. */
+    int extracted = 0;
+    for (int i = 0; i < n; i++) {
+        char pkg_path[APP_PATH_MAX_LEN];
+        snprintf(pkg_path, sizeof(pkg_path), "%s/%s", dir, names[i]);
+
+        /* base name = filename minus the ".akpkg" suffix */
+        char base[64];
+        strncpy(base, names[i], sizeof(base) - 1);
+        base[sizeof(base) - 1] = '\0';
+        base[strlen(base) - 6] = '\0';
+
+        ssize_t pkg_size = fs_manager_get_size(pkg_path);
+        if (pkg_size <= 0 || (size_t)pkg_size > AKPKG_MAX_ISIZE) {
+            LOG_WRN("akpkg-sd: bad size for %s (%zd)", pkg_path, pkg_size);
+            continue;
+        }
+
+        uint8_t *pkg = akira_malloc_buffer((size_t)pkg_size);
+        if (!pkg) {
+            LOG_ERR("akpkg-sd: alloc %zd failed", pkg_size);
+            continue;
+        }
+        if (fs_manager_read_file(pkg_path, pkg, (size_t)pkg_size) != pkg_size) {
+            LOG_ERR("akpkg-sd: read failed %s", pkg_path);
+            akira_free_buffer(pkg);
+            continue;
+        }
+        if (!akpkg_is_gzip(pkg, (size_t)pkg_size)) {
+            LOG_WRN("akpkg-sd: %s not gzip, skipping", pkg_path);
+            akira_free_buffer(pkg);
+            continue;
+        }
+
+        /* Decompressed size from the gzip ISIZE trailer (last 4 bytes, LE). */
+        size_t isize = (size_t)pkg[pkg_size - 4]
+                     | ((size_t)pkg[pkg_size - 3] << 8)
+                     | ((size_t)pkg[pkg_size - 2] << 16)
+                     | ((size_t)pkg[pkg_size - 1] << 24);
+        if (isize == 0 || isize > AKPKG_MAX_ISIZE) {
+            LOG_WRN("akpkg-sd: implausible ISIZE %zu for %s", isize, pkg_path);
+            akira_free_buffer(pkg);
+            continue;
+        }
+
+        uint8_t *tar = akira_malloc_buffer(isize);
+        if (!tar) {
+            LOG_ERR("akpkg-sd: alloc tar %zu failed", isize);
+            akira_free_buffer(pkg);
+            continue;
+        }
+        ssize_t tar_len = akpkg_inflate(pkg, (size_t)pkg_size, tar, isize);
+        akira_free_buffer(pkg);
+        if (tar_len < 0) {
+            LOG_ERR("akpkg-sd: inflate failed %s (%zd)", pkg_path, tar_len);
+            akira_free_buffer(tar);
+            continue;
+        }
+
+        const uint8_t *bin_ptr; size_t bin_size;
+        const char    *mf_ptr;  size_t mf_size;
+        if (akpkg_tar_extract(tar, (size_t)tar_len,
+                              &bin_ptr, &bin_size, &mf_ptr, &mf_size) != 0) {
+            LOG_ERR("akpkg-sd: tar extract failed %s", pkg_path);
+            akira_free_buffer(tar);
+            continue;
+        }
+
+        /* Binary inside the archive may be .wasm or .aot — pick by magic. */
+        const char *ext = is_aot_binary(bin_ptr, bin_size) ? ".aot" : ".wasm";
+        char bin_path[APP_PATH_MAX_LEN];
+        char json_path[APP_PATH_MAX_LEN];
+        snprintf(bin_path, sizeof(bin_path), "%s/%s%s", dir, base, ext);
+        snprintf(json_path, sizeof(json_path), "%s/%s.json", dir, base);
+
+        ssize_t w1 = fs_manager_write_file(bin_path, bin_ptr, bin_size);
+        ssize_t w2 = fs_manager_write_file(json_path, mf_ptr, mf_size);
+        akira_free_buffer(tar);
+
+        if (w1 != (ssize_t)bin_size || w2 != (ssize_t)mf_size) {
+            LOG_ERR("akpkg-sd: write failed %s (bin %zd, json %zd)", base, w1, w2);
+            continue; /* leave archive in place for retry on next scan */
+        }
+
+        /* Success — remove the archive so it isn't re-extracted. */
+        if (fs_manager_delete_file(pkg_path) < 0) {
+            LOG_WRN("akpkg-sd: extracted %s but failed to delete archive", base);
+        }
+        LOG_INF("akpkg-sd: extracted %s -> %s%s + .json", names[i], base, ext);
+        extracted++;
+    }
+
+    akira_free_buffer(names);
+
+    if (extracted) {
+        LOG_INF("akpkg-sd: %d archive(s) extracted in %s", extracted, dir);
+    }
+    return extracted;
+}
+
 /* ===== SD Registry ===== */
 
 int app_manager_register_sd_apps(void)
@@ -2013,6 +2157,10 @@ int app_manager_register_sd_apps(void)
     if (!g_initialized) {
         return -EINVAL;
     }
+
+    /* Extract any .akpkg archives on the card first so their .wasm/.aot
+     * contents are visible to the scan below. */
+    app_manager_extract_sd_akpkgs(SD_APPS_DIR);
 
     struct fs_dir_t dir;
     fs_dir_t_init(&dir);

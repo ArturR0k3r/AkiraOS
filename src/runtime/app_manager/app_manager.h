@@ -455,6 +455,20 @@ extern "C"
                                   app_source_t source);
 
     /**
+     * @brief Decompress any .akpkg archives found in a directory in place.
+     *
+     * For each "<base>.akpkg" in @p dir, inflates the gzip+tar archive and
+     * writes its contents back to the same directory as "<base>.wasm" or
+     * "<base>.aot" (chosen by binary magic) plus "<base>.json" (manifest),
+     * then deletes the archive. Failed archives are left untouched for retry.
+     * Intended to run as a pre-pass before scanning /SD:/apps/ for apps.
+     *
+     * @param dir Directory to scan (e.g. "/SD:/apps").
+     * @return Number of archives extracted, negative errno on error.
+     */
+    int app_manager_extract_sd_akpkgs(const char *dir);
+
+    /**
      * @brief Register apps found in /SD:/apps/ as in-memory registry entries.
      *
      * Scans the SD card and adds APP_SOURCE_SD entries to g_registry without
