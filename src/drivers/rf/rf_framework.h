@@ -219,10 +219,23 @@ int rf_framework_set_active_driver(rf_chip_type_t type);
 
 /**
  * @brief Get number of registered drivers
- * 
+ *
  * @return Number of registered drivers
  */
 int rf_framework_get_driver_count(void);
+
+/**
+ * @brief Claim the shared RF hardware reset line (RF_RST).
+ *
+ * On boards where multiple transceivers share one physical RESET pin (e.g.
+ * CC1121 and LR2021 both on TCA6408 P4), pulsing reset resets ALL of them.
+ * The first driver to init claims the reset and performs the pulse; later
+ * inits must skip their own pulse so they don't wipe an already-configured
+ * sibling. Returns true exactly once per boot, to the first caller.
+ *
+ * @return true if the caller should perform the reset pulse, false otherwise
+ */
+bool rf_framework_claim_shared_reset(void);
 
 #ifdef __cplusplus
 }

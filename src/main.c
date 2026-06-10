@@ -47,6 +47,9 @@
 #ifdef CONFIG_AKIRA_HID_APP_HANDLER
 #include <connectivity/hid/hid_app_handler.h>
 #endif
+#ifdef CONFIG_AKIRA_MODULE_RF
+#include <api/akira_rf_api.h>
+#endif
 
 LOG_MODULE_REGISTER(akira_main, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -180,8 +183,17 @@ int main(void)
     /* Filesystem auto-initialized via SYS_INIT (see fs_manager.c) */
 
 #ifdef CONFIG_AKIRA_MODULE_RF
-    /* RF module enabled - framework will auto-init on first API call */
     LOG_INF("RF module enabled");
+#ifdef CONFIG_AKIRA_CC1121
+    if (akira_rf_init(AKIRA_RF_CHIP_CC1121) < 0) {
+        LOG_ERR("CC1121 init failed");
+    }
+#endif
+#ifdef CONFIG_AKIRA_LR2021
+    if (akira_rf_init(AKIRA_RF_CHIP_LR2021) < 0) {
+        LOG_ERR("LR2021 init failed");
+    }
+#endif
 #endif
 
 #ifdef CONFIG_AKIRA_HTTP_SERVER

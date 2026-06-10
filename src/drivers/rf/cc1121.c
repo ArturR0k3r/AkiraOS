@@ -479,11 +479,15 @@ static int cc1121_init(void)
         g_cc1121.reset = (struct gpio_dt_spec)GPIO_DT_SPEC_GET(CC1121_NODE, reset_gpios);
         if (gpio_is_ready_dt(&g_cc1121.reset)) {
             gpio_pin_configure_dt(&g_cc1121.reset, GPIO_OUTPUT_INACTIVE);
-            /* Pulse reset */
-            gpio_pin_set_dt(&g_cc1121.reset, 1);
-            k_msleep(5);
-            gpio_pin_set_dt(&g_cc1121.reset, 0);
-            k_msleep(5);
+            /* RF_RST is shared with LR2021 — only pulse it if no sibling has
+             * already claimed it, otherwise we would reset a configured LR2021.
+             * The SRES software strobe below resets this chip either way. */
+            if (rf_framework_claim_shared_reset()) {
+                gpio_pin_set_dt(&g_cc1121.reset, 1);
+                k_msleep(5);
+                gpio_pin_set_dt(&g_cc1121.reset, 0);
+                k_msleep(5);
+            }
         }
     }
 
@@ -877,7 +881,7 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
     cc1121_strobe(CC1121_SFRX);
     cc1121_strobe(CC1121_SRX);
     g_cc1121.current_mode = RF_MODE_RX;
-    LOG_INF("RX started: freq=%u timeout=%u ms", g_cc1121.frequency_hz, timeout_ms);
+    LOG_DBG("RX started: freq=%u timeout=%u ms", g_cc1121.frequency_hz, timeout_ms);
 
     int64_t deadline = k_uptime_get() + (timeout_ms ? timeout_ms : CC1121_RX_TIMEOUT_MS);
     uint8_t last_marc = CC1121_MARC_RX;
@@ -995,7 +999,7 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
     {
         uint8_t marc = 0;
         cc1121_get_marcstate(&marc);
-        LOG_INF("RX timeout: MARCSTATE=0x%02X NUM_RXBYTES=0", marc & 0x1F);
+        LOG_DBG("RX timeout: MARCSTATE=0x%02X NUM_RXBYTES=0", marc & 0x1F);
     }
     cc1121_strobe(CC1121_SIDLE);
     g_cc1121.current_mode = RF_MODE_STANDBY;
