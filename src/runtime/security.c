@@ -12,7 +12,7 @@ LOG_MODULE_REGISTER(akira_security, CONFIG_AKIRA_LOG_LEVEL);
 #endif
 
 /* Map capability string to mask (exported) - extended for all capability types */
-uint32_t akira_capability_str_to_mask(const char *cap)
+uint64_t akira_capability_str_to_mask(const char *cap)
 {
     if (!cap) return 0;
     if (strcmp(cap, "display.write") == 0)  return AKIRA_CAP_DISPLAY_WRITE;
@@ -46,6 +46,7 @@ uint32_t akira_capability_str_to_mask(const char *cap)
     if (strcmp(cap, "settings.*") == 0)     return AKIRA_CAP_SETTINGS;
     if (strcmp(cap, "adc") == 0)            return AKIRA_CAP_ADC;
     if (strcmp(cap, "wdt") == 0)            return AKIRA_CAP_WDT;
+    if (strcmp(cap, "ai.infer") == 0)       return AKIRA_CAP_AIINFER;
     /* Wildcard patterns */
     if (strcmp(cap, "display.*") == 0)      return AKIRA_CAP_DISPLAY_WRITE;
     if (strcmp(cap, "input.*") == 0)        return AKIRA_CAP_INPUT_READ | AKIRA_CAP_INPUT_WRITE;
@@ -58,11 +59,11 @@ uint32_t akira_capability_str_to_mask(const char *cap)
     if (strcmp(cap, "network.use") == 0)    return AKIRA_CAP_NETWORK;
     if (strcmp(cap, "network.connect") == 0) return AKIRA_CAP_NETWORK;
     if (strcmp(cap, "hw.*") == 0)           return AKIRA_CAP_TIMER | AKIRA_CAP_UART | AKIRA_CAP_I2C | AKIRA_CAP_PWM;
-    if (strcmp(cap, "*") == 0)              return 0xFFFFFFFF;
+    if (strcmp(cap, "*") == 0)              return UINT64_MAX;
     return 0;
 }
 
-char* akira_capability_mask_to_str(uint32_t cap)
+char* akira_capability_mask_to_str(uint64_t cap)
 {
     if (cap & AKIRA_CAP_DISPLAY_WRITE) return "display.write";
     if (cap & AKIRA_CAP_INPUT_READ) return "input.read";
@@ -90,59 +91,60 @@ char* akira_capability_mask_to_str(uint32_t cap)
     if (cap & AKIRA_CAP_ADC)         return "adc";
     if (cap & AKIRA_CAP_WDT)         return "wdt";
     if (cap & AKIRA_CAP_SETTINGS)    return "settings.*";
+    if (cap & AKIRA_CAP_AIINFER)     return "ai.infer";
     return "unknown";
 }
 
 /* Convenience wrapper for native callers */
-bool akira_security_check(uint32_t capability)
+bool akira_security_check(uint64_t capability)
 {
     return akira_security_check_native(capability);
 }
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 /* Get capability mask for exec_env - for use with inline macros */
-uint32_t akira_security_get_cap_mask(wasm_exec_env_t exec_env)
+uint64_t akira_security_get_cap_mask(wasm_exec_env_t exec_env)
 {
     if (!exec_env) return 0;
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
     return akira_runtime_get_cap_mask_for_module_inst(inst);
 }
 
-bool akira_security_check_exec(wasm_exec_env_t exec_env, uint32_t capability)
+bool akira_security_check_exec(wasm_exec_env_t exec_env, uint64_t capability)
 {
     if (!exec_env) return false;
 
-    uint32_t mask = akira_security_get_cap_mask(exec_env);
+    uint64_t mask = akira_security_get_cap_mask(exec_env);
 
     bool ok = (mask & capability) != 0;
     if (!ok) {
         wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
         char namebuf[32];
         if (akira_runtime_get_name_for_module_inst(inst, namebuf, sizeof(namebuf)) == 0) {
-            LOG_WRN("Security: capability denied for app %s: %s (0x%08x)", namebuf, akira_capability_mask_to_str(capability), capability);
-            sandbox_audit_log(AUDIT_EVENT_CAPABILITY_DENIED, namebuf, capability);
+            LOG_WRN("Security: capability denied for app %s: %s (0x%016llx)", namebuf, akira_capability_mask_to_str(capability), (unsigned long long)capability);
+            sandbox_audit_log(AUDIT_EVENT_CAPABILITY_DENIED, namebuf, (uint32_t)(capability & 0xFFFFFFFFu));
         } else {
-            LOG_WRN("Security: capability denied for unknown app: %s (0x%08x)", akira_capability_mask_to_str(capability), capability);
-            sandbox_audit_log(AUDIT_EVENT_CAPABILITY_DENIED, "unknown", capability);
+            LOG_WRN("Security: capability denied for unknown app: %s (0x%016llx)", akira_capability_mask_to_str(capability), (unsigned long long)capability);
+            sandbox_audit_log(AUDIT_EVENT_CAPABILITY_DENIED, "unknown", (uint32_t)(capability & 0xFFFFFFFFu));
         }
     }
     return ok;
 }
 #else
-uint32_t akira_security_get_cap_mask(wasm_exec_env_t exec_env)
+uint64_t akira_security_get_cap_mask(wasm_exec_env_t exec_env)
 {
     (void)exec_env;
     return 0;
 }
 
-bool akira_security_check_exec(wasm_exec_env_t exec_env, uint32_t capability)
+bool akira_security_check_exec(wasm_exec_env_t exec_env, uint64_t capability)
 {
     (void)exec_env; (void)capability;
     return false;
 }
 #endif
 
-bool akira_security_check_native(uint32_t capability)
+bool akira_security_check_native(uint64_t capability)
 {
     /* Native (non-wasm) callers have broader rights for now */
     (void)capability;

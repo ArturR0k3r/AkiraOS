@@ -1924,7 +1924,8 @@ int app_manager_install_akpkg(char *name, size_t name_size,
 
     int ret = akpkg_tar_extract(tar_buf, (size_t)tar_len,
                                 &wasm_ptr, &wasm_size,
-                                &mfst_ptr, &mfst_size);
+                                &mfst_ptr, &mfst_size,
+                                NULL, NULL);
     if (ret) {
         LOG_ERR("akpkg: tar extraction failed (%d)", ret);
         akira_free_buffer(tar_buf);

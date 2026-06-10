@@ -144,7 +144,7 @@ int sandbox_init(void)
 }
 
 void sandbox_ctx_init(sandbox_ctx_t *ctx, akira_trust_level_t trust,
-                      uint32_t cap_mask)
+                      uint64_t cap_mask)
 {
     if (!ctx)
         return;

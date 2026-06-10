@@ -54,7 +54,7 @@ extern "C"
      */
     typedef struct
     {
-        uint32_t cap_mask;                      /**< Capability bitmask */
+        uint64_t cap_mask;                      /**< Capability bitmask */
         uint32_t memory_quota;                  /**< Memory quota in bytes (0 = default) */
         char name[32];                          /**< Application name */
         char version[16];                       /**< Version string (e.g., "1.0.0") */
@@ -122,7 +122,7 @@ extern "C"
      * @param capability Capability string (e.g., "display.write")
      * @return Capability mask bit, or 0 if unknown
      */
-    uint32_t akira_capability_str_to_mask(const char *cap);
+    uint64_t akira_capability_str_to_mask(const char *cap);
 
     /**
      * @brief Get capability name from mask bit
@@ -130,7 +130,7 @@ extern "C"
      * @param mask Single capability bit
      * @return Capability string, or NULL if unknown
      */
-    const char *manifest_mask_to_capability(uint32_t mask);
+    const char *manifest_mask_to_capability(uint64_t mask);
 
 #ifdef __cplusplus
 }

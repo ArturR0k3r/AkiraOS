@@ -427,6 +427,44 @@ if(CONFIG_AKIRA_OTA_DELTA)
     target_sources(app PRIVATE src/lib/akira_delta.c)
 endif()
 
+# ===== AkiraClaw — Edge AI Inference (TFLite Micro) =====
+if(CONFIG_AKIRA_AIINFER)
+    set(TFLM_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/modules/tflite-micro")
+
+    # TFLite Micro requires C++; enable mixed-language build.
+    enable_language(CXX)
+
+    if(CONFIG_AKIRA_TFLITE_MICRO)
+        if(EXISTS "${TFLM_ROOT_DIR}/CMakeLists.txt")
+            # Build TFLM as an interface library so we control compilation flags.
+            add_subdirectory(${TFLM_ROOT_DIR} tflm_build EXCLUDE_FROM_ALL)
+        else()
+            message(FATAL_ERROR
+                "CONFIG_AKIRA_TFLITE_MICRO=y but TFLite Micro submodule not found at "
+                "${TFLM_ROOT_DIR}. Run: west update  (or  git submodule update --init modules/tflite-micro)")
+        endif()
+
+        if(CONFIG_AKIRA_TFLITE_ESPNN AND CONFIG_SOC_SERIES_ESP32S3)
+            target_compile_definitions(app PRIVATE TFLM_USE_ESPNN=1)
+        endif()
+
+        if(CONFIG_AKIRA_TFLITE_CMSIS_NN AND CONFIG_CPU_CORTEX_M)
+            target_compile_definitions(app PRIVATE TFLM_USE_CMSIS_NN=1)
+        endif()
+    endif()
+
+    target_compile_definitions(app PRIVATE
+        AKIRA_AIINFER_ARENA_KB=${CONFIG_AKIRA_AIINFER_ARENA_KB}
+        AKIRA_AIINFER_MAX_HANDLES=${CONFIG_AKIRA_AIINFER_MAX_HANDLES}
+    )
+
+    target_sources(app PRIVATE src/api/akira_aiinfer_api.cpp)
+
+    if(TARGET tensorflow-lite-micro)
+        target_link_libraries(app PRIVATE tensorflow-lite-micro)
+    endif()
+endif() # CONFIG_AKIRA_AIINFER
+
 # Track D — DX: telemetry, panic handler, runtime shell commands
 if(CONFIG_AKIRA_TELEMETRY)
     target_sources(app PRIVATE src/lib/akira_telemetry.c)

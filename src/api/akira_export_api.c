@@ -26,6 +26,9 @@
 #ifdef CONFIG_AKIRA_WASM_OTA
 #include "akira_ota_api.h"
 #endif
+#ifdef CONFIG_AKIRA_WASM_AIINFER
+#include "akira_aiinfer_api.h"
+#endif
 
 #include <runtime/akira_runtime.h>
 #include <runtime/security.h>
@@ -281,6 +284,13 @@ bool akira_register_native_apis()
         {"ota_get_state",        (void *)akira_native_ota_get_state,        "()i",  NULL},
         {"ota_confirm",          (void *)akira_native_ota_confirm,          "()i",  NULL},
         {"ota_rollback",         (void *)akira_native_ota_rollback,         "()i",  NULL},
+#endif
+
+/* ai.infer: on-device ML inference via TFLite Micro (AkiraClaw) */
+#ifdef CONFIG_AKIRA_WASM_AIINFER
+        {"aiinfer_load",   (void *)akira_native_aiinfer_load,   "(*~)i",    NULL},
+        {"aiinfer_run",    (void *)akira_native_aiinfer_run,    "(i*~*~)i", NULL},
+        {"aiinfer_unload", (void *)akira_native_aiinfer_unload, "(i)",      NULL},
 #endif
 
     };

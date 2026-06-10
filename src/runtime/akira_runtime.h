@@ -78,7 +78,7 @@ typedef struct {
     struct k_mutex exit_mutex;  /**< Per-slot mutex for cond_exit wait — isolates stop() calls across slots */
     struct k_condvar cond_exit; /**< Broadcast when thread exits */
 
-    uint32_t cap_mask;        /**< capability bitmask from manifest */
+    uint64_t cap_mask;        /**< capability bitmask from manifest */
     uint32_t memory_quota;    /**< memory quota from manifest (0 = unlimited) */
     atomic_t memory_used;     /**< current memory usage (bytes) — updated atomically */
 
@@ -145,8 +145,8 @@ int akira_runtime_destroy(int instance_id);
 int akira_runtime_uninstall(const char *name, int instance_id);
 
 /* Capability guard helpers */
-bool akira_security_check_exec(wasm_exec_env_t exec_env, uint32_t capability);
-bool akira_security_check_native(uint32_t capability);
+bool akira_security_check_exec(wasm_exec_env_t exec_env, uint64_t capability);
+bool akira_security_check_native(uint64_t capability);
 
 /*
  * WASM Memory Allocation with Per-App Quota Enforcement

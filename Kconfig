@@ -2017,6 +2017,79 @@ config AKIRA_PANIC
       reason, fault address, last app name) to an NVS partition.  On next
       boot the record is logged at ERR level and erased.
 
+menu "AkiraClaw — Edge AI Inference"
+
+config AKIRA_AIINFER
+    bool "Edge AI inference API (aiinfer_*)"
+    default n
+    depends on AKIRA_WASM_RUNTIME
+    select CPLUSPLUS
+    help
+      Enable on-device ML inference via TFLite Micro. Exposes aiinfer_load,
+      aiinfer_run, and aiinfer_unload as WASM native symbols, gated behind
+      the "ai.infer" capability (AKIRA_CAP_AIINFER, bit 32).
+      Requires a C++ toolchain and ~128 KiB of tensor arena RAM (configurable).
+
+config AKIRA_WASM_AIINFER
+    bool "Register aiinfer_* as WASM native symbols"
+    default y
+    depends on AKIRA_AIINFER
+    help
+      Registers aiinfer_load/run/unload in the WAMR native symbol table so
+      WASM apps can call them. Disable only for testing the C++ backend
+      without the WASM bridge.
+
+config AKIRA_TFLITE_MICRO
+    bool "TFLite Micro backend"
+    default y
+    depends on AKIRA_AIINFER
+    help
+      Build the TFLite Micro runtime as the inference engine. Currently the
+      only supported backend; future backends (e.g. ONNX Runtime Micro) will
+      add their own Kconfig options here.
+
+config AKIRA_TFLITE_ESPNN
+    bool "ESP-NN SIMD kernel acceleration (ESP32-S3)"
+    default y if SOC_SERIES_ESP32S3
+    depends on AKIRA_TFLITE_MICRO
+    help
+      Use Espressif's ESP-NN optimised kernels for TFLite Micro operations
+      on ESP32-S3. Provides 2–4× speedup for conv2d, depthwise_conv, and
+      fully_connected on the S3's extended ISA.
+
+config AKIRA_TFLITE_CMSIS_NN
+    bool "CMSIS-NN kernel acceleration (Cortex-M)"
+    default y if CPU_CORTEX_M
+    depends on AKIRA_TFLITE_MICRO
+    help
+      Use ARM CMSIS-NN optimised kernels for TFLite Micro operations on
+      Cortex-M targets (STM32, nRF54L15). Enables SIMD via DSP/MVE
+      instructions where supported by the MCU.
+
+config AKIRA_AIINFER_ARENA_KB
+    int "TFLite Micro tensor arena size per slot (KiB)"
+    default 128
+    range 32 512
+    depends on AKIRA_AIINFER
+    help
+      Size of the static tensor arena allocated per inference slot. The
+      arena must be large enough to hold all intermediate tensors for the
+      largest model the app will load. 128 KiB covers most KWS and small
+      image-classification models. Increase for larger models; decrease on
+      RAM-constrained targets.
+
+config AKIRA_AIINFER_MAX_HANDLES
+    int "Maximum simultaneous loaded models"
+    default 4
+    range 1 8
+    depends on AKIRA_AIINFER
+    help
+      Number of concurrent TFLite Micro interpreter slots. Each slot
+      consumes CONFIG_AKIRA_AIINFER_ARENA_KB of tensor arena memory, so
+      total arena RAM = ARENA_KB × MAX_HANDLES.
+
+endmenu # AkiraClaw — Edge AI Inference
+
 endmenu
 
 menu "Akira Settings"

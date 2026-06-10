@@ -211,7 +211,7 @@ static bool slot_valid(int id)
 }
 
 /* O(1) cap lookup — slot pointer is stored as WAMR custom data at instantiation */
-uint32_t akira_runtime_get_cap_mask_for_module_inst(wasm_module_inst_t inst)
+uint64_t akira_runtime_get_cap_mask_for_module_inst(wasm_module_inst_t inst)
 {
     if (!inst)
     {
@@ -473,8 +473,8 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
     int manifest_ret = manifest_parse_wasm_section(buffer, size, &manifest);
     if (manifest_ret == 0)
     {
-        LOG_INF("Found embedded manifest: cap_mask=0x%08x, memory_quota=%u",
-                manifest.cap_mask, manifest.memory_quota);
+        LOG_INF("Found embedded manifest: cap_mask=0x%016llx, memory_quota=%u",
+                (unsigned long long)manifest.cap_mask, manifest.memory_quota);
     }
 
     /* ===== Step 4: Load WASM module ===== */
@@ -602,8 +602,8 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
     module_cache_store(binary_hash, module, size, load_time_ms);
 
     sandbox_audit_log(AUDIT_EVENT_APP_LOADED, g_apps[slot].name, (uint32_t)size);
-    LOG_INF("WASM module loaded into slot %d (cap=0x%08x, quota=%u, load=%ums)",
-            slot, g_apps[slot].cap_mask, g_apps[slot].memory_quota, load_time_ms);
+    LOG_INF("WASM module loaded into slot %d (cap=0x%016llx, quota=%u, load=%ums)",
+            slot, (unsigned long long)g_apps[slot].cap_mask, g_apps[slot].memory_quota, load_time_ms);
     return slot;
 #else
     (void)buffer;
@@ -875,8 +875,8 @@ int akira_runtime_start(int instance_id)
 
     app->status = AKIRA_APP_STATUS_RUNNING;
     sandbox_audit_log(AUDIT_EVENT_APP_STARTED, app->name, (uint32_t)instance_id);
-    LOG_INF("WASM module loaded into slot %d (cap=0x%08x, quota=%u)",
-            instance_id, app->cap_mask, app->memory_quota);
+    LOG_INF("WASM module loaded into slot %d (cap=0x%016llx, quota=%u)",
+            instance_id, (unsigned long long)app->cap_mask, app->memory_quota);
     return 0;
 #else
     (void)instance_id;
@@ -1015,8 +1015,8 @@ int akira_runtime_install_with_manifest(const char *name, const void *binary, si
         {
             g_apps[id].memory_quota = manifest.memory_quota;
         }
-        LOG_INF("App %s: merged manifest cap_mask=0x%08x, memory_quota=%u",
-                name, g_apps[id].cap_mask, g_apps[id].memory_quota);
+        LOG_INF("App %s: merged manifest cap_mask=0x%016llx, memory_quota=%u",
+                name, (unsigned long long)g_apps[id].cap_mask, g_apps[id].memory_quota);
     }
 
     /* Store friendly name */

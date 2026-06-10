@@ -51,11 +51,12 @@ int32_t akpkg_inflate(const uint8_t *gz, size_t gz_len,
                       uint8_t *out, size_t out_cap);
 
 /**
- * @brief Locate app.wasm and manifest.json entries inside a tar archive.
+ * @brief Locate app.wasm, manifest.json, and optionally model.tflite inside a tar archive.
  *
  * Walks a POSIX tar image (must be fully in memory) and sets output pointers
- * directly into @p tar — no copies are made.  Both entries must be present
- * for the function to succeed.
+ * directly into @p tar — no copies are made.  app.wasm and manifest.json must
+ * be present for the function to succeed.  model.tflite is optional; pass NULL
+ * for @p model_ptr and @p model_size to ignore it.
  *
  * @param tar           Decompressed tar data.
  * @param tar_len       Length of @p tar.
@@ -63,11 +64,14 @@ int32_t akpkg_inflate(const uint8_t *gz, size_t gz_len,
  * @param wasm_size     Out: app.wasm size in bytes.
  * @param manifest_ptr  Out: pointer to manifest.json data inside @p tar.
  * @param manifest_size Out: manifest.json size in bytes.
- * @return 0 on success, -ENOENT if either entry is missing.
+ * @param model_ptr     Out: pointer to model.tflite data (NULL if absent or not requested).
+ * @param model_size    Out: model.tflite size in bytes (0 if absent or not requested).
+ * @return 0 on success, -ENOENT if app.wasm or manifest.json is missing.
  */
 int akpkg_tar_extract(const uint8_t *tar, size_t tar_len,
                       const uint8_t **wasm_ptr,     size_t *wasm_size,
-                      const char    **manifest_ptr, size_t *manifest_size);
+                      const char    **manifest_ptr, size_t *manifest_size,
+                      const uint8_t **model_ptr,    size_t *model_size);
 
 /**
  * @brief Decode a base64-encoded string into raw bytes (RFC 4648).

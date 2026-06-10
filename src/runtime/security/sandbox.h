@@ -163,7 +163,7 @@ extern "C"
      * @param cap_mask  Capability mask from manifest
      */
     void sandbox_ctx_init(sandbox_ctx_t *ctx, akira_trust_level_t trust,
-                          uint32_t cap_mask);
+                          uint64_t cap_mask);
 
     /**
      * @brief Check if a syscall is allowed (hot path)

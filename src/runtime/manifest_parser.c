@@ -275,9 +275,9 @@ int manifest_parse_json(const char *json, size_t json_len, akira_manifest_t *man
                     return -EINVAL;
                 }
 
-                uint32_t cap = akira_capability_str_to_mask(str_val);
+                uint64_t cap = akira_capability_str_to_mask(str_val);
                 manifest->cap_mask |= cap;
-                LOG_DBG("Parsed capability: %s -> 0x%08x", str_val, cap);
+                LOG_DBG("Parsed capability: %s -> 0x%016llx", str_val, (unsigned long long)cap);
             }
         }
         else if (strcmp(key, "network_policy") == 0)
@@ -483,8 +483,8 @@ int manifest_parse_json(const char *json, size_t json_len, akira_manifest_t *man
     }
 
     manifest->valid = true;
-    LOG_INF("Parsed manifest: name=%s, cap_mask=0x%08x, memory_quota=%u",
-            manifest->name, manifest->cap_mask, manifest->memory_quota);
+    LOG_INF("Parsed manifest: name=%s, cap_mask=0x%016llx, memory_quota=%u",
+            manifest->name, (unsigned long long)manifest->cap_mask, manifest->memory_quota);
 
     return 0;
 }
