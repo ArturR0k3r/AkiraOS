@@ -111,3 +111,5 @@ build_nrf53/
 #python env
 .venv/
 modules/wasm-micro-runtime
+
+tmp/
