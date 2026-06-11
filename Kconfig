@@ -301,14 +301,56 @@ config AKIRA_CC1101
       Enable TI CC1101 Sub-GHz transceiver driver.
       Supports 300-928MHz frequency range.
 
+config AKIRA_LR2021
+    bool "Enable LR2021 LoRa Plus driver"
+    default n
+    depends on SPI && GPIO && AKIRA_RF_FRAMEWORK
+    help
+      Enable Semtech LR2021 LoRa Plus transceiver.
+      Fourth-generation LoRa IP, multi-band Sub-GHz + 2.4 GHz.
+      Supports LoRa, FSK, FLRC, BPSK, BLE PHY, O-QPSK modulations.
+
 config AKIRA_CC1121
-    bool "Enable CC1121 Sub-GHz driver (AkiraConsole Production)"
+    bool "Enable CC1121 Sub-GHz driver"
     default n
     depends on SPI && GPIO && AKIRA_RF_FRAMEWORK
     help
       Enable TI CC1121RHB high-performance Sub-GHz transceiver driver.
       Covers 315/433/868/915 MHz bands, narrowband FSK/OOK.
-      Used on AkiraConsole Production via TCA6408 GPIO expander CS.
+
+config AKIRA_RF_RX_DAEMON
+    bool "Enable RF RX background daemon"
+    default y
+    depends on AKIRA_RF_FRAMEWORK
+    help
+      Runs a background thread that polls the active RF driver and enqueues
+      received packets. Callers use akira_rf_recv_pop() instead of the
+      blocking akira_rf_receive(). Enables non-blocking receive for WASM apps.
+
+config AKIRA_RF_POLL_INTERVAL_MS
+    int "RF RX daemon poll interval (ms)"
+    default 2000
+    depends on AKIRA_RF_RX_DAEMON
+    help
+      How long the daemon blocks in driver->rx() per poll cycle.
+      Lower values reduce receive latency but increase CPU wakeups.
+
+config AKIRA_RF_RX_QUEUE_DEPTH
+    int "RF RX queue depth (packets)"
+    default 8
+    depends on AKIRA_RF_RX_DAEMON
+    help
+      Maximum number of received packets buffered before drop-oldest eviction.
+
+config AKIRA_RF_DAEMON_STACK_SIZE
+    int "RF RX daemon stack size (bytes)"
+    default 2048
+    depends on AKIRA_RF_RX_DAEMON
+
+config AKIRA_RF_DAEMON_PRIORITY
+    int "RF RX daemon thread priority"
+    default 14
+    depends on AKIRA_RF_RX_DAEMON
 
 endmenu
 

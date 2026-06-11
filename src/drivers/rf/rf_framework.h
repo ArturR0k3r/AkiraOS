@@ -28,6 +28,7 @@ typedef enum {
     RF_CHIP_NRF24L01 = 1,  /**< Nordic nRF24L01+ 2.4GHz transceiver */
     RF_CHIP_CC1101 = 2,    /**< TI CC1101 Sub-GHz transceiver */
     RF_CHIP_LR1121 = 3,    /**< Semtech LR1121 LoRa/GFSK transceiver */
+    RF_CHIP_LR2021 = 4,    /**< Semtech LR2021 LoRa Plus transceiver */
 } rf_chip_type_t;
 
 /**

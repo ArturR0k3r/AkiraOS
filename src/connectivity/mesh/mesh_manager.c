@@ -42,6 +42,9 @@ static struct {
     bool started;
 } mesh_state;
 
+#define MESH_BEACON_BUF_SIZE 64
+#define MESH_PACKET_BUF_SIZE 256
+
 /* Forward declarations */
 static void mesh_beacon_work_handler(struct k_work *work);
 static void mesh_radio_event_handler(const radio_event_t *event, void *user_data);
@@ -126,7 +129,7 @@ static void mesh_beacon_work_handler(struct k_work *work)
     }
     
     /* Build beacon message */
-    uint8_t beacon[64];
+    uint8_t beacon[MESH_BEACON_BUF_SIZE];
     struct mesh_header *hdr = (struct mesh_header *)beacon;
     
     hdr->version = 1;
@@ -284,7 +287,7 @@ int akira_mesh_send(const uint8_t *dest_id, const uint8_t *data, size_t len)
     }
     
     /* Build mesh packet */
-    uint8_t packet[256];
+    uint8_t packet[MESH_PACKET_BUF_SIZE];
     struct mesh_header *hdr = (struct mesh_header *)packet;
     
     if (len > sizeof(packet) - sizeof(struct mesh_header)) {
