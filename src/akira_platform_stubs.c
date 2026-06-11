@@ -37,3 +37,14 @@ __weak void akira_on_app_crashed(const char *name, int exit_code)
 	ARG_UNUSED(name);
 	ARG_UNUSED(exit_code);
 }
+
+/* WAMR calls __stdout_hook_install() from bh_platform_init() to install a
+ * custom printf hook into newlib.  When building native_sim with
+ * CONFIG_EXTERNAL_LIBC=y (host glibc) the symbol does not exist.
+ * Provide a no-op weak stub so the linker is satisfied. */
+#ifdef CONFIG_EXTERNAL_LIBC
+__attribute__((weak)) void __stdout_hook_install(int (*hook)(int))
+{
+	(void)hook;
+}
+#endif

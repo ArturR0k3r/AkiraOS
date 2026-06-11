@@ -460,6 +460,9 @@ if(CONFIG_AKIRA_AIINFER)
 
     target_sources(app PRIVATE src/api/akira_aiinfer_api.cpp)
 
+    # No extra includes needed: CONFIG_EXTERNAL_LIBC=y on native_sim removes
+    # -nostdinc so the host C++ STL is found automatically.
+
     if(TARGET tensorflow-lite-micro)
         target_link_libraries(app PRIVATE tensorflow-lite-micro)
     endif()

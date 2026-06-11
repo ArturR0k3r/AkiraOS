@@ -459,9 +459,10 @@ int app_manager_install_from_path(const char *path)
     strncpy(name, filename, APP_NAME_MAX_LEN - 1);
     name[APP_NAME_MAX_LEN - 1] = '\0';
 
-    /* Remove .wasm or .aot extension */
+    /* Remove .wasm or .aot or .akpkg extension */
     char *ext = strstr(name, ".wasm");
     if (!ext) ext = strstr(name, ".aot");
+    if (!ext) ext = strstr(name, ".akpkg");
     if (ext)
     {
         *ext = '\0';
@@ -476,6 +477,13 @@ int app_manager_install_from_path(const char *path)
     else if (strstr(path, "/usb/"))
     {
         source = APP_SOURCE_USB;
+    }
+
+    /* Detect .akpkg (gzip-compressed tar) and route through the akpkg installer */
+    if (akpkg_is_gzip(buffer, (size_t)bytes_read)) {
+        int r = app_manager_install_akpkg(name, APP_NAME_MAX_LEN, buffer, (size_t)bytes_read, source);
+        akira_free_buffer(buffer);
+        return r;
     }
 
     /* Try to load manifest — heap-allocate to avoid blowing the shell stack */

@@ -197,6 +197,103 @@ Actual API implementation
 - Branch prediction friendly
 - Planned: static jump table for <50 ns
 
+#### Implementing a Native Function
+
+Every native function follows the same three-step pattern: capability check, pointer translation, implementation.
+
+**1. Registration — WAMR signature string**
+
+Functions are registered in `src/api/akira_export_api.c`:
+
+```c
+{"my_func", (void *)akira_native_my_func, "(i*~)i", NULL},
+//                                          ^^^^
+//                                          WAMR type signature
+```
+
+Signature character reference:
+
+| Char | WASM type | C parameter type | Notes |
+|------|-----------|-----------------|-------|
+| `i`  | i32       | `int32_t` / `uint32_t` | plain integer |
+| `I`  | i64       | `int64_t` / `uint64_t` | 64-bit integer |
+| `f`  | f32       | `float`         | |
+| `F`  | f64       | `double`        | |
+| `*`  | i32 ptr   | `const T *` or `T *` | **See pointer rule below** |
+| `~`  | i32 len   | `uint32_t`      | **Must immediately follow `*`** |
+| `$`  | i32 ptr   | `const char *`  | null-terminated string pointer |
+| `V`  | void      | —               | return type only |
+
+**2. Pointer handling — the `*~` rule**
+
+When a signature contains `*~`, WAMR validates the `[ptr, ptr+len)` range against the WASM linear memory and **converts the pointer to a native address before calling your function**. The C parameter must be an actual pointer type, not `uint32_t`:
+
+```c
+// WRONG — double-converts; wasm_runtime_addr_app_to_native returns NULL
+int akira_native_my_func(wasm_exec_env_t env, uint32_t buf_ptr, uint32_t len) {
+    uint8_t *buf = wasm_runtime_addr_app_to_native(
+        wasm_runtime_get_module_inst(env), buf_ptr);  // ← always NULL for *~ params
+    ...
+}
+
+// RIGHT — WAMR already converted buf_ptr to a native pointer
+int akira_native_my_func(wasm_exec_env_t env, const uint8_t *buf, uint32_t len) {
+    if (!buf || len == 0) return -EINVAL;
+    // use buf directly — it points into WASM linear memory
+    ...
+}
+```
+
+Only use `wasm_runtime_addr_app_to_native()` when the signature uses bare `i` for a pointer (passing a raw WASM address as an integer). The `rf_send` function (`"(*i)i"`) is a historical example of this pattern — bare `*` without `~` does _not_ auto-convert.
+
+**3. Buffer allocation — use PSRAM**
+
+On boards with `CONFIG_AKIRA_PSRAM=y` (e.g. AkiraConsole), `k_malloc()` draws from the ~79 KB DRAM system heap, which BLE and WiFi stacks keep near-exhausted at runtime. Any native function that needs to copy or retain data longer than the call must use `akira_malloc_buffer()` instead:
+
+```c
+#include "lib/mem_helper.h"
+
+// WRONG — fails at runtime when BLE is active
+s->buf = k_malloc(size);
+
+// RIGHT — allocates from PSRAM via shared_multi_heap
+s->buf = akira_malloc_buffer(size);
+// ... use s->buf ...
+akira_free_buffer(s->buf);  // paired free
+```
+
+`akira_malloc_buffer()` calls `shared_multi_heap_alloc(SMH_REG_ATTR_EXTERNAL, size)`, which routes to PSRAM on ESP32-S3 and falls back to DRAM on boards without PSRAM. Always pair it with `akira_free_buffer()`.
+
+**Complete minimal example:**
+
+```c
+// src/api/akira_example_api.c
+
+#include "lib/mem_helper.h"
+#include <runtime/security.h>
+
+// Registered as: {"example_process", akira_native_example_process, "(i*~)i", NULL}
+int akira_native_example_process(wasm_exec_env_t exec_env,
+                                  int32_t mode,
+                                  const uint8_t *data, uint32_t data_len)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MY_CAP, -EACCES);
+
+    if (!data || data_len == 0)
+        return -EINVAL;
+
+    // data is a native pointer — no addr_app_to_native needed
+    uint8_t *work = akira_malloc_buffer(data_len);
+    if (!work)
+        return -ENOMEM;
+
+    memcpy(work, data, data_len);
+    /* ... process work buf ... */
+    akira_free_buffer(work);
+    return 0;
+}
+```
+
 ### Security Layer
 
 Custom capability-based access control system.

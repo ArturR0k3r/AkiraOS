@@ -18,6 +18,7 @@
 #include <errno.h>
 
 #include <runtime/security.h>
+#include "lib/mem_helper.h"
 
 /* TFLite Micro headers */
 #include "tensorflow/lite/micro/micro_interpreter.h"
@@ -37,16 +38,22 @@ LOG_MODULE_REGISTER(akira_aiinfer, CONFIG_AKIRA_LOG_LEVEL);
  * Slot management
  * ---------------------------------------------------------------------- */
 
+/* Use static storage + placement new to avoid heap operator new/delete.
+ * The objects are constructed in-place and destroyed via explicit dtor. */
 struct InferSlot {
     bool used;
     uint8_t *model_buf;                  /* PSRAM copy of model bytes     */
     size_t   model_len;
     uint8_t arena[AKIRA_AIINFER_ARENA_KB * 1024] __aligned(16);
-    tflite::MicroMutableOpResolver<96> *resolver;
+    alignas(tflite::MicroMutableOpResolver<16>)
+        uint8_t resolver_buf[sizeof(tflite::MicroMutableOpResolver<16>)];
+    alignas(tflite::MicroInterpreter)
+        uint8_t interpreter_buf[sizeof(tflite::MicroInterpreter)];
+    tflite::MicroMutableOpResolver<16> *resolver;
     tflite::MicroInterpreter           *interpreter;
 };
 
-static InferSlot g_slots[AKIRA_AIINFER_MAX_HANDLES];
+static InferSlot AKIRA_BULK_BSS g_slots[AKIRA_AIINFER_MAX_HANDLES];
 static K_MUTEX_DEFINE(g_aiinfer_mutex);
 
 /* -----------------------------------------------------------------------
@@ -67,15 +74,15 @@ static void slot_free(int handle)
         return;
 
     if (s->interpreter) {
-        delete s->interpreter;
+        s->interpreter->~MicroInterpreter();
         s->interpreter = nullptr;
     }
     if (s->resolver) {
-        delete s->resolver;
+        s->resolver->~MicroMutableOpResolver();
         s->resolver = nullptr;
     }
     if (s->model_buf) {
-        k_free(s->model_buf);
+        akira_free_buffer(s->model_buf);
         s->model_buf = nullptr;
     }
     s->model_len = 0;
@@ -88,23 +95,14 @@ static void slot_free(int handle)
 
 extern "C"
 int akira_native_aiinfer_load(wasm_exec_env_t exec_env,
-                              uint32_t model_ptr, uint32_t model_len)
+                              const uint8_t *model_buf, uint32_t model_len)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_AIINFER, AIINFER_ERR_INVALID);
 
-    if (model_len == 0)
-        return AIINFER_ERR_INVALID;
-
-#ifdef CONFIG_AKIRA_WASM_RUNTIME
-    uint8_t *wasm_model = (uint8_t *)wasm_runtime_addr_app_to_native(
-        wasm_runtime_get_module_inst(exec_env), model_ptr);
-    if (!wasm_model) {
-        LOG_ERR("aiinfer_load: invalid WASM model pointer");
+    if (model_len == 0 || !model_buf) {
+        LOG_ERR("aiinfer_load: invalid model buffer");
         return AIINFER_ERR_INVALID;
     }
-#else
-    uint8_t *wasm_model = (uint8_t *)(uintptr_t)model_ptr;
-#endif
 
     k_mutex_lock(&g_aiinfer_mutex, K_FOREVER);
 
@@ -124,14 +122,14 @@ int akira_native_aiinfer_load(wasm_exec_env_t exec_env,
 
     InferSlot *s = &g_slots[handle];
 
-    /* Copy model to PSRAM (or SRAM if PSRAM unavailable) */
-    s->model_buf = (uint8_t *)k_malloc(model_len);
+    /* Copy model to PSRAM via shared multi-heap (falls back to SRAM) */
+    s->model_buf = (uint8_t *)akira_malloc_buffer(model_len);
     if (!s->model_buf) {
         k_mutex_unlock(&g_aiinfer_mutex);
         LOG_ERR("aiinfer_load: OOM allocating %u B for model", model_len);
         return AIINFER_ERR_NOMEM;
     }
-    memcpy(s->model_buf, wasm_model, model_len);
+    memcpy(s->model_buf, model_buf, model_len);
     s->model_len = model_len;
 
     /* Validate flatbuffer model */
@@ -139,42 +137,33 @@ int akira_native_aiinfer_load(wasm_exec_env_t exec_env,
     if (model->version() != TFLITE_SCHEMA_VERSION) {
         LOG_ERR("aiinfer_load: schema version mismatch (%u != %u)",
                 (unsigned)model->version(), TFLITE_SCHEMA_VERSION);
-        k_free(s->model_buf);
+        akira_free_buffer(s->model_buf);
         s->model_buf = nullptr;
         k_mutex_unlock(&g_aiinfer_mutex);
         return AIINFER_ERR_INVALID;
     }
 
-    /* Build op resolver with all built-in ops */
-    s->resolver = new tflite::MicroMutableOpResolver<96>();
-    s->resolver->AddBuiltin(tflite::BuiltinOperator_DEPTHWISE_CONV_2D,
-        tflite::ops::micro::Register_DEPTHWISE_CONV_2D());
-    s->resolver->AddBuiltin(tflite::BuiltinOperator_CONV_2D,
-        tflite::ops::micro::Register_CONV_2D());
-    s->resolver->AddBuiltin(tflite::BuiltinOperator_FULLY_CONNECTED,
-        tflite::ops::micro::Register_FULLY_CONNECTED());
-    s->resolver->AddBuiltin(tflite::BuiltinOperator_SOFTMAX,
-        tflite::ops::micro::Register_SOFTMAX());
-    s->resolver->AddBuiltin(tflite::BuiltinOperator_RESHAPE,
-        tflite::ops::micro::Register_RESHAPE());
-    s->resolver->AddBuiltin(tflite::BuiltinOperator_AVERAGE_POOL_2D,
-        tflite::ops::micro::Register_AVERAGE_POOL_2D());
-    s->resolver->AddBuiltin(tflite::BuiltinOperator_MAX_POOL_2D,
-        tflite::ops::micro::Register_MAX_POOL_2D());
-    s->resolver->AddBuiltin(tflite::BuiltinOperator_QUANTIZE,
-        tflite::ops::micro::Register_QUANTIZE());
-    s->resolver->AddBuiltin(tflite::BuiltinOperator_DEQUANTIZE,
-        tflite::ops::micro::Register_DEQUANTIZE());
+    /* Build op resolver via placement new into static slot storage */
+    s->resolver = new (s->resolver_buf) tflite::MicroMutableOpResolver<16>();
+    s->resolver->AddDepthwiseConv2D();
+    s->resolver->AddConv2D();
+    s->resolver->AddFullyConnected();
+    s->resolver->AddSoftmax();
+    s->resolver->AddReshape();
+    s->resolver->AddAveragePool2D();
+    s->resolver->AddMaxPool2D();
+    s->resolver->AddQuantize();
+    s->resolver->AddDequantize();
 
-    /* Create and allocate interpreter */
-    s->interpreter = new tflite::MicroInterpreter(
+    /* Create interpreter via placement new into static slot storage */
+    s->interpreter = new (s->interpreter_buf) tflite::MicroInterpreter(
         model, *s->resolver, s->arena, sizeof(s->arena));
 
     if (s->interpreter->AllocateTensors() != kTfLiteOk) {
         LOG_ERR("aiinfer_load: AllocateTensors failed (arena too small?)");
-        delete s->interpreter;  s->interpreter = nullptr;
-        delete s->resolver;     s->resolver     = nullptr;
-        k_free(s->model_buf);   s->model_buf    = nullptr;
+        s->interpreter->~MicroInterpreter();  s->interpreter = nullptr;
+        s->resolver->~MicroMutableOpResolver(); s->resolver   = nullptr;
+        akira_free_buffer(s->model_buf);         s->model_buf  = nullptr;
         k_mutex_unlock(&g_aiinfer_mutex);
         return AIINFER_ERR_NOMEM;
     }
@@ -190,8 +179,8 @@ int akira_native_aiinfer_load(wasm_exec_env_t exec_env,
 extern "C"
 int akira_native_aiinfer_run(wasm_exec_env_t exec_env,
                              int handle,
-                             uint32_t in_ptr,  uint32_t in_len,
-                             uint32_t out_ptr, uint32_t out_len)
+                             const uint8_t *in_buf,  uint32_t in_len,
+                             uint8_t       *out_buf, uint32_t out_len)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_AIINFER, AIINFER_ERR_INVALID);
 
@@ -199,18 +188,10 @@ int akira_native_aiinfer_run(wasm_exec_env_t exec_env,
     if (!s || !s->used || !s->interpreter)
         return AIINFER_ERR_INVALID;
 
-#ifdef CONFIG_AKIRA_WASM_RUNTIME
-    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    uint8_t *wasm_in  = (uint8_t *)wasm_runtime_addr_app_to_native(inst, in_ptr);
-    uint8_t *wasm_out = (uint8_t *)wasm_runtime_addr_app_to_native(inst, out_ptr);
-    if (!wasm_in || !wasm_out) {
-        LOG_ERR("aiinfer_run: invalid WASM buffer pointer");
+    if (!in_buf || !out_buf) {
+        LOG_ERR("aiinfer_run: invalid buffer pointer");
         return AIINFER_ERR_INVALID;
     }
-#else
-    uint8_t *wasm_in  = (uint8_t *)(uintptr_t)in_ptr;
-    uint8_t *wasm_out = (uint8_t *)(uintptr_t)out_ptr;
-#endif
 
     TfLiteTensor *input = s->interpreter->input(0);
     if (!input || (uint32_t)input->bytes != in_len) {
@@ -226,14 +207,14 @@ int akira_native_aiinfer_run(wasm_exec_env_t exec_env,
         return AIINFER_ERR_SHAPE;
     }
 
-    memcpy(input->data.raw, wasm_in, in_len);
+    memcpy(input->data.raw, in_buf, in_len);
 
     if (s->interpreter->Invoke() != kTfLiteOk) {
         LOG_ERR("aiinfer_run: Invoke() failed");
         return AIINFER_ERR_INVALID;
     }
 
-    memcpy(wasm_out, output->data.raw, output->bytes);
+    memcpy(out_buf, output->data.raw, output->bytes);
     return AIINFER_OK;
 }
 

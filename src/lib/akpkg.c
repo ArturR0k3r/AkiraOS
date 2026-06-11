@@ -733,7 +733,7 @@ int32_t akpkg_inflate(const uint8_t *gz, size_t gz_len,
         return -EIO;
     }
 
-    return (ssize_t)s.out_pos;
+    return (int32_t)s.out_pos;
 }
 
 size_t akpkg_base64_decode(const char *src, size_t src_len,

@@ -12,6 +12,7 @@
 
 #include "app_signing.h"
 #include "sandbox.h"
+#include "lib/mem_helper.h"
 #include <zephyr/logging/log.h>
 #include <string.h>
 #include <errno.h>
@@ -68,7 +69,7 @@ static struct
     uint8_t root_pubkeys_der[MAX_TRUSTED_ROOTS][MAX_PUBKEY_DER_SIZE];
     size_t  root_pubkeys_len[MAX_TRUSTED_ROOTS];
     int root_count;
-} g_signing_state = {0};
+} g_signing_state AKIRA_BULK_BSS;
 
 /* ===== SHA-256 Implementation ===== */
 

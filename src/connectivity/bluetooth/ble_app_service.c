@@ -23,6 +23,7 @@ LOG_MODULE_REGISTER(akira_ble_svc, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/uuid.h>
+#include "lib/mem_helper.h"
 
 /* Number of GATT attrs per characteristic slot (decl + value + CCC) */
 #define ATTRS_PER_CHAR   3
@@ -62,8 +63,8 @@ struct ble_service_slot {
 /* Static Pools                                                              */
 /*===========================================================================*/
 
-static struct ble_char_slot  g_chars[CONFIG_AKIRA_BLE_MAX_CHARS];
-static struct ble_service_slot g_svcs[CONFIG_AKIRA_BLE_MAX_SERVICES];
+static struct ble_char_slot   AKIRA_BULK_BSS g_chars[CONFIG_AKIRA_BLE_MAX_CHARS];
+static struct ble_service_slot AKIRA_BULK_BSS g_svcs[CONFIG_AKIRA_BLE_MAX_SERVICES];
 
 /* Event queue */
 K_MSGQ_DEFINE(g_evt_q, sizeof(struct ble_event),
