@@ -353,8 +353,6 @@ void sandbox_audit_log(audit_event_type_t type, const char *app_name,
     memset(entry->hmac, 0, sizeof(entry->hmac));
     akira_platform_audit_hmac_sign((uint32_t)entry->type, entry->timestamp_ms,
                                    entry->app_name, entry->detail, entry->hmac);
-#else
-    memset(entry->hmac, 0, sizeof(entry->hmac));
 #endif
 
     int32_t count = atomic_get(&g_audit.count);

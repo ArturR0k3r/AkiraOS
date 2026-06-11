@@ -150,7 +150,9 @@ extern "C"
         int64_t timestamp_ms;
         char app_name[32];
         uint32_t detail; /**< Event-specific detail (e.g., syscall cat) */
-        uint8_t hmac[32]; /**< HMAC-SHA256 tag; all-zero if signing unavailable */
+#ifdef CONFIG_AKIRA_AUDIT_LOG_HMAC
+        uint8_t hmac[32]; /**< HMAC-SHA256 tag */
+#endif
     } audit_entry_t;
 
 /** Audit log ring buffer size */

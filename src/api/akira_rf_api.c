@@ -631,7 +631,7 @@ int akira_native_rf_set_power(wasm_exec_env_t exec_env, int8_t dbm)
 #endif
 }
 
-#ifdef CONFIG_WIFI
+#if defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
 
 #define WIFI_SCAN_MAX_CHANNELS 14
 #define WIFI_SCAN_TIMEOUT_MS   5000
@@ -732,6 +732,6 @@ int akira_native_wifi_scan_rssi(wasm_exec_env_t exec_env,
     return WIFI_SCAN_MAX_CHANNELS;
 }
 
-#endif /* CONFIG_WIFI */
+#endif /* CONFIG_WIFI && CONFIG_AKIRA_RF_FRAMEWORK */
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */

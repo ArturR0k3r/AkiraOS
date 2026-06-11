@@ -48,9 +48,11 @@ int akira_native_rf_set_frequency(wasm_exec_env_t exec_env, uint32_t freq_hz);
 int akira_native_rf_get_rssi(wasm_exec_env_t exec_env);
 int akira_native_rf_set_power(wasm_exec_env_t exec_env, int8_t dbm);
 
+#if defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
 /* WiFi spectrum scan — uses ESP32 built-in WiFi radio */
 int akira_native_wifi_scan_rssi(wasm_exec_env_t exec_env,
                                  uint32_t buf_ptr, uint32_t buf_len);
+#endif
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
 
 #endif /* AKIRA_RF_API_H */
