@@ -667,35 +667,101 @@ flash_board() {
 }
 
 # =============================================================================
-# SBOM Generation
+# SBOM Generation (CycloneDX 1.4 — EU CRA 2027 compliance)
 # =============================================================================
 generate_sbom() {
     local build_dir=$(get_build_dir)
-    local sbom_file="$build_dir/sbom.json"
-    
-    print_step "Generating Software Bill of Materials..."
-    
-    # Use west to generate SBOM if available
-    if west blobs --help &> /dev/null; then
-        # Basic SBOM from build info
-        cat > "$sbom_file" << EOF
+    local sbom_file="$build_dir/sbom.cdx.json"
+    local serial_uuid
+    serial_uuid="urn:uuid:$(cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')"
+    local timestamp
+    timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+    print_step "Generating CycloneDX 1.4 SBOM..."
+
+    # Resolve west-managed module versions from west.yml when possible
+    local zephyr_ver="4.3.0"
+    local wamr_ver="2.3.0"
+    local mcuboot_ver="2.1.0"
+    local mbedtls_ver="3.5.2"
+    if command -v west &>/dev/null && west topdir &>/dev/null; then
+        zephyr_ver=$(west list zephyr -f "{version}" 2>/dev/null | tr -d 'v' || echo "$zephyr_ver")
+        wamr_ver=$(west list wasm-micro-runtime -f "{version}" 2>/dev/null | tr -d 'v' || echo "$wamr_ver")
+        mcuboot_ver=$(west list mcuboot -f "{version}" 2>/dev/null | tr -d 'v' || echo "$mcuboot_ver")
+    fi
+
+    mkdir -p "$build_dir"
+    cat > "$sbom_file" << EOF
 {
-    "name": "AkiraOS",
-    "version": "${AKIRA_VERSION}",
-    "board": "$BOARD",
-    "zephyr_board": "${BOARD_MAP[$BOARD]}",
-    "build_date": "$(date -Iseconds)",
-    "components": [
-        {"name": "Zephyr RTOS", "version": "4.3.0"},
-        {"name": "WASM Micro Runtime", "version": "2.3.0"},
-        {"name": "MCUboot", "version": "2.0.0"}
-    ]
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.4",
+  "serialNumber": "${serial_uuid}",
+  "version": 1,
+  "metadata": {
+    "timestamp": "${timestamp}",
+    "tools": [
+      {
+        "vendor": "PenEngineering S.R.L",
+        "name": "AkiraOS build.sh",
+        "version": "${AKIRA_VERSION}"
+      }
+    ],
+    "component": {
+      "type": "firmware",
+      "name": "AkiraOS",
+      "version": "${AKIRA_VERSION}",
+      "purl": "pkg:generic/penengineering/akiraos@${AKIRA_VERSION}",
+      "properties": [
+        { "name": "akiraos:board", "value": "${BOARD}" },
+        { "name": "akiraos:zephyr_board", "value": "${BOARD_MAP[$BOARD]:-$BOARD}" }
+      ],
+      "licenses": [
+        { "license": { "id": "Apache-2.0" } }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "zephyr",
+      "version": "${zephyr_ver}",
+      "purl": "pkg:github/zephyrproject-rtos/zephyr@v${zephyr_ver}",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }]
+    },
+    {
+      "type": "library",
+      "name": "wasm-micro-runtime",
+      "version": "${wamr_ver}",
+      "purl": "pkg:github/bytecodealliance/wasm-micro-runtime@WAMR-${wamr_ver}",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }]
+    },
+    {
+      "type": "library",
+      "name": "mcuboot",
+      "version": "${mcuboot_ver}",
+      "purl": "pkg:github/mcu-tools/mcuboot@v${mcuboot_ver}",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }]
+    },
+    {
+      "type": "library",
+      "name": "mbedtls",
+      "version": "${mbedtls_ver}",
+      "purl": "pkg:github/Mbed-TLS/mbedtls@v${mbedtls_ver}",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }]
+    },
+    {
+      "type": "library",
+      "name": "picolibc",
+      "version": "bundled",
+      "purl": "pkg:generic/zephyrproject-rtos/picolibc",
+      "licenses": [{ "license": { "id": "BSD-3-Clause" } }]
+    }
+  ],
+  "vulnerabilities": []
 }
 EOF
-        print_success "SBOM generated: $sbom_file"
-    else
-        print_warning "SBOM generation requires west blobs support"
-    fi
+    print_success "SBOM (CycloneDX 1.4) generated: $sbom_file"
+    echo "  Scan for CVEs: grype sbom:${sbom_file}"
 }
 
 # =============================================================================

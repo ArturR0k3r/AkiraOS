@@ -72,6 +72,18 @@ Known limitations are documented in [docs/architecture/security.md](docs/archite
 
 ---
 
+## Compliance Documentation
+
+| Document | Description |
+|----------|-------------|
+| [PSA Certified Level 1 Gap Analysis](docs/compliance/psa-gap-analysis.md) | Self-certification questionnaire mapping and remaining gaps |
+| [IEC 62443-4-2 SL 1 Mapping](docs/compliance/iec-62443-4-2-mapping.md) | IACS component security requirement → AkiraOS feature mapping |
+| [SBOM (CycloneDX 1.4)](docs/compliance/sbom-cyclonedx.md) | Software Bill of Materials — generate via `./build.sh -s` → `build/sbom.cdx.json` |
+
+The SBOM is regenerated on every release build and published as a GitHub release asset (EU Cyber Resilience Act 2027 requirement).
+
+---
+
 ## Bug Bounty
 
 There is currently no formal bug bounty programme. We acknowledge all confirmed vulnerability reporters in our security advisories and release notes (unless you prefer to remain anonymous).
