@@ -728,6 +728,14 @@ if(CONFIG_AKIRA_MATTER)
     # include(${ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR}/config/zephyr/chip-module/CMakeLists.txt)
 endif()
 
+if(CONFIG_AKIRA_MATTER_COPROC_UART)
+    target_sources(app PRIVATE src/runtime/akira_matter_ipc.c)
+endif()
+
+if(CONFIG_AKIRA_WASM_MATTER)
+    target_sources(app PRIVATE src/api/akira_matter_api.c)
+endif()
+
 # Thread protocol
 if(CONFIG_AKIRA_THREAD)
     target_sources(app PRIVATE

@@ -1,0 +1,85 @@
+/*
+ * AkiraOS Device Tree Overlay — xiao_esp32c6/xiao_esp32c6/hpcore
+ *
+ * Seeed XIAO ESP32-C6 (RISC-V HP Core @ 160MHz)
+ * Module: ESP32-C6-MINI-1N4 (4MB Flash, 512KB SRAM)
+ * Console: USB CDC-ACM (usb_serial, set by upstream XIAO DTS)
+ *
+ * Upstream XIAO DTS already defines:
+ *   uart0 (TX=GPIO16, RX=GPIO17)
+ *   spi2 (MISO=GPIO20, SCLK=GPIO19, MOSI=GPIO18)
+ *   i2c0 (SDA=GPIO22, SCL=GPIO23)
+ *   usb_serial → zephyr,console
+ *
+ * XIAO exposed header pins used here:
+ *   D2 = GPIO4  → UART1 TX (Matter co-processor)
+ *   D3 = GPIO5  → UART1 RX (Matter co-processor)
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/pinctrl/esp-pinctrl-common.h>
+#include <dt-bindings/pinctrl/esp32c6-pinctrl.h>
+#include <zephyr/dt-bindings/pinctrl/esp32c6-gpio-sigmap.h>
+
+/* =========================================================================
+ * UART1 — Matter co-processor IPC
+ * D2 (GPIO4) = TX, D3 (GPIO5) = RX
+ * ========================================================================= */
+&pinctrl {
+	uart1_matter: uart1_matter {
+		group1 {
+			pinmux = <UART1_TX_GPIO4>, <UART1_RX_GPIO5>;
+			bias-pull-up;
+		};
+	};
+};
+
+&uart1 {
+	status = "okay";
+	pinctrl-0 = <&uart1_matter>;
+	pinctrl-names = "default";
+	current-speed = <115200>;
+};
+
+/* =========================================================================
+ * Flash Partitions — AkiraOS on 4MB flash
+ *
+ * Upstream 4MB layout (partitions_0x0_default_4M.dtsi) already defines:
+ *   storage_partition: 192KB @ 0x3B0000
+ *
+ * Create akira_settings_nvs_partition as a second DTS label for the same
+ * node so settings.c DT_NODELABEL(akira_settings_nvs_partition) resolves.
+ * ========================================================================= */
+akira_settings_nvs_partition: &storage_partition {
+};
+
+/* =========================================================================
+ * Root — aliases, LED, fstab
+ * ========================================================================= */
+/ {
+	aliases {
+		/* led0 already defined in upstream XIAO DTS as &yellow_led */
+		akira-adc          = &adc0;
+		matter-coproc-uart = &uart1;
+	};
+
+	chosen {
+		/* Console stays as usb_serial (set by upstream XIAO DTS) */
+		zephyr,settings-partition = <&storage_partition>;
+	};
+
+	fstab {
+		compatible = "zephyr,fstab";
+
+		lfs1: lfs1 {
+			compatible = "zephyr,fstab,littlefs";
+			read-size      = <1>;
+			prog-size      = <16>;
+			cache-size     = <256>;
+			lookahead-size = <32>;
+			block-cycles   = <512>;
+			partition      = <&storage_partition>;
+			mount-point    = "/lfs";
+		};
+	};
+};
