@@ -92,6 +92,9 @@ extern "C" {
 /* On-device ML inference via TFLite Micro (AkiraClaw).
  * Manifest string: "ai.infer" */
 #define AKIRA_CAP_AIINFER       (1ULL << 32)
+/* Matter/Thread co-processor IPC bridge.
+ * Manifest string: "matter" */
+#define AKIRA_CAP_MATTER        (1ULL << 33)
 
 /*
  * Capability check macro using security subsystem.

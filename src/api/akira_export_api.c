@@ -29,6 +29,9 @@
 #ifdef CONFIG_AKIRA_WASM_AIINFER
 #include "akira_aiinfer_api.h"
 #endif
+#ifdef CONFIG_AKIRA_WASM_MATTER
+#include "akira_matter_api.h"
+#endif
 
 #include <runtime/akira_runtime.h>
 #include <runtime/security.h>
@@ -291,6 +294,14 @@ bool akira_register_native_apis()
         {"aiinfer_load",   (void *)akira_native_aiinfer_load,   "(*~)i",    NULL},
         {"aiinfer_run",    (void *)akira_native_aiinfer_run,    "(i*~*~)i", NULL},
         {"aiinfer_unload", (void *)akira_native_aiinfer_unload, "(i)",      NULL},
+#endif
+
+/* matter: Thread/Matter co-processor IPC bridge */
+#ifdef CONFIG_AKIRA_WASM_MATTER
+        {"matter_commission", (void *)akira_native_matter_commission, "($*~)i",    NULL},
+        {"matter_send",       (void *)akira_native_matter_send,       "(*~*~i)i",  NULL},
+        {"matter_subscribe",  (void *)akira_native_matter_subscribe,  "(*~i)i",    NULL},
+        {"matter_poll",       (void *)akira_native_matter_poll,       "(*~*i*~ii)i", NULL},
 #endif
 
     };

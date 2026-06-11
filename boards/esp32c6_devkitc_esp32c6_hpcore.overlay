@@ -124,12 +124,40 @@
 };
 
 /* =========================================================================
+ * UART1 — Matter co-processor IPC
+ *
+ * TX=GPIO4, RX=GPIO5 — free header pins on ESP32-C6 DevKitC.
+ * Connect to a Thread/Matter co-processor (e.g. ESP32-H2 UART0).
+ * Aliased as "matter-coproc-uart" so akira_matter_ipc.c can resolve
+ * it via DEVICE_DT_GET(DT_ALIAS(matter_coproc_uart)).
+ *
+ * Node is disabled by default; enable by setting CONFIG_AKIRA_MATTER=y
+ * in the board config (or a separate Kconfig fragment).
+ * ========================================================================= */
+&pinctrl {
+	uart1_matter: uart1_matter {
+		group1 {
+			pinmux = <UART1_TX_GPIO4>, <UART1_RX_GPIO5>;
+			bias-pull-up;
+		};
+	};
+};
+
+&uart1 {
+	status = "disabled";   /* enabled when CONFIG_AKIRA_MATTER=y */
+	pinctrl-0 = <&uart1_matter>;
+	pinctrl-names = "default";
+	current-speed = <115200>;
+};
+
+/* =========================================================================
  * Root nodes — aliases, LEDs, fstab
  * ========================================================================= */
 / {
 	aliases {
-		led0      = &led0;
-		akira-adc = &adc0;
+		led0                = &led0;
+		akira-adc           = &adc0;
+		matter-coproc-uart  = &uart1;
 		/* sw0 alias already defined in upstream base DTS (GPIO9 boot button) */
 	};
 

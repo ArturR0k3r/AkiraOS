@@ -47,6 +47,8 @@ uint64_t akira_capability_str_to_mask(const char *cap)
     if (strcmp(cap, "adc") == 0)            return AKIRA_CAP_ADC;
     if (strcmp(cap, "wdt") == 0)            return AKIRA_CAP_WDT;
     if (strcmp(cap, "ai.infer") == 0)       return AKIRA_CAP_AIINFER;
+    if (strcmp(cap, "matter") == 0)         return AKIRA_CAP_MATTER;
+    if (strcmp(cap, "matter.*") == 0)       return AKIRA_CAP_MATTER;
     /* Wildcard patterns */
     if (strcmp(cap, "display.*") == 0)      return AKIRA_CAP_DISPLAY_WRITE;
     if (strcmp(cap, "input.*") == 0)        return AKIRA_CAP_INPUT_READ | AKIRA_CAP_INPUT_WRITE;
@@ -92,6 +94,7 @@ char* akira_capability_mask_to_str(uint64_t cap)
     if (cap & AKIRA_CAP_WDT)         return "wdt";
     if (cap & AKIRA_CAP_SETTINGS)    return "settings.*";
     if (cap & AKIRA_CAP_AIINFER)     return "ai.infer";
+    if (cap & AKIRA_CAP_MATTER)      return "matter";
     return "unknown";
 }
 

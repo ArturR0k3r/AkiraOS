@@ -554,6 +554,33 @@ config AKIRA_MATTER_DEVICE_TYPE
     help
       Primary device type (0x0100 = On/Off Light)
 
+config AKIRA_MATTER_COPROC_UART
+    bool "Use UART co-processor for Matter/Thread"
+    default y
+    depends on SERIAL
+    help
+      Route Matter commands over UART1 to a Thread/Matter co-processor
+      (e.g. ESP32-H2 flashed with esp-matter). The co-processor handles
+      the full Matter stack (~800KB RAM) while AkiraOS acts as the
+      application OS. The UART device must be aliased as
+      "matter-coproc-uart" in DTS.
+
+config AKIRA_MATTER_COPROC_BAUDRATE
+    int "Co-processor UART baud rate"
+    default 115200
+    depends on AKIRA_MATTER_COPROC_UART
+    help
+      Baud rate for the UART link to the Matter co-processor.
+
+config AKIRA_WASM_MATTER
+    bool "Register matter_* as WASM native symbols"
+    default n
+    depends on AKIRA_MATTER_COPROC_UART && AKIRA_WASM_RUNTIME
+    help
+      Registers matter_commission/send/subscribe/poll in the WAMR native
+      symbol table so WASM apps can interact with the Matter fabric.
+      Gated behind AKIRA_CAP_MATTER ("matter" in app manifest).
+
 endif # AKIRA_MATTER
 
 config AKIRA_THREAD
