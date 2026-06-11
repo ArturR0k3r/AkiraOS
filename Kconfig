@@ -301,6 +301,16 @@ config AKIRA_CC1101
       Enable TI CC1101 Sub-GHz transceiver driver.
       Supports 300-928MHz frequency range.
 
+config AKIRA_LR2021
+    bool "Enable LR2021 LoRa Plus driver (AkiraConsole Production)"
+    default n
+    depends on SPI && GPIO && AKIRA_RF_FRAMEWORK
+    help
+      Enable Semtech LR2021 LoRa Plus transceiver.
+      Fourth-generation LoRa IP, multi-band Sub-GHz + 2.4 GHz.
+      Supports LoRa, FSK, FLRC, BPSK, BLE PHY, O-QPSK modulations.
+      Used on AkiraConsole Production via TCA6408 GPIO expander.
+
 config AKIRA_CC1121
     bool "Enable CC1121 Sub-GHz driver (AkiraConsole Production)"
     default n
