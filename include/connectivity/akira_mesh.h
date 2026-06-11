@@ -28,7 +28,7 @@ extern "C" {
 #define AKIRA_MESH_MAX_NODES      CONFIG_AKIRA_MESH_MAX_NODES
 #define AKIRA_MESH_MAX_HOPS       CONFIG_AKIRA_MESH_MAX_HOPS
 #define AKIRA_MESH_NODE_ID_LEN    8
-
+#define AKIRA_MESH_APP_NAME_LEN   32
 /* AkiraMesh transport types */
 typedef enum {
     AKIRA_MESH_TRANSPORT_BLE,      /* BLE Mesh (standards-based) */
@@ -56,7 +56,7 @@ typedef enum {
 /* Mesh configuration */
 typedef struct {
     uint8_t node_id[AKIRA_MESH_NODE_ID_LEN];  /* Unique node ID */
-    char node_name[32];                       /* Human-readable name */
+    char node_name[AKIRA_MESH_APP_NAME_LEN];                       /* Human-readable name */
     akira_mesh_role_t role;                   /* Node role */
     akira_mesh_transport_t transport;         /* Preferred transport */
     uint8_t max_hops;                         /* Maximum hop count */
@@ -66,7 +66,7 @@ typedef struct {
 /* Node information */
 typedef struct {
     uint8_t node_id[AKIRA_MESH_NODE_ID_LEN];
-    char name[32];
+    char name[AKIRA_MESH_APP_NAME_LEN];
     akira_mesh_role_t role;
     uint8_t hop_count;                        /* Hops from this node */
     int8_t rssi;                              /* Signal strength */
