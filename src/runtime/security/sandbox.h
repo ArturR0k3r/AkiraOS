@@ -21,6 +21,9 @@
 #include <stdbool.h>
 #include <zephyr/kernel.h>
 #include "trust_levels.h"
+#ifdef CONFIG_AKIRA_SANDBOX_MPU
+#include <zephyr/kernel/mm.h>
+#endif
 
 #ifdef __cplusplus
 extern "C"
@@ -113,6 +116,13 @@ extern "C"
 
         /* State */
         bool initialized;
+
+#ifdef CONFIG_AKIRA_SANDBOX_MPU
+        /* Per-app MPU region covering the WASM linear memory heap. */
+        struct k_mem_partition mpu_wasm_partition;
+        struct k_mem_domain   mpu_domain;
+        bool mpu_ready;
+#endif
     } sandbox_ctx_t;
 
     /* ===== Security Audit Event ===== */
@@ -140,6 +150,7 @@ extern "C"
         int64_t timestamp_ms;
         char app_name[32];
         uint32_t detail; /**< Event-specific detail (e.g., syscall cat) */
+        uint8_t hmac[32]; /**< HMAC-SHA256 tag; all-zero if signing unavailable */
     } audit_entry_t;
 
 /** Audit log ring buffer size */
@@ -242,6 +253,28 @@ extern "C"
      * @return Number of bytes written
      */
     int sandbox_get_stats(const sandbox_ctx_t *ctx, char *buf, size_t len);
+
+#ifdef CONFIG_AKIRA_SANDBOX_MPU
+    /**
+     * @brief Configure an ARM MPU region for a WASM app's linear memory.
+     *
+     * Must be called after sandbox_ctx_init() and before the first
+     * sandbox_exec_begin().  The WASM runtime passes the base address and
+     * size of the module's linear memory (heap) here.
+     *
+     * The region is activated on sandbox_exec_begin() and deactivated on
+     * sandbox_exec_end(), giving the MPU a chance to catch out-of-bounds
+     * native memory accesses during WASM interpretation.
+     *
+     * @param ctx        Sandbox context.
+     * @param wasm_heap  Base address of the WASM linear memory buffer.
+     * @param heap_size  Size of the WASM linear memory in bytes.
+     *                   Must be a power of two and >= 32 bytes (ARMv7-M MPU
+     *                   alignment constraint).
+     */
+    void sandbox_mpu_configure(sandbox_ctx_t *ctx, void *wasm_heap,
+                               size_t heap_size);
+#endif /* CONFIG_AKIRA_SANDBOX_MPU */
 
 #ifdef __cplusplus
 }

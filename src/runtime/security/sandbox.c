@@ -16,6 +16,9 @@
 #include <string.h>
 #include <stdio.h>
 #include "runtime/security.h"
+#ifdef CONFIG_AKIRA_AUDIT_LOG_HMAC
+#include <akira_platform/audit_hmac.h>
+#endif
 
 LOG_MODULE_REGISTER(akira_sandbox, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -250,6 +253,12 @@ void sandbox_exec_begin(sandbox_ctx_t *ctx)
         return;
     ctx->exec_start_ms = k_uptime_get();
     ctx->exec_active = true;
+
+#ifdef CONFIG_AKIRA_SANDBOX_MPU
+    if (ctx->mpu_ready) {
+        k_mem_domain_add_thread(&ctx->mpu_domain, k_current_get());
+    }
+#endif
 }
 
 void sandbox_exec_end(sandbox_ctx_t *ctx)
@@ -257,7 +266,36 @@ void sandbox_exec_end(sandbox_ctx_t *ctx)
     if (!ctx)
         return;
     ctx->exec_active = false;
+
+#ifdef CONFIG_AKIRA_SANDBOX_MPU
+    if (ctx->mpu_ready) {
+        /* Remove thread from restricted domain, returning it to the default
+         * kernel domain which has access to all kernel memory. */
+        k_mem_domain_remove_thread(k_current_get());
+    }
+#endif
 }
+
+#ifdef CONFIG_AKIRA_SANDBOX_MPU
+void sandbox_mpu_configure(sandbox_ctx_t *ctx, void *wasm_heap, size_t heap_size)
+{
+    if (!ctx || !wasm_heap || heap_size == 0)
+        return;
+
+    ctx->mpu_wasm_partition = (struct k_mem_partition){
+        .start = (uintptr_t)wasm_heap,
+        .size  = heap_size,
+        .attr  = K_MEM_PARTITION_P_RW_U_RW,
+    };
+
+    struct k_mem_partition *parts[] = { &ctx->mpu_wasm_partition };
+    k_mem_domain_init(&ctx->mpu_domain, ARRAY_SIZE(parts), parts);
+    ctx->mpu_ready = true;
+
+    LOG_INF("Sandbox MPU region configured: base=0x%08x size=%zu",
+            (unsigned)wasm_heap, heap_size);
+}
+#endif /* CONFIG_AKIRA_SANDBOX_MPU */
 
 bool sandbox_exec_timed_out(sandbox_ctx_t *ctx)
 {
@@ -310,6 +348,14 @@ void sandbox_audit_log(audit_event_type_t type, const char *app_name,
     {
         entry->app_name[0] = '\0';
     }
+
+#ifdef CONFIG_AKIRA_AUDIT_LOG_HMAC
+    memset(entry->hmac, 0, sizeof(entry->hmac));
+    akira_platform_audit_hmac_sign((uint32_t)entry->type, entry->timestamp_ms,
+                                   entry->app_name, entry->detail, entry->hmac);
+#else
+    memset(entry->hmac, 0, sizeof(entry->hmac));
+#endif
 
     int32_t count = atomic_get(&g_audit.count);
     if (count < CONFIG_AKIRA_AUDIT_LOG_SIZE)

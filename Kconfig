@@ -1371,7 +1371,39 @@ config AKIRA_AUDIT_LOG_SIZE
     depends on AKIRA_SECURITY_AUDIT
     help
       Number of audit log entries in the ring buffer.
-      Each entry uses ~68 bytes of RAM.
+      Each entry uses ~100 bytes of RAM (includes 32-byte HMAC field).
+
+config AKIRA_AUDIT_LOG_HMAC
+    bool "HMAC-SHA256 signing of audit log entries"
+    default n
+    depends on AKIRA_SECURITY_AUDIT
+    depends on AKIRA_PLATFORM_AUDIT_HMAC
+    help
+      Tag each audit log entry with HMAC-SHA256 keyed from HSM slot
+      AKIRA_HSM_SLOT_AUDIT_KEY.  The 32-byte tag enables AkiraHub to
+      verify that entries were authentically produced by this device,
+      closing the PSA Certified L1 non-repudiation gap (IEC 62443-4-2 SL2).
+
+      Requires akira_platform_audit_hmac_init() to be called at boot.
+
+config AKIRA_SANDBOX_MPU
+    bool "Hardware MPU isolation per WASM sandbox"
+    default n
+    depends on AKIRA_SANDBOX
+    depends on ARM_MPU
+    select USERSPACE
+    help
+      Configure an ARM MPU domain for each WASM app's linear memory.
+      The domain is activated on sandbox_exec_begin() and deactivated on
+      sandbox_exec_end(), so out-of-bounds native memory accesses during
+      WASM interpretation are caught by the hardware rather than silently
+      corrupting kernel state.
+
+      The WASM runtime must call sandbox_mpu_configure() after loading
+      the module to register the linear memory base and size.
+
+      Requires CONFIG_USERSPACE=y (selected automatically) and
+      CONFIG_ARM_MPU=y on the target board.
 
 config AKIRA_WASM_INTEGRITY_CHECK
     bool "Enable WASM binary integrity verification"
