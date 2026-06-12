@@ -277,18 +277,10 @@ config AKIRA_MODULE_RF
     help
       Enable RF module (compile RF framework and drivers). Useful to disable on constrained boards.
 
-config AKIRA_RF_FRAMEWORK
-    bool "Enable unified RF framework"
-    default n
-    depends on AKIRA_MODULE_RF
-    help
-      Enable the unified RF driver framework that provides
-      a common API for multiple RF chips.
-
 config AKIRA_LR1121
     bool "Enable LR1121 LoRa driver"
     default n
-    depends on SPI && GPIO && AKIRA_RF_FRAMEWORK
+    depends on SPI && GPIO && AKIRA_RADIO_MANAGER
     help
       Enable Semtech LR1121 multi-band LoRa transceiver.
       Supports LoRa and GFSK modulation, Sub-GHz to 2.4GHz.
@@ -296,7 +288,7 @@ config AKIRA_LR1121
 config AKIRA_CC1101
     bool "Enable CC1101 Sub-GHz driver"
     default n
-    depends on SPI && GPIO && AKIRA_RF_FRAMEWORK
+    depends on SPI && GPIO && AKIRA_RADIO_MANAGER
     help
       Enable TI CC1101 Sub-GHz transceiver driver.
       Supports 300-928MHz frequency range.
@@ -304,7 +296,7 @@ config AKIRA_CC1101
 config AKIRA_LR2021
     bool "Enable LR2021 LoRa Plus driver"
     default n
-    depends on SPI && GPIO && AKIRA_RF_FRAMEWORK
+    depends on SPI && GPIO && AKIRA_RADIO_MANAGER
     help
       Enable Semtech LR2021 LoRa Plus transceiver.
       Fourth-generation LoRa IP, multi-band Sub-GHz + 2.4 GHz.
@@ -313,7 +305,7 @@ config AKIRA_LR2021
 config AKIRA_CC1121
     bool "Enable CC1121 Sub-GHz driver"
     default n
-    depends on SPI && GPIO && AKIRA_RF_FRAMEWORK
+    depends on SPI && GPIO && AKIRA_RADIO_MANAGER
     help
       Enable TI CC1121RHB high-performance Sub-GHz transceiver driver.
       Covers 315/433/868/915 MHz bands, narrowband FSK/OOK.
@@ -321,7 +313,7 @@ config AKIRA_CC1121
 config AKIRA_RF_RX_DAEMON
     bool "Enable RF RX background daemon"
     default y
-    depends on AKIRA_RF_FRAMEWORK
+    depends on AKIRA_RADIO_MANAGER
     help
       Runs a background thread that polls the active RF driver and enqueues
       received packets. Callers use akira_rf_recv_pop() instead of the
@@ -566,6 +558,14 @@ config AKIRA_RADIO_MANAGER
       Enable hardware-agnostic Radio Abstraction Layer (RAL).
       Provides unified interface for WiFi, BLE, and 802.15.4 radios,
       enabling protocol stacks to work across all hardware platforms.
+
+config AKIRA_RADIO_MAX_RADIOS
+    int "Maximum number of registered radios"
+    default 8
+    depends on AKIRA_RADIO_MANAGER
+    help
+      Size of the radio registry. Must be >= total number of drivers
+      that call radio_manager_register() at boot.
 
 config AKIRA_MATTER
     bool "Enable Matter protocol support"

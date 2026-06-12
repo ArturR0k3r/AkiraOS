@@ -310,13 +310,20 @@ if(CONFIG_DISPLAY)
 endif()
 
 # WASM-dependent API wrappers (need wasm_export.h)
-# gpio_api and rf_api are also used by shell commands so compile under WASM_RUNTIME
 if(CONFIG_AKIRA_WASM_RUNTIME)
     target_sources(app PRIVATE
-        src/api/akira_gpio_api.c
-        src/api/akira_rf_api.c
         src/api/akira_export_api.c
     )
+endif()
+
+if(CONFIG_GPIO)
+    target_sources(app PRIVATE
+        src/api/akira_gpio_api.c
+    )
+endif()
+
+if(CONFIG_AKIRA_MODULE_RF)
+        target_sources(app PRIVATE src/api/akira_rf_api.c)
 endif()
 
 if(CONFIG_AKIRA_WASM_PYTHON)
@@ -507,10 +514,6 @@ endif()
 
 # RF Framework and Drivers (conditional on module gating)
 if(CONFIG_AKIRA_MODULE_RF)
-    if(CONFIG_AKIRA_RF_FRAMEWORK)
-        target_sources(app PRIVATE src/drivers/rf/rf_framework.c)
-    endif()
-
     if(CONFIG_AKIRA_LR1121)
         target_sources(app PRIVATE src/drivers/rf/lr1121.c)
     endif()

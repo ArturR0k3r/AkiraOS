@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <wasm_export.h>
+#include "connectivity/radio_interface.h"
 
 
 /* RF chip types */
@@ -21,6 +22,7 @@ typedef enum {
     AKIRA_RF_CHIP_LR1121,
     AKIRA_RF_CHIP_CC1121,
     AKIRA_RF_CHIP_LR2021,
+    AKIRA_RF_CHIP_MAX,
 } akira_rf_chip_t;
 
 /* Core RF API functions (no security checks) */
@@ -37,6 +39,7 @@ int akira_rf_receive(uint8_t *buffer, size_t max_len, uint32_t timeout_ms);
 int akira_rf_set_frequency(uint32_t freq_hz);
 int akira_rf_set_power(int8_t dbm);
 int akira_rf_get_rssi(int16_t *rssi);
+radio_handle_t *akira_rf_get_active_handle(void);
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 /* WASM native export functions (with capability checks) */
