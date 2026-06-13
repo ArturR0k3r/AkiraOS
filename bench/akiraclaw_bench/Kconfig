@@ -1,0 +1,18 @@
+# Benchmark-specific Kconfig options (sourced automatically by Zephyr
+# via APPLICATION_SOURCE_DIR when KCONFIG_ROOT = AkiraOS/Kconfig).
+
+config BENCH_WASM_NOGUARD
+	bool "Use wasm_noguard binary for B1"
+	default n
+	help
+	  When y, bench_b1_wasm.c includes wasm_data_noguard.h so the benchmark
+	  runs the CG-disabled WASM variant.  Only meaningful with prj_noguard.conf
+	  (CONFIG_AKIRA_CAPABILITY_SYSTEM=n).
+
+config AKIRA_PLATFORM_AUDIT_HMAC
+	bool "Platform HMAC key provider for audit log (bench stub)"
+	default n
+	help
+	  Enables the bench-local audit_hmac.c which implements
+	  akira_platform_audit_hmac_sign() using mbedTLS HMAC-SHA256 with a
+	  fixed 32-byte bench key.  Required by AKIRA_AUDIT_LOG_HMAC.

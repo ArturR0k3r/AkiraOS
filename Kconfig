@@ -1442,6 +1442,14 @@ config AKIRA_AUDIT_LOG_SIZE
       Number of audit log entries in the ring buffer.
       Each entry uses ~100 bytes of RAM (includes 32-byte HMAC field).
 
+config AKIRA_PLATFORM_AUDIT_HMAC
+    bool "Platform HMAC key provider for audit log"
+    default n
+    help
+      Indicates that the platform layer provides akira_platform_audit_hmac_sign().
+      Set this in board-specific or application-specific Kconfig when a concrete
+      implementation (HSM, mbedTLS stub, etc.) is available.
+
 config AKIRA_AUDIT_LOG_HMAC
     bool "HMAC-SHA256 signing of audit log entries"
     default n
