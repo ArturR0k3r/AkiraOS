@@ -20,7 +20,7 @@
  */
 
 #include "cc1121.h"
-#include "rf_framework.h"
+#include "connectivity/radio_interface.h"
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/gpio.h>
@@ -187,11 +187,12 @@ static const struct spi_dt_spec g_spi = SPI_DT_SPEC_GET(
 static struct {
     bool initialized;
     struct gpio_dt_spec reset;
-    rf_mode_t current_mode;
+    radio_mode_t current_mode;
     uint32_t frequency_hz;
     uint32_t xosc_hz;
     int8_t tx_power_dbm;
-    rf_rx_callback_t rx_callback;
+    radio_event_cb_t event_cb;
+    void *event_user_data;
 } g_cc1121;
 
 /* =========================================================================
@@ -474,20 +475,15 @@ static int cc1121_init(void)
         return -ENODEV;
     }
 
-    /* --- RESET GPIO (optional, shared with LR2021) ----------------------- */
+    /* --- RESET GPIO (optional) ------------------------------------------- */
     if (DT_NODE_HAS_PROP(CC1121_NODE, reset_gpios)) {
         g_cc1121.reset = (struct gpio_dt_spec)GPIO_DT_SPEC_GET(CC1121_NODE, reset_gpios);
         if (gpio_is_ready_dt(&g_cc1121.reset)) {
             gpio_pin_configure_dt(&g_cc1121.reset, GPIO_OUTPUT_INACTIVE);
-            /* RF_RST is shared with LR2021 — only pulse it if no sibling has
-             * already claimed it, otherwise we would reset a configured LR2021.
-             * The SRES software strobe below resets this chip either way. */
-            if (rf_framework_claim_shared_reset()) {
-                gpio_pin_set_dt(&g_cc1121.reset, 1);
-                k_msleep(5);
-                gpio_pin_set_dt(&g_cc1121.reset, 0);
-                k_msleep(5);
-            }
+            gpio_pin_set_dt(&g_cc1121.reset, 1);
+            k_msleep(5);
+            gpio_pin_set_dt(&g_cc1121.reset, 0);
+            k_msleep(5);
         }
     }
 
@@ -634,7 +630,7 @@ static int cc1121_init(void)
     }
 
     g_cc1121.initialized = true;
-    g_cc1121.current_mode = RF_MODE_STANDBY;
+    g_cc1121.current_mode = RADIO_MODE_STANDBY;
     LOG_INF("CC1121 ready: %u Hz, %d dBm", g_cc1121.frequency_hz, g_cc1121.tx_power_dbm);
     return 0;
 }
@@ -643,11 +639,11 @@ static int cc1121_deinit(void)
 {
     cc1121_strobe(CC1121_SPWD);
     g_cc1121.initialized = false;
-    g_cc1121.current_mode = RF_MODE_SLEEP;
+    g_cc1121.current_mode = RADIO_MODE_SLEEP;
     return 0;
 }
 
-static int cc1121_set_mode(rf_mode_t mode)
+static int cc1121_set_mode(radio_mode_t mode)
 {
     if (!g_cc1121.initialized) {
         return -ENODEV;
@@ -655,22 +651,22 @@ static int cc1121_set_mode(rf_mode_t mode)
 
     int ret = 0;
     switch (mode) {
-    case RF_MODE_SLEEP:
+    case RADIO_MODE_SLEEP:
         ret = cc1121_strobe(CC1121_SPWD);
         break;
-    case RF_MODE_STANDBY:
+    case RADIO_MODE_STANDBY:
         ret = cc1121_strobe(CC1121_SIDLE);
         if (ret == 0) {
             ret = wait_for_idle();
         }
         break;
-    case RF_MODE_RX:
+    case RADIO_MODE_RX:
         cc1121_strobe(CC1121_SIDLE);
         wait_for_idle();
         cc1121_strobe(CC1121_SFRX);
         ret = cc1121_strobe(CC1121_SRX);
         break;
-    case RF_MODE_TX:
+    case RADIO_MODE_TX:
         cc1121_strobe(CC1121_SFTX);
         ret = cc1121_strobe(CC1121_STX);
         break;
@@ -730,7 +726,7 @@ static int cc1121_set_power(int8_t dbm)
     return ret;
 }
 
-static int cc1121_set_modulation(rf_modulation_t mod)
+static int cc1121_set_modulation(radio_modulation_t mod)
 {
     if (!g_cc1121.initialized) {
         return -ENODEV;
@@ -738,11 +734,11 @@ static int cc1121_set_modulation(rf_modulation_t mod)
 
     uint8_t mod_reg;
     switch (mod) {
-    case RF_MOD_FSK:
-    case RF_MOD_GFSK:
+    case RADIO_MOD_FSK:
+    case RADIO_MOD_GFSK:
         mod_reg = 0x46; /* 2-FSK */
         break;
-    case RF_MOD_OOK:
+    case RADIO_MOD_OOK:
         mod_reg = 0x36; /* ASK/OOK */
         break;
     default:
@@ -864,7 +860,7 @@ static int cc1121_tx(const uint8_t *data, size_t len)
         }
     }
 
-    g_cc1121.current_mode = RF_MODE_STANDBY;
+    g_cc1121.current_mode = RADIO_MODE_STANDBY;
     LOG_INF("TX done: %zu bytes at %u Hz, %d dBm", len,
             g_cc1121.frequency_hz, g_cc1121.tx_power_dbm);
     return 0;
@@ -880,7 +876,7 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
     wait_for_idle();
     cc1121_strobe(CC1121_SFRX);
     cc1121_strobe(CC1121_SRX);
-    g_cc1121.current_mode = RF_MODE_RX;
+    g_cc1121.current_mode = RADIO_MODE_RX;
     LOG_DBG("RX started: freq=%u timeout=%u ms", g_cc1121.frequency_hz, timeout_ms);
 
     int64_t deadline = k_uptime_get() + (timeout_ms ? timeout_ms : CC1121_RX_TIMEOUT_MS);
@@ -985,10 +981,17 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
 
             cc1121_strobe(CC1121_SIDLE);
             cc1121_strobe(CC1121_SFRX);
-            g_cc1121.current_mode = RF_MODE_STANDBY;
+            g_cc1121.current_mode = RADIO_MODE_STANDBY;
 
-            if (g_cc1121.rx_callback) {
-                g_cc1121.rx_callback(buffer, payload_len, 0);
+            if (g_cc1121.event_cb) {
+                radio_event_t ev = {
+                    .type = RADIO_EVENT_RX_DONE,
+                    .data = buffer,
+                    .len = payload_len,
+                    .rssi = 0,
+                    .user_data = g_cc1121.event_user_data,
+                };
+                g_cc1121.event_cb(&ev, g_cc1121.event_user_data);
             }
             return (int)payload_len;
         }
@@ -1002,7 +1005,7 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
         LOG_DBG("RX timeout: MARCSTATE=0x%02X NUM_RXBYTES=0", marc & 0x1F);
     }
     cc1121_strobe(CC1121_SIDLE);
-    g_cc1121.current_mode = RF_MODE_STANDBY;
+    g_cc1121.current_mode = RADIO_MODE_STANDBY;
     return 0;
 }
 
@@ -1046,53 +1049,68 @@ static int cc1121_get_rssi(int16_t *rssi)
     return 0;
 }
 
-static void cc1121_set_rx_callback(rf_rx_callback_t cb)
+static int cc1121_set_event_callback(radio_handle_t *handle, radio_event_cb_t cb, void *user_data)
 {
-    g_cc1121.rx_callback = cb;
-}
-
-/* =========================================================================
- * RF framework driver struct
- * ========================================================================= */
-
-static const struct akira_rf_driver cc1121_driver = {
-    .name              = "CC1121",
-    .type              = RF_CHIP_CC1121,
-    .init              = cc1121_init,
-    .deinit            = cc1121_deinit,
-    .set_mode          = cc1121_set_mode,
-    .set_frequency     = cc1121_set_frequency,
-    .set_power         = cc1121_set_power,
-    .set_modulation    = cc1121_set_modulation,
-    .set_bitrate       = cc1121_set_bitrate,
-    .tx                = cc1121_tx,
-    .rx                = cc1121_rx,
-    .get_rssi          = cc1121_get_rssi,
-    .set_rx_callback   = cc1121_set_rx_callback,
-    /* LoRa-specific ops not applicable */
-    .set_spreading_factor = NULL,
-    .set_bandwidth        = NULL,
-    .set_coding_rate      = NULL,
-};
-
-const struct akira_rf_driver *cc1121_get_driver(void)
-{
-    return &cc1121_driver;
-}
-
-/**
- * @brief Auto-register CC1121 driver at boot
- */
-static int cc1121_auto_register(void)
-{
-    int ret = rf_framework_register_driver(&cc1121_driver);
-    if (ret < 0 && ret != -EEXIST) {
-        LOG_ERR("Failed to auto-register CC1121 driver: %d", ret);
-        return ret;
-    }
-    LOG_INF("CC1121 driver registered with RF framework");
+    ARG_UNUSED(handle);
+    g_cc1121.event_cb = cb;
+    g_cc1121.event_user_data = user_data;
     return 0;
 }
 
-/* Register driver during APPLICATION initialization */
+/* =========================================================================
+ * radio_ops_t vtable shims
+ * ========================================================================= */
+
+static int cc1121_ops_init(radio_handle_t *h)        { ARG_UNUSED(h); return cc1121_init(); }
+static int cc1121_ops_deinit(radio_handle_t *h)      { ARG_UNUSED(h); return cc1121_deinit(); }
+static int cc1121_ops_send(radio_handle_t *h, const uint8_t *d, size_t l) { ARG_UNUSED(h); return cc1121_tx(d, l); }
+static int cc1121_ops_recv(radio_handle_t *h, uint8_t *b, size_t l, uint32_t t) { ARG_UNUSED(h); return cc1121_rx(b, l, t); }
+static int cc1121_ops_set_frequency(radio_handle_t *h, uint32_t hz) { ARG_UNUSED(h); return cc1121_set_frequency(hz); }
+static int cc1121_ops_set_power(radio_handle_t *h, int8_t dbm)      { ARG_UNUSED(h); return cc1121_set_power(dbm); }
+static int cc1121_ops_get_rssi(radio_handle_t *h, int16_t *r)       { ARG_UNUSED(h); return cc1121_get_rssi(r); }
+static int cc1121_ops_set_mode(radio_handle_t *h, radio_mode_t m)   { ARG_UNUSED(h); return cc1121_set_mode(m); }
+static int cc1121_ops_set_modulation(radio_handle_t *h, radio_modulation_t m) { ARG_UNUSED(h); return cc1121_set_modulation(m); }
+static int cc1121_ops_set_bitrate(radio_handle_t *h, uint32_t bps)  { ARG_UNUSED(h); return cc1121_set_bitrate(bps); }
+
+static const radio_ops_t cc1121_ops = {
+    .init               = cc1121_ops_init,
+    .deinit             = cc1121_ops_deinit,
+    .send               = cc1121_ops_send,
+    .recv               = cc1121_ops_recv,
+    .set_event_callback = cc1121_set_event_callback,
+    .set_frequency      = cc1121_ops_set_frequency,
+    .set_power          = cc1121_ops_set_power,
+    .get_rssi           = cc1121_ops_get_rssi,
+    .set_mode           = cc1121_ops_set_mode,
+    .set_modulation     = cc1121_ops_set_modulation,
+    .set_bitrate        = cc1121_ops_set_bitrate,
+};
+
+static radio_handle_t cc1121_handle = {
+    .type         = RADIO_TYPE_SUBGHZ,
+    .name         = "CC1121",
+    .capabilities = RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_CCA | RADIO_CAP_RAW_MODE |
+                    RADIO_CAP_LOW_POWER | RADIO_CAP_BAND_SUBGHZ |
+                    RADIO_CAP_MOD_FSK | RADIO_CAP_MOD_OOK,
+    .ops          = &cc1121_ops,
+};
+
+radio_handle_t *cc1121_get_handle(void)
+{
+    return &cc1121_handle;
+}
+
+#ifdef CONFIG_AKIRA_CC1121
+static int cc1121_auto_register(void)
+{
+    int ret = radio_manager_register(&cc1121_handle);
+    if (ret < 0 && ret != -EALREADY) {
+        LOG_ERR("Failed to register CC1121: %d", ret);
+        return ret;
+    }
+    LOG_INF("CC1121 registered with radio_manager");
+    return 0;
+}
+
 SYS_INIT(cc1121_auto_register, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
+#endif /* CONFIG_AKIRA_CC1121 */

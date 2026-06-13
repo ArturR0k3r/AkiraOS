@@ -30,7 +30,7 @@
 #include "akira_gpio_api.h"
 #endif
 
-#if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_AKIRA_MODULE_RF) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
+#if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_AKIRA_MODULE_RF) && defined(CONFIG_AKIRA_RADIO_MANAGER)
 #include "akira_rf_api.h"
 #endif
 

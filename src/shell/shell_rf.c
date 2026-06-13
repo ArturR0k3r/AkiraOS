@@ -6,7 +6,9 @@
 #include <zephyr/shell/shell.h>
 #include <zephyr/logging/log.h>
 #include <api/akira_rf_api.h>
+#include "connectivity/radio_interface.h"
 #include <stdlib.h>
+#include <string.h>
 
 LOG_MODULE_REGISTER(shell_rf, LOG_LEVEL_INF);
 
@@ -15,13 +17,13 @@ static int cmd_rf_init(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 2) {
         shell_error(sh, "Usage: rf init <chip>");
-        shell_print(sh, "  chip: 0=None, 1=NRF24L01, 2=CC1101, 3=LR1121");
+        shell_print(sh, "  chip: 0=None 1=NRF24L01 2=CC1101 3=LR1121 4=CC1121 5=LR2021");
         return -EINVAL;
     }
 
     int chip = atoi(argv[1]);
-    if (chip < 0 || chip > 3) {
-        shell_error(sh, "Invalid chip type (0-3)");
+    if (chip < 0 || chip >= AKIRA_RF_CHIP_MAX) {
+        shell_error(sh, "Invalid chip (0=None 1=NRF24L01 2=CC1101 3=LR1121 4=CC1121 5=LR2021)");
         return -EINVAL;
     }
 
@@ -154,28 +156,29 @@ static int cmd_rf_status(const struct shell *sh, size_t argc, char **argv)
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
-    shell_print(sh, "RF Status:");
-    shell_print(sh, "  Framework: " 
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
-               "Enabled"
-#else
-               "Disabled"
-#endif
-    );
-    shell_print(sh, "  LR1121: "
-#ifdef CONFIG_AKIRA_LR1121
-               "Available"
-#else
-               "Not available"
-#endif
-    );
-    shell_print(sh, "  CC1101: "
-#ifdef CONFIG_AKIRA_CC1101
-               "Available"
-#else
-               "Not available"
-#endif
-    );
+    /* Active chip */
+    radio_handle_t *active = akira_rf_get_active_handle();
+    if (active) {
+        int16_t rssi = -999;
+        akira_rf_get_rssi(&rssi);
+        shell_print(sh, "active:   %s  caps=0x%08x  rssi=%d dBm",
+                    active->name, active->capabilities, rssi);
+    } else {
+        shell_print(sh, "active:   none");
+    }
+
+    /* All registered radios */
+    radio_handle_t *handles[8];
+    int n = radio_manager_get_all(RADIO_TYPE_NONE, handles, ARRAY_SIZE(handles));
+    shell_print(sh, "registered: %d", n);
+    for (int i = 0; i < n; i++) {
+        shell_print(sh, "  [%d] %-12s  caps=0x%08x  ops=%s%s",
+                    i,
+                    handles[i]->name,
+                    handles[i]->capabilities,
+                    handles[i]->ops ? "yes" : "NULL(stub)",
+                    handles[i] == active ? "  <-- active" : "");
+    }
 
     return 0;
 }
@@ -197,16 +200,140 @@ static int cmd_rf_deinit(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+/* Shell command: rf select <chip> */
+static int cmd_rf_select(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: rf select <chip>");
+        shell_print(sh, "  chip: 0=None, 1=NRF24L01, 2=CC1101, 3=LR1121, 4=CC1121, 5=LR2021");
+        return -EINVAL;
+    }
+
+    int chip = atoi(argv[1]);
+    int ret = akira_rf_select((akira_rf_chip_t)chip);
+    if (ret < 0) {
+        shell_error(sh, "select failed: %d", ret);
+        return ret;
+    }
+
+    shell_print(sh, "active chip -> %d", chip);
+    return 0;
+}
+
+/* Shell command: rf test registry — dump all registered handles */
+static int cmd_rf_test_registry(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    radio_handle_t *handles[8];
+    int n = radio_manager_get_all(RADIO_TYPE_NONE, handles, ARRAY_SIZE(handles));
+    if (n <= 0) {
+        shell_print(sh, "no radios registered");
+        return 0;
+    }
+
+    shell_print(sh, "%-12s  caps", "name");
+    shell_print(sh, "%-12s  ----", "----");
+    for (int i = 0; i < n; i++) {
+        shell_print(sh, "%-12s  0x%08x  ops=%s",
+                    handles[i]->name,
+                    handles[i]->capabilities,
+                    handles[i]->ops ? "yes" : "NULL");
+    }
+    return 0;
+}
+
+/* Shell command: rf test caps <hex_mask> — lookup by capability */
+static int cmd_rf_test_caps(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: rf test caps <hex_mask>");
+        shell_print(sh, "  e.g. rf test caps 0x00010001  (TX|BAND_SUBGHZ)");
+        return -EINVAL;
+    }
+
+    uint32_t mask = (uint32_t)strtoul(argv[1], NULL, 16);
+    radio_handle_t *h = radio_manager_get_by_caps(mask);
+    if (!h) {
+        shell_print(sh, "no match for caps 0x%08x", mask);
+        return 0;
+    }
+
+    shell_print(sh, "match: %s (caps=0x%08x)", h->name, h->capabilities);
+    return 0;
+}
+
+/* Shell command: rf test loopback <data> — send then recv */
+static int cmd_rf_test_loopback(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: rf test loopback <data>");
+        return -EINVAL;
+    }
+
+    const char *data = argv[1];
+    size_t len = strlen(data);
+
+    int ret = akira_rf_send((const uint8_t *)data, len);
+    if (ret < 0) {
+        shell_error(sh, "send failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "sent %zu bytes", len);
+
+    uint8_t buf[256];
+    ret = akira_rf_receive(buf, sizeof(buf), 3000);
+    if (ret < 0) {
+        shell_error(sh, "recv failed: %d", ret);
+        return ret;
+    }
+    if (ret == 0) {
+        shell_print(sh, "recv timeout (no echo — expected without second node)");
+        return 0;
+    }
+
+    shell_print(sh, "recv %d bytes:", ret);
+    shell_hexdump(sh, buf, ret);
+    return 0;
+}
+
+/* Shell command: rf test nohandle — send with no active chip, expect error */
+static int cmd_rf_test_nohandle(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    akira_rf_deinit();
+    int ret = akira_rf_send((const uint8_t *)"x", 1);
+    if (ret < 0) {
+        shell_print(sh, "PASS: send with no handle returned %d", ret);
+    } else {
+        shell_error(sh, "FAIL: expected error, got %d", ret);
+    }
+    return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf_test,
+    SHELL_CMD_ARG(registry, NULL, "Dump registered radio handles", cmd_rf_test_registry, 1, 0),
+    SHELL_CMD_ARG(caps,     NULL, "Lookup handle by cap mask (hex)", cmd_rf_test_caps, 2, 0),
+    SHELL_CMD_ARG(loopback, NULL, "Send data and attempt recv", cmd_rf_test_loopback, 2, 0),
+    SHELL_CMD_ARG(nohandle, NULL, "Send with no active chip (expect error)", cmd_rf_test_nohandle, 1, 0),
+    SHELL_SUBCMD_SET_END
+);
+
 /* Register RF shell commands */
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf,
-    SHELL_CMD_ARG(init, NULL, "Initialize RF chip", cmd_rf_init, 2, 0),
-    SHELL_CMD_ARG(deinit, NULL, "Deinitialize RF", cmd_rf_deinit, 1, 0),
-    SHELL_CMD_ARG(freq, NULL, "Set frequency (Hz)", cmd_rf_freq, 2, 0),
-    SHELL_CMD_ARG(power, NULL, "Set TX power (dBm)", cmd_rf_power, 2, 0),
-    SHELL_CMD_ARG(send, NULL, "Send data", cmd_rf_send, 2, 0),
-    SHELL_CMD_ARG(recv, NULL, "Receive data", cmd_rf_recv, 1, 1),
-    SHELL_CMD_ARG(rssi, NULL, "Read RSSI", cmd_rf_rssi, 1, 0),
-    SHELL_CMD_ARG(status, NULL, "Show RF status", cmd_rf_status, 1, 0),
+    SHELL_CMD_ARG(init,    NULL,         "Initialize RF chip",      cmd_rf_init,   2, 0),
+    SHELL_CMD_ARG(deinit,  NULL,         "Deinitialize RF",         cmd_rf_deinit, 1, 0),
+    SHELL_CMD_ARG(select,  NULL,         "Select active chip",      cmd_rf_select, 2, 0),
+    SHELL_CMD_ARG(freq,    NULL,         "Set frequency (Hz)",      cmd_rf_freq,   2, 0),
+    SHELL_CMD_ARG(power,   NULL,         "Set TX power (dBm)",      cmd_rf_power,  2, 0),
+    SHELL_CMD_ARG(send,    NULL,         "Send data",               cmd_rf_send,   2, 0),
+    SHELL_CMD_ARG(recv,    NULL,         "Receive data",            cmd_rf_recv,   1, 1),
+    SHELL_CMD_ARG(rssi,    NULL,         "Read RSSI",               cmd_rf_rssi,   1, 0),
+    SHELL_CMD_ARG(status,  NULL,         "Show RF status",          cmd_rf_status, 1, 0),
+    SHELL_CMD(test, &sub_rf_test,        "Radio abstraction tests", NULL),
     SHELL_SUBCMD_SET_END
 );
 

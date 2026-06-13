@@ -12,7 +12,7 @@
  */
 
 #include "lr2021.h"
-#include "rf_framework.h"
+#include "connectivity/radio_interface.h"
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/gpio.h>
@@ -121,16 +121,17 @@ static struct {
     struct gpio_dt_spec cs;
     struct gpio_dt_spec reset;
     struct gpio_dt_spec busy;
-    rf_mode_t current_mode;
+    radio_mode_t current_mode;
     uint32_t frequency_hz;
     uint32_t bitrate_bps;
     int8_t tx_power_dbm;
-    rf_rx_callback_t rx_callback;
+    radio_event_cb_t event_cb;
+    void *event_user_data;
 } g_lr2021;
 
 /* Forward declarations — called from init before their definitions */
 static int lr2021_set_frequency(uint32_t freq_hz);
-static int lr2021_set_modulation(rf_modulation_t mod);
+static int lr2021_set_modulation(radio_modulation_t mod);
 static int lr2021_set_bitrate(uint32_t bps);
 
 /* =========================================================================
@@ -404,16 +405,11 @@ static int lr2021_init(void)
     gpio_pin_configure_dt(&g_lr2021.busy, GPIO_INPUT);
 
     /* --- Hardware reset -------------------------------------------------- */
-    /* RF_RST is shared with CC1121 — only pulse it if no sibling has already
-     * claimed it, otherwise we would reset a configured CC1121. If skipped,
-     * this chip was already reset to POR by the sibling's earlier pulse. */
-    if (rf_framework_claim_shared_reset()) {
-        LOG_INF("Resetting LR2021...");
-        gpio_pin_set_dt(&g_lr2021.reset, 1);  /* Assert reset (active low) */
-        k_msleep(10);
-        gpio_pin_set_dt(&g_lr2021.reset, 0);  /* Release reset */
-        k_msleep(10);
-    }
+    LOG_INF("Resetting LR2021...");
+    gpio_pin_set_dt(&g_lr2021.reset, 1);
+    k_msleep(10);
+    gpio_pin_set_dt(&g_lr2021.reset, 0);
+    k_msleep(10);
 
     /* Wait for boot calibration to finish (BUSY goes low) */
     ret = lr2021_wait_busy();
@@ -444,7 +440,7 @@ static int lr2021_init(void)
         }
     }
 
-    g_lr2021.current_mode = RF_MODE_STANDBY;
+    g_lr2021.current_mode = RADIO_MODE_STANDBY;
 
     /* --- Set defaults from DT --- */
     g_lr2021.frequency_hz = LR2021_DT_FREQ_HZ;
@@ -471,7 +467,7 @@ static int lr2021_init(void)
 
     lr2021_set_frequency(g_lr2021.frequency_hz);
 
-    lr2021_set_modulation(RF_MOD_FSK);
+    lr2021_set_modulation(RADIO_MOD_FSK);
     lr2021_set_bitrate(g_lr2021.bitrate_bps);
 
     /* --- Set default syncword (same as CC1121 for cross-compat) --- */
@@ -517,11 +513,11 @@ static int lr2021_deinit(void)
     lr2021_write_command(LR2021_CMD_SET_SLEEP, sleep_cfg, 5);
 
     g_lr2021.initialized = false;
-    g_lr2021.current_mode = RF_MODE_SLEEP;
+    g_lr2021.current_mode = RADIO_MODE_SLEEP;
     return 0;
 }
 
-static int lr2021_set_mode(rf_mode_t mode)
+static int lr2021_set_mode(radio_mode_t mode)
 {
     if (!g_lr2021.initialized) {
         return -ENODEV;
@@ -530,17 +526,17 @@ static int lr2021_set_mode(rf_mode_t mode)
     int ret = 0;
 
     switch (mode) {
-    case RF_MODE_SLEEP: {
+    case RADIO_MODE_SLEEP: {
         uint8_t args[5] = { LR2021_SLEEP_RAM_RETENTION, 0, 0, 0, 0 };
         ret = lr2021_write_command(LR2021_CMD_SET_SLEEP, args, 5);
         break;
     }
-    case RF_MODE_STANDBY: {
+    case RADIO_MODE_STANDBY: {
         uint8_t m = LR2021_STANDBY_XOSC;
         ret = lr2021_write_command(LR2021_CMD_SET_STANDBY, &m, 1);
         break;
     }
-    case RF_MODE_RX: {
+    case RADIO_MODE_RX: {
         /* Select Rx path based on frequency: HF (>=500MHz) or LF (<500MHz) */
         uint8_t rx_path = (g_lr2021.frequency_hz >= 500000000) ? 1 : 0;
         uint8_t rx_boost = rx_path ? 4 : 0;  /* datasheet recommended defaults */
@@ -553,14 +549,14 @@ static int lr2021_set_mode(rf_mode_t mode)
         ret = lr2021_write_command(LR2021_CMD_SET_RX, timeout, 3);
         break;
     }
-    case RF_MODE_TX:
+    case RADIO_MODE_TX:
         /* TX mode is entered during lr2021_tx() */
         break;
     default:
         return -EINVAL;
     }
 
-    if (ret == 0 && mode != RF_MODE_TX) {
+    if (ret == 0 && mode != RADIO_MODE_TX) {
         g_lr2021.current_mode = mode;
     }
     return ret;
@@ -616,7 +612,7 @@ static int lr2021_set_power(int8_t dbm)
     return ret;
 }
 
-static int lr2021_set_modulation(rf_modulation_t mod)
+static int lr2021_set_modulation(radio_modulation_t mod)
 {
     if (!g_lr2021.initialized) {
         return -ENODEV;
@@ -625,11 +621,11 @@ static int lr2021_set_modulation(rf_modulation_t mod)
     /* Select packet type based on modulation */
     uint8_t pkt_type;
     switch (mod) {
-    case RF_MOD_FSK:
-    case RF_MOD_GFSK:
+    case RADIO_MOD_FSK:
+    case RADIO_MOD_GFSK:
         pkt_type = LR2021_PKT_TYPE_FSK;
         break;
-    case RF_MOD_LORA:
+    case RADIO_MOD_LORA:
         pkt_type = LR2021_PKT_TYPE_LORA;
         break;
     default:
@@ -738,7 +734,7 @@ static int lr2021_tx(const uint8_t *data, size_t len)
         }
     }
 
-    g_lr2021.current_mode = RF_MODE_STANDBY;  /* Auto fallback to standby */
+    g_lr2021.current_mode = RADIO_MODE_STANDBY;  /* Auto fallback to standby */
     LOG_DBG("LR2021 TX: %zu bytes at %u Hz, %d dBm",
             len, g_lr2021.frequency_hz, g_lr2021.tx_power_dbm);
     return 0;
@@ -790,7 +786,7 @@ static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
         }
     }
 
-    g_lr2021.current_mode = RF_MODE_RX;
+    g_lr2021.current_mode = RADIO_MODE_RX;
 
     /* Poll IRQ for RX_DONE or TIMEOUT.
      * GetAndClearIrqStatus returns: Stat(16) | IrqStatus(31:24..7:0) = 6 bytes.
@@ -809,7 +805,7 @@ static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
             LOG_ERR("GetAndClearIrqStatus failed: %d", ret);
             lr2021_write_command(LR2021_CMD_SET_STANDBY,
                                  (uint8_t[]){ LR2021_STANDBY_RC }, 1);
-            g_lr2021.current_mode = RF_MODE_STANDBY;
+            g_lr2021.current_mode = RADIO_MODE_STANDBY;
             return ret;
         }
         /* Response byte order: IrqStatus(31:24) | (23:16) | (15:8) | (7:0) */
@@ -828,7 +824,7 @@ static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
             LOG_DBG("LR2021 RX timeout IRQ (no packet detected)");
             lr2021_write_command(LR2021_CMD_SET_STANDBY,
                                  (uint8_t[]){ LR2021_STANDBY_RC }, 1);
-            g_lr2021.current_mode = RF_MODE_STANDBY;
+            g_lr2021.current_mode = RADIO_MODE_STANDBY;
             return 0;
         }
         if (irq & LR2021_IRQ_CRC_ERROR) {
@@ -846,7 +842,7 @@ static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
                 poll_count, irq);
         lr2021_write_command(LR2021_CMD_SET_STANDBY,
                              (uint8_t[]){ LR2021_STANDBY_RC }, 1);
-        g_lr2021.current_mode = RF_MODE_STANDBY;
+        g_lr2021.current_mode = RADIO_MODE_STANDBY;
         return 0;
     }
 
@@ -863,7 +859,7 @@ static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
             LOG_ERR("RX FIFO length read failed: %d", ret);
             lr2021_write_command(LR2021_CMD_SET_STANDBY,
                                  (uint8_t[]){ LR2021_STANDBY_RC }, 1);
-            g_lr2021.current_mode = RF_MODE_STANDBY;
+            g_lr2021.current_mode = RADIO_MODE_STANDBY;
             return ret;
         }
 
@@ -873,7 +869,7 @@ static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
             lr2021_write_command(LR2021_CMD_CLEAR_RX_FIFO, NULL, 0);
             lr2021_write_command(LR2021_CMD_SET_STANDBY,
                                  (uint8_t[]){ LR2021_STANDBY_RC }, 1);
-            g_lr2021.current_mode = RF_MODE_STANDBY;
+            g_lr2021.current_mode = RADIO_MODE_STANDBY;
             return 0;
         }
 
@@ -882,17 +878,24 @@ static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
             LOG_ERR("RX FIFO read failed: %d", ret);
             lr2021_write_command(LR2021_CMD_SET_STANDBY,
                                  (uint8_t[]){ LR2021_STANDBY_RC }, 1);
-            g_lr2021.current_mode = RF_MODE_STANDBY;
+            g_lr2021.current_mode = RADIO_MODE_STANDBY;
             return ret;
         }
 
         lr2021_write_command(LR2021_CMD_CLEAR_RX_FIFO, NULL, 0);
         lr2021_write_command(LR2021_CMD_SET_STANDBY,
                              (uint8_t[]){ LR2021_STANDBY_RC }, 1);
-        g_lr2021.current_mode = RF_MODE_STANDBY;
+        g_lr2021.current_mode = RADIO_MODE_STANDBY;
 
-        if (g_lr2021.rx_callback) {
-            g_lr2021.rx_callback(buffer, pkt_len, 0);
+        if (g_lr2021.event_cb) {
+            radio_event_t ev = {
+                .type = RADIO_EVENT_RX_DONE,
+                .data = buffer,
+                .len = pkt_len,
+                .rssi = 0,
+                .user_data = g_lr2021.event_user_data,
+            };
+            g_lr2021.event_cb(&ev, g_lr2021.event_user_data);
         }
 
         return (int)pkt_len;
@@ -912,10 +915,10 @@ static int lr2021_get_rssi(int16_t *rssi)
 
     /* Ensure chip is in RX (PLL locked) before reading RSSI.
      * rx_timeout=0 means single mode: stays in RX until packet or mode change. */
-    rf_mode_t prev_mode = g_lr2021.current_mode;
+    radio_mode_t prev_mode = g_lr2021.current_mode;
 
-    if (prev_mode != RF_MODE_RX) {
-        int ret = lr2021_set_mode(RF_MODE_RX);
+    if (prev_mode != RADIO_MODE_RX) {
+        int ret = lr2021_set_mode(RADIO_MODE_RX);
         if (ret < 0) {
             return ret;
         }
@@ -928,7 +931,7 @@ static int lr2021_get_rssi(int16_t *rssi)
     uint8_t rsp[2] = { 0 };
     int ret = lr2021_read_command(LR2021_CMD_GET_RSSI_INST, NULL, 0, rsp, 2);
 
-    if (prev_mode != RF_MODE_RX) {
+    if (prev_mode != RADIO_MODE_RX) {
         lr2021_set_mode(prev_mode);
     }
 
@@ -942,53 +945,73 @@ static int lr2021_get_rssi(int16_t *rssi)
     return 0;
 }
 
-static void lr2021_set_rx_callback(rf_rx_callback_t cb)
+static int lr2021_set_event_callback(radio_handle_t *handle, radio_event_cb_t cb, void *user_data)
 {
-    g_lr2021.rx_callback = cb;
+    ARG_UNUSED(handle);
+    g_lr2021.event_cb = cb;
+    g_lr2021.event_user_data = user_data;
+    return 0;
 }
 
 /* =========================================================================
- * RF framework driver struct
+ * radio_ops_t vtable shims (handle param unused — driver uses global state)
  * ========================================================================= */
 
-static const struct akira_rf_driver lr2021_driver = {
-    .name              = "LR2021",
-    .type              = RF_CHIP_LR2021,
-    .init              = lr2021_init,
-    .deinit            = lr2021_deinit,
-    .set_mode          = lr2021_set_mode,
-    .set_frequency     = lr2021_set_frequency,
-    .set_power         = lr2021_set_power,
-    .set_modulation    = lr2021_set_modulation,
-    .set_bitrate       = lr2021_set_bitrate,
-    .tx                = lr2021_tx,
-    .rx                = lr2021_rx,
-    .get_rssi          = lr2021_get_rssi,
-    .set_rx_callback   = lr2021_set_rx_callback,
-    /* LoRa-specific ops — not yet implemented */
-    .set_spreading_factor = NULL,
-    .set_bandwidth        = NULL,
-    .set_coding_rate      = NULL,
+static int lr2021_ops_init(radio_handle_t *h)        { ARG_UNUSED(h); return lr2021_init(); }
+static int lr2021_ops_deinit(radio_handle_t *h)      { ARG_UNUSED(h); return lr2021_deinit(); }
+static int lr2021_ops_send(radio_handle_t *h, const uint8_t *d, size_t l) { ARG_UNUSED(h); return lr2021_tx(d, l); }
+static int lr2021_ops_recv(radio_handle_t *h, uint8_t *b, size_t l, uint32_t t) { ARG_UNUSED(h); return lr2021_rx(b, l, t); }
+static int lr2021_ops_set_frequency(radio_handle_t *h, uint32_t hz) { ARG_UNUSED(h); return lr2021_set_frequency(hz); }
+static int lr2021_ops_set_power(radio_handle_t *h, int8_t dbm)      { ARG_UNUSED(h); return lr2021_set_power(dbm); }
+static int lr2021_ops_get_rssi(radio_handle_t *h, int16_t *r)       { ARG_UNUSED(h); return lr2021_get_rssi(r); }
+static int lr2021_ops_set_mode(radio_handle_t *h, radio_mode_t m)   { ARG_UNUSED(h); return lr2021_set_mode(m); }
+static int lr2021_ops_set_modulation(radio_handle_t *h, radio_modulation_t m) { ARG_UNUSED(h); return lr2021_set_modulation(m); }
+static int lr2021_ops_set_bitrate(radio_handle_t *h, uint32_t bps)  { ARG_UNUSED(h); return lr2021_set_bitrate(bps); }
+
+static const radio_ops_t lr2021_ops = {
+    .init               = lr2021_ops_init,
+    .deinit             = lr2021_ops_deinit,
+    .send               = lr2021_ops_send,
+    .recv               = lr2021_ops_recv,
+    .set_event_callback = lr2021_set_event_callback,
+    .set_frequency      = lr2021_ops_set_frequency,
+    .set_power          = lr2021_ops_set_power,
+    .get_rssi           = lr2021_ops_get_rssi,
+    .set_mode           = lr2021_ops_set_mode,
+    .set_modulation     = lr2021_ops_set_modulation,
+    .set_bitrate        = lr2021_ops_set_bitrate,
 };
 
-const struct akira_rf_driver *lr2021_get_driver(void)
+static radio_handle_t lr2021_handle = {
+    .type         = RADIO_TYPE_SUBGHZ,
+    .name         = "LR2021",
+    .capabilities = RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_CCA | RADIO_CAP_RAW_MODE |
+                    RADIO_CAP_LOW_POWER | RADIO_CAP_BAND_SUBGHZ | RADIO_CAP_BAND_2GHZ4 |
+                    RADIO_CAP_MOD_FSK | RADIO_CAP_MOD_LORA | RADIO_CAP_MOD_BPSK |
+                    RADIO_CAP_MOD_FLRC | RADIO_CAP_MOD_BLE_PHY | RADIO_CAP_MOD_OQPSK,
+    .ops          = &lr2021_ops,
+};
+
+radio_handle_t *lr2021_get_handle(void)
 {
-    return &lr2021_driver;
+    return &lr2021_handle;
 }
 
 /* =========================================================================
  * Auto-register at boot
  * ========================================================================= */
 
+#ifdef CONFIG_AKIRA_LR2021
 static int lr2021_auto_register(void)
 {
-    int ret = rf_framework_register_driver(&lr2021_driver);
-    if (ret < 0 && ret != -EEXIST) {
-        LOG_ERR("Failed to auto-register LR2021 driver: %d", ret);
+    int ret = radio_manager_register(&lr2021_handle);
+    if (ret < 0 && ret != -EALREADY) {
+        LOG_ERR("Failed to register LR2021: %d", ret);
         return ret;
     }
-    LOG_INF("LR2021 driver registered with RF framework");
+    LOG_INF("LR2021 registered with radio_manager");
     return 0;
 }
 
 SYS_INIT(lr2021_auto_register, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
+#endif /* CONFIG_AKIRA_LR2021 */
