@@ -27,7 +27,57 @@ LOG_MODULE_REGISTER(akira_hid_api, CONFIG_AKIRA_LOG_LEVEL);
 
 #ifdef CONFIG_AKIRA_HID
 #include <connectivity/hid/hid_manager.h>
+#include <connectivity/usb/usb_hid.h>
 #endif
+
+/* ── Polled receive queues for raw (ID 3) and FIDO (ID 4) channels ──────── */
+/*
+ * These queues are filled from USB interrupt context by callbacks registered
+ * on the first hid_init(USB, …) call, and drained by WASM via hid_raw_recv /
+ * hid_fido_recv in the app's polling loop.
+ */
+#ifdef CONFIG_AKIRA_HID
+
+#define HID_RAW_QUEUE_DEPTH  4
+#define HID_FIDO_QUEUE_DEPTH 4
+
+struct hid_raw_pkt  { uint8_t data[USB_HID_RAW_PAYLOAD_SIZE];  uint8_t len; };
+struct hid_fido_pkt { uint8_t data[USB_HID_FIDO_PAYLOAD_SIZE]; uint8_t len; };
+
+K_MSGQ_DEFINE(hid_raw_msgq,  sizeof(struct hid_raw_pkt),  HID_RAW_QUEUE_DEPTH,  4);
+K_MSGQ_DEFINE(hid_fido_msgq, sizeof(struct hid_fido_pkt), HID_FIDO_QUEUE_DEPTH, 4);
+
+static void hid_raw_isr_cb(const uint8_t *data, uint8_t len)
+{
+    struct hid_raw_pkt pkt;
+    uint8_t copy = (len > USB_HID_RAW_PAYLOAD_SIZE) ? USB_HID_RAW_PAYLOAD_SIZE : len;
+    memcpy(pkt.data, data, copy);
+    pkt.len = copy;
+    k_msgq_put(&hid_raw_msgq, &pkt, K_NO_WAIT); /* drop if full */
+}
+
+static void hid_fido_isr_cb(const uint8_t *data, uint8_t len)
+{
+    struct hid_fido_pkt pkt;
+    uint8_t copy = (len > USB_HID_FIDO_PAYLOAD_SIZE) ? USB_HID_FIDO_PAYLOAD_SIZE : len;
+    memcpy(pkt.data, data, copy);
+    pkt.len = copy;
+    k_msgq_put(&hid_fido_msgq, &pkt, K_NO_WAIT);
+}
+
+static bool hid_usb_handlers_registered = false;
+
+static void hid_maybe_register_usb_handlers(void)
+{
+    if (!hid_usb_handlers_registered)
+    {
+        usb_hid_raw_set_handler(hid_raw_isr_cb);
+        usb_hid_fido_set_handler(hid_fido_isr_cb);
+        hid_usb_handlers_registered = true;
+    }
+}
+
+#endif /* CONFIG_AKIRA_HID */
 
 /* ── Device lifecycle ─────────────────────────────────────────────────────── */
 
@@ -379,7 +429,110 @@ int akira_native_hid_init(wasm_exec_env_t exec_env, int32_t transport, int32_t t
     }
 
 #ifdef CONFIG_AKIRA_HID
-    return hid_manager_setup((hid_transport_t)transport, (hid_device_type_t)types);
+    int ret = hid_manager_setup((hid_transport_t)transport, (hid_device_type_t)types);
+    if (ret == 0 && transport == 2 /* HID_TRANSPORT_USB */)
+    {
+        hid_maybe_register_usb_handlers();
+    }
+    return ret;
+#else
+    return -ENOTSUP;
+#endif
+}
+
+/* ── Raw / FIDO polled receive ────────────────────────────────────────────── */
+
+int akira_native_hid_raw_recv(wasm_exec_env_t exec_env,
+                               uint32_t buf_ptr, uint32_t len)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+
+#ifdef CONFIG_AKIRA_HID
+    if (len < USB_HID_RAW_PAYLOAD_SIZE) {
+        return -EINVAL;
+    }
+
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    if (!module_inst) {
+        return -EINVAL;
+    }
+
+    uint8_t *ptr = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+    if (!ptr) {
+        return -EFAULT;
+    }
+
+    struct hid_raw_pkt pkt;
+    if (k_msgq_get(&hid_raw_msgq, &pkt, K_NO_WAIT) != 0) {
+        return -EAGAIN;
+    }
+
+    memcpy(ptr, pkt.data, pkt.len);
+    return (int)pkt.len;
+#else
+    return -ENOTSUP;
+#endif
+}
+
+int akira_native_hid_fido_recv(wasm_exec_env_t exec_env,
+                                uint32_t buf_ptr, uint32_t len)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+
+#ifdef CONFIG_AKIRA_HID
+    if (len < USB_HID_FIDO_PAYLOAD_SIZE) {
+        return -EINVAL;
+    }
+
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    if (!module_inst) {
+        return -EINVAL;
+    }
+
+    uint8_t *ptr = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+    if (!ptr) {
+        return -EFAULT;
+    }
+
+    struct hid_fido_pkt pkt;
+    if (k_msgq_get(&hid_fido_msgq, &pkt, K_NO_WAIT) != 0) {
+        return -EAGAIN;
+    }
+
+    memcpy(ptr, pkt.data, pkt.len);
+    return (int)pkt.len;
+#else
+    return -ENOTSUP;
+#endif
+}
+
+int akira_native_hid_fido_send(wasm_exec_env_t exec_env,
+                                uint32_t buf_ptr, uint32_t len)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+
+#ifdef CONFIG_AKIRA_HID
+    if (len == 0 || len > USB_HID_FIDO_PAYLOAD_SIZE) {
+        return -EINVAL;
+    }
+
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    if (!module_inst) {
+        return -EINVAL;
+    }
+
+    const uint8_t *ptr =
+        (const uint8_t *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+    if (!ptr) {
+        return -EFAULT;
+    }
+
+    /* Pad to full FIDO payload size */
+    static uint8_t __aligned(4) fido_buf[USB_HID_FIDO_PAYLOAD_SIZE];
+    memset(fido_buf, 0, sizeof(fido_buf));
+    memcpy(fido_buf, ptr, len);
+
+    return usb_hid_fido_send(fido_buf);
 #else
     return -ENOTSUP;
 #endif

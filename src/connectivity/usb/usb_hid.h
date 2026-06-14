@@ -28,8 +28,19 @@ extern "C"
 /** Report ID for vendor raw channel */
 #define USB_HID_RAW_REPORT_ID 3
 
+/*===========================================================================*/
+/* FIDO/U2F HID (Report ID 4) constants                                     */
+/*===========================================================================*/
+
+/** Report ID for the FIDO Alliance HID channel (CTAP2/U2F) */
+#define USB_HID_FIDO_REPORT_ID      4
+/** Payload bytes in each FIDO report (FIDO HID spec: 64 bytes) */
+#define USB_HID_FIDO_PAYLOAD_SIZE   64
+/** Total bytes submitted to hid_device_submit_report (ID + payload) */
+#define USB_HID_FIDO_REPORT_SIZE    65
+
     /*===========================================================================*/
-    /* Raw HID handler type                                                     */
+    /* Handler types                                                            */
     /*===========================================================================*/
 
     /**
@@ -41,6 +52,16 @@ extern "C"
      * @param len    Number of valid bytes in @p data (max USB_HID_RAW_PAYLOAD_SIZE).
      */
     typedef void (*usb_hid_raw_handler_t)(const uint8_t *data, uint8_t len);
+
+    /**
+     * @brief Callback invoked when a FIDO OUT report (ID 4) arrives from the host.
+     *
+     * Called from USB interrupt context — must be ISR-safe (no blocking).
+     *
+     * @param data   Pointer to the 64-byte payload (does NOT include Report ID byte).
+     * @param len    Number of valid bytes in @p data (max USB_HID_FIDO_PAYLOAD_SIZE).
+     */
+    typedef void (*usb_hid_fido_handler_t)(const uint8_t *data, uint8_t len);
 
     /*===========================================================================*/
     /* Public API                                                                */
@@ -63,6 +84,19 @@ extern "C"
      * @return 0 on success, -ENOTCONN if USB not ready, -EBUSY if timeout.
      */
     int usb_hid_raw_send(const uint8_t *payload);
+
+    /**
+     * @brief Register (or unregister) a handler for FIDO OUT reports (Report ID 4).
+     * @param handler Callback, or NULL to unregister.
+     */
+    void usb_hid_fido_set_handler(usb_hid_fido_handler_t handler);
+
+    /**
+     * @brief Send a FIDO IN report (Report ID 4) to the host.
+     * @param payload  64-byte payload (USB_HID_FIDO_PAYLOAD_SIZE bytes).
+     * @return 0 on success, -ENOTCONN if USB not ready, -EBUSY if timeout.
+     */
+    int usb_hid_fido_send(const uint8_t *payload);
 
 #ifdef __cplusplus
 }

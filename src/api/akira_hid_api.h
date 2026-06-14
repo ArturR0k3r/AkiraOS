@@ -52,10 +52,39 @@ int akira_native_hid_mouse_scroll(wasm_exec_env_t exec_env, int32_t delta);
 /* ── Consumer / Media keys ────────────────────────────────────────────────── */
 int akira_native_hid_consumer_send(wasm_exec_env_t exec_env, int32_t usage_code);
 
-/* ── Raw report ───────────────────────────────────────────────────────────── */
+/* ── Raw report (send) ────────────────────────────────────────────────────── */
 int akira_native_hid_send_raw_report(wasm_exec_env_t exec_env,
                                      int32_t report_id,
                                      uint32_t data_ptr, uint32_t len);
+
+/* ── Raw report (receive, polled) ─────────────────────────────────────────── */
+
+/**
+ * @brief Poll for an incoming raw OUT report (Report ID 3) from the host.
+ *
+ * Non-blocking. Returns the number of bytes copied into @p buf_ptr, or
+ * -EAGAIN if no packet is available, or a negative error code on failure.
+ * The caller must provide a buffer of at least USB_HID_RAW_PAYLOAD_SIZE (63) bytes.
+ */
+int akira_native_hid_raw_recv(wasm_exec_env_t exec_env,
+                               uint32_t buf_ptr, uint32_t len);
+
+/**
+ * @brief Poll for an incoming FIDO OUT report (Report ID 4) from the host.
+ *
+ * Non-blocking. Returns the number of bytes copied, or -EAGAIN if empty.
+ * The caller must provide a buffer of at least USB_HID_FIDO_PAYLOAD_SIZE (64) bytes.
+ */
+int akira_native_hid_fido_recv(wasm_exec_env_t exec_env,
+                                uint32_t buf_ptr, uint32_t len);
+
+/**
+ * @brief Send a FIDO IN report (Report ID 4) to the host.
+ *
+ * @p buf_ptr must point to exactly USB_HID_FIDO_PAYLOAD_SIZE (64) bytes.
+ */
+int akira_native_hid_fido_send(wasm_exec_env_t exec_env,
+                                uint32_t buf_ptr, uint32_t len);
 
 /* ── Named action registry ────────────────────────────────────────────────── */
 int akira_native_hid_action_register(wasm_exec_env_t exec_env,
