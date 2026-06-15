@@ -8,11 +8,21 @@
 #include <runtime/security.h>
 #include <zephyr/logging/log.h>
 #include "connectivity/radio_interface.h"
+#if defined(CONFIG_AKIRA_LR2021)
 #include "../drivers/rf/lr2021.h"
+#endif
+#if defined(CONFIG_AKIRA_CC1121)
 #include "../drivers/rf/cc1121.h"
+#endif
+#if defined(CONFIG_AKIRA_LR1121)
 #include "../drivers/rf/lr1121.h"
+#endif
+#if defined(CONFIG_AKIRA_CC1101)
 #include "../drivers/rf/cc1101.h"
+#endif
+#if defined(CONFIG_AKIRA_NRF24L01)
 #include "../drivers/rf/nrf24l01.h"
+#endif
 #include <lib/mem_helper.h>
 #include <string.h>
 #include <zephyr/sys/util.h>
@@ -38,11 +48,21 @@ static bool s_inited[AKIRA_RF_CHIP_MAX];
 static radio_handle_t *map_chip_to_handle(akira_rf_chip_t chip)
 {
     switch (chip) {
+#if defined(CONFIG_AKIRA_LR2021)
     case AKIRA_RF_CHIP_LR2021:   return lr2021_get_handle();
+#endif
+#if defined(CONFIG_AKIRA_CC1121)
     case AKIRA_RF_CHIP_CC1121:   return cc1121_get_handle();
+#endif
+#if defined(CONFIG_AKIRA_LR1121)
     case AKIRA_RF_CHIP_LR1121:   return lr1121_get_handle();
+#endif
+#if defined(CONFIG_AKIRA_CC1101)
     case AKIRA_RF_CHIP_CC1101:   return cc1101_get_handle();
+#endif
+#if defined(CONFIG_AKIRA_NRF24L01)
     case AKIRA_RF_CHIP_NRF24L01: return nrf24l01_get_handle();
+#endif
     default:                      return NULL;
     }
 }
