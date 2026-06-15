@@ -5,7 +5,7 @@
 [submodule "AkiraSDK"]
 	path = AkiraSDK
 	url = https://github.com/ArturR0k3r/AkiraSDK
-	branch = v1.5.x
+	branch = v1.6.x
 [submodule "tflite-micro"]
 	path = modules/tflite-micro
 	url = https://github.com/zephyrproject-rtos/tflite-micro
