@@ -396,6 +396,10 @@ int hid_manager_set_device_types(hid_device_type_t types)
 
 int hid_manager_setup(hid_transport_t transport, hid_device_type_t device_types)
 {
+    /* Disable first so set_transport won't re-enable and set_device_types can proceed */
+    if (hid_mgr.initialized && hid_mgr.state.enabled) {
+        hid_manager_disable();
+    }
     int rc = hid_manager_set_transport(transport);
     if (rc < 0) {
         LOG_ERR("hid_manager_setup: set_transport failed: %d", rc);

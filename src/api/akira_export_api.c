@@ -173,6 +173,9 @@ bool akira_register_native_apis()
         {"hid_set_transport", (void *)akira_native_hid_set_transport, "(i)i", NULL},
         {"hid_set_device_types", (void *)akira_native_hid_set_device_types, "(i)i", NULL},
         {"hid_init", (void *)akira_native_hid_init, "(ii)i", NULL},
+        {"hid_raw_recv", (void *)akira_native_hid_raw_recv, "(ii)i", NULL},
+        {"hid_fido_recv", (void *)akira_native_hid_fido_recv, "(ii)i", NULL},
+        {"hid_fido_send", (void *)akira_native_hid_fido_send, "(ii)i", NULL},
 #endif
 
 #ifdef CONFIG_AKIRA_WASM_LIFECYCLE
