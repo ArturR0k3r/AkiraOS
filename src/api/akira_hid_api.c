@@ -69,12 +69,14 @@ static bool hid_usb_handlers_registered = false;
 
 static void hid_maybe_register_usb_handlers(void)
 {
+#ifdef CONFIG_AKIRA_USB_HID
     if (!hid_usb_handlers_registered)
     {
         usb_hid_raw_set_handler(hid_raw_isr_cb);
         usb_hid_fido_set_handler(hid_fido_isr_cb);
         hid_usb_handlers_registered = true;
     }
+#endif
 }
 
 #endif /* CONFIG_AKIRA_HID */
