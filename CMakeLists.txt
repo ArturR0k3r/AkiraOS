@@ -529,11 +529,10 @@ if(CONFIG_AKIRA_MODULE_RF)
     if(CONFIG_AKIRA_LR2021)
         target_sources(app PRIVATE src/drivers/rf/lr2021.c)
     endif()
-endif()
 
-# Custom drivers for peripherals not covered by Zephyr upstream drivers
-if(CONFIG_AKIRA_NRF24L01)
-    target_sources(app PRIVATE src/drivers/nrf24l01.c)
+    if(CONFIG_AKIRA_NRF24L01)
+        target_sources(app PRIVATE src/drivers/rf/nrf24l01.c)
+    endif()
 endif()
 
 if(CONFIG_AKIRA_INA219)
