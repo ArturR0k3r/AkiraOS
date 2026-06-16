@@ -55,15 +55,26 @@ void akira_os_shell_go_home(void);
 void akira_os_shell_notify_app_changed(void);
 
 /**
- * @brief Pre-empt the shell into WASM-dormant mode before an SD XIP launch.
+ * @brief Pre-empt the shell into WASM-dormant mode before launching a WASM app.
  *
- * Sets g_wasm_active and releases the display in one atomic step, so the
- * shell thread goes dormant immediately when sd_install_screen_load() returns
- * — before the app is actually running and CMD_APP_STATE_CHANGED arrives.
+ * Clears the display, sets g_wasm_active and releases the display in one
+ * atomic step, so the shell thread goes dormant immediately — before the app
+ * is actually running and CMD_APP_STATE_CHANGED arrives.
  *
- * Must be called from the shell thread (sd_install_screen_load context).
+ * Must be called from the shell thread immediately before app_manager_start().
  */
 void akira_shell_set_wasm_launching(void);
+
+/**
+ * @brief Undo akira_shell_set_wasm_launching() after a synchronous start failure.
+ *
+ * Reclaims the display for the shell and clears g_wasm_active.  Call this
+ * when app_manager_start() returns an error after akira_shell_set_wasm_launching()
+ * was already called.
+ *
+ * Must be called from the shell thread.
+ */
+void akira_shell_abort_wasm_launch(void);
 
 #ifdef __cplusplus
 }

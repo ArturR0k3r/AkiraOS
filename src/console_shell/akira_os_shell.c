@@ -294,6 +294,12 @@ void akira_shell_set_wasm_launching(void)
     akira_display_release_to_wasm();
 }
 
+void akira_shell_abort_wasm_launch(void)
+{
+    g_wasm_active = false;
+    akira_display_claim_shell();
+}
+
 /* ------------------------------------------------------------------ */
 /* Shell main thread                                                   */
 /* ------------------------------------------------------------------ */
@@ -585,8 +591,13 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             case CMD_GO_HOME:
                 LOG_INF("HOME pressed — returning to launcher");
 
-                /* Stop any running WASM app */
-                if (g_wasm_active)
+                /* Reclaim display immediately so the home screen is visible
+                 * before app_manager_stop() blocks for the abort timeout. */
+                g_wasm_active = false;
+                akira_display_claim_shell();
+                home_screen_load();
+
+                /* Stop any running WASM apps (may block up to abort timeout) */
                 {
                     app_info_t apps[CONFIG_AKIRA_APP_MAX_INSTALLED];
                     int n = app_manager_list(apps,
@@ -598,12 +609,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                             app_manager_stop(apps[i].name);
                         }
                     }
-                    g_wasm_active = false;
                 }
-
-                /* Reclaim display for shell — dismiss settings if open */
-                akira_display_claim_shell();
-                home_screen_load();
                 break;
 
             case CMD_APP_STATE_CHANGED:

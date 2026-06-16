@@ -31,6 +31,7 @@ LOG_MODULE_REGISTER(akira_home_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include "home_screen.h"
 #include "settings_screen.h"
 #include "shell_theme.h"
+#include "akira_os_shell.h"
 
 #include <zephyr/kernel.h>
 #include <string.h>
@@ -1062,7 +1063,11 @@ static void opts_confirm(void)
             }
             else
             {
-                app_manager_start(t->name);
+                akira_shell_set_wasm_launching();
+                if (app_manager_start(t->name) < 0) {
+                    akira_shell_abort_wasm_launch();
+                    home_screen_refresh();
+                }
             }
             break;
         case 1:
@@ -1393,7 +1398,11 @@ void home_screen_handle_key(uint32_t just_pressed)
             }
             else if (t->type == TILE_WASM)
             {
-                app_manager_start(t->name);
+                akira_shell_set_wasm_launching();
+                if (app_manager_start(t->name) < 0) {
+                    akira_shell_abort_wasm_launch();
+                    home_screen_refresh();
+                }
             }
         }
     }
