@@ -10,6 +10,7 @@
 #include <lib/mem_helper.h>
 #include <lib/simple_json.h>
 #include <lib/akpkg.h>
+#include "../security/app_signing.h"
 #include "../storage/fs_manager.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -1927,13 +1928,16 @@ int app_manager_install_akpkg(char *name, size_t name_size,
     }
 
     /* --- Extract tar entries --- */
-    const uint8_t *wasm_ptr;    size_t wasm_size;
-    const char    *mfst_ptr;    size_t mfst_size;
+    const uint8_t *wasm_ptr;   size_t wasm_size;
+    const char    *mfst_ptr;   size_t mfst_size;
+    const uint8_t *model_ptr;  size_t model_size;
+    const uint8_t *d2_sig;     size_t d2_sig_size;
 
     int ret = akpkg_tar_extract(tar_buf, (size_t)tar_len,
                                 &wasm_ptr, &wasm_size,
                                 &mfst_ptr, &mfst_size,
-                                NULL, NULL);
+                                &model_ptr, &model_size,
+                                &d2_sig, &d2_sig_size);
     if (ret) {
         LOG_ERR("akpkg: tar extraction failed (%d)", ret);
         akira_free_buffer(tar_buf);
@@ -1941,6 +1945,17 @@ int app_manager_install_akpkg(char *name, size_t name_size,
     }
 
     LOG_INF("akpkg: wasm=%zu B  manifest=%zu B", wasm_size, mfst_size);
+
+    /* --- PQC verification (Dilithium-2) — delegated to AkiraPlatform --- */
+    ret = app_verify_pqc_sig((const uint8_t *)mfst_ptr, mfst_size,
+                             wasm_ptr, wasm_size,
+                             model_ptr, model_size,
+                             d2_sig, d2_sig_size);
+    if (ret != 0) {
+        LOG_ERR("akpkg: PQC signature check failed (%d)", ret);
+        akira_free_buffer(tar_buf);
+        return -EACCES;
+    }
 
     /* --- Determine app name (use caller buffer directly) --- */
     if (!name || name_size == 0) {

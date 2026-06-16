@@ -5,7 +5,8 @@
  * An .akpkg is a gzip-compressed tar archive containing:
  *   manifest.json  — application metadata
  *   app.wasm       — compiled WebAssembly binary
- *   sig.ed25519    — optional signature (ignored by this module)
+ *   sig.ed25519    — optional Ed25519 signature (64 bytes)
+ *   sig.dilithium2 — optional Dilithium-2 signature (2420 bytes, AkiraPlatform PQC)
  *
  * Provides gzip magic detection, in-memory DEFLATE decompression (RFC 1951),
  * and tar entry extraction with no external compression library dependencies.
@@ -51,27 +52,30 @@ int32_t akpkg_inflate(const uint8_t *gz, size_t gz_len,
                       uint8_t *out, size_t out_cap);
 
 /**
- * @brief Locate app.wasm, manifest.json, and optionally model.tflite inside a tar archive.
+ * @brief Locate app.wasm, manifest.json, and optional entries inside a tar archive.
  *
  * Walks a POSIX tar image (must be fully in memory) and sets output pointers
  * directly into @p tar — no copies are made.  app.wasm and manifest.json must
- * be present for the function to succeed.  model.tflite is optional; pass NULL
- * for @p model_ptr and @p model_size to ignore it.
+ * be present for the function to succeed.  model.tflite and the PQC signature
+ * entries are optional; pass NULL for the pointer/size pairs to ignore them.
  *
- * @param tar           Decompressed tar data.
- * @param tar_len       Length of @p tar.
- * @param wasm_ptr      Out: pointer to app.wasm data inside @p tar.
- * @param wasm_size     Out: app.wasm size in bytes.
- * @param manifest_ptr  Out: pointer to manifest.json data inside @p tar.
- * @param manifest_size Out: manifest.json size in bytes.
- * @param model_ptr     Out: pointer to model.tflite data (NULL if absent or not requested).
- * @param model_size    Out: model.tflite size in bytes (0 if absent or not requested).
+ * @param tar              Decompressed tar data.
+ * @param tar_len          Length of @p tar.
+ * @param wasm_ptr         Out: pointer to app.wasm data inside @p tar.
+ * @param wasm_size        Out: app.wasm size in bytes.
+ * @param manifest_ptr     Out: pointer to manifest.json data inside @p tar.
+ * @param manifest_size    Out: manifest.json size in bytes.
+ * @param model_ptr        Out: pointer to model.tflite data (NULL if absent or not requested).
+ * @param model_size       Out: model.tflite size in bytes (0 if absent or not requested).
+ * @param dilithium2_ptr   Out: pointer to sig.dilithium2 data (NULL if absent or not requested).
+ * @param dilithium2_size  Out: sig.dilithium2 size in bytes (0 if absent or not requested).
  * @return 0 on success, -ENOENT if app.wasm or manifest.json is missing.
  */
 int akpkg_tar_extract(const uint8_t *tar, size_t tar_len,
-                      const uint8_t **wasm_ptr,     size_t *wasm_size,
-                      const char    **manifest_ptr, size_t *manifest_size,
-                      const uint8_t **model_ptr,    size_t *model_size);
+                      const uint8_t **wasm_ptr,        size_t *wasm_size,
+                      const char    **manifest_ptr,    size_t *manifest_size,
+                      const uint8_t **model_ptr,       size_t *model_size,
+                      const uint8_t **dilithium2_ptr,  size_t *dilithium2_size);
 
 /**
  * @brief Decode a base64-encoded string into raw bytes (RFC 4648).
