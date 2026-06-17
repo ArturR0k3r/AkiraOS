@@ -415,13 +415,14 @@
 	// Secondary: 2.4GHz (PCB inverted-F antenna)
 	// -------------------------------------------------------------------------
 	lr2021: lr2021@0 {
-		compatible        = "semtech,lr1121";
+		compatible        = "semtech,lr2021";
 		reg               = <0>;
 		spi-max-frequency = <10000000>;
 		cs-gpios          = <&tca6408 6 GPIO_ACTIVE_LOW>;   // LR_CS via P6
 		reset-gpios       = <&tca6408 4 GPIO_ACTIVE_LOW>;   // RF_RST via P4
 		busy-gpios        = <&tca6408 5 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>; // LR_BUSY via P5
 		irq-gpios         = <&gpio1 16 GPIO_ACTIVE_HIGH>;   // LR_INT = GPIO48 (gpio1 pin 16)
+		irq-dio           = <5>;                            // LR_INT routed from LR2021 DIO5
 		status            = "okay";
 	};
 

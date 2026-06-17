@@ -34,8 +34,17 @@ properties:
     type: phandle-array
     required: false
     description: |
-      GPIO pin connected to IRQ pin (optional).
-      Can be used for interrupt-driven operation.
+      MCU GPIO pin connected to the LR2021 IRQ line (optional).
+      When present, the driver uses interrupt-driven RX instead of polling.
+
+  irq-dio:
+    type: int
+    required: false
+    default: 5
+    description: |
+      LR2021 DIO pin (5..11) physically routed to the irq-gpios line.
+      The driver maps this DIO to the IRQ output via SetDioIrqConfig.
+      Only meaningful when irq-gpios is present.
 
   spi-max-frequency:
     type: int
