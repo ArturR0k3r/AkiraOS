@@ -1,6 +1,6 @@
 /**
  * @file akira_rf_api.c
- * @brief RF API — thin wrapper over radio_manager for WASM/shell access
+ * @brief RF API — self-contained raw-RF stack for WASM/shell access
  */
 
 #include "akira_api.h"
@@ -35,13 +35,20 @@
 
 LOG_MODULE_REGISTER(akira_rf_api, CONFIG_AKIRA_LOG_LEVEL);
 
-/* Serializes init/select/deinit. Data path is lock-free here —
- * radio_manager owns bus locking internally. */
+/* Serializes init/select/deinit AND data-path bus ops (single operator). */
 static K_MUTEX_DEFINE(s_chip_lock);
 
 #define CHIP_LOCK_TIMEOUT_MS 2000
 
+/* RX queue: the daemon fills it; akira_rf_receive() drains it (decoupled from
+ * the chip). Shared, so defined here ahead of both users. */
+#define RF_RX_MAX_PACKET    255
+struct rf_rx_packet { uint8_t data[RF_RX_MAX_PACKET]; uint16_t len; };
+K_MSGQ_DEFINE(s_rf_rx_msgq, sizeof(struct rf_rx_packet),
+              CONFIG_AKIRA_RF_RX_QUEUE_DEPTH, 4);
+
 static akira_rf_chip_t g_active_chip = AKIRA_RF_CHIP_NONE;
+static radio_handle_t *g_active_handle = NULL;
 /* Per-chip init tracking: init hardware once, then just swap active handle. */
 static bool s_inited[AKIRA_RF_CHIP_MAX];
 
@@ -97,9 +104,15 @@ int akira_rf_init(akira_rf_chip_t chip)
         return ret;
     }
 
+    int aret = radio_manager_acquire(handle, "rf");
+    if (aret < 0) {
+        LOG_ERR("Radio '%s' busy (owned elsewhere): %d", handle->name, aret);
+        k_mutex_unlock(&s_chip_lock);
+        return aret;
+    }
     s_inited[chip] = true;
     g_active_chip = chip;
-    radio_manager_set_active(handle);
+    g_active_handle = handle;
 
     k_mutex_unlock(&s_chip_lock);
     LOG_INF("RF radio '%s' initialized", handle->name);
@@ -114,23 +127,21 @@ int akira_rf_deinit(void)
         return -EBUSY;
     }
 
-    radio_handle_t *h = radio_manager_get_active();
+    radio_handle_t *h = g_active_handle;
     if (h && h->ops && h->ops->deinit) {
         h->ops->deinit(h);
     }
     if (g_active_chip != AKIRA_RF_CHIP_NONE) {
         s_inited[g_active_chip] = false;
     }
-    radio_manager_set_active(NULL);
+    if (g_active_handle) {
+        radio_manager_release(g_active_handle, "rf");
+        g_active_handle = NULL;
+    }
     g_active_chip = AKIRA_RF_CHIP_NONE;
 
     k_mutex_unlock(&s_chip_lock);
     return 0;
-}
-
-int akira_rf_recv_pop(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
-{
-    return radio_manager_recv_pop(buf, max_len, timeout_ms);
 }
 
 int akira_rf_select(akira_rf_chip_t chip)
@@ -170,7 +181,17 @@ int akira_rf_select(akira_rf_chip_t chip)
         s_inited[chip] = true;
     }
 
-    radio_manager_set_active(handle);
+    if (g_active_handle && g_active_handle != handle) {
+        radio_manager_release(g_active_handle, "rf");
+        g_active_handle = NULL;
+        g_active_chip = AKIRA_RF_CHIP_NONE;
+    }
+    int aret = radio_manager_acquire(handle, "rf");
+    if (aret < 0) {
+        k_mutex_unlock(&s_chip_lock);
+        return aret;
+    }
+    g_active_handle = handle;
     g_active_chip = chip;
 
     k_mutex_unlock(&s_chip_lock);
@@ -180,35 +201,146 @@ int akira_rf_select(akira_rf_chip_t chip)
 
 int akira_rf_send(const uint8_t *data, size_t len)
 {
-    return radio_manager_send(data, len);
+    if (!data || len == 0) return -EINVAL;
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->send) ? h->ops->send(h, data, len) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
 }
 
-int akira_rf_receive(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
+int akira_rf_receive(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
 {
-    return radio_manager_receive(buffer, max_len, timeout_ms);
+    if (!buf || max_len == 0) return -EINVAL;
+    /* Pull from the daemon's RX queue rather than touching the chip directly —
+     * the daemon owns the (continuous) RX path. Avoids racing the daemon for
+     * the chip and works for both interrupt-driven and polling radios. */
+    struct rf_rx_packet pkt;
+    if (k_msgq_get(&s_rf_rx_msgq, &pkt, K_MSEC(timeout_ms)) != 0) {
+        return 0;  /* timeout, no packet */
+    }
+    size_t n = (pkt.len < max_len) ? pkt.len : max_len;
+    memcpy(buf, pkt.data, n);
+    return (int)n;
 }
 
 int akira_rf_set_frequency(uint32_t freq_hz)
 {
     LOG_INF("RF set frequency: %u Hz", freq_hz);
-    return radio_manager_set_frequency(freq_hz);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->set_frequency) ? h->ops->set_frequency(h, freq_hz) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
 }
 
 int akira_rf_set_power(int8_t dbm)
 {
     LOG_INF("RF set power: %d dBm", dbm);
-    return radio_manager_set_power(dbm);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->set_power) ? h->ops->set_power(h, dbm) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
 }
 
 int akira_rf_get_rssi(int16_t *rssi)
 {
-    return radio_manager_get_rssi(rssi);
+    if (!rssi) return -EINVAL;
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) {
+        *rssi = RADIO_RSSI_UNAVAILABLE; return -EBUSY;
+    }
+    radio_handle_t *h = g_active_handle;
+    int ret;
+    if (h && h->ops && h->ops->get_rssi) {
+        ret = h->ops->get_rssi(h, rssi);
+        if (ret == -ENOSYS) *rssi = RADIO_RSSI_UNAVAILABLE;
+    } else {
+        *rssi = RADIO_RSSI_UNAVAILABLE; ret = -ENODEV;
+    }
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
 }
 
 radio_handle_t *akira_rf_get_active_handle(void)
 {
-    return radio_manager_get_active();
+    return g_active_handle;
 }
+
+#ifdef CONFIG_AKIRA_RF_RX_DAEMON
+
+#define RF_DAEMON_SLEEP_MS  100
+
+static struct rf_rx_packet s_rf_poll_buf;
+
+static void rf_rx_daemon_fn(void *p1, void *p2, void *p3)
+{
+    ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
+    while (1) {
+        if (!g_active_handle) { k_msleep(RF_DAEMON_SLEEP_MS); continue; }
+        radio_handle_t *h = g_active_handle;
+        if (!h || !h->ops || !h->ops->recv) { k_msleep(RF_DAEMON_SLEEP_MS); continue; }
+
+        int n;
+        if (h->ops->rx_wait) {
+            /* Interrupt-driven continuous RX. recv() (under the lock, briefly)
+             * arms continuous RX on first call and reads any pending packet
+             * non-blocking. rx_wait() then blocks LOCK-FREE on the IRQ until the
+             * next packet — the chip never leaves RX (no gap) and the lock is
+             * free while idle (no starvation). */
+            if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) {
+                k_msleep(RF_DAEMON_SLEEP_MS); continue;
+            }
+            n = h->ops->recv(h, s_rf_poll_buf.data, RF_RX_MAX_PACKET, 0);
+            k_mutex_unlock(&s_chip_lock);
+            if (n <= 0) { h->ops->rx_wait(h, 1000); continue; }  /* wait next IRQ */
+        } else {
+            /* Polling radios: short window so the lock is released frequently. */
+            if (k_mutex_lock(&s_chip_lock, K_NO_WAIT) != 0) {
+                k_msleep(RF_DAEMON_SLEEP_MS); continue;
+            }
+            n = h->ops->recv(h, s_rf_poll_buf.data, RF_RX_MAX_PACKET, 250);
+            k_mutex_unlock(&s_chip_lock);
+            if (n <= 0) { k_msleep(RF_DAEMON_SLEEP_MS); continue; }
+        }
+        LOG_INF("RF RX %d bytes: %02x %02x %02x %02x %02x %02x %02x %02x",
+                n,
+                n > 0 ? s_rf_poll_buf.data[0] : 0, n > 1 ? s_rf_poll_buf.data[1] : 0,
+                n > 2 ? s_rf_poll_buf.data[2] : 0, n > 3 ? s_rf_poll_buf.data[3] : 0,
+                n > 4 ? s_rf_poll_buf.data[4] : 0, n > 5 ? s_rf_poll_buf.data[5] : 0,
+                n > 6 ? s_rf_poll_buf.data[6] : 0, n > 7 ? s_rf_poll_buf.data[7] : 0);
+        s_rf_poll_buf.len = (uint16_t)n;
+        if (k_msgq_put(&s_rf_rx_msgq, &s_rf_poll_buf, K_NO_WAIT) == -ENOMSG) {
+            struct rf_rx_packet discard;
+            k_msgq_get(&s_rf_rx_msgq, &discard, K_NO_WAIT);
+            k_msgq_put(&s_rf_rx_msgq, &s_rf_poll_buf, K_NO_WAIT);
+        }
+    }
+}
+
+K_THREAD_DEFINE(rf_rx_daemon, CONFIG_AKIRA_RF_DAEMON_STACK_SIZE,
+                rf_rx_daemon_fn, NULL, NULL, NULL,
+                CONFIG_AKIRA_RF_DAEMON_PRIORITY, 0, 0);
+
+int akira_rf_recv_pop(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
+{
+    if (!buf || max_len == 0) return -EINVAL;
+    struct rf_rx_packet pkt;
+    k_timeout_t t = (timeout_ms == 0) ? K_NO_WAIT : K_MSEC(timeout_ms);
+    int ret = k_msgq_get(&s_rf_rx_msgq, &pkt, t);
+    if (ret < 0) return ret;
+    size_t copy = MIN(pkt.len, max_len);
+    memcpy(buf, pkt.data, copy);
+    return (int)copy;
+}
+
+#else
+int akira_rf_recv_pop(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
+{
+    ARG_UNUSED(buf); ARG_UNUSED(max_len); ARG_UNUSED(timeout_ms);
+    return -ENOSYS;
+}
+#endif /* CONFIG_AKIRA_RF_RX_DAEMON */
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 

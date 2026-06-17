@@ -336,7 +336,7 @@ config AKIRA_RF_RX_QUEUE_DEPTH
 
 config AKIRA_RF_DAEMON_STACK_SIZE
     int "RF RX daemon stack size (bytes)"
-    default 2048
+    default 4096
     depends on AKIRA_RF_RX_DAEMON
 
 config AKIRA_RF_DAEMON_PRIORITY
@@ -698,6 +698,70 @@ config AKIRA_MESH_TRANSPORT_ESPNOW
     depends on WIFI_ESP32
     help
       Enable ESP-NOW transport (ESP32 optimization)
+
+config AKIRA_MESH_MAX_RETRIES
+    int "End-to-end retransmit attempts (beyond initial send)"
+    default 3
+    help
+      Number of retransmissions before a reliable-delivery packet is
+      declared failed. Total attempts = this value + 1 (initial send).
+
+config AKIRA_MESH_ACK_TIMEOUT_MS
+    int "End-to-end ACK timeout (ms)"
+    default 500
+    help
+      Time to wait for an end-to-end ACK before retransmitting.
+
+config AKIRA_MESH_ROUTE_LIFETIME_S
+    int "Route entry lifetime (s)"
+    default 30
+    help
+      How long an AODV route entry stays valid before expiry.
+
+config AKIRA_MESH_MAX_ROUTES
+    int "Route table size"
+    default 16
+    help
+      Maximum number of AODV route entries.
+
+config AKIRA_MESH_MAX_PENDING_ACKS
+    int "Max simultaneous in-flight unacked packets"
+    default 8
+    help
+      Size of the pending-ACK table. Sends past this limit return -EBUSY.
+
+config AKIRA_MESH_MAX_PENDING_ROUTES
+    int "Max packets queued awaiting route discovery"
+    default 8
+    help
+      Packets buffered while an AODV route request is in flight.
+
+config AKIRA_MESH_SEEN_CACHE
+    int "Duplicate-suppression cache entries"
+    default 32
+    help
+      Ring-buffer size for (src_id, seq_num) duplicate suppression.
+
+config AKIRA_MESH_RX_STACK_SIZE
+    int "Mesh RX thread stack size"
+    default 2048
+    help
+      Stack size for the mesh receive/dispatch thread.
+
+config AKIRA_MESH_RX_PRIORITY
+    int "Mesh RX thread priority"
+    default 7
+    help
+      Scheduling priority for the mesh receive thread.
+
+config AKIRA_MESH_RX_POLL_MS
+    int "Mesh RX listen-window (ms)"
+    default 5000
+    help
+      Per-cycle blocking receive window for the mesh RX thread. The radio
+      listens continuously for this long each cycle (like a long rf recv),
+      with only a brief gap afterward to let TX in. Longer = better packet
+      capture but more TX latency on the shared half-duplex radio.
 
 endif # AKIRA_MESH
 

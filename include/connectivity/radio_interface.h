@@ -175,9 +175,18 @@ typedef struct {
     /* Transmit packet */
     int (*send)(struct radio_handle *handle, const uint8_t *data, size_t len);
     
-    /* Receive packet (synchronous) */
+    /* Receive packet (synchronous).
+     * For radios that keep RX continuously armed (see rx_wait), this is a
+     * NON-blocking read: it arms continuous RX on first call and returns any
+     * packet already in the FIFO, or 0 if none. */
     int (*recv)(struct radio_handle *handle, uint8_t *buf, size_t buf_len, uint32_t timeout_ms);
-    
+
+    /* Optional: block (lock-free, no SPI) until a packet is ready or timeout.
+     * Lets a caller wait for RX without holding the chip lock, enabling
+     * interrupt-driven continuous RX. Returns 0 if a packet is ready,
+     * -EAGAIN on timeout. NULL => radio uses the blocking recv() polling model. */
+    int (*rx_wait)(struct radio_handle *handle, uint32_t timeout_ms);
+
     /* Start network scan */
     int (*scan)(struct radio_handle *handle, uint32_t timeout_ms);
     
@@ -345,26 +354,23 @@ const char *radio_type_to_string(radio_type_t type);
  */
 const char *radio_state_to_string(radio_state_t state);
 
-/* Active radio management */
+/* Ownership — the single access primitive. Acquire before driving ops. */
 
-/** Set the active radio for all data-path operations. Pass NULL to clear. */
-int radio_manager_set_active(radio_handle_t *handle);
+/** Acquire a specific handle exclusively. -EBUSY if owned by another owner.
+ *  Re-acquire by the same owner string is idempotent (returns 0). */
+int radio_manager_acquire(radio_handle_t *handle, const char *owner);
 
-/** Get the currently active radio handle (NULL if none selected). */
-radio_handle_t *radio_manager_get_active(void);
+/** Atomic find-first-free + acquire by radio type. NULL if none free. */
+radio_handle_t *radio_manager_acquire_by_type(radio_type_t type, const char *owner);
 
-/* Data path — all operate on the currently active radio */
-int radio_manager_send(const uint8_t *data, size_t len);
-int radio_manager_receive(uint8_t *buf, size_t max_len, uint32_t timeout_ms);
-int radio_manager_set_frequency(uint32_t freq_hz);
-int radio_manager_set_power(int8_t dbm);
-int radio_manager_get_rssi(int16_t *rssi);
+/** Atomic find-first-free + acquire by capability mask. NULL if none free. */
+radio_handle_t *radio_manager_acquire_by_caps(uint32_t caps, const char *owner);
 
-/**
- * Pop the oldest received packet from the RX daemon queue.
- * Returns -ENOSYS when CONFIG_AKIRA_RF_RX_DAEMON is disabled.
- */
-int radio_manager_recv_pop(uint8_t *buf, size_t max_len, uint32_t timeout_ms);
+/** Release ownership. -EPERM if owner string does not match. */
+int radio_manager_release(radio_handle_t *handle, const char *owner);
+
+/** Inspection: owner string, or NULL if unacquired. */
+const char *radio_manager_get_owner(const radio_handle_t *handle);
 
 /* Convenience wrappers for common operations */
 

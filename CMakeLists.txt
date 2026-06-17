@@ -755,6 +755,7 @@ endif()
 if(CONFIG_AKIRA_MESH)
     target_sources(app PRIVATE
         src/connectivity/mesh/mesh_manager.c
+        src/connectivity/mesh/mesh_routing.c
     )
 endif()
 
