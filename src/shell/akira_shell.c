@@ -73,6 +73,7 @@
 #endif
 #if defined(CONFIG_AKIRA_MESH)
 #include "connectivity/akira_mesh.h"
+#include "api/akira_rf_api.h"
 #endif
 
 LOG_MODULE_REGISTER(akira_shell, AKIRA_LOG_LEVEL);
@@ -2153,11 +2154,76 @@ static int cmd_mesh_nodes(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+static void mesh_shell_rx_cb(const uint8_t *src_id, const uint8_t *data,
+                             size_t len, void *user_data)
+{
+    ARG_UNUSED(user_data);
+    printk("[mesh] rx from %02x (%zu bytes): %.*s\n",
+           src_id[AKIRA_MESH_NODE_ID_LEN - 1], len, (int)len, data);
+}
+
+static int cmd_mesh_init(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: mesh init <node_id_hex>  (e.g. mesh init 01)");
+        return -EINVAL;
+    }
+
+    uint8_t id = (uint8_t)strtoul(argv[1], NULL, 16);
+
+    akira_mesh_config_t cfg = {0};
+    cfg.node_id[AKIRA_MESH_NODE_ID_LEN - 1] = id;
+    snprintf(cfg.node_name, sizeof(cfg.node_name), "akira-%02x", id);
+    cfg.role = AKIRA_MESH_ROLE_NODE;
+    /* Select LR2021 specifically: MOD_LORA is unique to it (CC1121 is FSK/OOK
+     * only), avoiding the shared RF_RST conflict with CC1121 on this board.
+     * Selection only — does not force LoRa modulation. */
+    cfg.transport_caps = RADIO_CAP_TX | RADIO_CAP_RX |
+                         RADIO_CAP_BAND_SUBGHZ | RADIO_CAP_MOD_LORA;
+    cfg.max_hops = AKIRA_MESH_MAX_HOPS;
+    cfg.beacon_interval_ms = 5000;
+
+    /* Release RF API ownership so mesh can acquire the LR2021. */
+    akira_rf_deinit();
+
+    int ret = akira_mesh_init(&cfg);
+    if (ret) {
+        shell_error(sh, "mesh init failed: %d", ret);
+        return ret;
+    }
+
+    akira_mesh_register_rx_callback(mesh_shell_rx_cb, NULL);
+    shell_print(sh, "mesh init: node %02x (%s), transport=SUBGHZ", id, cfg.node_name);
+    return 0;
+}
+
+static int cmd_mesh_send(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 3) {
+        shell_error(sh, "Usage: mesh send <dest_id_hex> <text>");
+        return -EINVAL;
+    }
+
+    uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
+    dest[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+
+    const char *text = argv[2];
+    int ret = akira_mesh_send(dest, (const uint8_t *)text, strlen(text));
+    if (ret) {
+        shell_error(sh, "mesh send failed: %d", ret);
+        return ret;
+    }
+
+    shell_print(sh, "sent %zu bytes to %02x", strlen(text),
+                dest[AKIRA_MESH_NODE_ID_LEN - 1]);
+    return 0;
+}
+
 static int cmd_mesh_start(const struct shell *sh, size_t argc, char **argv)
 {
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
-    
+
     int ret = akira_mesh_start();
     if (ret) {
         shell_error(sh, "Failed to start mesh: %d", ret);
@@ -2184,6 +2250,8 @@ static int cmd_mesh_stop(const struct shell *sh, size_t argc, char **argv)
 }
 
 SHELL_STATIC_SUBCMD_SET_CREATE(mesh_cmds,
+    SHELL_CMD_ARG(init, NULL, "Init mesh: <node_id_hex>", cmd_mesh_init, 2, 0),
+    SHELL_CMD_ARG(send, NULL, "Send: <dest_id_hex> <text>", cmd_mesh_send, 3, 0),
     SHELL_CMD(info, NULL, "Show mesh statistics", cmd_mesh_info),
     SHELL_CMD(nodes, NULL, "List discovered nodes", cmd_mesh_nodes),
     SHELL_CMD(start, NULL, "Start mesh networking", cmd_mesh_start),

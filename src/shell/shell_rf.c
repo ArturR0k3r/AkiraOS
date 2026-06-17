@@ -4,6 +4,7 @@
  */
 
 #include <zephyr/shell/shell.h>
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <api/akira_rf_api.h>
 #include "connectivity/radio_interface.h"
@@ -103,6 +104,67 @@ static int cmd_rf_send(const struct shell *sh, size_t argc, char **argv)
     }
 
     shell_print(sh, "Data sent successfully");
+    return 0;
+}
+
+/* Shell command: rf sweep <count> [size] [interval_ms]
+ * Sends <count> packets, each <size> bytes (default 16), with <interval_ms>
+ * between sends (default 50).  First 4 bytes of each packet are a little-
+ * endian sequence number; the rest are filled with 0xAA. */
+static int cmd_rf_sweep(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: rf sweep <count> [size] [interval_ms]");
+        shell_print(sh, "  Example: rf sweep 10            # 10 pkts, 16 bytes each");
+        shell_print(sh, "  Example: rf sweep 20 32 100     # 20 pkts, 32 bytes, 100 ms gap");
+        return -EINVAL;
+    }
+
+    uint32_t count = (uint32_t)atol(argv[1]);
+    uint32_t size  = (argc >= 3) ? (uint32_t)atol(argv[2]) : 16;
+    uint32_t interval_ms = (argc >= 4) ? (uint32_t)atol(argv[3]) : 50;
+
+    if (count == 0 || count > 10000) {
+        shell_error(sh, "count must be 1..10000");
+        return -EINVAL;
+    }
+    if (size < 4 || size > 255) {
+        shell_error(sh, "size must be 4..255");
+        return -EINVAL;
+    }
+    if (interval_ms > 10000) {
+        shell_error(sh, "interval must be <= 10000 ms");
+        return -EINVAL;
+    }
+
+    uint8_t buf[255];
+    memset(buf, 0xAA, sizeof(buf));
+
+    shell_print(sh, "Sweep: %u packets, %u bytes each, %u ms gap",
+                count, size, interval_ms);
+
+    for (uint32_t i = 0; i < count; i++) {
+        /* Encode sequence number (LE) in first 4 bytes */
+        buf[0] = (uint8_t)(i);
+        buf[1] = (uint8_t)(i >> 8);
+        buf[2] = (uint8_t)(i >> 16);
+        buf[3] = (uint8_t)(i >> 24);
+
+        int ret = akira_rf_send(buf, size);
+        if (ret < 0) {
+            shell_error(sh, "[%u/%u] send failed: %d", i + 1, count, ret);
+            return ret;
+        }
+
+        shell_print(sh, "[%u/%u] sent %u bytes (seq=%u)",
+                    i + 1, count, size, i);
+
+        if (i + 1 < count && interval_ms > 0) {
+            k_msleep(interval_ms);
+        }
+    }
+
+    shell_print(sh, "Sweep complete: %u packets sent", count);
     return 0;
 }
 
@@ -330,6 +392,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf,
     SHELL_CMD_ARG(freq,    NULL,         "Set frequency (Hz)",      cmd_rf_freq,   2, 0),
     SHELL_CMD_ARG(power,   NULL,         "Set TX power (dBm)",      cmd_rf_power,  2, 0),
     SHELL_CMD_ARG(send,    NULL,         "Send data",               cmd_rf_send,   2, 0),
+    SHELL_CMD_ARG(sweep,   NULL,         "Send multiple packets",   cmd_rf_sweep,  2, 2),
     SHELL_CMD_ARG(recv,    NULL,         "Receive data",            cmd_rf_recv,   1, 1),
     SHELL_CMD_ARG(rssi,    NULL,         "Read RSSI",               cmd_rf_rssi,   1, 0),
     SHELL_CMD_ARG(status,  NULL,         "Show RF status",          cmd_rf_status, 1, 0),

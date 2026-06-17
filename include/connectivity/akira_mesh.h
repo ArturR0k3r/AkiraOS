@@ -19,6 +19,7 @@
 #include <zephyr/kernel.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "connectivity/radio_interface.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,12 +30,12 @@ extern "C" {
 #define AKIRA_MESH_MAX_HOPS       CONFIG_AKIRA_MESH_MAX_HOPS
 #define AKIRA_MESH_NODE_ID_LEN    8
 #define AKIRA_MESH_APP_NAME_LEN   32
-/* AkiraMesh transport types */
-typedef enum {
-    AKIRA_MESH_TRANSPORT_BLE,      /* BLE Mesh (standards-based) */
-    AKIRA_MESH_TRANSPORT_802154,   /* Custom over 802.15.4 */
-    AKIRA_MESH_TRANSPORT_ESPNOW,   /* ESP-NOW (ESP32 only) */
-} akira_mesh_transport_t;
+
+/* Transport selection is purely capability-based — the mesh acquires the first
+ * free radio whose capabilities match the configured mask. */
+#define AKIRA_MESH_CAPS_SUBGHZ (RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_BAND_SUBGHZ)
+#define AKIRA_MESH_CAPS_802154 (RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_CSMA_CA)
+#define AKIRA_MESH_CAPS_BLE    (RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_MOD_BLE_PHY)
 
 /* Node role */
 typedef enum {
@@ -48,7 +49,9 @@ typedef enum {
     AKIRA_MESH_MSG_BEACON = 0,     /* Node discovery beacon */
     AKIRA_MESH_MSG_ROUTE_REQ,      /* Route request (AODV RREQ) */
     AKIRA_MESH_MSG_ROUTE_REPLY,    /* Route reply (AODV RREP) */
+    AKIRA_MESH_MSG_ROUTE_ERROR,    /* Route error (AODV RERR) */
     AKIRA_MESH_MSG_DATA,           /* User data */
+    AKIRA_MESH_MSG_ACK,            /* End-to-end delivery ACK */
     AKIRA_MESH_MSG_APP_CHUNK,      /* WASM app chunk */
     AKIRA_MESH_MSG_STATE_SYNC,     /* State synchronization */
 } akira_mesh_msg_type_t;
@@ -56,11 +59,11 @@ typedef enum {
 /* Mesh configuration */
 typedef struct {
     uint8_t node_id[AKIRA_MESH_NODE_ID_LEN];  /* Unique node ID */
-    char node_name[AKIRA_MESH_APP_NAME_LEN];                       /* Human-readable name */
+    char node_name[AKIRA_MESH_APP_NAME_LEN];  /* Human-readable name */
     akira_mesh_role_t role;                   /* Node role */
-    akira_mesh_transport_t transport;         /* Preferred transport */
+    uint32_t transport_caps;                  /* Caps mask for radio acquisition */
     uint8_t max_hops;                         /* Maximum hop count */
-    bool enable_auto_routing;                 /* Enable automatic routing */
+    uint32_t beacon_interval_ms;              /* Beacon transmission interval */
 } akira_mesh_config_t;
 
 /* Node information */
