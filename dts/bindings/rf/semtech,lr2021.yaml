@@ -68,3 +68,25 @@ properties:
     description: |
       Default FSK bitrate in bits per second.
       Used if not changed at runtime via SetBitrate.
+
+  akira,default-lora-sf:
+    type: int
+    required: false
+    default: 7
+    description: |
+      Default LoRa spreading factor (5..12). Used when modulation is switched
+      to LoRa before any runtime SetSpreadingFactor override.
+
+  akira,default-lora-bw-hz:
+    type: int
+    required: false
+    default: 125000
+    description: |
+      Default LoRa bandwidth in Hz. Supported: 125000, 250000, 500000.
+
+  akira,default-lora-cr:
+    type: int
+    required: false
+    default: 5
+    description: |
+      Default LoRa coding rate as the denominator of 4/N (5..8 => 4/5..4/8).

@@ -244,6 +244,46 @@ int akira_rf_set_power(int8_t dbm)
     return ret;
 }
 
+int akira_rf_set_modulation(radio_modulation_t mod)
+{
+    LOG_INF("RF set modulation: %d", mod);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->set_modulation) ? h->ops->set_modulation(h, mod) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
+int akira_rf_set_spreading_factor(uint8_t sf)
+{
+    LOG_INF("RF set LoRa SF: %u", sf);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->set_spreading_factor) ? h->ops->set_spreading_factor(h, sf) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
+int akira_rf_set_bandwidth(uint32_t bw_hz)
+{
+    LOG_INF("RF set BW: %u Hz", bw_hz);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->set_bandwidth) ? h->ops->set_bandwidth(h, bw_hz) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
+int akira_rf_set_coding_rate(uint8_t cr)
+{
+    LOG_INF("RF set LoRa CR: 4/%u", cr);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->set_coding_rate) ? h->ops->set_coding_rate(h, cr) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
 int akira_rf_get_rssi(int16_t *rssi)
 {
     if (!rssi) return -EINVAL;

@@ -38,6 +38,10 @@ int akira_rf_send(const uint8_t *data, size_t len);
 int akira_rf_receive(uint8_t *buffer, size_t max_len, uint32_t timeout_ms);
 int akira_rf_set_frequency(uint32_t freq_hz);
 int akira_rf_set_power(int8_t dbm);
+int akira_rf_set_modulation(radio_modulation_t mod);
+int akira_rf_set_spreading_factor(uint8_t sf);
+int akira_rf_set_bandwidth(uint32_t bw_hz);
+int akira_rf_set_coding_rate(uint8_t cr);
 int akira_rf_get_rssi(int16_t *rssi);
 radio_handle_t *akira_rf_get_active_handle(void);
 

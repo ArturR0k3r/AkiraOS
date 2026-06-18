@@ -376,11 +376,92 @@ static int cmd_rf_test_nohandle(const struct shell *sh, size_t argc, char **argv
     return 0;
 }
 
+/* rf mod <fsk|lora> */
+static int cmd_rf_mod(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: rf mod <fsk|lora>");
+        return -EINVAL;
+    }
+    radio_modulation_t mod;
+    if (strcmp(argv[1], "fsk") == 0) {
+        mod = RADIO_MOD_FSK;
+    } else if (strcmp(argv[1], "lora") == 0) {
+        mod = RADIO_MOD_LORA;
+    } else {
+        shell_error(sh, "Unknown modulation '%s' (fsk|lora)", argv[1]);
+        return -EINVAL;
+    }
+    int ret = akira_rf_set_modulation(mod);
+    if (ret < 0) {
+        shell_error(sh, "Failed to set modulation: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "Modulation set to %s", argv[1]);
+    return 0;
+}
+
+/* rf lora sf <5..12> */
+static int cmd_rf_lora_sf(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: rf lora sf <5..12>");
+        return -EINVAL;
+    }
+    int ret = akira_rf_set_spreading_factor((uint8_t)atoi(argv[1]));
+    if (ret < 0) {
+        shell_error(sh, "Failed to set SF: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "LoRa SF set");
+    return 0;
+}
+
+/* rf bw <hz> — bandwidth for the active modulation.
+ * LoRa: 125000/250000/500000. FSK: rx_bw filter, snapped to nearest supported. */
+static int cmd_rf_bw(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: rf bw <hz>");
+        shell_print(sh, "  LoRa: 125000|250000|500000;  FSK: rx_bw (nearest supported)");
+        return -EINVAL;
+    }
+    int ret = akira_rf_set_bandwidth((uint32_t)atol(argv[1]));
+    if (ret < 0) {
+        shell_error(sh, "Failed to set BW: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "Bandwidth set");
+    return 0;
+}
+
+/* rf lora cr <5..8> */
+static int cmd_rf_lora_cr(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: rf lora cr <5..8>  (denominator of 4/N)");
+        return -EINVAL;
+    }
+    int ret = akira_rf_set_coding_rate((uint8_t)atoi(argv[1]));
+    if (ret < 0) {
+        shell_error(sh, "Failed to set CR: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "LoRa CR set");
+    return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf_test,
     SHELL_CMD_ARG(registry, NULL, "Dump registered radio handles", cmd_rf_test_registry, 1, 0),
     SHELL_CMD_ARG(caps,     NULL, "Lookup handle by cap mask (hex)", cmd_rf_test_caps, 2, 0),
     SHELL_CMD_ARG(loopback, NULL, "Send data and attempt recv", cmd_rf_test_loopback, 2, 0),
     SHELL_CMD_ARG(nohandle, NULL, "Send with no active chip (expect error)", cmd_rf_test_nohandle, 1, 0),
+    SHELL_SUBCMD_SET_END
+);
+
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf_lora,
+    SHELL_CMD_ARG(sf, NULL, "Set LoRa spreading factor (5..12)", cmd_rf_lora_sf, 2, 0),
+    SHELL_CMD_ARG(cr, NULL, "Set LoRa coding rate 4/N (5..8)", cmd_rf_lora_cr, 2, 0),
     SHELL_SUBCMD_SET_END
 );
 
@@ -391,6 +472,9 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf,
     SHELL_CMD_ARG(select,  NULL,         "Select active chip",      cmd_rf_select, 2, 0),
     SHELL_CMD_ARG(freq,    NULL,         "Set frequency (Hz)",      cmd_rf_freq,   2, 0),
     SHELL_CMD_ARG(power,   NULL,         "Set TX power (dBm)",      cmd_rf_power,  2, 0),
+    SHELL_CMD_ARG(mod,     NULL,         "Set modulation (fsk|lora)", cmd_rf_mod,  2, 0),
+    SHELL_CMD_ARG(bw,      NULL,         "Set bandwidth Hz (FSK or LoRa)", cmd_rf_bw, 2, 0),
+    SHELL_CMD(lora, &sub_rf_lora,        "LoRa parameters (sf|cr)", NULL),
     SHELL_CMD_ARG(send,    NULL,         "Send data",               cmd_rf_send,   2, 0),
     SHELL_CMD_ARG(sweep,   NULL,         "Send multiple packets",   cmd_rf_sweep,  2, 2),
     SHELL_CMD_ARG(recv,    NULL,         "Receive data",            cmd_rf_recv,   1, 1),
