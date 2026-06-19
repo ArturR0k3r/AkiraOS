@@ -533,6 +533,10 @@ endif()
 
 # RF Framework and Drivers (conditional on module gating)
 if(CONFIG_AKIRA_MODULE_RF)
+    if(CONFIG_AKIRA_RF_FRAMEWORK)
+        target_sources(app PRIVATE src/drivers/rf/rf_framework.c)
+    endif()
+
     if(CONFIG_AKIRA_LR1121)
         target_sources(app PRIVATE src/drivers/rf/lr1121.c)
     endif()

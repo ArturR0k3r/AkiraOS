@@ -29,6 +29,7 @@
 #include <zephyr/init.h>
 #include <errno.h>
 #include <string.h>
+#include <connectivity/radio_interface.h>
 
 LOG_MODULE_REGISTER(akira_cc1121, LOG_LEVEL_INF);
 
@@ -1080,12 +1081,65 @@ const struct akira_rf_driver *cc1121_get_driver(void)
     return &cc1121_driver;
 }
 
+/* =========================================================================
+ * radio_ops_t vtable shims (handle param unused — driver uses global state)
+ * ========================================================================= */
+
+static int cc1121_ops_init(radio_handle_t *h)          { ARG_UNUSED(h); return cc1121_init(); }
+static int cc1121_ops_deinit(radio_handle_t *h)        { ARG_UNUSED(h); return cc1121_deinit(); }
+static int cc1121_ops_send(radio_handle_t *h, const uint8_t *d, size_t l)   { ARG_UNUSED(h); return cc1121_tx(d, l); }
+static int cc1121_ops_recv(radio_handle_t *h, uint8_t *b, size_t l, uint32_t t) { ARG_UNUSED(h); return cc1121_rx(b, l, t); }
+static int cc1121_ops_set_frequency(radio_handle_t *h, uint32_t hz)         { ARG_UNUSED(h); return cc1121_set_frequency(hz); }
+static int cc1121_ops_set_power(radio_handle_t *h, int8_t dbm)              { ARG_UNUSED(h); return cc1121_set_power(dbm); }
+static int cc1121_ops_get_rssi(radio_handle_t *h, int16_t *r)               { ARG_UNUSED(h); return cc1121_get_rssi(r); }
+static int cc1121_ops_set_mode(radio_handle_t *h, radio_mode_t m)           { ARG_UNUSED(h); return cc1121_set_mode(m); }
+static int cc1121_ops_set_modulation(radio_handle_t *h, radio_modulation_t m) { ARG_UNUSED(h); return cc1121_set_modulation(m); }
+static int cc1121_ops_set_bitrate(radio_handle_t *h, uint32_t bps)          { ARG_UNUSED(h); return cc1121_set_bitrate(bps); }
+
+static const radio_ops_t cc1121_ops = {
+    .init               = cc1121_ops_init,
+    .deinit             = cc1121_ops_deinit,
+    .send               = cc1121_ops_send,
+    .recv               = cc1121_ops_recv,
+    .set_frequency      = cc1121_ops_set_frequency,
+    .set_power          = cc1121_ops_set_power,
+    .get_rssi           = cc1121_ops_get_rssi,
+    .set_mode           = cc1121_ops_set_mode,
+    .set_modulation     = cc1121_ops_set_modulation,
+    .set_bitrate        = cc1121_ops_set_bitrate,
+};
+
+static radio_handle_t cc1121_radio_handle = {
+    .type         = RADIO_TYPE_SUBGHZ,
+    .name         = "CC1121",
+    .capabilities = RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_RAW_MODE |
+                    RADIO_CAP_LOW_POWER | RADIO_CAP_BAND_SUBGHZ |
+                    RADIO_CAP_MOD_FSK | RADIO_CAP_MOD_OOK,
+    .ops          = &cc1121_ops,
+};
+
+struct radio_handle *cc1121_get_handle(void)
+{
+    return &cc1121_radio_handle;
+}
+
 /**
  * @brief Auto-register CC1121 driver at boot
  */
 static int cc1121_auto_register(void)
 {
-    int ret = rf_framework_register_driver(&cc1121_driver);
+    int ret;
+
+    /* Register with radio_manager for shell/API visibility */
+    ret = radio_manager_register(&cc1121_radio_handle);
+    if (ret < 0 && ret != -EALREADY) {
+        LOG_ERR("Failed to register CC1121 with radio_manager: %d", ret);
+        return ret;
+    }
+    LOG_INF("CC1121 registered with radio_manager");
+
+    /* Register with the unified RF framework */
+    ret = rf_framework_register_driver(&cc1121_driver);
     if (ret < 0 && ret != -EEXIST) {
         LOG_ERR("Failed to auto-register CC1121 driver: %d", ret);
         return ret;
