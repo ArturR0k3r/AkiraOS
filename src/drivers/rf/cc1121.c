@@ -210,7 +210,6 @@ static int cc1121_spi_write(const uint8_t *hdr, size_t hdr_len,
         .buffers = tx,
         .count   = data ? 2 : 1,
     };
-
     return spi_write_dt(&g_spi, &tx_set);
 }
 
@@ -220,7 +219,6 @@ static int cc1121_spi_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t 
     struct spi_buf rx = { .buf = rx_buf,          .len = len };
     struct spi_buf_set tx_set = { .buffers = &tx, .count = 1 };
     struct spi_buf_set rx_set = { .buffers = &rx, .count = 1 };
-
     return spi_transceive_dt(&g_spi, &tx_set, &rx_set);
 }
 
@@ -469,7 +467,7 @@ static int cc1121_init(void)
         return 0;
     }
 
-    /* --- SPI bus --------------------------------------------------------- */
+    /* --- SPI bus + CS ---------------------------------------------------- */
     if (!spi_is_ready_dt(&g_spi)) {
         LOG_ERR("SPI bus not ready");
         return -ENODEV;

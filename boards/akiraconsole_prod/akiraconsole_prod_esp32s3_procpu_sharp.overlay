@@ -33,9 +33,9 @@
         status = "disabled";
 };
 
-/* Override SPI2 cs-gpios for Sharp (SCS = GPIO10 ACTIVE_HIGH) and
- * redirect unused chip-selects (LR1121 disabled, CC1121 disabled)
- * to expansion-connector pins (J5) with no active circuits attached.
+/* Override SPI2 cs-gpios for Sharp: only cs-gpios[1] changes polarity
+ * (GPIO10 ACTIVE_HIGH for Sharp SCS). LR_CS and CC_CS stay on TCA6408
+ * P6/P3 so the LR2021 and CC1121 transceivers remain selectable.
  *
  * NOTE: GPIO33–GPIO37 are PSRAM-internal pins on the WROOM-1-N16R8 module
  * and must never be used as user GPIOs — they would crash the system
@@ -43,10 +43,10 @@
  */
 &spi2 {
         cs-gpios =
-                <&gpio1 7 GPIO_ACTIVE_LOW>,     /* [0] LR_CS  → GPIO39 (J5 expansion, LR1121 disabled) */
-                <&gpio0 10 GPIO_ACTIVE_HIGH>,   /* [1] SCS    → GPIO10 Sharp ACTIVE_HIGH               */
-                <&gpio0 14 GPIO_ACTIVE_LOW>,    /* [2] SD_CS  → GPIO14                                */
-                <&gpio1 8 GPIO_ACTIVE_LOW>;     /* [3] CC_CS  → GPIO40 (J5 expansion, CC1121 disabled) */
+                <&tca6408 6 GPIO_ACTIVE_LOW>,   /* [0] LR_CS  → TCA6408 P6 (LR2021)      */
+                <&gpio0 10 GPIO_ACTIVE_HIGH>,   /* [1] SCS    → GPIO10 Sharp ACTIVE_HIGH */
+                <&gpio0 14 GPIO_ACTIVE_LOW>,    /* [2] SD_CS  → GPIO14                   */
+                <&tca6408 3 GPIO_ACTIVE_LOW>;   /* [3] CC_CS  → TCA6408 P3 (CC1121)      */
 	status = "okay";
 };
 
