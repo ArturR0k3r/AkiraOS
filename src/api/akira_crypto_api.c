@@ -11,7 +11,7 @@ LOG_MODULE_REGISTER(akira_crypto_api, CONFIG_AKIRA_LOG_LEVEL);
  * @file akira_crypto_api.c
  * @brief Cryptographic operations WASM native API.
  *
- * Backend: Zephyr TinyCrypt (CONFIG_TINYCRYPT=y).
+ * Backend: mbedTLS (already compiled in for WiFi/BLE on ESP32-S3).
  * - Key buffers are zeroed after use (prevent leaking key material).
  * - All input lengths capped at CONFIG_AKIRA_WASM_CRYPTO_MAX_INPUT (default 64KB).
  * - Every operation validates WASM linear memory bounds before use.
@@ -29,13 +29,13 @@ LOG_MODULE_REGISTER(akira_crypto_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <string.h>
 #include <errno.h>
 
-#include <tinycrypt/sha256.h>
-#include <tinycrypt/aes.h>
-#include <tinycrypt/cbc_mode.h>
-#include <tinycrypt/ctr_mode.h>
-#include <tinycrypt/hmac.h>
-#include <tinycrypt/constants.h>
+#include <mbedtls/sha256.h>
+#include <mbedtls/aes.h>
 #include <zephyr/random/random.h>
+
+#define TC_SHA256_DIGEST_SIZE  32
+#define TC_AES_KEY_SIZE_256    32
+#define TC_AES_BLOCK_SIZE      16
 
 #ifndef CONFIG_AKIRA_WASM_CRYPTO_MAX_INPUT
 #define CONFIG_AKIRA_WASM_CRYPTO_MAX_INPUT (64u * 1024u)
@@ -67,13 +67,9 @@ int akira_native_crypto_sha256(wasm_exec_env_t exec_env,
     WASM_ADDR_CHECK(inst, data_ptr, data_len);
     WASM_ADDR_CHECK(inst, out_ptr, TC_SHA256_DIGEST_SIZE);
 
-    struct tc_sha256_state_struct ctx;
-    if (tc_sha256_init(&ctx) != TC_CRYPTO_SUCCESS) {
-        return -EIO;
-    }
-    tc_sha256_update(&ctx, (const uint8_t *)data_ptr, data_len);
-    tc_sha256_final((uint8_t *)out_ptr, &ctx);
-    return 0;
+    int ret = mbedtls_sha256((const uint8_t *)data_ptr, data_len,
+                              (uint8_t *)out_ptr, 0 /* 0 = SHA-256 */);
+    return (ret == 0) ? 0 : -EIO;
 }
 
 /* ── aes256_cbc_encrypt ─────────────────────────────────────────────────── */
@@ -98,22 +94,22 @@ int akira_native_crypto_aes256_encrypt(wasm_exec_env_t exec_env,
     WASM_ADDR_CHECK(inst, in_ptr,  in_len);
     WASM_ADDR_CHECK(inst, out_ptr, in_len);
 
-    struct tc_aes_key_sched_struct sched;
-    if (tc_aes256_set_encrypt_key(&sched, (const uint8_t *)key_ptr)
-        != TC_CRYPTO_SUCCESS) {
-        return -EIO;
+    /* mbedTLS crypt_cbc modifies iv in-place; use a local copy */
+    uint8_t iv_local[TC_AES_BLOCK_SIZE];
+    memcpy(iv_local, iv_ptr, TC_AES_BLOCK_SIZE);
+
+    mbedtls_aes_context ctx;
+    mbedtls_aes_init(&ctx);
+    int ret = mbedtls_aes_setkey_enc(&ctx, (const uint8_t *)key_ptr, 256);
+    if (ret == 0) {
+        ret = mbedtls_aes_crypt_cbc(&ctx, MBEDTLS_AES_ENCRYPT,
+                                     in_len, iv_local,
+                                     (const uint8_t *)in_ptr,
+                                     (uint8_t *)out_ptr);
     }
-
-    int ret = tc_cbc_mode_encrypt((uint8_t *)out_ptr,
-                                   in_len,
-                                   (const uint8_t *)in_ptr,
-                                   in_len,
-                                   (const uint8_t *)iv_ptr,
-                                   &sched);
-
-    /* Zero key schedule to prevent leaking key material */
-    memset(&sched, 0, sizeof(sched));
-    return (ret == TC_CRYPTO_SUCCESS) ? 0 : -EIO;
+    mbedtls_aes_free(&ctx);
+    memset(iv_local, 0, sizeof(iv_local));
+    return (ret == 0) ? 0 : -EIO;
 }
 
 /* ── aes256_cbc_decrypt ─────────────────────────────────────────────────── */
@@ -138,21 +134,21 @@ int akira_native_crypto_aes256_decrypt(wasm_exec_env_t exec_env,
     WASM_ADDR_CHECK(inst, in_ptr,  in_len);
     WASM_ADDR_CHECK(inst, out_ptr, in_len);
 
-    struct tc_aes_key_sched_struct sched;
-    if (tc_aes256_set_decrypt_key(&sched, (const uint8_t *)key_ptr)
-        != TC_CRYPTO_SUCCESS) {
-        return -EIO;
+    uint8_t iv_local[TC_AES_BLOCK_SIZE];
+    memcpy(iv_local, iv_ptr, TC_AES_BLOCK_SIZE);
+
+    mbedtls_aes_context ctx;
+    mbedtls_aes_init(&ctx);
+    int ret = mbedtls_aes_setkey_dec(&ctx, (const uint8_t *)key_ptr, 256);
+    if (ret == 0) {
+        ret = mbedtls_aes_crypt_cbc(&ctx, MBEDTLS_AES_DECRYPT,
+                                     in_len, iv_local,
+                                     (const uint8_t *)in_ptr,
+                                     (uint8_t *)out_ptr);
     }
-
-    int ret = tc_cbc_mode_decrypt((uint8_t *)out_ptr,
-                                   in_len,
-                                   (const uint8_t *)in_ptr,
-                                   in_len,
-                                   (const uint8_t *)iv_ptr,
-                                   &sched);
-
-    memset(&sched, 0, sizeof(sched));
-    return (ret == TC_CRYPTO_SUCCESS) ? 0 : -EIO;
+    mbedtls_aes_free(&ctx);
+    memset(iv_local, 0, sizeof(iv_local));
+    return (ret == 0) ? 0 : -EIO;
 }
 
 /* ── hmac_sha256 ────────────────────────────────────────────────────────── */
@@ -164,7 +160,7 @@ int akira_native_crypto_hmac_sha256(wasm_exec_env_t exec_env,
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EACCES);
 
-    if (key_len == 0 || key_len > TC_SHA256_BLOCK_SIZE) {
+    if (key_len == 0 || key_len > 64u) { /* SHA256 block size */
         return -EINVAL;
     }
     if (data_len > CONFIG_AKIRA_WASM_CRYPTO_MAX_INPUT) {
@@ -176,20 +172,32 @@ int akira_native_crypto_hmac_sha256(wasm_exec_env_t exec_env,
     WASM_ADDR_CHECK(inst, data_ptr, data_len);
     WASM_ADDR_CHECK(inst, out_ptr,  TC_SHA256_DIGEST_SIZE);
 
-    struct tc_hmac_state_struct ctx;
-    if (tc_hmac_set_key(&ctx, (const uint8_t *)key_ptr, key_len)
-        != TC_CRYPTO_SUCCESS) {
-        return -EIO;
+    /* HMAC-SHA256 built from raw mbedtls_sha256 (avoids MBEDTLS_MD_C dep) */
+    #define HMAC_BLOCK 64
+    uint8_t k_ipad[HMAC_BLOCK], k_opad[HMAC_BLOCK];
+    memset(k_ipad, 0x36, HMAC_BLOCK);
+    memset(k_opad, 0x5c, HMAC_BLOCK);
+    for (uint32_t i = 0; i < key_len; i++) {
+        k_ipad[i] ^= ((const uint8_t *)key_ptr)[i];
+        k_opad[i] ^= ((const uint8_t *)key_ptr)[i];
     }
-    tc_hmac_init(&ctx);
-    tc_hmac_update(&ctx, (const uint8_t *)data_ptr, data_len);
-    if (tc_hmac_final((uint8_t *)out_ptr, TC_SHA256_DIGEST_SIZE, &ctx)
-        != TC_CRYPTO_SUCCESS) {
-        return -EIO;
-    }
-    /* Zero HMAC state */
-    memset(&ctx, 0, sizeof(ctx));
+    uint8_t inner[TC_SHA256_DIGEST_SIZE];
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    mbedtls_sha256_starts(&ctx, 0);
+    mbedtls_sha256_update(&ctx, k_ipad, HMAC_BLOCK);
+    mbedtls_sha256_update(&ctx, (const uint8_t *)data_ptr, data_len);
+    mbedtls_sha256_finish(&ctx, inner);
+    mbedtls_sha256_starts(&ctx, 0);
+    mbedtls_sha256_update(&ctx, k_opad, HMAC_BLOCK);
+    mbedtls_sha256_update(&ctx, inner, TC_SHA256_DIGEST_SIZE);
+    mbedtls_sha256_finish(&ctx, (uint8_t *)out_ptr);
+    mbedtls_sha256_free(&ctx);
+    memset(k_ipad, 0, HMAC_BLOCK);
+    memset(k_opad, 0, HMAC_BLOCK);
+    memset(inner,  0, sizeof(inner));
     return 0;
+    #undef HMAC_BLOCK
 }
 
 /* ── random_bytes ───────────────────────────────────────────────────────── */
@@ -229,25 +237,26 @@ int akira_native_crypto_aes256_ctr(wasm_exec_env_t exec_env,
     WASM_ADDR_CHECK(inst, in_ptr,    in_len);
     WASM_ADDR_CHECK(inst, out_ptr,   in_len);
 
-    struct tc_aes_key_sched_struct sched;
-    if (tc_aes256_set_encrypt_key(&sched, (const uint8_t *)key_ptr)
-        != TC_CRYPTO_SUCCESS) {
-        return -EIO;
+    /* Use local nonce/stream-block copies so caller's buffer is not modified */
+    uint8_t nonce_ctr[TC_AES_BLOCK_SIZE];
+    uint8_t stream_block[TC_AES_BLOCK_SIZE];
+    size_t  nc_off = 0;
+    memcpy(nonce_ctr, nonce_ptr, TC_AES_BLOCK_SIZE);
+    memset(stream_block, 0, sizeof(stream_block));
+
+    mbedtls_aes_context ctx;
+    mbedtls_aes_init(&ctx);
+    int ret = mbedtls_aes_setkey_enc(&ctx, (const uint8_t *)key_ptr, 256);
+    if (ret == 0) {
+        ret = mbedtls_aes_crypt_ctr(&ctx, in_len, &nc_off,
+                                     nonce_ctr, stream_block,
+                                     (const uint8_t *)in_ptr,
+                                     (uint8_t *)out_ptr);
     }
-
-    /* TinyCrypt CTR mode: nonce is the initial counter block (16 bytes).
-     * tc_ctr_mode() increments the counter in-place; use a local copy so
-     * the caller's nonce buffer is not modified. */
-    uint8_t ctr[TC_AES_BLOCK_SIZE];
-    memcpy(ctr, nonce_ptr, TC_AES_BLOCK_SIZE);
-
-    int ret = tc_ctr_mode((uint8_t *)out_ptr, in_len,
-                          (const uint8_t *)in_ptr, in_len,
-                          ctr, &sched);
-
-    memset(&sched, 0, sizeof(sched));
-    memset(ctr, 0, sizeof(ctr));
-    return (ret == TC_CRYPTO_SUCCESS) ? 0 : -EIO;
+    mbedtls_aes_free(&ctx);
+    memset(nonce_ctr,   0, sizeof(nonce_ctr));
+    memset(stream_block, 0, sizeof(stream_block));
+    return (ret == 0) ? 0 : -EIO;
 }
 
 /* ── ed25519_keygen / ed25519_sign ──────────────────────────────────────── */
