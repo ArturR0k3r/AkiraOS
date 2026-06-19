@@ -23,6 +23,9 @@ extern "C" {
 /** @brief Get CC1121 driver interface (RF framework registration). */
 const struct akira_rf_driver *cc1121_get_driver(void);
 
+/** @brief Get the CC1121 radio_handle_t (RADIO_MANAGER path) */
+struct radio_handle *cc1121_get_handle(void);
+
 /** @brief Direct register write (for calibration / custom config). */
 int cc1121_write_reg(uint8_t addr, uint8_t value);
 

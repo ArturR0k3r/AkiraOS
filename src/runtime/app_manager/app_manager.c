@@ -2112,7 +2112,8 @@ int app_manager_extract_sd_akpkgs(const char *dir)
         const uint8_t *bin_ptr; size_t bin_size;
         const char    *mf_ptr;  size_t mf_size;
         if (akpkg_tar_extract(tar, (size_t)tar_len,
-                              &bin_ptr, &bin_size, &mf_ptr, &mf_size) != 0) {
+                              &bin_ptr, &bin_size, &mf_ptr, &mf_size,
+                              NULL, NULL, NULL, NULL) != 0) {
             LOG_ERR("akpkg-sd: tar extract failed %s", pkg_path);
             akira_free_buffer(tar);
             continue;

@@ -341,6 +341,10 @@ if(CONFIG_AKIRA_MODULE_RF)
         target_sources(app PRIVATE src/api/akira_rf_api.c)
 endif()
 
+if(CONFIG_WIFI)
+        target_sources(app PRIVATE src/api/akira_wifi_api.c)
+endif()
+
 if(CONFIG_AKIRA_WASM_PYTHON)
     target_sources(app PRIVATE src/api/akira_python_api.c)
 endif()

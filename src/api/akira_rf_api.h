@@ -59,14 +59,13 @@ int akira_native_rf_set_spreading_factor(wasm_exec_env_t exec_env, int sf);
 int akira_native_rf_set_bandwidth(wasm_exec_env_t exec_env, uint32_t bw_hz);
 int akira_native_rf_set_coding_rate(wasm_exec_env_t exec_env, int cr);
 
-#if defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
-/* WiFi spectrum scan (per-channel max RSSI) */
+#if defined(CONFIG_WIFI)
 int akira_native_wifi_scan_rssi(wasm_exec_env_t exec_env,
                                  uint32_t buf_ptr, uint32_t buf_len);
-/* WiFi AP scan — full records: SSID/BSSID/channel/RSSI/security */
 int akira_native_wifi_scan_aps(wasm_exec_env_t exec_env,
                                 void *buf, uint32_t buf_len);
-/* 802.11 deauthentication frame injector (requires wifi.inject capability) */
+#endif
+#if defined(CONFIG_WIFI) && (defined(CONFIG_SOC_SERIES_ESP32S3) || defined(CONFIG_SOC_SERIES_ESP32))
 int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
                               void *bssid_ptr, void *client_ptr,
                               int32_t channel, int32_t count, int32_t interval_ms);

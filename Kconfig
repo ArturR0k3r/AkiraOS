@@ -307,7 +307,7 @@ config AKIRA_RF_FRAMEWORK
 config AKIRA_LR2021
     bool "Enable LR2021 LoRa Plus driver (AkiraConsole Production)"
     default n
-    depends on SPI && GPIO && AKIRA_RF_FRAMEWORK
+    depends on SPI && GPIO && AKIRA_RADIO_MANAGER
     help
       Enable Semtech LR2021 LoRa Plus transceiver.
       Fourth-generation LoRa IP, multi-band Sub-GHz + 2.4 GHz.
@@ -317,7 +317,7 @@ config AKIRA_LR2021
 config AKIRA_CC1121
     bool "Enable CC1121 Sub-GHz driver (AkiraConsole Production)"
     default n
-    depends on SPI && GPIO && AKIRA_RF_FRAMEWORK
+    depends on SPI && GPIO && AKIRA_RADIO_MANAGER
     help
       Enable TI CC1121RHB high-performance Sub-GHz transceiver driver.
       Covers 315/433/868/915 MHz bands, narrowband FSK/OOK.
