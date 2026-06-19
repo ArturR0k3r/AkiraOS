@@ -9,6 +9,7 @@
 #define AKIRA_BT_ECHO_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,6 +21,9 @@ int bt_echo_init(void);
 /** Enable/disable echo behavior at runtime */
 void bt_echo_enable(bool enable);
 bool bt_echo_is_enabled(void);
+
+/** Send data to all connected peers via BT Echo notification */
+int bt_echo_send(const uint8_t *data, uint16_t len);
 
 #ifdef __cplusplus
 }

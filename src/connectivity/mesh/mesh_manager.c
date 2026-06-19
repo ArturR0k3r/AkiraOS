@@ -76,7 +76,11 @@ static struct {
     struct k_mutex         tables_lock; /* guards tables + node table + counters */
     bool initialized;
     bool started;
-} mesh_state;
+} mesh_state
+#if defined(CONFIG_SPIRAM)
+  __attribute__((section(".ext_ram.bss")))
+#endif
+;
 
 static K_MUTEX_DEFINE(mesh_init_lock);   /* serialize init/stop */
 
@@ -431,7 +435,11 @@ static void mesh_dispatch(const uint8_t *buf, size_t len)
 /* RX thread — polls the radio under the bus lock, dispatches without. */
 /* ------------------------------------------------------------------ */
 
+#if defined(CONFIG_SPIRAM)
+static uint8_t s_rx_buf[MESH_PACKET_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
+#else
 static uint8_t s_rx_buf[MESH_PACKET_BUF_SIZE];
+#endif
 
 static void mesh_rx_thread_fn(void *a, void *b, void *c)
 {

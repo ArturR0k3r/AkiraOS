@@ -31,7 +31,7 @@
     };
 };
 
-&w25q32jv {
+&flash0 {
     partitions {
         compatible = "fixed-partitions";
         #address-cells = <1>;

@@ -280,12 +280,9 @@ const struct device *akira_get_spi_device(const char *label)
     /* On native_sim, return dummy pointer for simulation */
     static const struct device sim_spi_dev;
     return &sim_spi_dev;
-#elif AKIRA_PLATFORM_STM32 || AKIRA_PLATFORM_NORDIC
-    /* STM32/Nordic: SPI devices vary - return NULL, caller should use DT macros */
-    ARG_UNUSED(label);
-    return NULL;
-#else
-    /* On ESP32/ESP32-S3, use device tree */
+#elif AKIRA_PLATFORM_ESP32 || AKIRA_PLATFORM_ESP32S3 || \
+      AKIRA_PLATFORM_ESP32C6 || AKIRA_PLATFORM_ESP32H2
+    /* On ESP32 variants, look up spi2 from the device tree */
     if (strcmp(label, "spi2") == 0)
     {
         const struct device *dev = DEVICE_DT_GET(DT_NODELABEL(spi2));
@@ -296,6 +293,10 @@ const struct device *akira_get_spi_device(const char *label)
         }
         return dev;
     }
+    return NULL;
+#else
+    /* All other platforms (RP2040, STM32, Nordic, etc.): caller uses DT macros */
+    ARG_UNUSED(label);
     return NULL;
 #endif
 }

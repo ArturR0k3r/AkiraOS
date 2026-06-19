@@ -91,6 +91,16 @@ bool bt_echo_is_enabled(void)
     return g_enabled;
 }
 
+int bt_echo_send(const uint8_t *data, uint16_t len)
+{
+    if (!g_enabled) return -EACCES;
+    if (!data || len == 0) return -EINVAL;
+    const struct bt_gatt_attr *attr = &echo_svc.attrs[2]; /* characteristic value attr */
+    int rc = bt_gatt_notify(NULL, attr, data, len);
+    if (rc < 0) LOG_ERR("Echo notify failed: %d", rc);
+    return rc;
+}
+
 #else
 
 int bt_echo_init(void)
@@ -106,6 +116,13 @@ void bt_echo_enable(bool enable)
 bool bt_echo_is_enabled(void)
 {
     return false;
+}
+
+int bt_echo_send(const uint8_t *data, uint16_t len)
+{
+    ARG_UNUSED(data);
+    ARG_UNUSED(len);
+    return -ENOTSUP;
 }
 
 #endif /* CONFIG_BT */
