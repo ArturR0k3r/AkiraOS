@@ -146,6 +146,21 @@ int akira_native_hid_key_release(wasm_exec_env_t exec_env, int32_t keycode)
 #endif
 }
 
+int akira_native_hid_set_modifiers(wasm_exec_env_t exec_env, int32_t mod_mask)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+
+    if (mod_mask < 0 || mod_mask > 0xFF) {
+        return -EINVAL;
+    }
+
+#ifdef CONFIG_AKIRA_HID
+    return hid_keyboard_set_modifiers((uint8_t)mod_mask);
+#else
+    return -ENOTSUP;
+#endif
+}
+
 int akira_native_hid_key_release_all(wasm_exec_env_t exec_env)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);

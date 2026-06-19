@@ -49,6 +49,14 @@ uint64_t akira_capability_str_to_mask(const char *cap)
     if (strcmp(cap, "ai.infer") == 0)       return AKIRA_CAP_AIINFER;
     if (strcmp(cap, "matter") == 0)         return AKIRA_CAP_MATTER;
     if (strcmp(cap, "matter.*") == 0)       return AKIRA_CAP_MATTER;
+    if (strcmp(cap, "fs.read") == 0)        return AKIRA_CAP_FS_READ;
+    if (strcmp(cap, "fs.write") == 0)       return AKIRA_CAP_FS_WRITE;
+    if (strcmp(cap, "fs.*") == 0)           return AKIRA_CAP_FS_READ | AKIRA_CAP_FS_WRITE;
+    if (strcmp(cap, "rtc.read") == 0)       return AKIRA_CAP_RTC_READ;
+    if (strcmp(cap, "rtc.write") == 0)      return AKIRA_CAP_RTC_WRITE;
+    if (strcmp(cap, "rtc.*") == 0)          return AKIRA_CAP_RTC_READ | AKIRA_CAP_RTC_WRITE;
+    if (strcmp(cap, "wifi.inject") == 0)    return AKIRA_CAP_WIFI_INJECT;
+    if (strcmp(cap, "crypto") == 0)         return AKIRA_CAP_CRYPTO;
     /* Wildcard patterns */
     if (strcmp(cap, "display.*") == 0)      return AKIRA_CAP_DISPLAY_WRITE;
     if (strcmp(cap, "input.*") == 0)        return AKIRA_CAP_INPUT_READ | AKIRA_CAP_INPUT_WRITE;
@@ -93,8 +101,14 @@ char* akira_capability_mask_to_str(uint64_t cap)
     if (cap & AKIRA_CAP_ADC)         return "adc";
     if (cap & AKIRA_CAP_WDT)         return "wdt";
     if (cap & AKIRA_CAP_SETTINGS)    return "settings.*";
-    if (cap & AKIRA_CAP_AIINFER)     return "ai.infer";
-    if (cap & AKIRA_CAP_MATTER)      return "matter";
+    if (cap & AKIRA_CAP_AIINFER)       return "ai.infer";
+    if (cap & AKIRA_CAP_MATTER)        return "matter";
+    if (cap & AKIRA_CAP_FS_READ)       return "fs.read";
+    if (cap & AKIRA_CAP_FS_WRITE)      return "fs.write";
+    if (cap & AKIRA_CAP_RTC_READ)      return "rtc.read";
+    if (cap & AKIRA_CAP_RTC_WRITE)     return "rtc.write";
+    if (cap & AKIRA_CAP_CRYPTO)        return "crypto";
+    if (cap & AKIRA_CAP_WIFI_INJECT)   return "wifi.inject";
     return "unknown";
 }
 

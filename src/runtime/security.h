@@ -95,6 +95,10 @@ extern "C" {
 /* Matter/Thread co-processor IPC bridge.
  * Manifest string: "matter" */
 #define AKIRA_CAP_MATTER        (1ULL << 33)
+/* 802.11 raw management frame injection (deauth, disassoc).
+ * Elevated privilege — requires explicit user consent.
+ * Manifest string: "wifi.inject" */
+#define AKIRA_CAP_WIFI_INJECT   (1ULL << 34)
 
 /*
  * Capability check macro using security subsystem.

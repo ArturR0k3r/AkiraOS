@@ -54,12 +54,43 @@ int akira_native_rf_receive(wasm_exec_env_t exec_env, uint32_t buffer_ptr, uint3
 int akira_native_rf_set_frequency(wasm_exec_env_t exec_env, uint32_t freq_hz);
 int akira_native_rf_get_rssi(wasm_exec_env_t exec_env);
 int akira_native_rf_set_power(wasm_exec_env_t exec_env, int8_t dbm);
+int akira_native_rf_set_modulation(wasm_exec_env_t exec_env, int mod);
+int akira_native_rf_set_spreading_factor(wasm_exec_env_t exec_env, int sf);
+int akira_native_rf_set_bandwidth(wasm_exec_env_t exec_env, uint32_t bw_hz);
+int akira_native_rf_set_coding_rate(wasm_exec_env_t exec_env, int cr);
 
 #if defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
-/* WiFi spectrum scan — uses ESP32 built-in WiFi radio */
+/* WiFi spectrum scan (per-channel max RSSI) */
 int akira_native_wifi_scan_rssi(wasm_exec_env_t exec_env,
                                  uint32_t buf_ptr, uint32_t buf_len);
+/* WiFi AP scan — full records: SSID/BSSID/channel/RSSI/security */
+int akira_native_wifi_scan_aps(wasm_exec_env_t exec_env,
+                                void *buf, uint32_t buf_len);
+/* 802.11 deauthentication frame injector (requires wifi.inject capability) */
+int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
+                              void *bssid_ptr, void *client_ptr,
+                              int32_t channel, int32_t count, int32_t interval_ms);
 #endif
+
+/*
+ * Raw Sub-GHz OOK/ASK capture and replay.
+ * Both functions require AKIRA_CAP_RF_TRANSCEIVE.
+ * The chip must be selected via rf_select() and configured via
+ * rf_set_frequency() / rf_set_modulation() before calling these.
+ *
+ * Pulse buffer layout: uint16_t[], alternating mark/space durations in µs.
+ * Index 0 = first mark (high), index 1 = first space (low), ...
+ */
+
+/* Capture raw OOK pulse timings.  Type string: "(iii)i" */
+int akira_native_rf_raw_capture(wasm_exec_env_t exec_env,
+                                 uint32_t buf_wasm, uint32_t max_samples,
+                                 int32_t timeout_ms);
+
+/* Replay a raw OOK pulse sequence.  Type string: "(iii)i" */
+int akira_native_rf_raw_replay(wasm_exec_env_t exec_env,
+                                uint32_t buf_wasm, uint32_t sample_count,
+                                int32_t repeat);
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
 
 #endif /* AKIRA_RF_API_H */

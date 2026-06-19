@@ -87,10 +87,28 @@ bool akira_register_native_apis()
 #endif
 
 #if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_AKIRA_MODULE_RF) && defined(CONFIG_AKIRA_RADIO_MANAGER)
-        {"rf_set_frequency", (void *)akira_native_rf_set_frequency, "(i)i", NULL},
-        {"rf_set_power", (void *)akira_native_rf_set_power, "(i)i", NULL},
-        {"rf_get_rssi", (void *)akira_native_rf_get_rssi, "()i", NULL},
-        {"rf_send", (void *)akira_native_rf_send, "(*i)i", NULL},
+        {"rf_set_frequency",       (void *)akira_native_rf_set_frequency,       "(i)i",    NULL},
+        {"rf_set_power",           (void *)akira_native_rf_set_power,           "(i)i",    NULL},
+        {"rf_get_rssi",            (void *)akira_native_rf_get_rssi,            "()i",     NULL},
+        {"rf_send",                (void *)akira_native_rf_send,                "(*i)i",   NULL},
+        {"rf_select",              (void *)akira_native_rf_select,              "(i)i",    NULL},
+        {"rf_recv_pop",            (void *)akira_native_rf_recv_pop,            "(iii)i",  NULL},
+        {"rf_receive",             (void *)akira_native_rf_receive,             "(iii)i",  NULL},
+        {"rf_set_modulation",      (void *)akira_native_rf_set_modulation,      "(i)i",    NULL},
+        {"rf_set_spreading_factor",(void *)akira_native_rf_set_spreading_factor,"(i)i",    NULL},
+        {"rf_set_bandwidth",       (void *)akira_native_rf_set_bandwidth,       "(i)i",    NULL},
+        {"rf_set_coding_rate",     (void *)akira_native_rf_set_coding_rate,     "(i)i",    NULL},
+        /* Raw OOK/ASK signal capture and replay (CC1101 / CC1121) */
+        {"rf_raw_capture",         (void *)akira_native_rf_raw_capture,         "(iii)i",  NULL},
+        {"rf_raw_replay",          (void *)akira_native_rf_raw_replay,          "(iii)i",  NULL},
+#endif
+#if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
+        /* Passive 802.11 spectrum scan — per-channel max RSSI */
+        {"wifi_scan_rssi", (void *)akira_native_wifi_scan_rssi, "(ii)i",      NULL},
+        /* Passive 802.11 AP scan — full SSID/BSSID/channel/RSSI/security records */
+        {"wifi_scan_aps",  (void *)akira_native_wifi_scan_aps,  "(*~)i",      NULL},
+        /* 802.11 deauth frame injector — requires wifi.inject capability */
+        {"wifi_deauth",    (void *)akira_native_wifi_deauth,    "(**iii)i",   NULL},
 #endif
 
 #if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_SENSOR)
@@ -123,10 +141,11 @@ bool akira_register_native_apis()
         {"hid_enable", (void *)akira_native_hid_enable, "()i", NULL},
         {"hid_disable", (void *)akira_native_hid_disable, "()i", NULL},
         {"hid_is_connected", (void *)akira_native_hid_is_connected, "()i", NULL},
-        {"hid_key_press", (void *)akira_native_hid_key_press, "(i)i", NULL},
-        {"hid_key_release", (void *)akira_native_hid_key_release, "(i)i", NULL},
-        {"hid_key_release_all", (void *)akira_native_hid_key_release_all, "()i", NULL},
-        {"hid_type_string", (void *)akira_native_hid_type_string, "($)i", NULL},
+        {"hid_key_press",      (void *)akira_native_hid_key_press,      "(i)i",  NULL},
+        {"hid_key_release",    (void *)akira_native_hid_key_release,    "(i)i",  NULL},
+        {"hid_key_release_all",(void *)akira_native_hid_key_release_all,"()i",   NULL},
+        {"hid_type_string",    (void *)akira_native_hid_type_string,    "($)i",  NULL},
+        {"hid_set_modifiers",  (void *)akira_native_hid_set_modifiers,  "(i)i",  NULL},
         {"hid_gamepad_press", (void *)akira_native_hid_gamepad_press, "(i)i", NULL},
         {"hid_gamepad_release", (void *)akira_native_hid_gamepad_release, "(i)i", NULL},
         {"hid_gamepad_set_axis", (void *)akira_native_hid_gamepad_set_axis, "(ii)i", NULL},
@@ -265,13 +284,19 @@ bool akira_register_native_apis()
         {"fs_readdir", (void *)akira_native_fs_readdir, "($*~)i",  NULL},
 #endif
 
-/* crypto.*: sha256, aes256-cbc, hmac-sha256, random */
+/* crypto.*: sha256, aes256-cbc, hmac-sha256, random, ed25519 */
 #ifdef CONFIG_AKIRA_WASM_CRYPTO
-        {"crypto_sha256",          (void *)akira_native_crypto_sha256,          "(*~*)i",        NULL},
-        {"crypto_aes256_encrypt",  (void *)akira_native_crypto_aes256_encrypt,  "(**i*~*)i",     NULL},
-        {"crypto_aes256_decrypt",  (void *)akira_native_crypto_aes256_decrypt,  "(**i*~*)i",     NULL},
-        {"crypto_hmac_sha256",     (void *)akira_native_crypto_hmac_sha256,     "(*~*~*)i",      NULL},
-        {"crypto_random",          (void *)akira_native_crypto_random,          "(*~)i",         NULL},
+        {"crypto_sha256",            (void *)akira_native_crypto_sha256,            "(*~*)i",    NULL},
+        {"crypto_aes256_encrypt",    (void *)akira_native_crypto_aes256_encrypt,    "(**i*~*)i", NULL},
+        {"crypto_aes256_decrypt",    (void *)akira_native_crypto_aes256_decrypt,    "(**i*~*)i", NULL},
+        {"crypto_hmac_sha256",       (void *)akira_native_crypto_hmac_sha256,       "(*~*~*)i",  NULL},
+        {"crypto_random",            (void *)akira_native_crypto_random,            "(*~)i",     NULL},
+        /* Ed25519 — seed_ptr(32B) and pub_ptr(32B) are fixed-size, validated inside */
+        {"crypto_ed25519_keygen",    (void *)akira_native_crypto_ed25519_keygen,    "(**)i",     NULL},
+        /* seed_ptr(32B), msg_ptr+msg_len pair (auto-validated), sig_ptr(64B) */
+        {"crypto_ed25519_sign",      (void *)akira_native_crypto_ed25519_sign,      "(**~*)i",   NULL},
+        /* key(32B), nonce(16B), in+in_len (validated pair), out (same len as in) */
+        {"crypto_aes256_ctr",        (void *)akira_native_crypto_aes256_ctr,        "(**i*~*)i", NULL},
 #endif
 
 /* rtc.*: get/set unix time, uptime, alarm */

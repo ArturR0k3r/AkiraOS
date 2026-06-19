@@ -82,6 +82,53 @@ int akira_native_crypto_hmac_sha256(wasm_exec_env_t exec_env,
 int akira_native_crypto_random(wasm_exec_env_t exec_env,
                                 void *buf_ptr, uint32_t len);
 
+/**
+ * @brief AES-256-CTR encrypt/decrypt (CTR mode is its own inverse).
+ * @param key_ptr    32-byte AES key.
+ * @param nonce_ptr  16-byte counter/nonce block (initial counter value).
+ * @param in_ptr     Input buffer (plaintext or ciphertext).
+ * @param in_len     Input length in bytes (any length, no padding required).
+ * @param out_ptr    Output buffer (same length as in_len).
+ * @return 0 on success, negative errno on error.
+ */
+int akira_native_crypto_aes256_ctr(wasm_exec_env_t exec_env,
+                                    void *key_ptr, void *nonce_ptr,
+                                    void *in_ptr, uint32_t in_len,
+                                    void *out_ptr);
+
+/**
+ * @brief Generate a new Ed25519 key pair from hardware entropy.
+ *
+ * Sources 32 bytes from sys_csrand_get() as the Ed25519 seed (private key
+ * scalar), then derives the public key using Zephyr PSA Crypto.
+ *
+ * Gate: CONFIG_AKIRA_WASM_CRYPTO_ED25519=y (requires PSA_WANT_ALG_PURE_EDDSA).
+ *
+ * @param seed_ptr  WASM pointer to 32-byte output buffer (private seed).
+ * @param pub_ptr   WASM pointer to 32-byte output buffer (public key).
+ * @return 0 on success, -ENOTSUP if not compiled in, -EIO on PSA failure.
+ */
+int akira_native_crypto_ed25519_keygen(wasm_exec_env_t exec_env,
+                                        void *seed_ptr,
+                                        void *pub_ptr);
+
+/**
+ * @brief Sign a message with an Ed25519 private key seed (pure EdDSA).
+ *
+ * Imports the 32-byte seed into a volatile PSA key slot, signs the message,
+ * then immediately destroys the slot. The seed is NOT stored on the host.
+ *
+ * @param seed_ptr  WASM pointer to 32-byte private key seed.
+ * @param msg_ptr   WASM pointer to message buffer.
+ * @param msg_len   Message length in bytes.
+ * @param sig_ptr   WASM pointer to 64-byte signature output.
+ * @return 0 on success, -ENOTSUP if not compiled in, -EIO on PSA failure.
+ */
+int akira_native_crypto_ed25519_sign(wasm_exec_env_t exec_env,
+                                      void *seed_ptr,
+                                      void *msg_ptr, uint32_t msg_len,
+                                      void *sig_ptr);
+
 #ifdef __cplusplus
 }
 #endif

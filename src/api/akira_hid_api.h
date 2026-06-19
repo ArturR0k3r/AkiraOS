@@ -35,6 +35,7 @@ int akira_native_hid_key_press(wasm_exec_env_t exec_env, int32_t keycode);
 int akira_native_hid_key_release(wasm_exec_env_t exec_env, int32_t keycode);
 int akira_native_hid_key_release_all(wasm_exec_env_t exec_env);
 int akira_native_hid_type_string(wasm_exec_env_t exec_env, const char *str);
+int akira_native_hid_set_modifiers(wasm_exec_env_t exec_env, int32_t mod_mask);
 
 /* ── Gamepad ──────────────────────────────────────────────────────────────── */
 int akira_native_hid_gamepad_press(wasm_exec_env_t exec_env, int32_t btn_mask);
