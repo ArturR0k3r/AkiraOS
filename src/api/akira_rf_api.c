@@ -342,7 +342,7 @@ static void rf_rx_daemon_fn(void *p1, void *p2, void *p3)
             if (k_mutex_lock(&s_chip_lock, K_NO_WAIT) != 0) {
                 k_msleep(RF_DAEMON_SLEEP_MS); continue;
             }
-            n = h->ops->recv(h, s_rf_poll_buf.data, RF_RX_MAX_PACKET, 250);
+            n = h->ops->recv(h, s_rf_poll_buf.data, RF_RX_MAX_PACKET, 2000);
             k_mutex_unlock(&s_chip_lock);
             if (n <= 0) { k_msleep(RF_DAEMON_SLEEP_MS); continue; }
         }

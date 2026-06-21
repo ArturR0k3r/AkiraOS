@@ -122,10 +122,16 @@ LOG_MODULE_REGISTER(akira_cc1121, LOG_LEVEL_INF);
 #define CC1121_EXT_XOSC5        0x32
 #define CC1121_EXT_XOSC1        0x36
 #define CC1121_EXT_XOSC0        0x37
+#define CC1121_EXT_TOC_CFG      0x02  /* Timing offset correction: TOC_LIMIT[7:6], PRE_SYNC[5:3], POST_SYNC[2:0] */
 #define CC1121_EXT_PARTNUMBER   0x8F  /* Reads 0x23 on CC1121RHB */
 #define CC1121_EXT_RSSI1        0x71  /* RSSI upper 8 bits (signed, RSSI[11:4]) */
 #define CC1121_EXT_RSSI0        0x72  /* RSSI lower nibble + status             */
 #define CC1121_EXT_MARCSTATE    0x73  /* Radio state machine status */
+#define CC1121_EXT_AGC_GAIN3    0x79  /* AGC LNA gain settings */
+#define CC1121_EXT_AGC_GAIN2    0x7A
+#define CC1121_EXT_AGC_GAIN1    0x7B
+#define CC1121_EXT_AGC_GAIN0    0x7C
+#define CC1121_EXT_ASK_SOFT     0x7F  /* OOK soft decision: +16=carrier≥threshold, -16=below; bits[5:0] signed */
 #define CC1121_EXT_PQT_SYNC_ERR 0x75  /* bits[7:4]=PQT_ERROR (0=best), bits[3:0]=SYNC_ERROR (0=best, <SYNC_THR/2 → accepted) */
 #define CC1121_EXT_FREQOFF_EST0 0x78  /* Frequency offset estimate LSB (signed, units = fxosc/2^18 ~122Hz) */
 #define CC1121_EXT_MODEM_STATUS1 0x92 /* bit7=SYNC_FOUND bit1=PQT_REACHED bit0=PQT_VALID; RXFIFO status in bits[6:2] */
@@ -178,6 +184,7 @@ LOG_MODULE_REGISTER(akira_cc1121, LOG_LEVEL_INF);
 #define CC1121_DT_XOSC_HZ    DT_PROP_OR(CC1121_NODE, akira_xosc_frequency_hz,     32000000)
 
 static int cc1121_set_power(int8_t dbm);
+static int cc1121_apply_modulation(radio_modulation_t mod);
 
 static const struct spi_dt_spec g_spi = SPI_DT_SPEC_GET(
     CC1121_NODE,
@@ -188,6 +195,7 @@ static struct {
     bool initialized;
     struct gpio_dt_spec reset;
     radio_mode_t current_mode;
+    radio_modulation_t current_mod;
     uint32_t frequency_hz;
     uint32_t xosc_hz;
     int8_t tx_power_dbm;
@@ -427,6 +435,48 @@ static const struct { uint8_t addr; uint8_t val; } k_cc1121_base_cfg[] = {
     /* PA_CFG2 written separately — derived from DT akira,default-tx-power-dbm */
 };
 
+/* Full modulation-dependent register set, re-applied on every switch.
+ * Values not in this set (FS_*, FREQ, SYMBOL_RATE, PA_CFG2 power) are
+ * modulation-independent and stay as configured at init. */
+static const struct { uint8_t addr; uint8_t val; } k_cc1121_fsk_mod[] = {
+    { CC1121_MODCFG_DEV_E, 0x05 },  /* MOD_FORMAT=000 2-FSK, DEV_E=5 */
+    { CC1121_DEVIATION_M,  0x48 },  /* ±25 kHz deviation */
+    { CC1121_MDMCFG1,      0x46 },
+    { CC1121_MDMCFG0,      0x05 },
+    { CC1121_CHAN_BW,      0x01 },
+    { CC1121_AGC_REF,      0x3C },
+    { CC1121_AGC_CS_THR,   0xEF },
+    { CC1121_AGC_CFG3,     0x83 },
+    { CC1121_AGC_CFG2,     0x00 },  /* restore to default (no freeze-on-sync for FSK) */
+    { CC1121_AGC_CFG1,     0xA9 },
+    { CC1121_AGC_CFG0,     0xCF },
+    { CC1121_DCFILT_CFG,   0x1C },  /* restore DC filter for FSK */
+    { CC1121_PA_CFG1,      0x56 },  /* RAMP_SHAPE=10 (reset) restored after OOK */
+    { CC1121_PA_CFG0,      0x79 },  /* PA ramp shape (FSK) */
+    { CC1121_PA_CFG2,      0x7F },  /* PA_POWER_RAMP=0x3F (~14 dBm), bit6=1 */
+    { CC1121_PKT_CFG0,     0x20 },  /* Variable-length packets (restore from OOK fixed-length) */
+    { CC1121_PKT_LEN,      0xFF },  /* Max packet length in variable mode */
+};
+static const struct { uint8_t addr; uint8_t val; } k_cc1121_ook_mod[] = {
+    { CC1121_MODCFG_DEV_E, 0x18 },  /* MOD_FORMAT=011 ASK/OOK */
+    { CC1121_DEVIATION_M,  0x48 },
+    { CC1121_MDMCFG1,      0x46 },
+    { CC1121_MDMCFG0,      0x05 },
+    { CC1121_CHAN_BW,      0x01 },
+    { CC1121_AGC_REF,      0x20 },  /* Low AGC ref for OOK: prevents near-field envelope railing. */
+    { CC1121_AGC_CS_THR,   0x19 },  /* Reference low-rate carrier-sense threshold (was 0xEF). */
+    { CC1121_AGC_CFG3,     0xB1 },  /* AGC_MIN_GAIN=17: prevents OOK demod railing on strong signals. */
+    { CC1121_AGC_CFG2,     0x20 },  /* AGC gain control: START_PREVIOUS_GAIN=0, FE_PERF=01. */
+    { CC1121_AGC_CFG1,     0x09 },  /* AGC_SYNC_BEHAVIOUR=000: no freeze, keep adjusting. */
+    { CC1121_AGC_CFG0,     0xCF },  /* AGC_ASK_DECAY=11 (slowest): reference value. */
+    { CC1121_DCFILT_CFG,   0x00 },
+    { CC1121_PA_CFG1,      0x54 },  /* FIRST_IPL=2, SECOND_IPL=5, RAMP_SHAPE=00 (1/32 symbol OOK shape) */
+    { CC1121_PA_CFG0,      0x7C },  /* ASK_DEPTH=15, UPSAMPLER_P=100b=P=16 (legal for RAMP_SHAPE=00; P=2 is illegal → TX doesn't gate carrier off → all-ones) */
+    { CC1121_PA_CFG2,      0x7C },  /* PA_POWER_RAMP=60, bit6=1; OOK depth=60-4×15=0 (full) */
+    { CC1121_PKT_CFG0,     0x20 },  /* Variable-length packets for OOK RX parsing. */
+    { CC1121_PKT_LEN,      0xFF },  /* Max length in variable mode */
+};
+
 /* Extended register defaults.
  * The FS_* synthesizer registers are the TI-recommended values that MUST be
  * changed from reset for the PLL to lock (SmartRF Studio export; these values
@@ -627,6 +677,8 @@ static int cc1121_init(void)
         if (v2e != 0xFF) LOG_WRN("PKT_LEN mismatch: got %02X want 0xFF - packet filtering broken!", v2e);
     }
 
+    cc1121_apply_modulation(RADIO_MOD_FSK);
+
     g_cc1121.initialized = true;
     g_cc1121.current_mode = RADIO_MODE_STANDBY;
     LOG_INF("CC1121 ready: %u Hz, %d dBm", g_cc1121.frequency_hz, g_cc1121.tx_power_dbm);
@@ -717,11 +769,90 @@ static int cc1121_set_power(int8_t dbm)
         dbm = 14; /* PA_POWER_RAMP saturates at 0x3F (~14 dBm) */
     }
 
-    int ret = cc1121_write_reg(CC1121_PA_CFG2, dbm_to_pa_cfg2(dbm));
+    int ramp = 2 * ((int)dbm + 18) - 1;
+    if (ramp < 0x03) ramp = 0x03;
+    if (ramp > 0x3F) ramp = 0x3F;
+
+    /* OOK: A_min=0 (full depth) requires PA_POWER_RAMP = 4*ASK_DEPTH
+     * (datasheet PA_CFG0). The fixed ASK_DEPTH=15 in the OOK table forces
+     * ramp>=60, so any power below max made PA_POWER_RAMP-4*ASK_DEPTH<0 =
+     * illegal -> dead carrier. Recompute ASK_DEPTH for the chosen power and
+     * snap ramp to 4*ASK_DEPTH so the depth constraint always holds. */
+    if (g_cc1121.current_mod == RADIO_MOD_OOK) {
+        uint8_t depth = (uint8_t)(ramp / 4);
+        if (depth == 0) depth = 1;
+        ramp = depth * 4;
+        cc1121_write_reg(CC1121_PA_CFG0, (uint8_t)((depth << 3) | 0x04));
+    }
+
+    int ret = cc1121_write_reg(CC1121_PA_CFG2,
+                               CC1121_PA_CFG2_BIT6 | (uint8_t)(ramp & 0x3F));
     if (ret == 0) {
         g_cc1121.tx_power_dbm = dbm;
     }
     return ret;
+}
+
+static int cc1121_apply_modulation(radio_modulation_t mod)
+{
+    const struct { uint8_t addr; uint8_t val; } *tbl;
+    size_t n;
+
+    switch (mod) {
+    case RADIO_MOD_FSK:
+    case RADIO_MOD_GFSK:
+        tbl = (const void *)k_cc1121_fsk_mod; n = ARRAY_SIZE(k_cc1121_fsk_mod);
+        mod = RADIO_MOD_FSK;
+        break;
+    case RADIO_MOD_OOK:
+        tbl = (const void *)k_cc1121_ook_mod; n = ARRAY_SIZE(k_cc1121_ook_mod);
+        break;
+    default:
+        LOG_WRN("CC1121 unsupported modulation %d, using 2-FSK", mod);
+        tbl = (const void *)k_cc1121_fsk_mod; n = ARRAY_SIZE(k_cc1121_fsk_mod);
+        mod = RADIO_MOD_FSK;
+        break;
+    }
+
+    /* Switch must happen in IDLE; recalibrate after (RX chain changes). */
+    cc1121_strobe(CC1121_SIDLE);
+    int ret = wait_for_idle();
+    if (ret < 0) return ret;
+
+    for (size_t i = 0; i < n; i++) {
+        ret = cc1121_write_reg(tbl[i].addr, tbl[i].val);
+        if (ret < 0) {
+            LOG_ERR("mod reg 0x%02X write failed: %d", tbl[i].addr, ret);
+            return ret;
+        }
+    }
+
+    /* FOC (frequency offset correction) must be disabled in OOK mode:
+     * FOC integrator drifts during "0" bits (no carrier), corrupting demod.
+     * Restore the FSK value (0x22, FOC_EN=1) when leaving OOK. */
+    cc1121_write_ext_reg(CC1121_EXT_FREQOFF_CFG,
+                         mod == RADIO_MOD_OOK ? 0x00 : 0x22);
+
+    /* For OOK: use symbol-by-symbol timing correction (TOC_LIMIT=01=±2%).
+     * Default block-based (TOC_LIMIT=00) with 64-symbol blocks can mistrack
+     * OOK signals that have long runs of same bit (no transitions).
+     * TOC_CFG = 0b01_001_011 (TOC_LIMIT=01, pre-scale=6/16, post-integral=1/32).
+     * Restore default for FSK (0x0B = block-based, 16+64 symbols). */
+    cc1121_write_ext_reg(CC1121_EXT_TOC_CFG,
+                         mod == RADIO_MOD_OOK ? 0x4B : 0x0B);
+
+    ret = cc1121_strobe(CC1121_SCAL);
+    if (ret < 0) return ret;
+    ret = wait_for_idle();
+    if (ret < 0) return ret;
+
+    g_cc1121.current_mod = mod;
+
+    uint8_t rb = 0;
+    cc1121_read_reg(CC1121_MODCFG_DEV_E, &rb);
+    LOG_INF("CC1121 modulation=%s MODCFG_DEV_E=0x%02X",
+            mod == RADIO_MOD_OOK ? "OOK" : "2-FSK", rb);
+    return 0;
 }
 
 static int cc1121_set_modulation(radio_modulation_t mod)
@@ -729,23 +860,7 @@ static int cc1121_set_modulation(radio_modulation_t mod)
     if (!g_cc1121.initialized) {
         return -ENODEV;
     }
-
-    uint8_t mod_reg;
-    switch (mod) {
-    case RADIO_MOD_FSK:
-    case RADIO_MOD_GFSK:
-        mod_reg = 0x46; /* 2-FSK */
-        break;
-    case RADIO_MOD_OOK:
-        mod_reg = 0x36; /* ASK/OOK */
-        break;
-    default:
-        LOG_WRN("CC1121 does not support modulation %d, using 2-FSK", mod);
-        mod_reg = 0x46;
-        break;
-    }
-
-    return cc1121_write_reg(CC1121_MDMCFG1, mod_reg);
+    return cc1121_apply_modulation(mod);
 }
 
 static int cc1121_set_bitrate(uint32_t bps)
@@ -780,6 +895,16 @@ static int cc1121_tx(const uint8_t *data, size_t len)
     cc1121_strobe(CC1121_SIDLE);
     wait_for_idle();
     cc1121_strobe(CC1121_SFTX);
+
+    {
+        uint8_t mod_e = 0, pa0 = 0, pa1 = 0, pa2 = 0;
+        cc1121_read_reg(CC1121_MODCFG_DEV_E, &mod_e);
+        cc1121_read_reg(CC1121_PA_CFG0, &pa0);
+        cc1121_read_reg(CC1121_PA_CFG1, &pa1);
+        cc1121_read_reg(CC1121_PA_CFG2, &pa2);
+        LOG_INF("TX regs: MODCFG=0x%02X PA0=0x%02X PA1=0x%02X PA2=0x%02X mod=%d",
+                mod_e, pa0, pa1, pa2, g_cc1121.current_mod);
+    }
 
     /* Write length byte + payload to TX FIFO */
     uint8_t hdr  = CC1121_TXFIFO_BURST;
@@ -872,6 +997,7 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
 
     cc1121_strobe(CC1121_SIDLE);
     wait_for_idle();
+
     cc1121_strobe(CC1121_SFRX);
     cc1121_strobe(CC1121_SRX);
     g_cc1121.current_mode = RADIO_MODE_RX;
@@ -887,6 +1013,7 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
         uint8_t marc = 0;
         cc1121_get_marcstate(&marc);
         marc &= 0x1F;
+
         last_marc = marc;
 
         /* Recover from RX FIFO overflow error */
@@ -907,8 +1034,7 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
         bool packet_done = (marc == CC1121_MARC_IDLE ||
                             marc == CC1121_MARC_RX_END);
         if (!packet_done) {
-            /* Adaptive polling: relax when idle, speed up when data arrives.
-             * A 14-byte packet at 4800 bps takes ~29 ms on-air. */
+            /* Adaptive polling: relax when idle, speed up when data arrives. */
             k_msleep(rx_bytes > 0 ? 2 : 50);
             continue;
         }
@@ -976,6 +1102,8 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
 
             /* rx_buf[0..payload_len-1] = payload, rx_buf[payload_len..rx_bytes-1] = status */
             memcpy(buffer, rx_buf, payload_len);
+
+            LOG_DBG("RX done: %d bytes", (int)payload_len);
 
             cc1121_strobe(CC1121_SIDLE);
             cc1121_strobe(CC1121_SFRX);
