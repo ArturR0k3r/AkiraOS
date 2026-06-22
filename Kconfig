@@ -321,7 +321,7 @@ config AKIRA_RF_RX_DAEMON
 
 config AKIRA_RF_POLL_INTERVAL_MS
     int "RF RX daemon poll interval (ms)"
-    default 2000
+    default 5000
     depends on AKIRA_RF_RX_DAEMON
     help
       How long the daemon blocks in driver->rx() per poll cycle.

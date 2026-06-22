@@ -99,8 +99,8 @@ bool akira_register_native_apis()
         {"rf_set_bandwidth",       (void *)akira_native_rf_set_bandwidth,       "(i)i",    NULL},
         {"rf_set_coding_rate",     (void *)akira_native_rf_set_coding_rate,     "(i)i",    NULL},
         /* Raw OOK/ASK signal capture and replay (CC1101 / CC1121) */
-        {"rf_raw_capture",         (void *)akira_native_rf_raw_capture,         "(iii)i",  NULL},
-        {"rf_raw_replay",          (void *)akira_native_rf_raw_replay,          "(iii)i",  NULL},
+        {"rf_raw_capture",         (void *)akira_native_rf_raw_capture,         "(iiii)i",  NULL},
+        {"rf_raw_replay",          (void *)akira_native_rf_raw_replay,          "(iiii)i",  NULL},
 #endif
 #if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
         /* Passive 802.11 spectrum scan — per-channel max RSSI */
