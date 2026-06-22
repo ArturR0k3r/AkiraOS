@@ -52,6 +52,6 @@
 
 &ls027b7dh01 {
 	spi-lsb-first;
-	spi-max-frequency = <20000000>;  /* LS027B7DH01 rated max: 2 MHz */
+	spi-max-frequency = <2000000>;   /* LS027B7DH01 rated max: 2 MHz */
 	status = "okay";
 };

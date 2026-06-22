@@ -47,7 +47,7 @@ LOG_MODULE_REGISTER(akira_main, CONFIG_AKIRA_LOG_LEVEL);
 int main(void)
 {
     LOG_INF("=====================================================)");
-    LOG_INF("AkiraOS booting (v1.5.8)");
+    LOG_INF("AkiraOS booting (v1.6.x)");
     LOG_INF("Platform: %s", akira_get_platform_name());
     LOG_INF("Build: %s %s", __DATE__, __TIME__);
     LOG_INF("=====================================================)");
@@ -61,12 +61,12 @@ int main(void)
 
     /* Display test - runs AFTER HAL initialization */
 #ifdef CONFIG_DISPLAY
-    akira_display_clear(0x0021);
+    akira_display_clear(0xFFFF);
     /* Display boot info on screen */
     char buf[64];
     int y_pos = 20;
     const int line_height = 12;
-    const uint16_t text_color = 0xFFFF; // White
+    const uint16_t text_color = 0x0000; // Black on white (Sharp mono: 0=black pixel ON)
 
     akira_display_text(5, y_pos, "====================================", text_color);
     y_pos += line_height;
@@ -74,7 +74,7 @@ int main(void)
     akira_display_text(5, y_pos, "AkiraOS booting", text_color);
     y_pos += line_height;
 
-    akira_display_text(5, y_pos, "AkiraOS v1.5.8", text_color);
+    akira_display_text(5, y_pos, "AkiraOS v1.6.x", text_color);
     y_pos += line_height;
 
     snprintf(buf, sizeof(buf), "Platform: %s", akira_get_platform_name());
@@ -276,8 +276,8 @@ int main(void)
         static uint32_t frame = 0;
         static bool idle_screen_shown = false;
         char buf[64];
-        const uint16_t text_color = 0xFFFF; // White
-        const uint16_t bg_color = 0x0000;   // Black
+        const uint16_t text_color = 0x0000; // Black (visible on Sharp mono)
+        const uint16_t bg_color = 0xFFFF;   // White
 
         /* Check if any app is running */
         bool app_running = false;
