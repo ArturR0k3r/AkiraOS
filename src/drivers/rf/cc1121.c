@@ -1290,7 +1290,7 @@ static int cc1121_raw_capture(uint8_t *buf, size_t max_bytes,
                               uint32_t sample_rate_hz, uint32_t timeout_ms)
 {
     if (!g_cc1121.initialized) return -ENODEV;
-    if (!buf || max_bytes == 0) return -EINVAL;
+    if (!buf || max_bytes == 0 || max_bytes > 8192) return -EINVAL;
 
     struct cc1121_raw_saved sv;
     int ret = cc1121_raw_enter(sample_rate_hz, &sv);

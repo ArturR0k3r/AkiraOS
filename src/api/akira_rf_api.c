@@ -876,8 +876,7 @@ int akira_native_rf_raw_capture(wasm_exec_env_t exec_env,
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
-    if (max_bytes == 0) return -EINVAL;
-    if (max_bytes > RF_RAW_MAX_BYTES) max_bytes = RF_RAW_MAX_BYTES;
+    if (max_bytes == 0 || max_bytes > RF_RAW_MAX_BYTES) return -EINVAL;
     if (timeout_ms <= 0) timeout_ms = 5000;
 
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
