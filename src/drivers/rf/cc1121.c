@@ -91,6 +91,8 @@ LOG_MODULE_REGISTER(akira_cc1121, LOG_LEVEL_INF);
 /* Extended register addresses (used with CC1121_EXT_ADDR prefix) */
 #define CC1121_EXT_IF_MIX_CFG   0x00
 #define CC1121_EXT_FREQOFF_CFG  0x01
+#define CC1121_EXT_FREQOFF1     0x0A  /* Applied freq offset MSB (FOC/SAFC accumulates here) */
+#define CC1121_EXT_FREQOFF0     0x0B  /* Applied freq offset LSB */
 #define CC1121_EXT_EXT_CTRL     0x06  /* BURST_ADDR_INCR_EN at bit 0 */
 #define CC1121_EXT_FREQ2        0x0C  /* Carrier frequency [23:16] */
 #define CC1121_EXT_FREQ1        0x0D  /* Carrier frequency [15:8]  */
@@ -860,12 +862,25 @@ static int cc1121_apply_modulation(radio_modulation_t mod)
      * on isolated packets), 4 bytes for FSK (default). */
     cc1121_write_reg(CC1121_PREAMBLE_CFG1, mod == RADIO_MOD_OOK ? 0x30 : 0x18);
 
+    /* RXOFF_MODE=RX: stay in RX after each packet (continuous RX) so the demod, AGC
+     * and FOC keep their lock between packets — the per-recv cold re-arm
+     * (SIDLE/SCAL/SRX) was what left FSK deaf-after-1st (demod settle gap + AGC/FOC
+     * churn). cc1121_rx detects packet completion by NUM_RXBYTES-stable instead of
+     * MARC→IDLE (MARC stays RX under RXOFF_MODE=RX). RFEND_CFG1 bits[5:4]: 00=IDLE,
+     * 11=RX; rest = reset 0x0F (RX_TIME=no-timeout). */
+    cc1121_write_reg(CC1121_RFEND_CFG1, 0x3F);
+
     ret = cc1121_strobe(CC1121_SCAL);
     if (ret < 0) return ret;
     ret = wait_for_idle();
     if (ret < 0) return ret;
 
     g_cc1121.current_mod = mod;
+    /* Force the next recv() to cold-arm: a modulation switch rewrites the demod
+     * config and ends in IDLE (SCAL above). Without this, a continuous-RX caller
+     * that still has current_mode==RX would skip the re-arm and run the demod on
+     * the half-applied old state → deaf after a mod switch. */
+    g_cc1121.current_mode = RADIO_MODE_STANDBY;
 
     uint8_t rb = 0;
     cc1121_read_reg(CC1121_MODCFG_DEV_E, &rb);
@@ -1014,22 +1029,30 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
         return -ENODEV;
     }
 
-    cc1121_strobe(CC1121_SIDLE);
-    wait_for_idle();
-    cc1121_strobe(CC1121_SFRX);
+    /* Continuous RX (RXOFF_MODE=RX, both modulations): the chip stays in RX across
+     * packets, so we cold-arm only on the first entry and let the demod/AGC/FOC hold
+     * lock between recv() calls. A modulation switch resets current_mode to STANDBY
+     * (cc1121_apply_modulation) which forces the next call to re-arm cleanly. */
+    bool continuous = true;
 
-    /* Explicit FS recalibration on every RX arm. Relying on FS_AUTOCAL alone
-     * left the synth un-/half-calibrated after the first packet → chip would
-     * not re-enter RX (MARCSTATE stuck IDLE 0x01) and went deaf until something
-     * external recalibrated (historically a frequency sweep). SCAL calibrates
-     * from IDLE and returns to IDLE; wait_for_idle() ensures it completes before
-     * SRX so RX is armed on a freshly-locked synth. */
-    cc1121_strobe(CC1121_SCAL);
-    wait_for_idle();
+    if (!continuous || g_cc1121.current_mode != RADIO_MODE_RX) {
+        cc1121_strobe(CC1121_SIDLE);
+        wait_for_idle();
+        cc1121_strobe(CC1121_SFRX);
 
-    cc1121_strobe(CC1121_SRX);
-    g_cc1121.current_mode = RADIO_MODE_RX;
-    k_msleep(2);  /* let SRX settle into RX before the first FIFO poll */
+        /* Explicit FS recalibration on every RX arm. Relying on FS_AUTOCAL alone
+         * left the synth un-/half-calibrated after the first packet → chip would
+         * not re-enter RX (MARCSTATE stuck IDLE 0x01) and went deaf until something
+         * external recalibrated (historically a frequency sweep). SCAL calibrates
+         * from IDLE and returns to IDLE; wait_for_idle() ensures it completes before
+         * SRX so RX is armed on a freshly-locked synth. */
+        cc1121_strobe(CC1121_SCAL);
+        wait_for_idle();
+
+        cc1121_strobe(CC1121_SRX);
+        g_cc1121.current_mode = RADIO_MODE_RX;
+        k_msleep(2);  /* let SRX settle into RX before the first FIFO poll */
+    }
     LOG_DBG("RX started: freq=%u timeout=%u ms", g_cc1121.frequency_hz, timeout_ms);
 
     int64_t deadline = k_uptime_get() + (timeout_ms ? timeout_ms : CC1121_RX_TIMEOUT_MS);
@@ -1057,33 +1080,62 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
             continue;
         }
 
-        /* Only process the FIFO when the chip signals packet completion.
-         * While MARC=RX (0x0D) the packet handler is still receiving —
-         * reading mid-packet returns truncated data (datasheet §9.4.1). */
-        bool packet_done = (marc == CC1121_MARC_IDLE ||
-                            marc == CC1121_MARC_RX_END);
-        if (!packet_done) {
-            /* Adaptive polling: relax when idle, speed up when data arrives. */
-            k_msleep(rx_bytes > 0 ? 2 : 50);
-            continue;
-        }
+        if (continuous) {
+            /* Continuous RX: MARC stays at RX (0x0D) across packets, so we can't
+             * use MARC→IDLE as the completion signal. Detect a fully-received
+             * packet by NUM_RXBYTES going non-zero and then stable: while the
+             * packet handler is still writing the FIFO the count keeps growing;
+             * once it stops the whole packet (len+payload+status) is in the FIFO. */
+            if (rx_bytes == 0) {
+                k_msleep(50);
+                continue;
+            }
+            k_msleep(8);
+            uint8_t rx_bytes2 = 0;
+            cc1121_read_ext_reg(CC1121_EXT_NUM_RXBYTES, &rx_bytes2);
+            if (rx_bytes2 != rx_bytes) {
+                continue;  /* still filling — wait for it to settle */
+            }
+            /* Spurious 1-2 bytes with no carrier = noise. Flush (SFRX needs IDLE)
+             * and return to continuous RX. */
+            if (rx_bytes < 3) {
+                cc1121_strobe(CC1121_SIDLE);
+                wait_for_idle();
+                cc1121_strobe(CC1121_SFRX);
+                cc1121_strobe(CC1121_SRX);
+                k_msleep(1);
+                continue;
+            }
+            /* fall through to the burst-read with rx_bytes stable */
+        } else {
+            /* Only process the FIFO when the chip signals packet completion.
+             * While MARC=RX (0x0D) the packet handler is still receiving —
+             * reading mid-packet returns truncated data (datasheet §9.4.1). */
+            bool packet_done = (marc == CC1121_MARC_IDLE ||
+                                marc == CC1121_MARC_RX_END);
+            if (!packet_done) {
+                /* Adaptive polling: relax when idle, speed up when data arrives. */
+                k_msleep(rx_bytes > 0 ? 2 : 50);
+                continue;
+            }
 
-        /* Packet is complete.  FIFO empty with IDLE means noise/timeout. */
-        if (rx_bytes == 0) {
-            cc1121_strobe(CC1121_SFRX);
-            cc1121_strobe(CC1121_SRX);
-            last_marc = CC1121_MARC_RX;
-            k_msleep(10);
-            continue;
-        }
+            /* Packet is complete.  FIFO empty with IDLE means noise/timeout. */
+            if (rx_bytes == 0) {
+                cc1121_strobe(CC1121_SFRX);
+                cc1121_strobe(CC1121_SRX);
+                last_marc = CC1121_MARC_RX;
+                k_msleep(10);
+                continue;
+            }
 
-        /* Spurious 1-2 bytes on completion are noise — flush and restart */
-        if (rx_bytes < 3) {
-            cc1121_strobe(CC1121_SFRX);
-            cc1121_strobe(CC1121_SRX);
-            last_marc = CC1121_MARC_RX;
-            k_msleep(1);
-            continue;
+            /* Spurious 1-2 bytes on completion are noise — flush and restart */
+            if (rx_bytes < 3) {
+                cc1121_strobe(CC1121_SFRX);
+                cc1121_strobe(CC1121_SRX);
+                last_marc = CC1121_MARC_RX;
+                k_msleep(1);
+                continue;
+            }
         }
 
         /* Valid completed packet */
@@ -1134,9 +1186,15 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
 
             LOG_DBG("RX done: %d bytes", (int)payload_len);
 
-            cc1121_strobe(CC1121_SIDLE);
-            cc1121_strobe(CC1121_SFRX);
-            g_cc1121.current_mode = RADIO_MODE_STANDBY;
+            if (continuous) {
+                /* RXOFF_MODE=RX already returned the chip to RX and the burst
+                 * read drained the FIFO — leave it armed and locked. */
+                g_cc1121.current_mode = RADIO_MODE_RX;
+            } else {
+                cc1121_strobe(CC1121_SIDLE);
+                cc1121_strobe(CC1121_SFRX);
+                g_cc1121.current_mode = RADIO_MODE_STANDBY;
+            }
 
             if (g_cc1121.event_cb) {
                 radio_event_t ev = {
@@ -1159,8 +1217,12 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
         cc1121_get_marcstate(&marc);
         LOG_DBG("RX timeout: MARCSTATE=0x%02X NUM_RXBYTES=0", marc & 0x1F);
     }
-    cc1121_strobe(CC1121_SIDLE);
-    g_cc1121.current_mode = RADIO_MODE_STANDBY;
+    if (!continuous) {
+        /* Continuous FSK stays armed across recv() timeouts so the next call
+         * resumes the same hot RX; only OOK drops to IDLE here. */
+        cc1121_strobe(CC1121_SIDLE);
+        g_cc1121.current_mode = RADIO_MODE_STANDBY;
+    }
     return 0;
 }
 
