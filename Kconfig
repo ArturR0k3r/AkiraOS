@@ -864,7 +864,7 @@ config AKIRA_HTTP_UPLOAD_TOKEN
 
 config AKIRA_HTTP_DEV_UPLOAD
     bool "Enable direct WASM app upload via HTTP"
-    default n
+    default y
     depends on AKIRA_HTTP_SERVER && AKIRA_APP_MANAGER
     help
       Registers the POST /api/apps/install endpoint for direct WASM app
