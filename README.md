@@ -246,7 +246,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) · Code style: Zephyr C · Commits: conve
 | 🖥️ Hardware | [akiraos.dev/akiraconsole](https://akiraos.dev/akiraconsole) |
 | 🏷️ OSHWA | [certification.oshwa.org/md000003.html](https://certification.oshwa.org/md000003.html) |
 | 💬 Discussions | [GitHub Discussions](https://github.com/ArturR0k3r/AkiraOS/discussions) |
-| 📢 Telegram | [@theguywithpen](https://t.me/theguywithpen) |
+| 📢 Telegram | [@theguywithpen](https://t.me/thguywithpen) |
 | 🛒 CrowdSupply | Coming soon — [akiraos.dev/akiraconsole](https://akiraos.dev/akiraconsole) |
 
 ---
@@ -261,7 +261,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) · Code style: Zephyr C · Commits: conve
 
 **If AkiraOS is useful to you — a ⭐ helps others find it.**
 
-[Star on GitHub](https://github.com/ArturR0k3r/AkiraOS) · [Follow updates](https://t.me/theguywithpen) · [Docs](https://docs.akiraos.dev)
+[Star on GitHub](https://github.com/ArturR0k3r/AkiraOS) · [Follow updates](https://t.me/thguywithpen) · [Docs](https://docs.akiraos.dev)
 
 *Apache 2.0 · Copyright © 2026 PenEngineering S.R.L · [Commercial licenses available](COMMERCIAL.md)*
 
