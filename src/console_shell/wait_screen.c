@@ -9,13 +9,18 @@ LOG_MODULE_REGISTER(akira_wait_screen, CONFIG_AKIRA_LOG_LEVEL);
 
 /**
  * @file wait_screen.c
- * @brief Idle wait / power-save screensaver.
+ * @brief Idle power-save screen for AkiraConsole.
  *
- * Layout (320x240):
- *   y= 10   "POWER SAVE"  small, centred, dark-gray
- *   y=100   HH:MM:SS      large font, centred, white
- *   y=130   battery %     small, centred, dark-gray
- *   y=220   "Press any button to wake"  small, centred, dark-gray
+ * Fully static — drawn once on enter, never redrawn.
+ * No CPU wakeups for clock ticks; battery is read once at entry.
+ *
+ * Layout (SCR_W × 240):
+ *   y= 30   full-width hairline
+ *   y= 96   "AKIRA"  large font, centred, white
+ *   y=120   full-width hairline
+ *   y=152   battery %  small, centred, dark-gray  (if available)
+ *   y=200   full-width hairline
+ *   y=213   "Hold HOME to wake"  small, centred, dark-gray
  */
 
 #include "wait_screen.h"
@@ -26,7 +31,6 @@ LOG_MODULE_REGISTER(akira_wait_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include <stdio.h>
 
 #include <api/akira_display_api.h>
-#include <lib/akira_time.h>
 #include <drivers/platform_hal.h>
 
 #if defined(CONFIG_DISPLAY)
@@ -71,35 +75,10 @@ static void draw_centred_large(int y, const char *s, uint16_t col)
     akira_display_text_large(x, y, s, col);
 }
 
-static void build_time_str(char *buf, size_t len)
-{
-    int64_t epoch = akira_time_get_epoch();
-    if (akira_time_is_set())
-    {
-        int64_t local = epoch + (int64_t)akira_time_get_tz_offset_s();
-        int64_t day_sec = local % 86400;
-        if (day_sec < 0)
-            day_sec += 86400;
-        snprintf(buf, len, "%02u:%02u:%02u",
-                 (unsigned)(day_sec / 3600),
-                 (unsigned)((day_sec % 3600) / 60),
-                 (unsigned)(day_sec % 60));
-    }
-    else
-    {
-        uint32_t s = (uint32_t)epoch;
-        snprintf(buf, len, "%02u:%02u:%02u",
-                 (s / 3600U) % 24U, (s % 3600U) / 60U, s % 60U);
-    }
-}
-
-/* Full redraw — used only on enter so static labels are drawn once. */
+/* Drawn once on enter — never updated, no periodic CPU wakeup needed. */
 static void draw_frame(void)
 {
-    char time_str[10];
     char batt_str[8] = "";
-
-    build_time_str(time_str, sizeof(time_str));
 
 #ifdef CONFIG_AKIRA_POWER_MANAGER
     {
@@ -113,47 +92,26 @@ static void draw_frame(void)
 
     akira_display_clear(C_BLACK);
 
-    draw_centred_small(10, "POWER SAVE", C_DKGRAY);
-    draw_centred_large(96, time_str, C_WHITE);
+    /* Top hairline */
+    akira_display_hline(0, 30, SCR_W, C_WHITE);
 
+    /* Wordmark */
+    draw_centred_large(96, "AKIRA", C_WHITE);
+
+    /* Bottom-of-wordmark hairline */
+    akira_display_hline(0, 120, SCR_W, C_WHITE);
+
+    /* Battery level (static snapshot taken at enter time) */
     if (batt_str[0])
     {
-        draw_centred_small(130, batt_str, C_DKGRAY);
+        draw_centred_small(152, batt_str, C_DKGRAY);
     }
 
-    draw_centred_small(220, "Hold HOME to wake", C_DKGRAY);
+    /* Lower hairline */
+    akira_display_hline(0, 200, SCR_W, C_WHITE);
 
-    akira_display_flush();
-}
-
-/* Incremental update — only repaint time and battery to avoid full-screen blink. */
-static void draw_dynamic(void)
-{
-    char time_str[10];
-    char batt_str[8] = "";
-
-    build_time_str(time_str, sizeof(time_str));
-
-#ifdef CONFIG_AKIRA_POWER_MANAGER
-    {
-        uint8_t pct = 0;
-        if (akira_pm_get_battery_level(&pct) == 0)
-        {
-            snprintf(batt_str, sizeof(batt_str), "%u%%", (unsigned)pct);
-        }
-    }
-#endif
-
-    /* Erase time row (FONT_11X18 = 18px tall, centred at y=96). */
-    akira_display_rect(0, 96, SCR_W, 18, C_BLACK);
-    draw_centred_large(96, time_str, C_WHITE);
-
-    /* Erase battery row (FONT_7X10 = 10px tall, centred at y=130). */
-    akira_display_rect(0, 130, SCR_W, 10, C_BLACK);
-    if (batt_str[0])
-    {
-        draw_centred_small(130, batt_str, C_DKGRAY);
-    }
+    /* Wake hint */
+    draw_centred_small(213, "Hold HOME to wake", C_DKGRAY);
 
     akira_display_flush();
 }
@@ -191,7 +149,7 @@ void wait_screen_enter(void)
 
 void wait_screen_update(void)
 {
-    draw_dynamic();
+    /* Screen is static — nothing to update. */
 }
 
 void wait_screen_exit(void)
