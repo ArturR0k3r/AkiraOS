@@ -317,11 +317,12 @@ config AKIRA_LR2021
 config AKIRA_CC1121
     bool "Enable CC1121 Sub-GHz driver (AkiraConsole Production)"
     default n
-    depends on SPI && GPIO && AKIRA_RADIO_MANAGER
+    depends on SPI && GPIO && AKIRA_RADIO_MANAGER && DT_HAS_COMPAT_STATUS_OKAY_TI_CC1121
     help
       Enable TI CC1121RHB high-performance Sub-GHz transceiver driver.
       Covers 315/433/868/915 MHz bands, narrowband FSK/OOK.
       Used on AkiraConsole Production via TCA6408 GPIO expander CS.
+      Requires a DT node with compatible = "ti,cc1121" and status = "okay".
 
 config AKIRA_RF_RX_DAEMON
     bool "Enable RF RX background daemon"
@@ -1388,6 +1389,25 @@ config AKIRA_POWER_DEEP_SLEEP
     depends on AKIRA_POWER_MANAGER
     help
       Enable deep sleep mode for maximum power savings.
+
+config AKIRA_WAIT_WAKE_HOLD_MS
+    int "Hold duration (ms) to wake from idle wait screen"
+    default 800
+    range 200 3000
+    depends on AKIRA_OS_SHELL
+    help
+      How long the HOME button must be held to exit the Phase 1 idle
+      wait screen.  Prevents accidental wakes from brief button contact.
+
+config AKIRA_DEEP_SLEEP_IDLE_S
+    int "Seconds on wait screen before entering deep sleep"
+    default 60
+    range 10 600
+    depends on AKIRA_POWER_DEEP_SLEEP && AKIRA_OS_SHELL
+    help
+      After this many seconds on the dim wait screen with no button
+      activity, the device blanks the display and enters hardware deep
+      sleep.  Wake via HOME button press (GPIO0 level trigger).
 
 config AKIRA_BATTERY_LOW_THRESHOLD
     int "Low battery threshold (%)"

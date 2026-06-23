@@ -417,19 +417,33 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             s_last_input_ms = now_ms;
         }
 
-        /* Wake from wait screen — edge detection only (just_pressed), NOT
-         * level (btns).  Using btns here would cause spurious wakes: during
-         * wait_screen_enter()'s draw the shell thread yields for I2C retries,
-         * and any noise/bounce processed by the input thread in that window
-         * would leave stale bits in g_btn_state that persist into the next
-         * iteration and fire the level check incorrectly. */
-        if (s_display_blanked && just_pressed)
+        /* Phase 1 wake: require HOME held for CONFIG_AKIRA_WAIT_WAKE_HOLD_MS.
+         * A plain tap is ignored — prevents accidental wakes from pocket
+         * button contact.  We track level (btns), not edge (just_pressed),
+         * so a continuous hold is detected across loop iterations. */
+        static int64_t s_wake_hold_since_ms;
+        if (s_display_blanked)
         {
-            s_display_blanked = false;
-            wait_screen_exit();
-            home_screen_refresh();
-            k_sleep(K_MSEC(20));
-            continue;
+            bool home_now = !!(btns & BIT(AKIRA_BTN_HOME));
+            if (!home_now)
+            {
+                s_wake_hold_since_ms = 0;
+            }
+            else if (s_wake_hold_since_ms == 0)
+            {
+                s_wake_hold_since_ms = now_ms;
+            }
+            else if ((now_ms - s_wake_hold_since_ms) >=
+                     CONFIG_AKIRA_WAIT_WAKE_HOLD_MS)
+            {
+                s_wake_hold_since_ms = 0;
+                s_display_blanked = false;
+                wait_screen_exit();
+                home_screen_refresh();
+                s_prev_btns = akira_input_get_bitmask();
+                k_sleep(K_MSEC(20));
+                continue;
+            }
         }
 
         /* HOME long-press detection — works regardless of display owner */
@@ -520,10 +534,12 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 }
 
                 /* Idle wait-screen check */
+                static int64_t s_deep_sleep_arm_ms;
                 if (!s_display_blanked && s_display_timeout_ms > 0 &&
                     (now_ms - s_last_input_ms) >= s_display_timeout_ms)
                 {
                     s_display_blanked = true;
+                    s_deep_sleep_arm_ms = now_ms;
                     wait_screen_enter();
                     /* Drain button noise accumulated during wait_screen_enter's
                      * I2C + SPI flush.  Without this, the next loop iteration
@@ -531,6 +547,18 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                      * noise bits as a fresh edge, and immediately wakes. */
                     s_prev_btns = akira_input_get_bitmask();
                 }
+                if (!s_display_blanked)
+                {
+                    s_deep_sleep_arm_ms = 0;
+                }
+#ifdef CONFIG_AKIRA_POWER_DEEP_SLEEP
+                if (s_display_blanked && s_deep_sleep_arm_ms &&
+                    (now_ms - s_deep_sleep_arm_ms) >=
+                        (int64_t)CONFIG_AKIRA_DEEP_SLEEP_IDLE_S * 1000)
+                {
+                    wait_screen_prepare_deep_sleep(); /* does not return */
+                }
+#endif
             }
 
             /* Re-read the idle timeout the instant the user leaves settings.

@@ -12,7 +12,7 @@
  *
  * Called by akira_os_shell.c when the console has been idle for
  * the configured idle timeout. Shows a live clock, battery level,
- * and dims the backlight. Any button press exits back to home.
+ * and dims the backlight. Hold HOME to exit back to home.
  */
 
 /** Enter wait screen: dim display, enable low-power mode, draw first frame. */
@@ -23,5 +23,11 @@ void wait_screen_update(void);
 
 /** Exit wait screen: restore brightness and disable low-power mode. */
 void wait_screen_exit(void);
+
+/**
+ * Blank display, configure HOME GPIO as wakeup source, and enter deep sleep.
+ * Only compiled when CONFIG_AKIRA_POWER_DEEP_SLEEP=y.  Does not return.
+ */
+void wait_screen_prepare_deep_sleep(void);
 
 #endif /* WAIT_SCREEN_H */

@@ -29,6 +29,13 @@ LOG_MODULE_REGISTER(akira_wait_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include <lib/akira_time.h>
 #include <drivers/platform_hal.h>
 
+#if defined(CONFIG_DISPLAY)
+#include <zephyr/drivers/display.h>
+#endif
+#if defined(CONFIG_AKIRA_POWER_DEEP_SLEEP)
+#include <zephyr/drivers/gpio.h>
+#endif
+
 #ifdef CONFIG_AKIRA_SETTINGS
 #include <settings/settings.h>
 #endif
@@ -114,7 +121,7 @@ static void draw_frame(void)
         draw_centred_small(130, batt_str, C_DKGRAY);
     }
 
-    draw_centred_small(220, "Press any button to wake", C_DKGRAY);
+    draw_centred_small(220, "Hold HOME to wake", C_DKGRAY);
 
     akira_display_flush();
 }
@@ -212,4 +219,27 @@ void wait_screen_exit(void)
 #endif
 
     LOG_INF("Wait screen exited");
+}
+
+void wait_screen_prepare_deep_sleep(void)
+{
+#if defined(CONFIG_DISPLAY)
+    const struct device *disp = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
+    if (device_is_ready(disp)) {
+        display_blanking_on(disp);
+    }
+#endif
+
+#ifdef CONFIG_AKIRA_POWER_DEEP_SLEEP
+    /* Configure HOME button (GPIO0, active-low) as level wakeup source.
+     * Zephyr's ESP32 GPIO driver calls rtc_gpio_wakeup_enable() for level
+     * triggers on RTC-capable GPIOs, enabling wakeup from deep sleep. */
+    static const struct gpio_dt_spec home_gpio =
+        GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
+    if (device_is_ready(home_gpio.port)) {
+        gpio_pin_interrupt_configure_dt(&home_gpio, GPIO_INT_LEVEL_ACTIVE);
+    }
+    akira_pm_set_mode(POWER_MODE_DEEP_SLEEP);
+#endif
+    LOG_INF("Deep sleep entered");
 }
