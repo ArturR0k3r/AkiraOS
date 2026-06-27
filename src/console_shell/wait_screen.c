@@ -48,8 +48,10 @@ LOG_MODULE_REGISTER(akira_wait_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include <drivers/power/power_manager.h>
 #endif
 
-/* Brightness level used while wait screen is active (30% of full range). */
-#define WAIT_BRIGHT_PCT 30
+/* Brightness level while wait screen is active.
+ * 10% is the lowest readable level on backlit TFT panels; Sharp reflective
+ * displays need no backlight at all but the same value is applied harmlessly. */
+#define WAIT_BRIGHT_PCT 10
 
 static uint8_t s_saved_brightness = 255; /* restored on exit */
 

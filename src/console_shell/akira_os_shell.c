@@ -407,12 +407,11 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
         uint32_t just_pressed = btns & ~s_prev_btns;
         s_prev_btns = btns;
 
-        /* Reset the idle timer on real press edges (just_pressed), NOT the raw
-         * level (btns).  A press can leave a stale bit set in g_btn_state that
-         * persists for many ticks; a level check would then reset the timer
-         * every tick forever, so the wait screen would never re-arm after the
-         * first wake.  Same edge-vs-level reasoning as the wake path below. */
-        if (just_pressed)
+        /* Reset the idle timer on real press edges, but only while the screen
+         * is awake.  Presses during sleep must not reset the timer — otherwise
+         * tapping while on the wait screen would re-arm the idle countdown
+         * (harmless today but semantically wrong and could mask future bugs). */
+        if (just_pressed && !s_display_blanked)
         {
             s_last_input_ms = now_ms;
         }
@@ -438,6 +437,12 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             {
                 s_wake_hold_since_ms = 0;
                 s_display_blanked = false;
+                /* Suppress the HOME long-press that is currently in progress:
+                 * the hold used to wake must not also fire CMD_GO_HOME.
+                 * Mark it as already fired so the detector ignores it until
+                 * the user releases and re-presses. */
+                s_home_held_since_ms = 0;
+                s_home_fired = true;
                 wait_screen_exit();
                 home_screen_refresh();
                 s_prev_btns = akira_input_get_bitmask();
@@ -446,8 +451,9 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             }
         }
 
-        /* HOME long-press detection — works regardless of display owner */
-        bool home_held = !!(btns & BIT(AKIRA_BTN_HOME));
+        /* HOME long-press detection — only while awake (sleep has its own
+         * wake-hold path above that already consumes the button press). */
+        bool home_held = !!(btns & BIT(AKIRA_BTN_HOME)) && !s_display_blanked;
         if (!home_held)
         {
             s_home_held_since_ms = 0;
@@ -468,8 +474,10 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 
         if (!g_wasm_active)
         {
-            /* s_prev_btns and just_pressed already computed at loop top. */
-            if (just_pressed)
+            /* s_prev_btns and just_pressed already computed at loop top.
+             * Guard with !s_display_blanked: keys must not reach the home or
+             * settings screen while the sleep screen is up. */
+            if (just_pressed && !s_display_blanked)
             {
                 static const char *const btn_names[] = {
                     [AKIRA_BTN_HOME] = "HOME",
