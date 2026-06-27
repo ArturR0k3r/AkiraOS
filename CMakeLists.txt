@@ -650,6 +650,7 @@ endif()
 # Date/time shell command — always include when Zephyr shell is enabled
 if(CONFIG_SHELL)
     target_sources(app PRIVATE src/shell/shell_date.c)
+    target_sources(app PRIVATE src/shell/shell_power.c)
 endif()
 
 # Bluetooth manager — needed by both HID mode and BLE app API mode
