@@ -132,7 +132,7 @@ static int cmd_power_timeout(const struct shell *sh, size_t argc, char **argv)
         snprintf(sv, sizeof(sv), "%d", s);
         akira_settings_set("akira/display/timeout_en", "1", 0);
         akira_settings_set("akira/display/timeout_s", sv, 0);
-        shell_print(sh, "Idle timeout set to %d s (takes effect within 1 s)", s);
+        shell_print(sh, "Idle timeout set to %d s (active within 1 s, no reboot needed)", s);
     }
 #else
     shell_error(sh, "NVS settings not available — recompile with CONFIG_AKIRA_SETTINGS=y");

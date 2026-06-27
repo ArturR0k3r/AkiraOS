@@ -541,6 +541,38 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                     home_screen_update_status();
                 }
 
+                /* Re-read idle timeout every second so shell 'power timeout'
+                 * and settings changes take effect without a reboot. */
+#ifdef CONFIG_AKIRA_SETTINGS
+                if (!s_display_blanked)
+                {
+                    bool _en = true;
+                    char _sv[16] = "";
+                    if (!akira_settings_get("akira/display/timeout_en",
+                                            _sv, sizeof(_sv)))
+                        _en = (atoi(_sv) != 0);
+                    if (!_en)
+                    {
+                        s_display_timeout_ms = 0;
+                    }
+                    else
+                    {
+                        memset(_sv, 0, sizeof(_sv));
+                        if (!akira_settings_get("akira/display/timeout_s",
+                                                _sv, sizeof(_sv)))
+                        {
+                            int t = atoi(_sv);
+                            s_display_timeout_ms =
+                                (t > 0) ? (int64_t)t * 1000 : 0;
+                        }
+                        else
+                        {
+                            s_display_timeout_ms = 60000;
+                        }
+                    }
+                }
+#endif
+
                 /* Idle wait-screen check */
                 static int64_t s_deep_sleep_arm_ms;
                 if (!s_display_blanked && s_display_timeout_ms > 0 &&
@@ -569,44 +601,9 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 #endif
             }
 
-            /* Re-read the idle timeout the instant the user leaves settings.
-             * Done every iteration (not inside the 1 s tick) so a quick
-             * in-and-out can't miss the active->inactive edge.  The NVS read
-             * only runs on that transition, so it won't flood the log. */
-#ifdef CONFIG_AKIRA_SETTINGS
-            {
-                static bool s_settings_was_active;
-                bool _settings_now = settings_screen_is_active();
-                if (s_settings_was_active && !_settings_now)
-                {
-                    bool en = true;
-                    char _sv[16] = "";
-                    if (!akira_settings_get("akira/display/timeout_en",
-                                            _sv, sizeof(_sv)))
-                        en = (atoi(_sv) != 0);
-                    if (en)
-                    {
-                        memset(_sv, 0, sizeof(_sv));
-                        if (!akira_settings_get("akira/display/timeout_s",
-                                                _sv, sizeof(_sv)))
-                        {
-                            int t = atoi(_sv);
-                            s_display_timeout_ms =
-                                (t > 0) ? (int64_t)t * 1000 : 0;
-                        }
-                        else
-                        {
-                            s_display_timeout_ms = 60000;
-                        }
-                    }
-                    else
-                    {
-                        s_display_timeout_ms = 0;
-                    }
-                }
-                s_settings_was_active = _settings_now;
-            }
-#endif
+            /* Timeout is re-read from NVS in the 1-second tick above, so
+             * settings and shell changes take effect within 1 s automatically.
+             * No extra per-frame re-read needed here. */
 
             k_sleep(K_MSEC(20));
         }
