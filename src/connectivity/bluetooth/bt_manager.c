@@ -396,8 +396,8 @@ int bt_manager_start_advertising(void)
 
     struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
         BT_LE_ADV_OPT_CONN,
-        BT_GAP_ADV_FAST_INT_MIN_2,
-        BT_GAP_ADV_FAST_INT_MAX_2,
+        BT_GAP_ADV_SLOW_INT_MIN,
+        BT_GAP_ADV_SLOW_INT_MAX,
         NULL);
 
     struct bt_data sd[] = {
@@ -588,8 +588,8 @@ int bt_manager_start_advertising_custom(const uint8_t svc_uuid128[16])
 
     struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
         BT_LE_ADV_OPT_CONN,
-        BT_GAP_ADV_FAST_INT_MIN_2,
-        BT_GAP_ADV_FAST_INT_MAX_2,
+        BT_GAP_ADV_SLOW_INT_MIN,
+        BT_GAP_ADV_SLOW_INT_MAX,
         NULL);
 
     /* Flags only in advert payload — keeps it minimal */

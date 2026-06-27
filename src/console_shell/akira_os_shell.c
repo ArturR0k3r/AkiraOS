@@ -366,7 +366,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
     static bool s_home_fired;            /* true = fired this press, wait for release */
 
     /* Screen idle wait — load timeout from settings (0 = disabled) */
-    int64_t s_display_timeout_ms = 180000; /* default 3 min */
+    int64_t s_display_timeout_ms = 60000; /* default 60 s — keeps battery healthy out of box */
 #ifdef CONFIG_AKIRA_SETTINGS
     {
         bool en = true;
@@ -383,8 +383,8 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             }
             else
             {
-                /* Key not set yet — keep 180 s default */
-                s_display_timeout_ms = 180000;
+                /* Key not set yet — use 60 s default */
+                s_display_timeout_ms = 60000;
             }
         }
         else
@@ -596,7 +596,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                         }
                         else
                         {
-                            s_display_timeout_ms = 180000;
+                            s_display_timeout_ms = 60000;
                         }
                     }
                     else

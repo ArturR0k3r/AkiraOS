@@ -48,10 +48,15 @@ LOG_MODULE_REGISTER(akira_wait_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include <drivers/power/power_manager.h>
 #endif
 
-/* Brightness level while wait screen is active.
- * 10% is the lowest readable level on backlit TFT panels; Sharp reflective
- * displays need no backlight at all but the same value is applied harmlessly. */
+/* Phase 1 backlight level.
+ * Sharp LS0XX is a reflective memory display — it holds the image without power
+ * and is readable in ambient light, so we cut the backlight completely.
+ * Backlit TFT panels need a minimum ~10% to remain visible in dim conditions. */
+#if defined(CONFIG_LS0XX)
+#define WAIT_BRIGHT_PCT 0
+#else
 #define WAIT_BRIGHT_PCT 10
+#endif
 
 static uint8_t s_saved_brightness = 255; /* restored on exit */
 
