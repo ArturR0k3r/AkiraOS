@@ -49,6 +49,7 @@ static struct
 #if BT_AVAILABLE
     struct bt_conn *current_conn;
     struct k_work_delayable reconnect_work;
+    struct k_work_delayable adv_slow_work; /**< switches advertising to slow interval after 30 s */
 #endif
 
     bt_event_callback_t event_cb;
@@ -80,12 +81,15 @@ static void notify_event(bt_event_t event, void *data)
 static void reconnect_work_handler(struct k_work *work)
 {
     LOG_INF("Restarting advertising after disconnect delay");
-    
+
     if (bt_mgr.config.auto_advertise && bt_mgr.state == BT_STATE_READY)
     {
         bt_manager_start_advertising();
     }
 }
+
+/* Forward declaration — ad[] is defined later in this file after the callbacks. */
+static const struct bt_data ad[];
 
 static void connected_cb(struct bt_conn *conn, uint8_t err)
 {
@@ -99,6 +103,7 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     bt_mgr.current_conn = bt_conn_ref(conn);
     bt_mgr.state = BT_STATE_CONNECTED;
     bt_mgr.stats.connections++;
+    k_work_cancel_delayable(&bt_mgr.adv_slow_work);
 
     char addr[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
@@ -273,6 +278,35 @@ static const struct bt_data ad[] = {
 #endif
 };
 
+/* Fires 30 s after advertising starts — switches to slow interval to save
+ * power while remaining discoverable.  Fast interval kept for the first 30 s
+ * so pairing from a phone is snappy out of the box. */
+static void adv_slow_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    if (bt_mgr.state != BT_STATE_ADVERTISING)
+    {
+        return;
+    }
+    LOG_INF("BLE: switching to low-power advertising interval");
+
+    static const struct bt_le_adv_param slow = BT_LE_ADV_PARAM_INIT(
+        BT_LE_ADV_OPT_CONN,
+        BT_GAP_ADV_SLOW_INT_MIN,
+        BT_GAP_ADV_SLOW_INT_MAX,
+        NULL);
+
+    struct bt_data sd = BT_DATA(BT_DATA_NAME_COMPLETE,
+                                bt_mgr.config.device_name,
+                                strlen(bt_mgr.config.device_name));
+    bt_le_adv_stop();
+    int err = bt_le_adv_start(&slow, ad, ARRAY_SIZE(ad), &sd, 1);
+    if (err && err != -EALREADY)
+    {
+        LOG_WRN("BLE slow-adv restart failed (%d)", err);
+    }
+}
+
 #endif /* BT_AVAILABLE */
 
 /*===========================================================================*/
@@ -309,8 +343,8 @@ int bt_manager_init(const bt_config_t *config)
     bt_mgr.state = BT_STATE_INITIALIZING;
 
 #if BT_AVAILABLE
-    /* Initialize delayed work for reconnection */
     k_work_init_delayable(&bt_mgr.reconnect_work, reconnect_work_handler);
+    k_work_init_delayable(&bt_mgr.adv_slow_work, adv_slow_work_handler);
 
 #if defined(CONFIG_AKIRA_BT_ECHO)
     bt_echo_init();
@@ -394,10 +428,12 @@ int bt_manager_start_advertising(void)
         return -EBUSY;
     }
 
+    /* Fast intervals for first 30 s so pairing is snappy.
+     * adv_slow_work switches to 1000-1200 ms after that to save power. */
     struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
         BT_LE_ADV_OPT_CONN,
-        BT_GAP_ADV_SLOW_INT_MIN,
-        BT_GAP_ADV_SLOW_INT_MAX,
+        BT_GAP_ADV_FAST_INT_MIN_2,
+        BT_GAP_ADV_FAST_INT_MAX_2,
         NULL);
 
     struct bt_data sd[] = {
@@ -406,7 +442,8 @@ int bt_manager_start_advertising(void)
     };
 
     int err = bt_le_adv_start(&adv_param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
-    if(err == -EALREADY){
+    if (err == -EALREADY)
+    {
         LOG_INF("BT already advertising!");
         return err;
     }
@@ -417,7 +454,8 @@ int bt_manager_start_advertising(void)
     }
 
     bt_mgr.state = BT_STATE_ADVERTISING;
-    LOG_INF("Bluetooth advertising started");
+    k_work_schedule(&bt_mgr.adv_slow_work, K_SECONDS(30));
+    LOG_INF("BLE advertising started (fast -> slow in 30 s)");
     return 0;
 #else
     LOG_INF("Bluetooth advertising (simulated)");
@@ -431,6 +469,7 @@ int bt_manager_stop_advertising(void)
 #if BT_AVAILABLE
     if (bt_mgr.state == BT_STATE_ADVERTISING)
     {
+        k_work_cancel_delayable(&bt_mgr.adv_slow_work);
         bt_le_adv_stop();
         bt_mgr.state = BT_STATE_READY;
         LOG_INF("Bluetooth advertising stopped");
@@ -588,8 +627,8 @@ int bt_manager_start_advertising_custom(const uint8_t svc_uuid128[16])
 
     struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
         BT_LE_ADV_OPT_CONN,
-        BT_GAP_ADV_SLOW_INT_MIN,
-        BT_GAP_ADV_SLOW_INT_MAX,
+        BT_GAP_ADV_FAST_INT_MIN_2,
+        BT_GAP_ADV_FAST_INT_MAX_2,
         NULL);
 
     /* Flags only in advert payload — keeps it minimal */
@@ -622,7 +661,8 @@ int bt_manager_start_advertising_custom(const uint8_t svc_uuid128[16])
     }
 
     bt_mgr.state = BT_STATE_ADVERTISING;
-    LOG_INF("BLE app advertising started");
+    k_work_schedule(&bt_mgr.adv_slow_work, K_SECONDS(30));
+    LOG_INF("BLE app advertising started (fast -> slow in 30 s)");
     return 0;
 #else
     bt_mgr.state = BT_STATE_ADVERTISING;
