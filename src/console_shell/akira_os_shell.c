@@ -62,6 +62,28 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 #ifdef CONFIG_AKIRA_SETTINGS
 #include <settings/settings.h>
 #endif
+#if defined(CONFIG_AKIRA_USB)
+#include <connectivity/usb/usb_manager.h>
+#endif
+#if defined(CONFIG_BT)
+#include <connectivity/bluetooth/bt_manager.h>
+#endif
+
+/* True while a host management session is active over USB or BLE.  Deep sleep
+ * powers down both the USB peripheral and the BT controller, so the device must
+ * stay awake while either link is up — otherwise the web app's connection drops
+ * out from under it.  Used to inhibit the wait-screen and deep-sleep paths. */
+static bool host_session_active(void)
+{
+    bool active = false;
+#if defined(CONFIG_AKIRA_USB)
+    active = active || usb_manager_is_configured();
+#endif
+#if defined(CONFIG_BT)
+    active = active || bt_manager_is_connected();
+#endif
+    return active;
+}
 
 typedef enum
 {
@@ -574,6 +596,22 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 }
 #endif
 
+                /* Keep awake while a USB/BLE host session is active: treat the
+                 * live link as continuous input so the wait screen never
+                 * engages, and if a host connects while already blanked, wake
+                 * the device so the radios stay powered. */
+                if (host_session_active())
+                {
+                    s_last_input_ms = now_ms;
+                    if (s_display_blanked)
+                    {
+                        s_display_blanked = false;
+                        wait_screen_exit();
+                        home_screen_refresh();
+                        s_prev_btns = akira_input_get_bitmask();
+                    }
+                }
+
                 /* Idle wait-screen check */
                 static int64_t s_deep_sleep_arm_ms;
                 if (!s_display_blanked && s_display_timeout_ms > 0 &&
@@ -594,6 +632,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 }
 #ifdef CONFIG_AKIRA_POWER_DEEP_SLEEP
                 if (s_display_blanked && s_deep_sleep_arm_ms &&
+                    !host_session_active() &&
                     (now_ms - s_deep_sleep_arm_ms) >=
                         (int64_t)CONFIG_AKIRA_DEEP_SLEEP_IDLE_S * 1000)
                 {
