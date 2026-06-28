@@ -16,7 +16,7 @@ LOG_MODULE_REGISTER(http_server, CONFIG_AKIRA_LOG_LEVEL);
 /* Configuration                                                             */
 /*===========================================================================*/
 
-#define MAX_ROUTES 16
+#define MAX_ROUTES 28
 #define MAX_WS_CLIENTS 4
 #define SERVER_THREAD_STACK_SIZE CONFIG_AKIRA_HTTP_SERVER_STACK_SIZE
 #define SERVER_THREAD_PRIORITY 7

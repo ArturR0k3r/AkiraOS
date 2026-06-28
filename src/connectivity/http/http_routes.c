@@ -18,6 +18,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/fs/fs.h>
 #include <zephyr/net/socket.h>
+#include <zephyr/sys/reboot.h>
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
@@ -30,6 +31,19 @@
 
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
 #include "ota/ota_manager.h"
+#define AKIRA_HTTP_OTA 1
+#endif
+
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+#include "drivers/power/power_manager.h"
+#endif
+
+#ifdef CONFIG_POWEROFF
+#include <zephyr/sys/poweroff.h>
+#endif
+
+#ifdef CONFIG_AKIRA_SETTINGS
+#include "settings/settings.h"
 #endif
 
 LOG_MODULE_REGISTER(http_routes, CONFIG_AKIRA_LOG_LEVEL);
@@ -796,6 +810,409 @@ static int route_options(const http_request_t *req, http_response_t *res,
 }
 
 /*===========================================================================*/
+/* Minimal JSON value extractor (string or bare number/bool token)           */
+/*===========================================================================*/
+
+static bool route_json_get(const char *json, const char *key,
+                           char *out, size_t out_len)
+{
+    if (!json)
+    {
+        return false;
+    }
+    char search[48];
+    snprintf(search, sizeof(search), "\"%s\":", key);
+    const char *p = strstr(json, search);
+    if (!p)
+    {
+        return false;
+    }
+    p += strlen(search);
+    while (*p == ' ')
+    {
+        p++;
+    }
+    size_t i = 0;
+    if (*p == '"')
+    {
+        p++;
+        while (*p && *p != '"' && i < out_len - 1)
+        {
+            out[i++] = *p++;
+        }
+    }
+    else
+    {
+        while (*p && *p != ',' && *p != '}' && *p != ' ' && i < out_len - 1)
+        {
+            out[i++] = *p++;
+        }
+    }
+    out[i] = '\0';
+    return true;
+}
+
+/*===========================================================================*/
+/* GET /api/v1/telemetry — battery / environment snapshot                    */
+/*===========================================================================*/
+
+static int route_telemetry(const http_request_t *req, http_response_t *res,
+                           void *user_data)
+{
+    ARG_UNUSED(req);
+    ARG_UNUSED(user_data);
+
+    int pos = snprintf(s_route_buf, sizeof(s_route_buf), "{");
+
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+    akira_battery_status_t bs;
+    if (akira_pm_get_battery_status(&bs) == 0)
+    {
+        pos += snprintf(s_route_buf + pos, sizeof(s_route_buf) - pos,
+                        "\"battery_pct\":%u,\"battery_mv\":%d,"
+                        "\"current_ma\":%d,\"charging\":%s",
+                        bs.level_percent, bs.voltage_mv, bs.current_ma,
+                        bs.charging ? "true" : "false");
+    }
+#endif
+
+    snprintf(s_route_buf + pos, sizeof(s_route_buf) - pos, "}");
+
+    res->status_code = 200;
+    res->content_type = HTTP_CONTENT_JSON;
+    res->body = s_route_buf;
+    return 0;
+}
+
+/*===========================================================================*/
+/* POST /api/v1/power — {"action":"reboot|sleep|poweroff"}                    */
+/*                                                                           */
+/* The action is deferred to a work item so the HTTP response is flushed     */
+/* before the device tears down the link.                                    */
+/*===========================================================================*/
+
+enum power_req
+{
+    POWER_REQ_NONE = 0,
+    POWER_REQ_REBOOT,
+    POWER_REQ_SLEEP,
+    POWER_REQ_POWEROFF,
+};
+static enum power_req s_power_req;
+
+static void power_action_work_fn(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    switch (s_power_req)
+    {
+    case POWER_REQ_REBOOT:
+        sys_reboot(SYS_REBOOT_COLD);
+        break;
+    case POWER_REQ_SLEEP:
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+        akira_pm_set_mode(POWER_MODE_DEEP_SLEEP);
+#endif
+        break;
+    case POWER_REQ_POWEROFF:
+#ifdef CONFIG_POWEROFF
+        sys_poweroff();
+#else
+        sys_reboot(SYS_REBOOT_COLD);
+#endif
+        break;
+    default:
+        break;
+    }
+}
+static K_WORK_DELAYABLE_DEFINE(s_power_work, power_action_work_fn);
+
+static int route_power(const http_request_t *req, http_response_t *res,
+                       void *user_data)
+{
+    ARG_UNUSED(user_data);
+
+    char action[16] = {0};
+    route_json_get(req->body, "action", action, sizeof(action));
+
+    enum power_req r = POWER_REQ_NONE;
+    if (strcmp(action, "reboot") == 0)
+    {
+        r = POWER_REQ_REBOOT;
+    }
+    else if (strcmp(action, "sleep") == 0)
+    {
+        r = POWER_REQ_SLEEP;
+    }
+    else if (strcmp(action, "poweroff") == 0)
+    {
+        r = POWER_REQ_POWEROFF;
+    }
+
+    if (r == POWER_REQ_NONE)
+    {
+        res->status_code = 400;
+        res->content_type = HTTP_CONTENT_JSON;
+        res->body = "{\"error\":\"action must be reboot|sleep|poweroff\"}";
+        return 0;
+    }
+
+    s_power_req = r;
+    /* 300 ms gives http_server.c time to write the response and close. */
+    k_work_schedule(&s_power_work, K_MSEC(300));
+
+    snprintf(s_route_buf, sizeof(s_route_buf),
+             "{\"status\":\"scheduled\",\"action\":\"%s\"}", action);
+    res->status_code = 200;
+    res->content_type = HTTP_CONTENT_JSON;
+    res->body = s_route_buf;
+    return 0;
+}
+
+/*===========================================================================*/
+/* GET /api/v1/settings  and  PUT /api/v1/settings                           */
+/*                                                                           */
+/* Exposes the real NVS-backed device settings used by the OS shell.         */
+/*===========================================================================*/
+
+#ifdef CONFIG_AKIRA_SETTINGS
+
+/* Settings surfaced over the API: NVS key <-> JSON field. */
+static const struct
+{
+    const char *key;  /* NVS key             */
+    const char *json; /* JSON field name     */
+} k_api_settings[] = {
+    {"akira/display/brightness", "display_brightness"},
+    {"akira/display/timeout_en", "display_timeout_en"},
+    {"akira/display/timeout_s", "display_timeout_s"},
+    {"akira/power/dispoff_s", "power_dispoff_s"},
+    {"akira/power/sleep_s", "power_sleep_s"},
+    {"akira/devmode/enabled", "devmode_enabled"},
+};
+
+static int route_settings_get(const http_request_t *req, http_response_t *res,
+                              void *user_data)
+{
+    ARG_UNUSED(req);
+    ARG_UNUSED(user_data);
+
+    int pos = snprintf(s_route_buf, sizeof(s_route_buf), "{");
+    bool first = true;
+    char val[32];
+    for (size_t i = 0; i < ARRAY_SIZE(k_api_settings); i++)
+    {
+        if (akira_settings_get(k_api_settings[i].key, val, sizeof(val)) != 0)
+        {
+            continue;
+        }
+        pos += snprintf(s_route_buf + pos, sizeof(s_route_buf) - pos,
+                        "%s\"%s\":\"%s\"", first ? "" : ",",
+                        k_api_settings[i].json, val);
+        first = false;
+    }
+    snprintf(s_route_buf + pos, sizeof(s_route_buf) - pos, "}");
+
+    res->status_code = 200;
+    res->content_type = HTTP_CONTENT_JSON;
+    res->body = s_route_buf;
+    return 0;
+}
+
+static int route_settings_put(const http_request_t *req, http_response_t *res,
+                              void *user_data)
+{
+    ARG_UNUSED(user_data);
+
+    int written = 0;
+    char val[32];
+    for (size_t i = 0; i < ARRAY_SIZE(k_api_settings); i++)
+    {
+        if (route_json_get(req->body, k_api_settings[i].json, val, sizeof(val)))
+        {
+            if (akira_settings_set(k_api_settings[i].key, val, 0) == 0)
+            {
+                written++;
+            }
+        }
+    }
+
+    snprintf(s_route_buf, sizeof(s_route_buf),
+             "{\"status\":\"ok\",\"updated\":%d}", written);
+    res->status_code = 200;
+    res->content_type = HTTP_CONTENT_JSON;
+    res->body = s_route_buf;
+    return 0;
+}
+#endif /* CONFIG_AKIRA_SETTINGS */
+
+/*===========================================================================*/
+/* OTA — GET /api/v1/ota/status, POST /api/v1/ota/upload, /api/v1/ota/confirm */
+/*===========================================================================*/
+
+#ifdef AKIRA_HTTP_OTA
+
+static const char *ota_state_to_api(enum ota_state st)
+{
+    switch (st)
+    {
+    case OTA_STATE_IDLE:
+        return "idle";
+    case OTA_STATE_COMPLETE:
+        return "pending_confirm";
+    case OTA_STATE_ERROR:
+        return "error";
+    default:
+        return "uploading";
+    }
+}
+
+static int route_ota_status(const http_request_t *req, http_response_t *res,
+                            void *user_data)
+{
+    ARG_UNUSED(req);
+    ARG_UNUSED(user_data);
+
+    const struct ota_progress *p = ota_get_progress();
+    snprintf(s_route_buf, sizeof(s_route_buf),
+             "{\"state\":\"%s\",\"percent\":%u,\"running_version\":\""
+             AKIRA_VERSION_STRING "\"}",
+             p ? ota_state_to_api(p->state) : "idle",
+             p ? p->percentage : 0);
+
+    res->status_code = 200;
+    res->content_type = HTTP_CONTENT_JSON;
+    res->body = s_route_buf;
+    return 0;
+}
+
+static int route_ota_upload(const http_request_t *req, http_response_t *res,
+                            void *user_data)
+{
+    ARG_UNUSED(user_data);
+
+    if (!route_check_auth(req))
+    {
+        res->status_code = 401;
+        res->content_type = HTTP_CONTENT_JSON;
+        res->body = "{\"error\":\"Unauthorized\"}";
+        return 0;
+    }
+
+    size_t content_length = req->content_length;
+    if (content_length == 0 || content_length > (2U * 1024U * 1024U))
+    {
+        res->status_code = 400;
+        res->content_type = HTTP_CONTENT_JSON;
+        res->body = "{\"error\":\"Invalid Content-Length\"}";
+        return 0;
+    }
+
+    if (ota_start_update(content_length) != OTA_OK)
+    {
+        res->status_code = 500;
+        res->content_type = HTTP_CONTENT_JSON;
+        res->body = "{\"error\":\"ota_start failed\"}";
+        return 0;
+    }
+
+    size_t total_received = 0;
+    if (req->body && req->body_len > 0)
+    {
+        if (ota_write_chunk((const uint8_t *)req->body, req->body_len) != OTA_OK)
+        {
+            ota_abort_update();
+            res->status_code = 500;
+            res->content_type = HTTP_CONTENT_JSON;
+            res->body = "{\"error\":\"chunk write failed\"}";
+            return 0;
+        }
+        total_received = req->body_len;
+    }
+
+    struct akira_buf *buf = akira_buf_alloc(K_MSEC(200));
+    if (!buf)
+    {
+        ota_abort_update();
+        res->status_code = 503;
+        res->content_type = HTTP_CONTENT_JSON;
+        res->body = "{\"error\":\"Server busy\"}";
+        return 0;
+    }
+
+    struct timeval tv = {.tv_sec = 60, .tv_usec = 0};
+    setsockopt(req->client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    while (total_received < content_length)
+    {
+        akira_buf_reset(buf);
+        size_t want = MIN(AKIRA_BUF_SIZE, content_length - total_received);
+        ssize_t got = recv(req->client_fd, buf->data, want, 0);
+        if (got <= 0)
+        {
+            akira_buf_unref(buf);
+            ota_abort_update();
+            res->status_code = 500;
+            res->content_type = HTTP_CONTENT_JSON;
+            res->body = "{\"error\":\"Upload incomplete\"}";
+            return 0;
+        }
+        akira_buf_add_len(buf, got);
+        if (ota_write_chunk(buf->data, buf->len) != OTA_OK)
+        {
+            akira_buf_unref(buf);
+            ota_abort_update();
+            res->status_code = 500;
+            res->content_type = HTTP_CONTENT_JSON;
+            res->body = "{\"error\":\"chunk write failed\"}";
+            return 0;
+        }
+        total_received += got;
+        k_yield();
+    }
+    akira_buf_unref(buf);
+
+    if (ota_finalize_update() != OTA_OK)
+    {
+        res->status_code = 500;
+        res->content_type = HTTP_CONTENT_JSON;
+        res->body = "{\"error\":\"ota_finalize failed\"}";
+        return 0;
+    }
+
+    res->status_code = 200;
+    res->content_type = HTTP_CONTENT_JSON;
+    res->body = "{\"status\":\"uploaded\",\"state\":\"pending_confirm\"}";
+    return 0;
+}
+
+static int route_ota_confirm(const http_request_t *req, http_response_t *res,
+                             void *user_data)
+{
+    ARG_UNUSED(req);
+    ARG_UNUSED(user_data);
+
+    enum ota_result r = ota_confirm_firmware();
+    if (r != OTA_OK)
+    {
+        snprintf(s_route_buf, sizeof(s_route_buf),
+                 "{\"error\":\"confirm failed: %d\"}", (int)r);
+        res->status_code = 500;
+        res->content_type = HTTP_CONTENT_JSON;
+        res->body = s_route_buf;
+        return 0;
+    }
+
+    /* Apply by rebooting into the confirmed image shortly after replying. */
+    ota_reboot_to_apply_update(300);
+
+    res->status_code = 200;
+    res->content_type = HTTP_CONTENT_JSON;
+    res->body = "{\"status\":\"applied\"}";
+    return 0;
+}
+#endif /* AKIRA_HTTP_OTA */
+
+/*===========================================================================*/
 /* Route table                                                               */
 /*===========================================================================*/
 
@@ -810,6 +1227,18 @@ int akira_http_routes_init(void)
         {HTTP_POST, "/api/v1/apps/start", route_app_start, NULL},
         {HTTP_POST, "/api/v1/apps/stop", route_app_stop, NULL},
         {HTTP_DELETE, "/api/v1/apps", route_app_delete, NULL},
+        /* Command centre: telemetry, power, settings, OTA */
+        {HTTP_GET, "/api/v1/telemetry", route_telemetry, NULL},
+        {HTTP_POST, "/api/v1/power", route_power, NULL},
+#ifdef CONFIG_AKIRA_SETTINGS
+        {HTTP_GET, "/api/v1/settings", route_settings_get, NULL},
+        {HTTP_PUT, "/api/v1/settings", route_settings_put, NULL},
+#endif
+#ifdef AKIRA_HTTP_OTA
+        {HTTP_GET, "/api/v1/ota/status", route_ota_status, NULL},
+        {HTTP_POST, "/api/v1/ota/upload", route_ota_upload, NULL},
+        {HTTP_POST, "/api/v1/ota/confirm", route_ota_confirm, NULL},
+#endif
         /* App + firmware upload */
 #if defined(CONFIG_AKIRA_HTTP_DEV_UPLOAD)
         {HTTP_POST, "/api/apps/install", route_app_install, NULL},
