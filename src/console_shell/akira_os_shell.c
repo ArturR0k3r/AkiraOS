@@ -596,7 +596,11 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                     (now_ms - s_deep_sleep_arm_ms) >=
                         (int64_t)CONFIG_AKIRA_DEEP_SLEEP_IDLE_S * 1000)
                 {
-                    wait_screen_prepare_deep_sleep(); /* does not return */
+                    wait_screen_prepare_deep_sleep(); /* normally does not return */
+                    /* If PM is a no-op (CONFIG_PM=n) the call returns.  Re-arm
+                     * so we don't hammer it every second — wait another full
+                     * delay before trying again. */
+                    s_deep_sleep_arm_ms = now_ms;
                 }
 #endif
             }

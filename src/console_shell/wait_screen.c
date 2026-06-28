@@ -37,7 +37,13 @@ LOG_MODULE_REGISTER(akira_wait_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/drivers/display.h>
 #endif
 #if defined(CONFIG_AKIRA_POWER_DEEP_SLEEP)
-#include <zephyr/drivers/gpio.h>
+#if defined(CONFIG_SOC_ESP32S3)
+/* CONFIG_POWEROFF=y compiles sleep_gpio/event/console/modem/cpu so that
+ * sleep_modes.c (always built) can resolve its own symbol references.
+ * sys_poweroff() → z_sys_poweroff() → esp_deep_sleep_start(). */
+#include <zephyr/sys/poweroff.h>
+#include <esp_sleep.h>
+#endif
 #endif
 
 #ifdef CONFIG_AKIRA_SETTINGS
@@ -188,7 +194,10 @@ void wait_screen_exit(void)
 
 void wait_screen_prepare_deep_sleep(void)
 {
-#if defined(CONFIG_DISPLAY)
+    /* Blank backlit displays before cutting power.
+     * Sharp LS0XX is a bistable reflective display — it holds the image
+     * without power and does not support display_blanking_on(). Skip it. */
+#if defined(CONFIG_DISPLAY) && !defined(CONFIG_LS0XX)
     const struct device *disp = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
     if (device_is_ready(disp)) {
         display_blanking_on(disp);
@@ -196,15 +205,16 @@ void wait_screen_prepare_deep_sleep(void)
 #endif
 
 #ifdef CONFIG_AKIRA_POWER_DEEP_SLEEP
-    /* Configure HOME button (GPIO0, active-low) as level wakeup source.
-     * Zephyr's ESP32 GPIO driver calls rtc_gpio_wakeup_enable() for level
-     * triggers on RTC-capable GPIOs, enabling wakeup from deep sleep. */
-    static const struct gpio_dt_spec home_gpio =
-        GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
-    if (device_is_ready(home_gpio.port)) {
-        gpio_pin_interrupt_configure_dt(&home_gpio, GPIO_INT_LEVEL_ACTIVE);
-    }
+#if defined(CONFIG_SOC_ESP32S3)
+    /* ESP32-S3: ext0 wakeup on GPIO0 (HOME button, active-low, pull-up).
+     * Button pressed = GPIO0 LOW → level = 0.
+     * sys_poweroff() → z_sys_poweroff() → esp_deep_sleep_start(). */
+    esp_sleep_enable_ext0_wakeup(0 /* GPIO_NUM_0 */, 0 /* level LOW */);
+    LOG_INF("Deep sleep — wake on GPIO0 LOW (HOME button)");
+    sys_poweroff();
+#else
     akira_pm_set_mode(POWER_MODE_DEEP_SLEEP);
-#endif
     LOG_INF("Deep sleep entered");
+#endif
+#endif
 }
