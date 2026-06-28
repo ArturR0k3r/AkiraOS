@@ -48,6 +48,19 @@
 	cs-gpios = <&tca6408 3 GPIO_ACTIVE_LOW>;  // CC_CS → TCA6408 P3
 };
 
+// TS3USB221 (U21) USB data mux select. Per the KiCad-netlist-verified TCA6408
+// pin map (board DTS): P0 = USB_SEL. Drive it at boot to route the USB-C J2
+// D+/D- pair to the ESP32-S3 native USB-OTG controller (GPIO19/20) that carries
+// the WebHID interface — without this the host never sees the HID device.
+// usb_manager_enable() drives this via GPIO_DT_SPEC_GET(zephyr_user, ...).
+// VERIFY polarity on hardware: if HID still does not enumerate, flip the flag
+// here between GPIO_ACTIVE_HIGH and GPIO_ACTIVE_LOW.
+/ {
+	zephyr,user {
+		usb-mux-sel-gpios = <&tca6408 0 GPIO_ACTIVE_HIGH>;  // USB_SEL → TCA6408 P0
+	};
+};
+
 #endif /* !CONFIG_MCUBOOT */
 
 // =============================================================================

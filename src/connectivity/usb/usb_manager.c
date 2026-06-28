@@ -7,11 +7,48 @@
 #include <zephyr/kernel.h>
 #include <zephyr/usb/usbd.h>
 #include <zephyr/usb/usbd_msg.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
 #include <errno.h>
 #include <string.h>
 
 LOG_MODULE_REGISTER(usb_manager, CONFIG_LOG_DEFAULT_LEVEL);
+
+/*
+ * TS3USB221 (U21) USB data-mux select — routes the USB-C J2 D+/D- pair to the
+ * ESP32-S3 native USB-OTG controller (which carries the WebHID interface).
+ * Defined as zephyr,user/usb-mux-sel-gpios in the board overlay (TCA6408 P0).
+ * Optional: if the property is absent (e.g. dev board), the mux is left as-is.
+ */
+#define USB_MUX_NODE DT_PATH(zephyr_user)
+#if DT_NODE_EXISTS(USB_MUX_NODE) && DT_NODE_HAS_PROP(USB_MUX_NODE, usb_mux_sel_gpios)
+#define HAVE_USB_MUX_SEL 1
+static const struct gpio_dt_spec usb_mux_sel =
+    GPIO_DT_SPEC_GET(USB_MUX_NODE, usb_mux_sel_gpios);
+#endif
+
+/**
+ * @brief Route the USB-C data lines to the native USB-OTG controller.
+ *
+ * The board multiplexes the USB-C connector between the ESP32-S3 native USB
+ * (HID) and an alternate path; without selecting the native path the host never
+ * enumerates the HID device. Drives the mux to its active level (see overlay).
+ */
+static void usb_manager_select_native_mux(void)
+{
+#ifdef HAVE_USB_MUX_SEL
+    if (!gpio_is_ready_dt(&usb_mux_sel)) {
+        LOG_WRN("USB mux select GPIO not ready; leaving mux unchanged");
+        return;
+    }
+    int ret = gpio_pin_configure_dt(&usb_mux_sel, GPIO_OUTPUT_ACTIVE);
+    if (ret != 0) {
+        LOG_ERR("Failed to drive USB mux select: %d", ret);
+        return;
+    }
+    LOG_INF("USB data mux routed to native USB-OTG controller");
+#endif
+}
 
 /**
  * @brief Callback entry structure
@@ -173,10 +210,16 @@ USBD_DESC_PRODUCT_DEFINE(device_product, "AkiraConsole");
 
 static const uint8_t attributes = USB_SCD_SELF_POWERED | USB_SCD_REMOTE_WAKEUP;
 
+/* 4th arg is the configuration *string descriptor* node, not the config node.
+ * It was wrongly set to &fs_cfg_desc: usbd_add_configuration() then linked the
+ * config's sys_snode into the descriptor list (a node can only be in one list),
+ * so the real append to the configs list silently no-op'd and
+ * usbd_config_get(FS, 1) returned NULL → HID class registration failed -ENODATA.
+ * No config string descriptor is needed → NULL. */
 USBD_CONFIGURATION_DEFINE(fs_cfg_desc,
                           attributes,
-                          100, // 200 mA 
-                          &fs_cfg_desc);
+                          100, // 200 mA
+                          NULL);
 
 int usb_manager_init(void)
 {
@@ -355,7 +398,11 @@ int usb_manager_enable(void)
     }
     
     LOG_INF("Enabling USB device");
-    
+
+    /* Route the USB-C data lines to the native OTG controller before bringing
+     * the device up, so the host enumerates the HID interface. */
+    usb_manager_select_native_mux();
+
     ret = usbd_enable(usb_mgr_ctx.usbd_ctx);
     if (ret != 0) {
         LOG_ERR("Failed to enable USB device: %d", ret);
