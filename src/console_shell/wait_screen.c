@@ -11,16 +11,20 @@ LOG_MODULE_REGISTER(akira_wait_screen, CONFIG_AKIRA_LOG_LEVEL);
  * @file wait_screen.c
  * @brief Idle power-save screen for AkiraConsole.
  *
- * Fully static — drawn once on enter, never redrawn.
- * No CPU wakeups for clock ticks; battery is read once at entry.
+ * Shows a clock (time + date) over the AKIRA wordmark. Redrawn only when the
+ * minute changes — the shell thread already ticks wait_screen_update() once a
+ * second while blanked, so this adds no new CPU wakeups. After deep sleep the
+ * bistable Sharp panel holds the last-drawn frame without power.
  *
  * Layout (SCR_W × 240):
- *   y= 30   full-width hairline
- *   y= 96   "AKIRA"  large font, centred, white
- *   y=120   full-width hairline
- *   y=152   battery %  small, centred, dark-gray  (if available)
- *   y=200   full-width hairline
- *   y=213   "Hold HOME to wake"  small, centred, dark-gray
+ *   y= 26   full-width hairline
+ *   y= 42   "AKIRA"  large font, centred, white
+ *   y= 76   full-width hairline
+ *   y=104   "HH:MM"  large font, centred, white      (time)
+ *   y=140   "Sat 28 Jun 2026"  small, centred, gray  (date)
+ *   y=178   full-width hairline
+ *   y=192   battery %  small, centred, dark-gray      (if available)
+ *   y=214   "Hold HOME to wake"  small, centred, dark-gray
  */
 
 #include "wait_screen.h"
@@ -32,6 +36,8 @@ LOG_MODULE_REGISTER(akira_wait_screen, CONFIG_AKIRA_LOG_LEVEL);
 
 #include <api/akira_display_api.h>
 #include <drivers/platform_hal.h>
+#include <lib/akira_time.h>
+#include <stdlib.h>
 
 #if defined(CONFIG_DISPLAY)
 #include <zephyr/drivers/display.h>
@@ -65,6 +71,68 @@ LOG_MODULE_REGISTER(akira_wait_screen, CONFIG_AKIRA_LOG_LEVEL);
 #endif
 
 static uint8_t s_saved_brightness = 255; /* restored on exit */
+static int s_last_min = -1;              /* last drawn minute; -1 forces redraw */
+
+/* ------------------------------------------------------------------ */
+/* Local wall-clock decomposition                                      */
+/* ------------------------------------------------------------------ */
+
+struct wall_clock
+{
+    int year, mon, day, hour, min, wday; /* wday: 0=Sun .. 6=Sat */
+    bool valid;
+};
+
+static const char *const k_wday[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+static const char *const k_mon[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+static const int k_mdays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+/* Decompose the current local epoch into calendar fields (Gregorian). */
+static struct wall_clock wait_now(void)
+{
+    struct wall_clock wc = {0};
+    wc.valid = akira_time_is_set();
+
+    int64_t epoch = akira_time_get_epoch() + akira_time_get_tz_offset_s();
+    int64_t days = epoch / 86400;
+    int64_t rem = epoch % 86400;
+    if (rem < 0)
+    {
+        rem += 86400;
+        days--;
+    }
+
+    wc.hour = (int)(rem / 3600);
+    wc.min = (int)((rem % 3600) / 60);
+    /* 1970-01-01 was a Thursday (index 4). */
+    wc.wday = (int)(((days % 7) + 4 + 7) % 7);
+
+    int y = 1970;
+    while (1)
+    {
+        bool leap = (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0));
+        int ydays = leap ? 366 : 365;
+        if (days < ydays)
+            break;
+        days -= ydays;
+        y++;
+    }
+    bool leap = (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0));
+    int mo = 0;
+    while (mo < 11)
+    {
+        int md = (mo == 1 && leap) ? 29 : k_mdays[mo];
+        if (days < md)
+            break;
+        days -= md;
+        mo++;
+    }
+    wc.year = y;
+    wc.mon = mo;            /* 0-based */
+    wc.day = (int)days + 1;
+    return wc;
+}
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -88,11 +156,28 @@ static void draw_centred_large(int y, const char *s, uint16_t col)
     akira_display_text_large(x, y, s, col);
 }
 
-/* Drawn once on enter — never updated, no periodic CPU wakeup needed. */
+/* Redrawn on enter and whenever the minute changes (see wait_screen_update). */
 static void draw_frame(void)
 {
-    char batt_str[8] = "";
+    struct wall_clock wc = wait_now();
 
+    char time_str[8];
+    char date_str[20];
+    if (wc.valid)
+    {
+        snprintf(time_str, sizeof(time_str), "%02d:%02d", wc.hour, wc.min);
+        snprintf(date_str, sizeof(date_str), "%s %02d %s %04d",
+                 k_wday[wc.wday], wc.day, k_mon[wc.mon], wc.year);
+    }
+    else
+    {
+        /* Clock never set — show placeholders rather than a 1970 date. */
+        snprintf(time_str, sizeof(time_str), "--:--");
+        snprintf(date_str, sizeof(date_str), "set clock: date set");
+    }
+    s_last_min = wc.valid ? wc.min : -1;
+
+    char batt_str[8] = "";
 #ifdef CONFIG_AKIRA_POWER_MANAGER
     {
         uint8_t pct = 0;
@@ -106,25 +191,29 @@ static void draw_frame(void)
     akira_display_clear(C_BLACK);
 
     /* Top hairline */
-    akira_display_hline(0, 30, SCR_W, C_WHITE);
+    akira_display_hline(0, 26, SCR_W, C_WHITE);
 
     /* Wordmark */
-    draw_centred_large(96, "AKIRA", C_WHITE);
+    draw_centred_large(42, "AKIRA", C_WHITE);
 
-    /* Bottom-of-wordmark hairline */
-    akira_display_hline(0, 120, SCR_W, C_WHITE);
+    /* Hairline under wordmark */
+    akira_display_hline(0, 76, SCR_W, C_WHITE);
 
-    /* Battery level (static snapshot taken at enter time) */
-    if (batt_str[0])
-    {
-        draw_centred_small(152, batt_str, C_DKGRAY);
-    }
+    /* Clock — the focal point */
+    draw_centred_large(104, time_str, C_WHITE);
+    draw_centred_small(140, date_str, C_GRAY);
 
     /* Lower hairline */
-    akira_display_hline(0, 200, SCR_W, C_WHITE);
+    akira_display_hline(0, 178, SCR_W, C_WHITE);
+
+    /* Battery level */
+    if (batt_str[0])
+    {
+        draw_centred_small(192, batt_str, C_DKGRAY);
+    }
 
     /* Wake hint */
-    draw_centred_small(213, "Hold HOME to wake", C_DKGRAY);
+    draw_centred_small(214, "Hold HOME to wake", C_DKGRAY);
 
     akira_display_flush();
 }
@@ -156,13 +245,21 @@ void wait_screen_enter(void)
     akira_pm_enable_low_power_mode(true);
 #endif
 
+    s_last_min = -1; /* force a fresh draw */
     draw_frame();
     LOG_INF("Wait screen entered");
 }
 
 void wait_screen_update(void)
 {
-    /* Screen is static — nothing to update. */
+    /* Called ~1×/s by the shell thread while blanked. Only repaint when the
+     * minute rolls over, so the clock stays current without per-second flushes. */
+    struct wall_clock wc = wait_now();
+    int cur = wc.valid ? wc.min : -1;
+    if (cur != s_last_min)
+    {
+        draw_frame();
+    }
 }
 
 void wait_screen_exit(void)
