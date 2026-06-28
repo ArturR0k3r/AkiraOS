@@ -304,7 +304,7 @@ void akira_shell_abort_wasm_launch(void)
 /* Shell main thread                                                   */
 /* ------------------------------------------------------------------ */
 
-#define SHELL_THREAD_STACK_SIZE 4096 * 2
+#define SHELL_THREAD_STACK_SIZE 6144 /* trimmed from 8192 to reclaim SRAM for BT controller heap */
 #define SHELL_THREAD_PRIORITY 10 /* above WASM apps (14), below sys work */
 
 static K_THREAD_STACK_DEFINE(g_shell_stack, SHELL_THREAD_STACK_SIZE);
