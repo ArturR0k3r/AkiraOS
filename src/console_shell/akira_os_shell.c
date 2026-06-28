@@ -437,6 +437,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             {
                 s_wake_hold_since_ms = 0;
                 s_display_blanked = false;
+                s_last_input_ms = now_ms; /* re-arm idle timer so we don't immediately re-blank */
                 /* Suppress the HOME long-press that is currently in progress:
                  * the hold used to wake must not also fire CMD_GO_HOME.
                  * Mark it as already fired so the detector ignores it until
