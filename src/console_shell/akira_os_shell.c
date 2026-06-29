@@ -417,6 +417,9 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 #endif
     int64_t s_last_input_ms = k_uptime_get();
     bool s_display_blanked = false;
+    /* Seconds on the wait screen before auto deep-sleep. 0 = never (the wait
+     * screen stays a live clock); set via NVS akira/power/sleep_s. */
+    int s_deep_sleep_idle_s = 0;
 
     while (true)
     {
@@ -593,6 +596,19 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                             s_display_timeout_ms = 60000;
                         }
                     }
+
+                    /* Auto deep-sleep timeout (0/unset = never → live clock). */
+                    memset(_sv, 0, sizeof(_sv));
+                    if (!akira_settings_get("akira/power/sleep_s",
+                                            _sv, sizeof(_sv)))
+                    {
+                        int t = atoi(_sv);
+                        s_deep_sleep_idle_s = (t > 0) ? t : 0;
+                    }
+                    else
+                    {
+                        s_deep_sleep_idle_s = 0;
+                    }
                 }
 #endif
 
@@ -631,10 +647,15 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                     s_deep_sleep_arm_ms = 0;
                 }
 #ifdef CONFIG_AKIRA_POWER_DEEP_SLEEP
+                /* Auto deep-sleep only when a sleep timeout is configured
+                 * (akira/power/sleep_s > 0). Default 0 = never: the wait screen
+                 * keeps running as a live clock (CPU idle, redrawn each minute).
+                 * Manual power-off (web app / power button) still sleeps. */
                 if (s_display_blanked && s_deep_sleep_arm_ms &&
+                    s_deep_sleep_idle_s > 0 &&
                     !host_session_active() &&
                     (now_ms - s_deep_sleep_arm_ms) >=
-                        (int64_t)CONFIG_AKIRA_DEEP_SLEEP_IDLE_S * 1000)
+                        (int64_t)s_deep_sleep_idle_s * 1000)
                 {
                     wait_screen_prepare_deep_sleep(); /* normally does not return */
                     /* If PM is a no-op (CONFIG_PM=n) the call returns.  Re-arm
