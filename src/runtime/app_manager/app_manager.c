@@ -1413,8 +1413,21 @@ static int registry_load(void)
 
 static int registry_save(void)
 {
-    /* Build registry buffer */
-    uint8_t buffer[sizeof(registry_header_t) + CONFIG_AKIRA_APP_MAX_INSTALLED * sizeof(app_entry_t)];
+    /* Build registry buffer.
+     *
+     * Heap-allocate rather than stack-allocate: at CONFIG_AKIRA_APP_MAX_INSTALLED=27
+     * this is ~2.4 KB (and up to ~5.6 KB at the Kconfig max of 64).  registry_save()
+     * is called from deep call chains on the 6 KB shell thread (e.g. the app launch
+     * path in app_manager_start()), where a multi-KB stack frame overflows the stack.
+     * A heap buffer keeps the frame flat regardless of how deep the caller is. */
+    const size_t buf_len =
+        sizeof(registry_header_t) + CONFIG_AKIRA_APP_MAX_INSTALLED * sizeof(app_entry_t);
+    uint8_t *buffer = akira_malloc_buffer(buf_len);
+    if (!buffer)
+    {
+        LOG_ERR("registry_save: failed to allocate %zu byte buffer", buf_len);
+        return -ENOMEM;
+    }
     size_t offset = 0;
 
     /* Write entries — skip SD-source apps (in-memory only, not persisted) */
@@ -1442,6 +1455,7 @@ static int registry_save(void)
 
     /* Save using fs_manager (handles RAM fallback) */
     ssize_t written = fs_manager_write_file(REGISTRY_PATH, buffer, offset);
+    akira_free_buffer(buffer);
     if (written < 0)
     {
         LOG_ERR("Failed to save registry: %zd", written);
