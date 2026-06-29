@@ -37,7 +37,26 @@ LOG_MODULE_REGISTER(akira_date, CONFIG_AKIRA_LOG_LEVEL);
 #define TZ_OFFSET_KEY   "system/tz_offset"
 #endif
 
-/* Offset such that: real_epoch = s_time_base + uptime_s */
+/* Wall-clock must advance through deep sleep. k_uptime_get() restarts at 0 on
+ * every boot — and ESP32-S3 deep sleep wakes via a full reboot — so a uptime-
+ * based clock snaps back to the last `date set` time after each sleep. The ESP
+ * internal RTC counter keeps running across deep sleep, so we base the clock on
+ * it instead. Other platforms fall back to uptime. */
+#if defined(CONFIG_SOC_ESP32S3)
+#include <soc/rtc.h> /* esp_rtc_get_time_us() */
+#define AKIRA_TIME_USE_ESP_RTC 1
+#endif
+
+static int64_t monotonic_s(void)
+{
+#ifdef AKIRA_TIME_USE_ESP_RTC
+    return (int64_t)(esp_rtc_get_time_us() / 1000000ULL);
+#else
+    return (int64_t)(k_uptime_get() / 1000);
+#endif
+}
+
+/* Offset such that: real_epoch = s_time_base + monotonic_s() */
 static int64_t s_time_base    = 0;
 static bool    s_clock_set    = false;
 static int32_t s_tz_offset_s  = 0; /* UTC offset in seconds, default UTC */
@@ -48,12 +67,12 @@ static int32_t s_tz_offset_s  = 0; /* UTC offset in seconds, default UTC */
 
 int64_t akira_time_get_epoch(void)
 {
-    return s_time_base + (int64_t)(k_uptime_get() / 1000);
+    return s_time_base + monotonic_s();
 }
 
 void akira_time_set_epoch(int64_t epoch_s)
 {
-    s_time_base = epoch_s - (int64_t)(k_uptime_get() / 1000);
+    s_time_base = epoch_s - monotonic_s();
     s_clock_set = true;
 
 #ifdef CONFIG_AKIRA_SETTINGS
