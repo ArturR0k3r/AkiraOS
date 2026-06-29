@@ -2175,11 +2175,8 @@ static int cmd_mesh_init(const struct shell *sh, size_t argc, char **argv)
     cfg.node_id[AKIRA_MESH_NODE_ID_LEN - 1] = id;
     snprintf(cfg.node_name, sizeof(cfg.node_name), "akira-%02x", id);
     cfg.role = AKIRA_MESH_ROLE_NODE;
-    /* Select LR2021 specifically: MOD_LORA is unique to it (CC1121 is FSK/OOK
-     * only), avoiding the shared RF_RST conflict with CC1121 on this board.
-     * Selection only — does not force LoRa modulation. */
     cfg.transport_caps = RADIO_CAP_TX | RADIO_CAP_RX |
-                         RADIO_CAP_BAND_SUBGHZ | RADIO_CAP_MOD_LORA;
+                         RADIO_CAP_BAND_SUBGHZ;
     cfg.max_hops = AKIRA_MESH_MAX_HOPS;
     cfg.beacon_interval_ms = 5000;
 

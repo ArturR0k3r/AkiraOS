@@ -1106,11 +1106,8 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
 
         /* Valid completed packet */
         {
-            /* CC1121 variable-length mode stores [length_byte][payload…]
-             * in the RX FIFO, then appends 2 status bytes (APPEND_STATUS=1).
-             * payload_len = NUM_RXBYTES − 2 (subtract status bytes).
-             * The first byte is the over-the-air length byte — caller sees it. */
-            size_t payload_len = (size_t)(rx_bytes - 2);
+            /* Don't count the first byte (packet length) or the last two bytes (status) */
+            size_t payload_len = (size_t)(rx_bytes - 3);
 
             if (payload_len > max_len) {
                 LOG_WRN("RX: payload_len=%zu > max=%zu — flush+restart",
@@ -1147,8 +1144,8 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
                 return ret;
             }
 
-            /* rx_buf[0..payload_len-1] = payload, rx_buf[payload_len..rx_bytes-1] = status */
-            memcpy(buffer, rx_buf, payload_len);
+            /* rx_buf[payload_len+1..rx_bytes-1] = status. Skip the length byte. */
+            memcpy(buffer, rx_buf + 1, payload_len);
 
             LOG_DBG("RX done: %d bytes", (int)payload_len);
 
