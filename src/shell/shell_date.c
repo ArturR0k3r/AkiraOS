@@ -37,23 +37,21 @@ LOG_MODULE_REGISTER(akira_date, CONFIG_AKIRA_LOG_LEVEL);
 #define TZ_OFFSET_KEY   "system/tz_offset"
 #endif
 
-/* Wall-clock must advance through deep sleep. k_uptime_get() restarts at 0 on
- * every boot — and ESP32-S3 deep sleep wakes via a full reboot — so a uptime-
- * based clock snaps back to the last `date set` time after each sleep. The ESP
- * internal RTC counter keeps running across deep sleep, so we base the clock on
- * it instead. Other platforms fall back to uptime. */
-#if defined(CONFIG_SOC_ESP32S3)
-#include <soc/rtc.h> /* esp_rtc_get_time_us() */
-#define AKIRA_TIME_USE_ESP_RTC 1
-#endif
-
+/* Monotonic seconds since boot, used as the clock's running base.
+ *
+ * We deliberately use k_uptime_get() rather than the ESP RTC counter
+ * (esp_rtc_get_time_us): the RTC helper periodically wipes its accumulator to 0
+ * when the slow-clock calibration momentarily reads 0 during WiFi/BT
+ * recalibration, which makes the wall clock jump to a garbage value. The shell
+ * keeps the device awake as a live clock (it no longer auto-deep-sleeps), so
+ * uptime is monotonic and reliable for the whole session.
+ *
+ * Trade-off: a manual reboot / power-off / deep-sleep resets uptime, so the
+ * clock restores to the last `date set` value (from NVS) and should be re-synced
+ * (date set / NTP). A battery on J8 keeps the RTC domain alive across power-off. */
 static int64_t monotonic_s(void)
 {
-#ifdef AKIRA_TIME_USE_ESP_RTC
-    return (int64_t)(esp_rtc_get_time_us() / 1000000ULL);
-#else
     return (int64_t)(k_uptime_get() / 1000);
-#endif
 }
 
 /* Offset such that: real_epoch = s_time_base + monotonic_s() */
