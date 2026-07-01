@@ -317,7 +317,7 @@ config AKIRA_LR2021
 config AKIRA_CC1121
     bool "Enable CC1121 Sub-GHz driver (AkiraConsole Production)"
     default n
-    depends on SPI && GPIO && AKIRA_RADIO_MANAGER && DT_HAS_COMPAT_STATUS_OKAY_TI_CC1121
+    depends on SPI && GPIO && AKIRA_RADIO_MANAGER && DT_HAS_TI_CC1121_ENABLED
     help
       Enable TI CC1121RHB high-performance Sub-GHz transceiver driver.
       Covers 315/433/868/915 MHz bands, narrowband FSK/OOK.

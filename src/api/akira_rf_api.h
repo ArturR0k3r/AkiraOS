@@ -34,6 +34,11 @@ int akira_rf_select(akira_rf_chip_t chip);
 /* Pop one packet from the background RX queue. timeout_ms=0 is non-blocking.
  * Returns bytes copied, -ENOMSG if empty, -ENOSYS if daemon disabled. */
 int akira_rf_recv_pop(uint8_t *buf, size_t max_len, uint32_t timeout_ms);
+/* Stateless raw OOK capture/replay (shell + WASM both call these). */
+int akira_rf_raw_capture(uint8_t *buf, size_t max_bytes,
+                         uint32_t sample_rate_hz, uint32_t timeout_ms);
+int akira_rf_raw_replay(const uint8_t *buf, size_t len,
+                        uint32_t sample_rate_hz, uint32_t repeat);
 int akira_rf_send(const uint8_t *data, size_t len);
 int akira_rf_receive(uint8_t *buffer, size_t max_len, uint32_t timeout_ms);
 int akira_rf_set_frequency(uint32_t freq_hz);
@@ -59,37 +64,39 @@ int akira_native_rf_set_spreading_factor(wasm_exec_env_t exec_env, int sf);
 int akira_native_rf_set_bandwidth(wasm_exec_env_t exec_env, uint32_t bw_hz);
 int akira_native_rf_set_coding_rate(wasm_exec_env_t exec_env, int cr);
 
-#if defined(CONFIG_WIFI)
+#if defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
+/* WiFi spectrum scan (per-channel max RSSI) */
 int akira_native_wifi_scan_rssi(wasm_exec_env_t exec_env,
                                  uint32_t buf_ptr, uint32_t buf_len);
+/* WiFi AP scan — full records: SSID/BSSID/channel/RSSI/security */
 int akira_native_wifi_scan_aps(wasm_exec_env_t exec_env,
                                 void *buf, uint32_t buf_len);
-#endif
-#if defined(CONFIG_WIFI) && (defined(CONFIG_SOC_SERIES_ESP32S3) || defined(CONFIG_SOC_SERIES_ESP32))
+/* 802.11 deauthentication frame injector (requires wifi.inject capability) */
 int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
                               void *bssid_ptr, void *client_ptr,
                               int32_t channel, int32_t count, int32_t interval_ms);
 #endif
 
 /*
- * Raw Sub-GHz OOK/ASK capture and replay.
- * Both functions require AKIRA_CAP_RF_TRANSCEIVE.
- * The chip must be selected via rf_select() and configured via
- * rf_set_frequency() / rf_set_modulation() before calling these.
+ * Raw Sub-GHz OOK capture and replay.
+ * Both require AKIRA_CAP_RF_TRANSCEIVE. Chip must be selected (rf_select) and
+ * frequency set (rf_set_frequency) first.
  *
- * Pulse buffer layout: uint16_t[], alternating mark/space durations in µs.
- * Index 0 = first mark (high), index 1 = first space (low), ...
+ * Buffer = raw demodulated OOK bitstream: 8 samples/byte, sampled at
+ * sample_rate_hz. The same sample_rate_hz must be passed to replay to
+ * reproduce timing. The native layer does no storage — the app persists the
+ * blob {sample_rate, len, bytes} to a file, or replays it transiently.
  */
 
-/* Capture raw OOK pulse timings.  Type string: "(iii)i" */
+/* Capture raw OOK bytes into a WASM buffer. Type string: "(iiii)i" */
 int akira_native_rf_raw_capture(wasm_exec_env_t exec_env,
-                                 uint32_t buf_wasm, uint32_t max_samples,
-                                 int32_t timeout_ms);
+                                 uint32_t buf_wasm, uint32_t max_bytes,
+                                 uint32_t sample_rate_hz, int32_t timeout_ms);
 
-/* Replay a raw OOK pulse sequence.  Type string: "(iii)i" */
+/* Replay raw OOK bytes from a WASM buffer. Type string: "(iiii)i" */
 int akira_native_rf_raw_replay(wasm_exec_env_t exec_env,
-                                uint32_t buf_wasm, uint32_t sample_count,
-                                int32_t repeat);
+                                uint32_t buf_wasm, uint32_t len,
+                                uint32_t sample_rate_hz, int32_t repeat);
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
 
 #endif /* AKIRA_RF_API_H */

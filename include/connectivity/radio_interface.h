@@ -220,6 +220,17 @@ typedef struct {
     int (*set_spreading_factor)(struct radio_handle *handle, uint8_t sf);
     int (*set_bandwidth)(struct radio_handle *handle, uint32_t bw_hz);
     int (*set_coding_rate)(struct radio_handle *handle, uint8_t cr);
+
+    /* Raw OOK capture/replay — gated by RADIO_CAP_RAW_MODE.
+     * raw_capture: stream the hard-sliced OOK bitstream from the RX FIFO into
+     *   buf (8 samples/byte at sample_rate_hz). Returns bytes captured.
+     * raw_replay: gate the carrier from buf's bits at sample_rate_hz, repeat
+     *   times. Returns 0 or <0 errno. NULL on radios without raw support. */
+    int (*raw_capture)(struct radio_handle *handle, uint8_t *buf,
+                       size_t max_bytes, uint32_t sample_rate_hz,
+                       uint32_t timeout_ms);
+    int (*raw_replay)(struct radio_handle *handle, const uint8_t *buf,
+                      size_t len, uint32_t sample_rate_hz, uint32_t repeat);
 } radio_ops_t;
 
 /* Radio handle structure */

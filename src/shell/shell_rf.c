@@ -376,20 +376,22 @@ static int cmd_rf_test_nohandle(const struct shell *sh, size_t argc, char **argv
     return 0;
 }
 
-/* rf mod <fsk|lora> */
+/* rf mod <fsk|ook|lora> */
 static int cmd_rf_mod(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 2) {
-        shell_error(sh, "Usage: rf mod <fsk|lora>");
+        shell_error(sh, "Usage: rf mod <fsk|ook|lora>");
         return -EINVAL;
     }
     radio_modulation_t mod;
     if (strcmp(argv[1], "fsk") == 0) {
         mod = RADIO_MOD_FSK;
+    } else if (strcmp(argv[1], "ook") == 0) {
+        mod = RADIO_MOD_OOK;
     } else if (strcmp(argv[1], "lora") == 0) {
         mod = RADIO_MOD_LORA;
     } else {
-        shell_error(sh, "Unknown modulation '%s' (fsk|lora)", argv[1]);
+        shell_error(sh, "Unknown modulation '%s' (fsk|ook|lora)", argv[1]);
         return -EINVAL;
     }
     int ret = akira_rf_set_modulation(mod);
@@ -451,6 +453,37 @@ static int cmd_rf_lora_cr(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+/* Shared raw capture buffer: capture fills it, replay re-sends it. */
+static uint8_t  s_rf_cap_buf[4096];
+static size_t   s_rf_cap_len;
+static uint32_t s_rf_cap_rate;
+
+static int cmd_rf_capture(const struct shell *sh, size_t argc, char **argv)
+{
+    uint32_t rate = strtoul(argv[1], NULL, 0);
+    uint32_t ms   = (argc > 2) ? strtoul(argv[2], NULL, 0) : 2000;
+    if (rate < 1000 || rate > 200000) {
+        shell_error(sh, "rate must be 1000..200000 sps");
+        return -EINVAL;
+    }
+    int n = akira_rf_raw_capture(s_rf_cap_buf, sizeof(s_rf_cap_buf), rate, ms);
+    if (n < 0) { shell_error(sh, "capture failed: %d", n); return n; }
+    s_rf_cap_len  = (size_t)n;
+    s_rf_cap_rate = rate;
+    shell_print(sh, "captured %d bytes @ %u sps", n, rate);
+    return 0;
+}
+
+static int cmd_rf_replay(const struct shell *sh, size_t argc, char **argv)
+{
+    if (s_rf_cap_len == 0) { shell_error(sh, "nothing captured"); return -EINVAL; }
+    uint32_t rep = (argc > 1) ? strtoul(argv[1], NULL, 0) : 3;
+    int ret = akira_rf_raw_replay(s_rf_cap_buf, s_rf_cap_len, s_rf_cap_rate, rep);
+    if (ret < 0) { shell_error(sh, "replay failed: %d", ret); return ret; }
+    shell_print(sh, "replayed %zu bytes x%u @ %u sps", s_rf_cap_len, rep, s_rf_cap_rate);
+    return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf_test,
     SHELL_CMD_ARG(registry, NULL, "Dump registered radio handles", cmd_rf_test_registry, 1, 0),
     SHELL_CMD_ARG(caps,     NULL, "Lookup handle by cap mask (hex)", cmd_rf_test_caps, 2, 0),
@@ -472,12 +505,14 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf,
     SHELL_CMD_ARG(select,  NULL,         "Select active chip",      cmd_rf_select, 2, 0),
     SHELL_CMD_ARG(freq,    NULL,         "Set frequency (Hz)",      cmd_rf_freq,   2, 0),
     SHELL_CMD_ARG(power,   NULL,         "Set TX power (dBm)",      cmd_rf_power,  2, 0),
-    SHELL_CMD_ARG(mod,     NULL,         "Set modulation (fsk|lora)", cmd_rf_mod,  2, 0),
+    SHELL_CMD_ARG(mod,     NULL,         "Set modulation (fsk|ook|lora)", cmd_rf_mod,  2, 0),
     SHELL_CMD_ARG(bw,      NULL,         "Set bandwidth Hz (FSK or LoRa)", cmd_rf_bw, 2, 0),
     SHELL_CMD(lora, &sub_rf_lora,        "LoRa parameters (sf|cr)", NULL),
     SHELL_CMD_ARG(send,    NULL,         "Send data",               cmd_rf_send,   2, 0),
     SHELL_CMD_ARG(sweep,   NULL,         "Send multiple packets",   cmd_rf_sweep,  2, 2),
     SHELL_CMD_ARG(recv,    NULL,         "Receive data",            cmd_rf_recv,   1, 1),
+    SHELL_CMD_ARG(capture, NULL, "Raw OOK capture: <rate_sps> [ms]", cmd_rf_capture, 2, 1),
+    SHELL_CMD_ARG(replay,  NULL, "Replay last capture: [repeat]",    cmd_rf_replay,  1, 1),
     SHELL_CMD_ARG(rssi,    NULL,         "Read RSSI",               cmd_rf_rssi,   1, 0),
     SHELL_CMD_ARG(status,  NULL,         "Show RF status",          cmd_rf_status, 1, 0),
     SHELL_CMD(test, &sub_rf_test,        "Radio abstraction tests", NULL),
