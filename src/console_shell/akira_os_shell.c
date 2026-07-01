@@ -689,6 +689,16 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             case CMD_GO_HOME:
                 LOG_INF("HOME pressed — returning to launcher");
 
+                /* Settings→Sleep blanks the panel independently of the shell's
+                 * own s_display_blanked/wait_screen state, so HOME's long-press
+                 * wake must also unblank it and close the settings screen here —
+                 * otherwise the panel stays blanked and input keeps routing to
+                 * the sleep page's own B-B wake gesture. */
+                if (settings_screen_is_sleeping())
+                {
+                    settings_screen_wake();
+                }
+
                 /* Reclaim display immediately so the home screen is visible
                  * before app_manager_stop() blocks for the abort timeout. */
                 g_wasm_active = false;

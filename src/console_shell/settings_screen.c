@@ -674,3 +674,13 @@ bool settings_screen_is_sleeping(void)
 {
     return g_sleeping;
 }
+
+void settings_screen_wake(void)
+{
+    if (!g_sleeping)
+        return;
+    g_sleeping = false;
+    g_sleep_first_press_ms = -1;
+    akira_display_hal_set_blank(false);
+    g_active = false;
+}
