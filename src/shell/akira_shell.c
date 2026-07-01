@@ -2183,8 +2183,7 @@ static int cmd_mesh_init(const struct shell *sh, size_t argc, char **argv)
     cfg.max_hops = AKIRA_MESH_MAX_HOPS;
     cfg.beacon_interval_ms = 5000;
 
-    /* Release RF API ownership so mesh can acquire the LR2021. */
-    akira_rf_deinit();
+    akira_rf_release_all();
 
     int ret = akira_mesh_init(&cfg);
     if (ret) {

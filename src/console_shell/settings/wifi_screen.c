@@ -7,7 +7,6 @@
 LOG_MODULE_REGISTER(akira_wifi_screen, CONFIG_AKIRA_LOG_LEVEL);
 
 #include <zephyr/kernel.h>
-#include <settings/settings.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -16,23 +15,65 @@ LOG_MODULE_REGISTER(akira_wifi_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include <api/akira_input_api.h>
 #include "wifi_screen.h"
 
-#if defined(CONFIG_WIFI) && defined(CONFIG_NET_MGMT)
-#include <zephyr/net/net_mgmt.h>
-#include <zephyr/net/wifi_mgmt.h>
+#include <connectivity/wifi/wifi_manager.h>
+
+/* Tighter row height + narrower item width than the shell_theme.h default so
+ * 6 networks fit on screen with a thin scrollbar strip on the right.
+ * LIST_Y reclaims the 2px gap below the header (header-to-footer is exactly
+ * 192px = 6*32) — the status text drawn at LIST_Y+4 is already hidden behind
+ * row 0's opaque fill whenever the list is non-empty, so no space is lost. */
+#undef LIST_Y
+#define LIST_Y SBAR_H
+#undef ITEM_H
+#define ITEM_H 32
+#define WIFI_SBAR_W 4
+#define WIFI_SBAR_X (SCR_W - 4 - WIFI_SBAR_W)
+#undef ITEM_W
+#define ITEM_W (WIFI_SBAR_X - 2 - ITEM_X)
+
 #define WIFI_MAX_NETWORKS 16
-static struct wifi_scan_result g_scan[WIFI_MAX_NETWORKS] __attribute__((section(".ext_ram.bss")));
-static int g_scan_count;
+static wifi_mgr_scan_result_t g_networks[WIFI_MAX_NETWORKS] __attribute__((section(".ext_ram.bss")));
+static int g_network_count;
+
 static struct k_sem g_scan_done;
-static void on_wifi_event(struct net_mgmt_event_callback *cb, uint32_t ev, struct net_if *iface)
+static struct k_sem g_connect_done;
+static struct k_sem g_disconnect_done;
+static int  g_connect_result; /* 1 = connected, 0 = failed, set before g_connect_done is given */
+static bool g_wifi_mgr_cb_reg;
+
+static void on_wifi_mgr_event(wifi_mgr_event_t evt, void *user_data)
 {
-    if (ev==NET_EVENT_WIFI_SCAN_RESULT && g_scan_count<WIFI_MAX_NETWORKS)
-        g_scan[g_scan_count++]=*(const struct wifi_scan_result*)cb->info;
-    else if (ev==NET_EVENT_WIFI_SCAN_DONE)
+    ARG_UNUSED(user_data);
+    switch (evt) {
+    case WIFI_MGR_EVT_SCAN_DONE:
         k_sem_give(&g_scan_done);
+        break;
+    case WIFI_MGR_EVT_CONNECTED:
+        g_connect_result = 1;
+        k_sem_give(&g_connect_done);
+        break;
+    case WIFI_MGR_EVT_CONNECT_FAILED:
+        g_connect_result = 0;
+        k_sem_give(&g_connect_done);
+        break;
+    case WIFI_MGR_EVT_DISCONNECTED:
+        k_sem_give(&g_disconnect_done);
+        break;
+    default:
+        break;
+    }
 }
-static struct net_mgmt_event_callback g_wifi_cb;
-static bool g_wifi_cb_reg;
-#endif
+
+static void ensure_wifi_mgr_cb(void)
+{
+    if (!g_wifi_mgr_cb_reg) {
+        k_sem_init(&g_scan_done, 0, 1);
+        k_sem_init(&g_connect_done, 0, 1);
+        k_sem_init(&g_disconnect_done, 0, 1);
+        wifi_manager_register_cb(on_wifi_mgr_event, NULL);
+        g_wifi_mgr_cb_reg = true;
+    }
+}
 
 
 
@@ -65,112 +106,344 @@ static void lc_bar(int x, int y, int w, int h, int pct) {
     if (fw>0) akira_display_rect(x,y,fw,h,C_WHITE);
 }
 
-#define SSID_MAX 33
 #define PASS_MAX 64
 
-static char g_ssid_list[16][SSID_MAX] __attribute__((section(".ext_ram.bss")));
-static int  g_ssid_count;
 static int  g_sel, g_scroll;
 
-/* ---- Character spinner for password entry ---- */
-static const char CHARSET[] =
-    " abcdefghijklmnopqrstuvwxyz0123456789"
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%&*()-_+=.,;:/?";
-#define CHARSET_LEN ((int)(sizeof(CHARSET)-1))
+/* ---- On-screen QWERTY keyboard for password entry ---- */
+static const char *const KB_ROWS_LOWER[4] = {"1234567890","qwertyuiop","asdfghjkl","zxcvbnm"};
+static const char *const KB_ROWS_UPPER[4] = {"!@#$%^&*()","QWERTYUIOP","ASDFGHJKL","ZXCVBNM"};
+static const int KB_ROW_LEN[5] = {10,10,9,7,1}; /* row 4 = space bar, 1 "column" */
 
-static void draw_passentry(const char *ssid, const char *buf, int cur, int csel) {
-    int pw=300,ph=96; int px=(SCR_W-pw)/2, py=(SCR_H-ph)/2;
-    akira_display_rect(px,py,pw,ph,C_BLACK);
-    akira_display_rect_outline(px,py,pw,ph,C_WHITE);
-    akira_display_rect_outline(px+1,py+1,pw-2,ph-2,C_WHITE);
-    char hdr[48]; snprintf(hdr,sizeof(hdr),"Password: %s",ssid);
-    lc_centred(px+4,py+6,pw-8,hdr,C_WHITE,C_BLACK);
-    akira_display_hline(px+4,py+18,pw-8,C_WHITE);
-    /* Password so far + cursor */
-    char disp[PASS_MAX+2]; memcpy(disp,buf,cur); disp[cur]=CHARSET[csel]; disp[cur+1]=0;
-    akira_display_text(px+8,py+24,disp,C_WHITE);
-    /* Hint */
-    akira_display_text(px+8,py+40,"UP/DN:char  A:add  B:del  X:done",C_GRAY);
-    /* Current char large */
-    char cc[2]={CHARSET[csel],0};
-    akira_display_text_large(px+pw/2-6,py+56,cc,C_WHITE);
+#define KB_MARGIN_X 8
+#define KB_CELL_W   38
+#define KB_ROW_H    30
+#define KB_Y0       (LIST_Y + 22)
+
+static bool g_kb_shift;
+static int  g_kb_row, g_kb_col;
+static char g_kb_buf[PASS_MAX];
+static int  g_kb_len;
+
+static int kb_row_x0(int row) {
+    switch (row) {
+    case 2: return KB_MARGIN_X + KB_CELL_W / 2;
+    case 3: return KB_MARGIN_X + KB_CELL_W + KB_CELL_W / 2;
+    case 4: return KB_MARGIN_X + KB_CELL_W * 2;
+    default: return KB_MARGIN_X;
+    }
+}
+
+static void kb_move(int dr, int dc) {
+    if (dr != 0) {
+        g_kb_row = (g_kb_row + dr + 5) % 5;
+        if (g_kb_col >= KB_ROW_LEN[g_kb_row]) {
+            g_kb_col = KB_ROW_LEN[g_kb_row] - 1;
+        }
+    }
+    if (dc != 0) {
+        int len = KB_ROW_LEN[g_kb_row];
+        g_kb_col = (g_kb_col + dc + len) % len;
+    }
+}
+
+static void draw_keyboard(const char *ssid) {
+    akira_display_clear(C_BLACK);
+    char hdr[48];
+    snprintf(hdr, sizeof(hdr), "Password: %s", ssid);
+    lc_header(hdr);
+
+    char disp[PASS_MAX + 1];
+    memcpy(disp, g_kb_buf, g_kb_len);
+    disp[g_kb_len] = 0;
+    akira_display_text(KB_MARGIN_X, LIST_Y + 2, disp, C_WHITE);
+
+    for (int row = 0; row < 4; row++) {
+        const char *chars = g_kb_shift ? KB_ROWS_UPPER[row] : KB_ROWS_LOWER[row];
+        int x0 = kb_row_x0(row);
+        int y = KB_Y0 + row * KB_ROW_H;
+        for (int col = 0; col < KB_ROW_LEN[row]; col++) {
+            bool hi = (row == g_kb_row && col == g_kb_col);
+            int x = x0 + col * KB_CELL_W;
+            uint16_t bg = hi ? C_WHITE : C_BLACK;
+            uint16_t fg = hi ? C_BLACK : C_WHITE;
+            akira_display_rounded_rect_fill(x, y, KB_CELL_W - 2, KB_ROW_H - 4, 3, bg);
+            akira_display_rounded_rect(x, y, KB_CELL_W - 2, KB_ROW_H - 4, 3, hi ? C_BLACK : C_DKGRAY);
+            char cs[2] = {chars[col], 0};
+            akira_display_text(x + KB_CELL_W / 2 - 4, y + (KB_ROW_H - 4 - 10) / 2, cs, fg);
+        }
+    }
+
+    {
+        int row = 4;
+        bool hi = (g_kb_row == row);
+        int x = kb_row_x0(row);
+        int w = KB_CELL_W * 6 - 2;
+        int y = KB_Y0 + row * KB_ROW_H;
+        uint16_t bg = hi ? C_WHITE : C_BLACK;
+        uint16_t fg = hi ? C_BLACK : C_WHITE;
+        akira_display_rounded_rect_fill(x, y, w, KB_ROW_H - 4, 3, bg);
+        akira_display_rounded_rect(x, y, w, KB_ROW_H - 4, 3, hi ? C_BLACK : C_DKGRAY);
+        akira_display_text(x + w / 2 - 20, y + (KB_ROW_H - 4 - 10) / 2, "SPACE", fg);
+    }
+
+    lc_footer("A:type  B:del  Y:shift  X:connect");
     akira_display_flush();
 }
 
-static bool enter_password(const char *ssid, char *out, int maxlen) {
-    char buf[PASS_MAX]; memset(buf,0,sizeof(buf));
-    int cur=0, csel=0;
-    draw_passentry(ssid,buf,cur,csel);
-    uint32_t prev=0;
+static bool enter_password(const char *ssid, char *out, int maxlen, const char *initial) {
+    g_kb_shift = false;
+    g_kb_row = 1; /* start on the qwerty row */
+    g_kb_col = 0;
+    g_kb_len = 0;
+    memset(g_kb_buf, 0, sizeof(g_kb_buf));
+    if (initial && initial[0]) {
+        g_kb_len = (int)strlen(initial);
+        if (g_kb_len > maxlen - 1) g_kb_len = maxlen - 1;
+        memcpy(g_kb_buf, initial, g_kb_len);
+    }
+    draw_keyboard(ssid);
+
+    uint32_t prev = akira_input_get_bitmask();
     while (true) {
         k_sleep(K_MSEC(20));
-        uint32_t btns=akira_input_get_bitmask(), just=btns&~prev; prev=btns;
+        uint32_t btns = akira_input_get_bitmask(), just = btns & ~prev;
+        prev = btns;
         if (!just) continue;
-        if (just&BIT(AKIRA_BTN_UP)) { csel=(csel-1+CHARSET_LEN)%CHARSET_LEN; draw_passentry(ssid,buf,cur,csel); }
-        if (just&BIT(AKIRA_BTN_DOWN)) { csel=(csel+1)%CHARSET_LEN; draw_passentry(ssid,buf,cur,csel); }
-        if (just&BIT(AKIRA_BTN_A)) {
-            if (cur<maxlen-1) { buf[cur++]=CHARSET[csel]; }
-            draw_passentry(ssid,buf,cur,csel);
+
+        if (just & BIT(AKIRA_BTN_HOME)) return false;
+        if (just & BIT(AKIRA_BTN_UP))    { kb_move(-1, 0); draw_keyboard(ssid); }
+        if (just & BIT(AKIRA_BTN_DOWN))  { kb_move(1, 0);  draw_keyboard(ssid); }
+        if (just & BIT(AKIRA_BTN_LEFT))  { kb_move(0, -1); draw_keyboard(ssid); }
+        if (just & BIT(AKIRA_BTN_RIGHT)) { kb_move(0, 1);  draw_keyboard(ssid); }
+        if (just & BIT(AKIRA_BTN_A)) {
+            if (g_kb_len < maxlen - 1) {
+                char ch = (g_kb_row == 4) ? ' '
+                    : (g_kb_shift ? KB_ROWS_UPPER[g_kb_row][g_kb_col]
+                                  : KB_ROWS_LOWER[g_kb_row][g_kb_col]);
+                g_kb_buf[g_kb_len++] = ch;
+                draw_keyboard(ssid);
+            }
         }
-        if (just&BIT(AKIRA_BTN_B)) {
-            if (cur>0) { cur--; buf[cur]=0; draw_passentry(ssid,buf,cur,csel); }
-            else return false;
+        if (just & BIT(AKIRA_BTN_B)) {
+            if (g_kb_len > 0) {
+                g_kb_buf[--g_kb_len] = 0;
+                draw_keyboard(ssid);
+            } else {
+                return false;
+            }
         }
-        if (just&BIT(AKIRA_BTN_X)) {
-            memcpy(out,buf,cur); out[cur]=0; return true;
+        if (just & BIT(AKIRA_BTN_Y)) {
+            g_kb_shift = !g_kb_shift;
+            draw_keyboard(ssid);
+        }
+        if (just & BIT(AKIRA_BTN_X)) {
+            memcpy(out, g_kb_buf, g_kb_len);
+            out[g_kb_len] = 0;
+            return true;
         }
     }
 }
 
-static void do_connect(const char *ssid, const char *pass) {
+/* ---- Connect/scan popup (matches akira_os_shell.c's SD-card popup style) ---- */
+#define WIFI_POPUP_W 240
+#define WIFI_POPUP_H 70
+#define WIFI_POPUP_X ((SCR_W - WIFI_POPUP_W) / 2)
+#define WIFI_POPUP_Y ((SCR_H - WIFI_POPUP_H) / 2)
+#define WIFI_POPUP_DOT_TICKS 15 /* advance dots every 300ms (15 * 20ms) */
+
+static void draw_wifi_popup(const char *label, int dots) {
+    int px = WIFI_POPUP_X, py = WIFI_POPUP_Y;
+    akira_display_rect(px, py, WIFI_POPUP_W, WIFI_POPUP_H, C_BLACK);
+    akira_display_rect_outline(px, py, WIFI_POPUP_W, WIFI_POPUP_H, C_WHITE);
+    akira_display_rect_outline(px + 1, py + 1, WIFI_POPUP_W - 2, WIFI_POPUP_H - 2, C_WHITE);
+    akira_display_text(px + 8, py + 8, "WiFi", C_WHITE);
+    akira_display_hline(px + 8, py + 20, WIFI_POPUP_W - 16, C_WHITE);
+    char line[24];
+    snprintf(line, sizeof(line), "%s%.*s", label, dots, "...");
+    akira_display_text(px + 8, py + 30, line, C_WHITE);
+    akira_display_flush();
+}
+
+/* Polls sem in short slices so the popup animates instead of the UI thread
+ * sitting on one long k_sem_take with a static label underneath it. */
+static bool wait_with_popup(struct k_sem *sem, int64_t timeout_ms, const char *label) {
+    int64_t deadline = k_uptime_get() + timeout_ms;
+    int dots = 0, tick = 0;
+    draw_wifi_popup(label, dots);
+    while (k_uptime_get() < deadline) {
+        if (k_sem_take(sem, K_MSEC(20)) == 0) {
+            return true;
+        }
+        if (++tick >= WIFI_POPUP_DOT_TICKS) {
+            tick = 0;
+            dots = (dots + 1) % 4;
+            draw_wifi_popup(label, dots);
+        }
+    }
+    return false;
+}
+
+static bool do_connect(const char *ssid, const char *pass) {
     LOG_INF("WiFi connect SSID:%s",ssid);
-#if defined(CONFIG_WIFI) && defined(CONFIG_NET_MGMT)
-    struct net_if *iface=net_if_get_default();
-    struct wifi_connect_req_params p={
-        .ssid=(const uint8_t*)ssid, .ssid_length=(uint8_t)strlen(ssid),
-        .psk=(const uint8_t*)pass,  .psk_length=(uint8_t)strlen(pass),
-        .security=strlen(pass)?WIFI_SECURITY_TYPE_PSK:WIFI_SECURITY_TYPE_NONE,
-        .channel=WIFI_CHANNEL_ANY,
-    };
-    int r=net_mgmt(NET_REQUEST_WIFI_CONNECT,iface,&p,sizeof(p));
-    if (r<0) LOG_ERR("connect:%d",r);
-    else { akira_settings_set(AKIRA_SETTINGS_WIFI_SSID_KEY,ssid,0); akira_settings_set(AKIRA_SETTINGS_WIFI_PSK_KEY,pass,0); }
-#endif
+    ensure_wifi_mgr_cb();
+
+    /* wifi_manager_connect() refuses with -EALREADY while CONNECTED/CONNECTING
+     * to a prior network — switching networks needs an explicit disconnect
+     * first, or every attempt to join a different SSID fails outright. */
+    wifi_mgr_state_t state = wifi_manager_get_state();
+    if (state == WIFI_MGR_STATE_CONNECTED || state == WIFI_MGR_STATE_CONNECTING) {
+        k_sem_reset(&g_disconnect_done);
+        if (wifi_manager_disconnect() == 0) {
+            wait_with_popup(&g_disconnect_done, 5000, "Disconnecting");
+        }
+    }
+
+    /* wifi_manager_connect() always uses whatever is currently saved, so the
+     * new credentials must be written before attempting to connect. Snapshot
+     * what was there first so a failed attempt can't clobber a previously
+     * good saved password for another network. */
+    char prev_ssid[33]={0}, prev_psk[PASS_MAX]={0};
+    bool had_prev = wifi_manager_get_saved_credentials(prev_ssid,sizeof(prev_ssid),
+                                                        prev_psk,sizeof(prev_psk))==0;
+
+    int r = wifi_manager_update_credentials(ssid, pass);
+    if (r < 0) {
+        LOG_ERR("update_credentials:%d", r);
+        return false;
+    }
+
+    k_sem_reset(&g_connect_done);
+    r = wifi_manager_connect();
+    if (r < 0) {
+        LOG_ERR("wifi_manager_connect:%d", r);
+        if (had_prev) wifi_manager_update_credentials(prev_ssid, prev_psk);
+        return false;
+    }
+
+    if (!wait_with_popup(&g_connect_done, 15000, "Connecting")) {
+        LOG_WRN("WiFi connect timed out");
+        if (had_prev) wifi_manager_update_credentials(prev_ssid, prev_psk);
+        return false;
+    }
+    if (g_connect_result == 0 && had_prev) {
+        wifi_manager_update_credentials(prev_ssid, prev_psk);
+    }
+    return g_connect_result != 0;
 }
 
-static void do_scan(void) {
-    g_ssid_count=0;
-#if defined(CONFIG_WIFI) && defined(CONFIG_NET_MGMT)
-    if (!g_wifi_cb_reg) {
-        k_sem_init(&g_scan_done,0,1);
-        net_mgmt_init_event_callback(&g_wifi_cb,on_wifi_event,
-            NET_EVENT_WIFI_SCAN_RESULT|NET_EVENT_WIFI_SCAN_DONE|NET_EVENT_WIFI_CONNECT_RESULT);
-        net_mgmt_add_event_callback(&g_wifi_cb); g_wifi_cb_reg=true;
+/* Returns false if the user cancelled the scan with HOME/B, true otherwise
+ * (whether the scan completed, failed to start, or timed out). */
+static bool do_scan(void) {
+    g_network_count = 0;
+    ensure_wifi_mgr_cb();
+
+    k_sem_reset(&g_scan_done);
+    int r = wifi_manager_scan();
+    if (r < 0) {
+        LOG_ERR("wifi_manager_scan:%d", r);
+        return true;
     }
-    g_scan_count=0; k_sem_reset(&g_scan_done);
-    struct net_if *iface=net_if_get_default();
-    int r=net_mgmt(NET_REQUEST_WIFI_SCAN,iface,NULL,0);
-    if (r<0) { LOG_ERR("scan:%d",r); return; }
-    k_sem_take(&g_scan_done,K_SECONDS(10));
-    for (int i=0;i<g_scan_count&&i<16;i++){
-        int l=MIN((int)g_scan[i].ssid_length,(int)SSID_MAX-1);
-        memcpy(g_ssid_list[g_ssid_count],g_scan[i].ssid,l);
-        g_ssid_list[g_ssid_count][l]=0;
-        g_ssid_count++;
+
+    int64_t deadline = k_uptime_get() + 10000;
+    uint32_t prev = akira_input_get_bitmask();
+    int dots = 0, tick = 0;
+    draw_wifi_popup("Scanning", dots);
+    while (k_uptime_get() < deadline) {
+        if (k_sem_take(&g_scan_done, K_MSEC(20)) == 0) {
+            size_t count = 0;
+            wifi_manager_get_scan_results(g_networks, WIFI_MAX_NETWORKS, &count);
+            g_network_count = (int)count;
+            return true;
+        }
+        if (++tick >= WIFI_POPUP_DOT_TICKS) {
+            tick = 0;
+            dots = (dots + 1) % 4;
+            draw_wifi_popup("Scanning", dots);
+        }
+        uint32_t btns = akira_input_get_bitmask();
+        uint32_t just = btns & ~prev;
+        prev = btns;
+        if (just & (BIT(AKIRA_BTN_HOME) | BIT(AKIRA_BTN_B))) {
+            return false;
+        }
     }
-#else
-    strncpy(g_ssid_list[0],"WiFi not available",SSID_MAX-1); g_ssid_count=1;
-#endif
+    LOG_WRN("WiFi scan timed out");
+    return true;
+}
+
+static bool get_connected_ssid(char *out, size_t out_sz) {
+    if (wifi_manager_get_state() != WIFI_MGR_STATE_CONNECTED) {
+        return false;
+    }
+    wifi_mgr_stats_t stats;
+    if (wifi_manager_get_stats(&stats) != 0) {
+        return false;
+    }
+    snprintf(out, out_sz, "%s", stats.ssid);
+    return true;
+}
+
+static void build_idle_status(char *buf, size_t sz) {
+    char ssid[33];
+    if (get_connected_ssid(ssid, sizeof(ssid))) {
+        snprintf(buf, sz, "Connected: %s", ssid);
+    } else if (g_network_count) {
+        snprintf(buf, sz, "Tap A to connect");
+    } else {
+        snprintf(buf, sz, "No networks found");
+    }
+}
+
+static void draw_signal_lock(int idx, int sel, int8_t rssi, bool secured) {
+    bool hi = (idx == sel);
+    int iy = LIST_Y + idx * ITEM_H;
+    uint16_t on = hi ? C_BLACK : C_WHITE;
+
+    int bars = (rssi >= -55) ? 4 : (rssi >= -65) ? 3 : (rssi >= -75) ? 2 : 1;
+    int bars_right = ITEM_X + ITEM_W - 8;
+    int bars_left  = bars_right - 22;
+    int base_y = iy + 3 + (ITEM_H - 6) / 2 + 5;
+    for (int i = 0; i < 4; i++) {
+        int bh = 3 + i * 3;
+        int bx = bars_left + i * 6, by = base_y - bh;
+        if (i < bars) {
+            akira_display_rect(bx, by, 4, bh, on);
+        } else {
+            akira_display_rect_outline(bx, by, 4, bh, on);
+        }
+    }
+
+    if (secured) {
+        int lock_right = bars_left - 6;
+        int lock_left  = lock_right - 10;
+        int lock_top   = iy + 3 + (ITEM_H - 6) / 2 - 5;
+        akira_display_rect_outline(lock_left, lock_top + 3, 10, 7, on);
+        akira_display_rect(lock_left + 3, lock_top, 4, 5, on);
+    }
 }
 
 static void draw_list(const char *status) {
     akira_display_clear(C_BLACK); lc_header("WIFI");
     akira_display_text(ITEM_X+4,LIST_Y+4,status,C_GRAY);
-    int vis=(FOOT_Y-LIST_Y-18)/ITEM_H;
-    if (g_scroll>g_ssid_count-vis) g_scroll=g_ssid_count>vis?g_ssid_count-vis:0;
+    int vis=(FOOT_Y-LIST_Y)/ITEM_H;
+    if (g_scroll>g_network_count-vis) g_scroll=g_network_count>vis?g_network_count-vis:0;
     if (g_scroll<0) g_scroll=0;
-    for (int i=g_scroll;i<g_ssid_count&&i<g_scroll+vis;i++)
-        lc_item(i-g_scroll,g_sel-g_scroll,g_ssid_list[i],"");
+    for (int i=g_scroll;i<g_network_count&&i<g_scroll+vis;i++) {
+        lc_item(i-g_scroll,g_sel-g_scroll,g_networks[i].ssid,"");
+        draw_signal_lock(i-g_scroll, g_sel-g_scroll, g_networks[i].rssi,
+                          g_networks[i].security != 0 /* 0 == WIFI_SECURITY_TYPE_NONE */);
+    }
+    if (g_network_count > vis) {
+        int track_y = LIST_Y;
+        int track_h = vis * ITEM_H;
+        akira_display_rect(WIFI_SBAR_X, track_y, WIFI_SBAR_W, track_h, C_BLACK);
+        int thumb_h = track_h * vis / g_network_count;
+        if (thumb_h < 8) thumb_h = 8;
+        int max_off = g_network_count - vis;
+        int thumb_y = track_y + (track_h - thumb_h) * g_scroll / max_off;
+        akira_display_rect(WIFI_SBAR_X, thumb_y, WIFI_SBAR_W, thumb_h, C_WHITE);
+    }
     lc_footer("A-Connect  |  B-Back");
     akira_display_flush();
 }
@@ -180,24 +453,44 @@ void wifi_screen_load(void)
     extern void settings_screen_load(void);
     g_sel=0; g_scroll=0;
     draw_list("Scanning...");
-    do_scan();
-    draw_list(g_ssid_count?"Tap A to connect":"No networks found");
-    uint32_t prev=0;
+    if (!do_scan()) {
+        settings_screen_load();
+        return;
+    }
+    char idle_status[48];
+    build_idle_status(idle_status, sizeof(idle_status));
+    draw_list(idle_status);
+    uint32_t prev=akira_input_get_bitmask();
     while (true) {
         k_sleep(K_MSEC(20));
         uint32_t btns=akira_input_get_bitmask(), just=btns&~prev; prev=btns;
         if (!just) continue;
-        int vis=(FOOT_Y-LIST_Y-18)/ITEM_H;
+        int vis=(FOOT_Y-LIST_Y)/ITEM_H;
         if (just&BIT(AKIRA_BTN_UP)) { if(g_sel>0){g_sel--;if(g_sel<g_scroll)g_scroll--;draw_list("Select network");} }
-        if (just&BIT(AKIRA_BTN_DOWN)) { if(g_sel<g_ssid_count-1){g_sel++;if(g_sel>=g_scroll+vis)g_scroll++;draw_list("Select network");} }
-        if ((just&BIT(AKIRA_BTN_A)) && g_ssid_count>0) {
+        if (just&BIT(AKIRA_BTN_DOWN)) { if(g_sel<g_network_count-1){g_sel++;if(g_sel>=g_scroll+vis)g_scroll++;draw_list("Select network");} }
+        if ((just&BIT(AKIRA_BTN_A)) && g_network_count>0) {
             char pass[PASS_MAX]={0};
-            if (enter_password(g_ssid_list[g_sel],pass,PASS_MAX)) {
-                do_connect(g_ssid_list[g_sel],pass);
-                draw_list("Connecting...");
+            char saved_ssid[33]={0}, saved_psk[PASS_MAX]={0};
+            const char *initial_psk = NULL;
+            /* Settings/NVS is a cache of the last saved connection — if it
+             * matches the selected network, offer its PSK as a starting point. */
+            if (wifi_manager_get_saved_credentials(saved_ssid,sizeof(saved_ssid),saved_psk,sizeof(saved_psk))==0
+                && strcmp(saved_ssid,g_networks[g_sel].ssid)==0) {
+                initial_psk = saved_psk;
+            }
+            if (enter_password(g_networks[g_sel].ssid,pass,PASS_MAX,initial_psk)) {
+                bool ok = do_connect(g_networks[g_sel].ssid,pass);
+                draw_list(ok ? "Connected!" : "Failed");
+                k_sleep(K_MSEC(1200));
+                build_idle_status(idle_status, sizeof(idle_status));
+                draw_list(idle_status);
             } else {
                 draw_list("Cancelled");
             }
+            /* enter_password() ran its own blocking poll loop with its own
+             * edge tracker; reseed ours so a still-held button (e.g. HOME)
+             * isn't misread as a fresh press on the next tick. */
+            prev = akira_input_get_bitmask();
         }
         if ((just&BIT(AKIRA_BTN_B))||(just&BIT(AKIRA_BTN_HOME))) { settings_screen_load(); return; }
     }

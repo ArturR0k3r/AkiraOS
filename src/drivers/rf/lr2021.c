@@ -389,15 +389,37 @@ static int lr2021_read_fifo(uint8_t *data, size_t len)
  * ========================================================================= */
 
 /* Map a LoRa bandwidth in Hz to the chip's bw code (datasheet Table 9-3).
- * Returns the code, or -1 for an unsupported bandwidth. */
+ * Clamps to the closest supported bandwidth; always returns a valid code. */
 static int lr2021_bw_hz_to_code(uint32_t bw_hz)
 {
-    switch (bw_hz) {
-    case 125000: return 0x4;
-    case 250000: return 0x5;
-    case 500000: return 0x6;
-    default:     return -1;
+    static const struct { uint32_t hz; uint8_t code; } table[] = {
+        {  31000, 0x2 },
+        {  41000, 0xA },
+        {  62000, 0x3 },
+        {  83000, 0xB },
+        { 101000, 0xC },
+        { 125000, 0x4 },
+        { 203000, 0xD },
+        { 250000, 0x5 },
+        { 406000, 0xE },
+        { 500000, 0x6 },
+        { 812000, 0xF },
+        {1000000, 0x7 },
+    };
+
+    uint8_t best_code = table[0].code;
+    uint32_t best_diff = UINT32_MAX;
+
+    for (size_t i = 0; i < ARRAY_SIZE(table); i++) {
+        uint32_t diff = (bw_hz > table[i].hz) ? (bw_hz - table[i].hz)
+                                              : (table[i].hz - bw_hz);
+        if (diff < best_diff) {
+            best_diff = diff;
+            best_code = table[i].code;
+        }
     }
+
+    return best_code;
 }
 
 /* Map an FSK double-sided bandwidth in Hz to an rx_bw code (datasheet Table 11-2).
@@ -544,12 +566,16 @@ static int lr2021_init(void)
     }
     gpio_pin_configure_dt(&g_lr2021.busy, GPIO_INPUT);
 
-    /* --- Hardware reset -------------------------------------------------- */
-    LOG_INF("Resetting LR2021...");
-    gpio_pin_set_dt(&g_lr2021.reset, 1);
-    k_msleep(10);
-    gpio_pin_set_dt(&g_lr2021.reset, 0);
-    k_msleep(10);
+    /* --- Hardware reset (optional, shared with CC1121) -------------------- */
+    /* RF_RST is shared with CC1121 — only pulse it if no sibling has already
+     * claimed it, otherwise we would reset an already-configured CC1121. */
+    if (rf_framework_claim_shared_reset()) {
+        LOG_INF("Resetting LR2021...");
+        gpio_pin_set_dt(&g_lr2021.reset, 1);
+        k_msleep(10);
+        gpio_pin_set_dt(&g_lr2021.reset, 0);
+        k_msleep(10);
+    }
 
     /* Wait for boot calibration to finish (BUSY goes low) */
     ret = lr2021_wait_busy();

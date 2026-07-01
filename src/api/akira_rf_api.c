@@ -26,20 +26,21 @@
 #include <lib/mem_helper.h>
 #include <string.h>
 #include <zephyr/sys/util.h>
-
-#ifdef CONFIG_WIFI
-#include <zephyr/net/net_if.h>
-#include <zephyr/net/net_mgmt.h>
-#include <zephyr/net/wifi_mgmt.h>
-#if defined(CONFIG_SOC_SERIES_ESP32S3) || defined(CONFIG_SOC_SERIES_ESP32)
-#include <esp_wifi.h>
-#endif
-#endif
+#include <zephyr/sys/atomic.h>
 
 LOG_MODULE_REGISTER(akira_rf_api, CONFIG_AKIRA_LOG_LEVEL);
 
 /* Serializes init/select/deinit AND data-path bus ops (single operator). */
 static K_MUTEX_DEFINE(s_chip_lock);
+
+/* Cooperative daemon pause: while set, the RX daemon parks at the top of its
+ * loop and never grabs the chip lock, so a raw capture/replay can own the chip
+ * without racing it. This is a SAFE stop/start — never k_thread_suspend() the
+ * daemon, which could freeze it mid-recv while holding s_chip_lock (deadlock). */
+static atomic_t s_rf_daemon_paused = ATOMIC_INIT(0);
+
+static inline void akira_rf_daemon_pause(void)  { atomic_set(&s_rf_daemon_paused, 1); }
+static inline void akira_rf_daemon_resume(void) { atomic_set(&s_rf_daemon_paused, 0); }
 
 #define CHIP_LOCK_TIMEOUT_MS 2000
 
@@ -47,9 +48,6 @@ static K_MUTEX_DEFINE(s_chip_lock);
  * the chip). Shared, so defined here ahead of both users. */
 #define RF_RX_MAX_PACKET    255
 struct rf_rx_packet { uint8_t data[RF_RX_MAX_PACKET]; uint16_t len; };
-#ifndef CONFIG_AKIRA_RF_RX_QUEUE_DEPTH
-#define CONFIG_AKIRA_RF_RX_QUEUE_DEPTH 8
-#endif
 #if defined(CONFIG_SPIRAM)
 /* Put the large queue data buffer in PSRAM to avoid DRAM overflow on S3 boards */
 static uint8_t s_rf_rx_buf[CONFIG_AKIRA_RF_RX_QUEUE_DEPTH * sizeof(struct rf_rx_packet)]
@@ -160,6 +158,28 @@ int akira_rf_deinit(void)
         radio_manager_release(g_active_handle, "rf");
         g_active_handle = NULL;
     }
+    g_active_chip = AKIRA_RF_CHIP_NONE;
+
+    k_mutex_unlock(&s_chip_lock);
+    return 0;
+}
+
+int akira_rf_release_all(void)
+{
+    LOG_INF("RF release ownership (no power-down)");
+
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) {
+        return -EBUSY;
+    }
+
+    for (int c = AKIRA_RF_CHIP_NONE + 1; c < AKIRA_RF_CHIP_MAX; c++) {
+        if (!s_inited[c]) continue;
+        radio_handle_t *h = map_chip_to_handle((akira_rf_chip_t)c);
+        if (h) {
+            radio_manager_release(h, "rf");
+        }
+    }
+    g_active_handle = NULL;
     g_active_chip = AKIRA_RF_CHIP_NONE;
 
     k_mutex_unlock(&s_chip_lock);
@@ -346,6 +366,7 @@ static void rf_rx_daemon_fn(void *p1, void *p2, void *p3)
         if (!g_active_handle) { k_msleep(RF_DAEMON_SLEEP_MS); continue; }
         radio_handle_t *h = g_active_handle;
         if (!h || !h->ops || !h->ops->recv) { k_msleep(RF_DAEMON_SLEEP_MS); continue; }
+        if (atomic_get(&s_rf_daemon_paused)) { k_msleep(20); continue; }
 
         int n;
         if (h->ops->rx_wait) {
@@ -365,7 +386,7 @@ static void rf_rx_daemon_fn(void *p1, void *p2, void *p3)
             if (k_mutex_lock(&s_chip_lock, K_NO_WAIT) != 0) {
                 k_msleep(RF_DAEMON_SLEEP_MS); continue;
             }
-            n = h->ops->recv(h, s_rf_poll_buf.data, RF_RX_MAX_PACKET, 250);
+            n = h->ops->recv(h, s_rf_poll_buf.data, RF_RX_MAX_PACKET, 2000);
             k_mutex_unlock(&s_chip_lock);
             if (n <= 0) { k_msleep(RF_DAEMON_SLEEP_MS); continue; }
         }
@@ -387,6 +408,43 @@ static void rf_rx_daemon_fn(void *p1, void *p2, void *p3)
 K_THREAD_DEFINE(rf_rx_daemon, CONFIG_AKIRA_RF_DAEMON_STACK_SIZE,
                 rf_rx_daemon_fn, NULL, NULL, NULL,
                 CONFIG_AKIRA_RF_DAEMON_PRIORITY, 0, 0);
+
+/* Stateless raw capture: pause the daemon, take the chip, stream into buf.
+ * The lock timeout exceeds the daemon's one in-flight 2 s recv so we never
+ * spuriously fail to acquire. */
+int akira_rf_raw_capture(uint8_t *buf, size_t max_bytes,
+                         uint32_t sample_rate_hz, uint32_t timeout_ms)
+{
+    radio_handle_t *h = g_active_handle;
+    if (!h || !h->ops || !h->ops->raw_capture) return -ENOSYS;
+    if (!(h->capabilities & RADIO_CAP_RAW_MODE)) return -ENOTSUP;
+
+    akira_rf_daemon_pause();
+    int ret = -EBUSY;
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(5000)) == 0) {
+        ret = h->ops->raw_capture(h, buf, max_bytes, sample_rate_hz, timeout_ms);
+        k_mutex_unlock(&s_chip_lock);
+    }
+    akira_rf_daemon_resume();
+    return ret;
+}
+
+int akira_rf_raw_replay(const uint8_t *buf, size_t len,
+                        uint32_t sample_rate_hz, uint32_t repeat)
+{
+    radio_handle_t *h = g_active_handle;
+    if (!h || !h->ops || !h->ops->raw_replay) return -ENOSYS;
+    if (!(h->capabilities & RADIO_CAP_RAW_MODE)) return -ENOTSUP;
+
+    akira_rf_daemon_pause();
+    int ret = -EBUSY;
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(5000)) == 0) {
+        ret = h->ops->raw_replay(h, buf, len, sample_rate_hz, repeat);
+        k_mutex_unlock(&s_chip_lock);
+    }
+    akira_rf_daemon_resume();
+    return ret;
+}
 
 int akira_rf_recv_pop(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
 {
@@ -520,163 +578,45 @@ int akira_native_rf_set_power(wasm_exec_env_t exec_env, int8_t dbm)
     return akira_rf_set_power(dbm);
 }
 
-
 /* ── Raw Sub-GHz OOK capture / replay ──────────────────────────────────── */
 
-/*
- * These functions use the CC1101 (or CC1121) in "asynchronous serial mode":
- *
- *   IOCFG0 ← 0x0C  →  GDO0 outputs demodulated serial data (raw OOK)
- *   PKTCTRL0 ← 0x32 →  infinite packet length, no CRC, async serial mode
- *
- * Capture measures GPIO edge timings with a k_cycle_get_32() based loop.
- * Each uint16_t sample is a pulse duration in microseconds (mark or space),
- * alternating: samples[0] = first mark, samples[1] = first space, ...
- * A silence > RF_RAW_GAP_US signals end-of-burst.
- *
- * Replay drives the TX pin (GDO0 in TX mode) via GPIO bit-banging timed by
- * the same cycle counter.
- *
- * On unsupported chips (LoRa-only, WiFi) both functions return -ENOTSUP.
- */
-
-#define RF_RAW_GAP_US       20000u  /* silence longer than this = end of burst */
-#define RF_RAW_MAX_SAMPLES  4096u   /* hard cap regardless of WASM request     */
-#define RF_RAW_MIN_PULSE_US    50u  /* shorter pulses rejected as noise        */
-#define RF_RAW_MAX_REPEAT       9
+#define RF_RAW_MAX_BYTES 8192u
 
 int akira_native_rf_raw_capture(wasm_exec_env_t exec_env,
-                                 uint32_t buf_wasm, uint32_t max_samples,
-                                 int32_t timeout_ms)
+                                 uint32_t buf_wasm, uint32_t max_bytes,
+                                 uint32_t sample_rate_hz, int32_t timeout_ms)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
-    if (max_samples == 0) return -EINVAL;
-    if (timeout_ms  <= 0) timeout_ms = 5000;
-    if (max_samples  > RF_RAW_MAX_SAMPLES) max_samples = RF_RAW_MAX_SAMPLES;
+    if (max_bytes == 0 || max_bytes > RF_RAW_MAX_BYTES) return -EINVAL;
+    if (timeout_ms <= 0) timeout_ms = 5000;
 
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
     if (!inst) return -EFAULT;
-
-    /* Validate that the WASM buffer can hold max_samples uint16_t values */
-    uint16_t *buf = (uint16_t *)wasm_runtime_addr_app_to_native(inst, buf_wasm);
-    if (!buf) return -EFAULT;
-    if (!wasm_runtime_validate_native_addr(inst, buf,
-                                           max_samples * sizeof(uint16_t)))
+    uint8_t *buf = (uint8_t *)wasm_runtime_addr_app_to_native(inst, buf_wasm);
+    if (!buf || !wasm_runtime_validate_native_addr(inst, buf, max_bytes))
         return -EFAULT;
 
-#if defined(CONFIG_AKIRA_CC1101) || defined(CONFIG_AKIRA_CC1121)
-    /*
-     * TODO(hw): Configure CC1101/CC1121 for asynchronous raw OOK RX:
-     *   cc1101_write_reg(CC1101_REG_IOCFG0,   0x0C); // GDO0 = serial data
-     *   cc1101_write_reg(CC1101_REG_PKTCTRL0, 0x32); // infinite/async serial
-     *   cc1101_write_reg(CC1101_REG_MDMCFG2,  0x30); // OOK, no sync/preamble
-     *   cc1101_strobe(CC1101_CMD_SRX);
-     *
-     * Then sample GDO0 GPIO transitions with k_cycle_get_32() timing.
-     * The loop below is the architectural skeleton — GPIO read is the stub.
-     */
-
-    uint32_t deadline = (uint32_t)k_uptime_get() + (uint32_t)timeout_ms;
-    uint32_t n        = 0;
-    int      last_lvl = -1;
-    uint32_t t_start  = 0;
-
-    while ((uint32_t)k_uptime_get() < deadline && n < max_samples) {
-        /* TODO(hw): int lvl = gpio_pin_get(gdo0_dev, gdo0_pin); */
-        int lvl = 0; /* stub: always low — replace with real GPIO read */
-
-        if (last_lvl < 0) {
-            /* Waiting for first edge */
-            if (lvl) { last_lvl = lvl; t_start = k_cycle_get_32(); }
-            continue;
-        }
-
-        if (lvl != last_lvl) {
-            uint32_t now  = k_cycle_get_32();
-            uint32_t diff_us = (uint32_t)k_cyc_to_us_floor32(now - t_start);
-
-            if (diff_us > RF_RAW_GAP_US) break; /* end of burst */
-
-            if (diff_us >= RF_RAW_MIN_PULSE_US && n < max_samples) {
-                buf[n++] = (uint16_t)(diff_us > 65535u ? 65535u : diff_us);
-            }
-            last_lvl = lvl;
-            t_start  = now;
-        }
-        /* Tight-loop on a realtime priority thread; yield every 100 µs */
-        k_busy_wait(100);
-    }
-
-    /* TODO(hw): Return CC1101 to idle: cc1101_strobe(CC1101_CMD_SIDLE) */
-
-    if (n == 0) return -ETIMEDOUT;
-    LOG_INF("rf_raw_capture: %u samples", n);
-    return (int)n;
-
-#else
-    ARG_UNUSED(buf);
-    ARG_UNUSED(max_samples);
-    ARG_UNUSED(timeout_ms);
-    return -ENOTSUP;
-#endif
+    return akira_rf_raw_capture(buf, max_bytes, sample_rate_hz,
+                                (uint32_t)timeout_ms);
 }
 
 int akira_native_rf_raw_replay(wasm_exec_env_t exec_env,
-                                uint32_t buf_wasm, uint32_t sample_count,
-                                int32_t repeat)
+                                uint32_t buf_wasm, uint32_t len,
+                                uint32_t sample_rate_hz, int32_t repeat)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
-    if (sample_count == 0 || sample_count > RF_RAW_MAX_SAMPLES) return -EINVAL;
+    if (len == 0 || len > RF_RAW_MAX_BYTES) return -EINVAL;
     if (repeat < 1) repeat = 1;
-    if (repeat > RF_RAW_MAX_REPEAT) repeat = RF_RAW_MAX_REPEAT;
 
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
     if (!inst) return -EFAULT;
-
-    const uint16_t *buf = (const uint16_t *)wasm_runtime_addr_app_to_native(
-                                                inst, buf_wasm);
-    if (!buf) return -EFAULT;
-    if (!wasm_runtime_validate_native_addr(inst, (void *)buf,
-                                           sample_count * sizeof(uint16_t)))
+    const uint8_t *buf = (const uint8_t *)wasm_runtime_addr_app_to_native(inst, buf_wasm);
+    if (!buf || !wasm_runtime_validate_native_addr(inst, (void *)buf, len))
         return -EFAULT;
 
-#if defined(CONFIG_AKIRA_CC1101) || defined(CONFIG_AKIRA_CC1121)
-    /*
-     * TODO(hw): Configure CC1101/CC1121 for async OOK TX:
-     *   cc1101_write_reg(CC1101_REG_IOCFG0,   0x2D); // GDO0 = DCLK (sync serial TX)
-     *   cc1101_write_reg(CC1101_REG_PKTCTRL0, 0x32); // async serial TX mode
-     *   cc1101_strobe(CC1101_CMD_STX);
-     *
-     * Then GPIO bit-bang the TX data pin with the stored pulse timings.
-     * Timing is driven by k_busy_wait(duration_us).
-     */
-
-    for (int r = 0; r < repeat; r++) {
-        for (uint32_t i = 0; i < sample_count; i++) {
-            uint32_t dur_us = buf[i];
-            if (dur_us == 0) continue;
-            int lvl = (i & 1) ? 0 : 1; /* even = mark, odd = space */
-
-            /* TODO(hw): gpio_pin_set(tx_pin_dev, tx_pin, lvl); */
-            ARG_UNUSED(lvl);
-            k_busy_wait(dur_us);
-        }
-        /* TODO(hw): gpio_pin_set(tx_pin_dev, tx_pin, 0); — TX off between repeats */
-        k_msleep(10); /* 10 ms gap between repetitions */
-    }
-
-    /* TODO(hw): cc1101_strobe(CC1101_CMD_SIDLE) */
-    LOG_INF("rf_raw_replay: %u samples x%d", sample_count, repeat);
-    return 0;
-
-#else
-    ARG_UNUSED(buf);
-    ARG_UNUSED(sample_count);
-    ARG_UNUSED(repeat);
-    return -ENOTSUP;
-#endif
+    return akira_rf_raw_replay(buf, len, sample_rate_hz, (uint32_t)repeat);
 }
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */

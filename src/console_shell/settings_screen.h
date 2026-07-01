@@ -38,6 +38,9 @@ bool settings_screen_is_active(void);
 /** Return true while the display is blanked (sleep mode). */
 bool settings_screen_is_sleeping(void);
 
+/** Force-exit sleep mode: unblank the panel and close the settings screen. */
+void settings_screen_wake(void);
+
 #ifdef __cplusplus
 }
 #endif
