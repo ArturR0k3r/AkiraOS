@@ -9,8 +9,8 @@ LOG_MODULE_REGISTER(akira_shell_settings, CONFIG_AKIRA_LOG_LEVEL);
 
 /**
  * @file settings_screen.c
- * @brief AkiraConsole Settings — WiFi connect/disconnect, Web Server
- *        start/stop, About.  Pure akira_display_* renderer, no LVGL.
+ * @brief AkiraConsole Settings — WiFi connect/disconnect, About.
+ *        Pure akira_display_* renderer, no LVGL.
  *
  * Color palette (standard RGB565, INVON disabled — same as home_screen.c):
  *   C_BLACK = 0x0000  →  displayed black
@@ -65,10 +65,6 @@ LOG_MODULE_REGISTER(akira_shell_settings, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/net/net_mgmt.h>
 #endif
 
-#if defined(CONFIG_AKIRA_HTTP_SERVER)
-#include "connectivity/http/http_server.h"
-#endif
-
 /* ------------------------------------------------------------------ */
 /* Palette                                                            */
 /* ------------------------------------------------------------------ */
@@ -101,7 +97,6 @@ typedef enum
     SS_MAIN = 0,
     SS_WIFI,
     SS_WIFI_CONNECT,
-    SS_WEBSERVER,
     SS_BLUETOOTH,
     SS_ABOUT,
     SS_SLEEP,
@@ -115,7 +110,6 @@ typedef enum
 {
     MAIN_ITEM_WIFI = 0,
     MAIN_ITEM_BLUETOOTH,
-    MAIN_ITEM_WEBSERVER,
     MAIN_ITEM_DATETIME,
     MAIN_ITEM_DISPLAY,
     MAIN_ITEM_POWER,
@@ -128,7 +122,7 @@ typedef enum
 } main_item_t;
 
 static const char *s_main_labels[MAIN_ITEMS] = {
-    "WiFi", "Bluetooth", "Web Server",
+    "WiFi", "Bluetooth",
     "Date & Time", "Display", "Power",
     "Apps", "OTA Update", "Developer",
     "About", "Sleep"};
@@ -159,12 +153,6 @@ static const char CHARSET[] =
     "!@#$%^&*()-_+=,./;:'\"";
 #define CHARSET_LEN ((int)(sizeof(CHARSET) - 1))
 
-/* ---- Web server menu (3 items) ----------------------------------- */
-#define WS_ITEMS 3
-static const char *s_ws_labels[WS_ITEMS] = {
-    "Start", "Stop", "Back"};
-static int g_ws_sel;
-
 /* ---- Bluetooth menu (4 items) ------------------------------------ */
 #define BT_ITEMS 4
 static const char *s_bt_labels[BT_ITEMS] = {
@@ -174,7 +162,6 @@ static int g_bt_sel;
 /* ---- Scroll offsets (index of first visible item per menu) ------- */
 static int g_main_scroll;
 static int g_wifi_scroll;
-static int g_ws_scroll;
 static int g_bt_scroll;
 
 /* ---- Sleep state ------------------------------------------------- */
@@ -621,33 +608,6 @@ static void draw_wifi_connect(void)
     draw_ribbon("[UP/DN] char  [A] add  [X] del  [Y] next", "[B] BACK");
 }
 
-static void draw_webserver(void)
-{
-    draw_header("Web Server");
-    akira_display_rect(0, CONT_Y, SCR_W, CONT_H, C_BLACK);
-
-    char l1[48] = "Status: STOPPED";
-    char l2[64] = "URL: http://---:" STRINGIFY(HTTP_SERVER_PORT);
-
-#if defined(CONFIG_AKIRA_HTTP_SERVER)
-    if (akira_http_server_is_running())
-    {
-        char ip[20] = "---";
-        wifi_get_ip(ip, sizeof(ip));
-        snprintf(l1, sizeof(l1), "Status: RUNNING");
-        snprintf(l2, sizeof(l2), "URL: http://%s:%d", ip, HTTP_SERVER_PORT);
-    }
-#endif
-
-    akira_display_rounded_rect_fill(4, CONT_Y + 4, SCR_W - 8, 34, 3, C_BLACK);
-    akira_display_rounded_rect(4, CONT_Y + 4, SCR_W - 8, 34, 3, C_DKGRAY);
-    akira_display_text(10, CONT_Y + 10, l1, C_WHITE);
-    akira_display_text(10, CONT_Y + 24, l2, C_WHITE);
-
-    draw_menu_at(s_ws_labels, WS_ITEMS, g_ws_sel, CONT_Y + 44, g_ws_scroll);
-    draw_ribbon("[A] SELECT", "[B] BACK");
-}
-
 static void draw_about(void)
 {
     draw_header("About AkiraOS");
@@ -717,9 +677,6 @@ static void redraw(void)
     case SS_WIFI_CONNECT:
         draw_wifi_connect();
         break;
-    case SS_WEBSERVER:
-        draw_webserver();
-        break;
     case SS_BLUETOOTH:
         draw_bluetooth();
         break;
@@ -771,11 +728,6 @@ static void handle_main(uint32_t k)
             g_bt_sel = 0;
             g_bt_scroll = 0;
             g_page = SS_BLUETOOTH;
-            break;
-        case MAIN_ITEM_WEBSERVER:
-            g_ws_sel = 0;
-            g_ws_scroll = 0;
-            g_page = SS_WEBSERVER;
             break;
         case MAIN_ITEM_DATETIME:
             /* Date & Time — hands off to datetime_screen (blocking loop) */
@@ -962,71 +914,6 @@ static void handle_wifi_connect(uint32_t k)
     }
 }
 
-static void handle_webserver(uint32_t k)
-{
-    bool ch = false;
-    if (k & BIT(AKIRA_BTN_UP))
-    {
-        g_ws_sel = (g_ws_sel - 1 + WS_ITEMS) % WS_ITEMS;
-        g_ws_scroll = scroll_clamp(g_ws_sel, g_ws_scroll, WS_ITEMS, CONT_Y + 44);
-        ch = true;
-    }
-    if (k & BIT(AKIRA_BTN_DOWN))
-    {
-        g_ws_sel = (g_ws_sel + 1) % WS_ITEMS;
-        g_ws_scroll = scroll_clamp(g_ws_sel, g_ws_scroll, WS_ITEMS, CONT_Y + 44);
-        ch = true;
-    }
-    if (k & BIT(AKIRA_BTN_A))
-    {
-        switch (g_ws_sel)
-        {
-        case 0: /* Start — notify server thread of current IP (thread started at boot) */
-#if defined(CONFIG_AKIRA_HTTP_SERVER) && defined(CONFIG_WIFI) && defined(CONFIG_NET_MGMT)
-        {
-            char ws_ip[NET_IPV4_ADDR_LEN] = "0.0.0.0";
-            struct net_if *ws_iface = net_if_get_default();
-            if (ws_iface)
-            {
-                struct in_addr *ws_addr =
-                    net_if_ipv4_get_global_addr(ws_iface, NET_ADDR_PREFERRED);
-                if (ws_addr)
-                {
-                    net_addr_ntop(AF_INET, ws_addr, ws_ip, sizeof(ws_ip));
-                }
-            }
-            akira_http_server_start();
-        }
-#elif defined(CONFIG_AKIRA_HTTP_SERVER)
-            akira_http_server_start();
-#else
-            LOG_WRN("HTTP server not compiled in");
-#endif
-        break;
-        case 1: /* Stop */
-#if defined(CONFIG_AKIRA_HTTP_SERVER)
-            akira_http_server_stop();
-#else
-            LOG_WRN("HTTP server not compiled in");
-#endif
-            break;
-        case 2: /* Back */
-            g_page = SS_MAIN;
-            break;
-        }
-        redraw();
-        return;
-    }
-    if (k & BIT(AKIRA_BTN_B))
-    {
-        g_page = SS_MAIN;
-        redraw();
-        return;
-    }
-    if (ch)
-        redraw();
-}
-
 static void handle_about(uint32_t k)
 {
     if (k)
@@ -1128,8 +1015,6 @@ void settings_screen_create(void)
     g_main_scroll = 0;
     g_wifi_sel = 0;
     g_wifi_scroll = 0;
-    g_ws_sel = 0;
-    g_ws_scroll = 0;
     g_bt_sel = 0;
     g_bt_scroll = 0;
     g_conn_field = 0;
@@ -1175,9 +1060,6 @@ void settings_screen_handle_key(uint32_t just_pressed)
     case SS_WIFI_CONNECT:
         handle_wifi_connect(just_pressed);
         break;
-    case SS_WEBSERVER:
-        handle_webserver(just_pressed);
-        break;
     case SS_BLUETOOTH:
         handle_bluetooth(just_pressed);
         break;
@@ -1197,7 +1079,7 @@ void settings_screen_update(void)
     if (!g_active)
         return;
     /* Refresh status-showing pages on periodic tick */
-    if (g_page == SS_WIFI || g_page == SS_WEBSERVER || g_page == SS_BLUETOOTH)
+    if (g_page == SS_WIFI || g_page == SS_BLUETOOTH)
     {
         redraw();
     }
