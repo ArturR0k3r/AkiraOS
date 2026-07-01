@@ -23,6 +23,7 @@ static int g_network_count;
 
 static struct k_sem g_scan_done;
 static struct k_sem g_connect_done;
+static struct k_sem g_disconnect_done;
 static int  g_connect_result; /* 1 = connected, 0 = failed, set before g_connect_done is given */
 static bool g_wifi_mgr_cb_reg;
 
@@ -41,6 +42,9 @@ static void on_wifi_mgr_event(wifi_mgr_event_t evt, void *user_data)
         g_connect_result = 0;
         k_sem_give(&g_connect_done);
         break;
+    case WIFI_MGR_EVT_DISCONNECTED:
+        k_sem_give(&g_disconnect_done);
+        break;
     default:
         break;
     }
@@ -51,6 +55,7 @@ static void ensure_wifi_mgr_cb(void)
     if (!g_wifi_mgr_cb_reg) {
         k_sem_init(&g_scan_done, 0, 1);
         k_sem_init(&g_connect_done, 0, 1);
+        k_sem_init(&g_disconnect_done, 0, 1);
         wifi_manager_register_cb(on_wifi_mgr_event, NULL);
         g_wifi_mgr_cb_reg = true;
     }
@@ -226,9 +231,59 @@ static bool enter_password(const char *ssid, char *out, int maxlen, const char *
     }
 }
 
+/* ---- Connect/scan popup (matches akira_os_shell.c's SD-card popup style) ---- */
+#define WIFI_POPUP_W 240
+#define WIFI_POPUP_H 70
+#define WIFI_POPUP_X ((SCR_W - WIFI_POPUP_W) / 2)
+#define WIFI_POPUP_Y ((SCR_H - WIFI_POPUP_H) / 2)
+#define WIFI_POPUP_DOT_TICKS 15 /* advance dots every 300ms (15 * 20ms) */
+
+static void draw_wifi_popup(const char *label, int dots) {
+    int px = WIFI_POPUP_X, py = WIFI_POPUP_Y;
+    akira_display_rect(px, py, WIFI_POPUP_W, WIFI_POPUP_H, C_BLACK);
+    akira_display_rect_outline(px, py, WIFI_POPUP_W, WIFI_POPUP_H, C_WHITE);
+    akira_display_rect_outline(px + 1, py + 1, WIFI_POPUP_W - 2, WIFI_POPUP_H - 2, C_WHITE);
+    akira_display_text(px + 8, py + 8, "WiFi", C_WHITE);
+    akira_display_hline(px + 8, py + 20, WIFI_POPUP_W - 16, C_WHITE);
+    char line[24];
+    snprintf(line, sizeof(line), "%s%.*s", label, dots, "...");
+    akira_display_text(px + 8, py + 30, line, C_WHITE);
+    akira_display_flush();
+}
+
+/* Polls sem in short slices so the popup animates instead of the UI thread
+ * sitting on one long k_sem_take with a static label underneath it. */
+static bool wait_with_popup(struct k_sem *sem, int64_t timeout_ms, const char *label) {
+    int64_t deadline = k_uptime_get() + timeout_ms;
+    int dots = 0, tick = 0;
+    draw_wifi_popup(label, dots);
+    while (k_uptime_get() < deadline) {
+        if (k_sem_take(sem, K_MSEC(20)) == 0) {
+            return true;
+        }
+        if (++tick >= WIFI_POPUP_DOT_TICKS) {
+            tick = 0;
+            dots = (dots + 1) % 4;
+            draw_wifi_popup(label, dots);
+        }
+    }
+    return false;
+}
+
 static bool do_connect(const char *ssid, const char *pass) {
     LOG_INF("WiFi connect SSID:%s",ssid);
     ensure_wifi_mgr_cb();
+
+    /* wifi_manager_connect() refuses with -EALREADY while CONNECTED/CONNECTING
+     * to a prior network — switching networks needs an explicit disconnect
+     * first, or every attempt to join a different SSID fails outright. */
+    wifi_mgr_state_t state = wifi_manager_get_state();
+    if (state == WIFI_MGR_STATE_CONNECTED || state == WIFI_MGR_STATE_CONNECTING) {
+        k_sem_reset(&g_disconnect_done);
+        if (wifi_manager_disconnect() == 0) {
+            wait_with_popup(&g_disconnect_done, 5000, "Disconnecting");
+        }
+    }
 
     /* wifi_manager_connect() always uses whatever is currently saved, so the
      * new credentials must be written before attempting to connect. Snapshot
@@ -252,7 +307,7 @@ static bool do_connect(const char *ssid, const char *pass) {
         return false;
     }
 
-    if (k_sem_take(&g_connect_done, K_SECONDS(15)) != 0) {
+    if (!wait_with_popup(&g_connect_done, 15000, "Connecting")) {
         LOG_WRN("WiFi connect timed out");
         if (had_prev) wifi_manager_update_credentials(prev_ssid, prev_psk);
         return false;
@@ -261,26 +316,6 @@ static bool do_connect(const char *ssid, const char *pass) {
         wifi_manager_update_credentials(prev_ssid, prev_psk);
     }
     return g_connect_result != 0;
-}
-
-/* ---- Scanning popup (matches akira_os_shell.c's SD-card popup style) ---- */
-#define WIFI_POPUP_W 240
-#define WIFI_POPUP_H 70
-#define WIFI_POPUP_X ((SCR_W - WIFI_POPUP_W) / 2)
-#define WIFI_POPUP_Y ((SCR_H - WIFI_POPUP_H) / 2)
-#define WIFI_POPUP_DOT_TICKS 15 /* advance dots every 300ms (15 * 20ms) */
-
-static void draw_scanning_popup(int dots) {
-    int px = WIFI_POPUP_X, py = WIFI_POPUP_Y;
-    akira_display_rect(px, py, WIFI_POPUP_W, WIFI_POPUP_H, C_BLACK);
-    akira_display_rect_outline(px, py, WIFI_POPUP_W, WIFI_POPUP_H, C_WHITE);
-    akira_display_rect_outline(px + 1, py + 1, WIFI_POPUP_W - 2, WIFI_POPUP_H - 2, C_WHITE);
-    akira_display_text(px + 8, py + 8, "WiFi", C_WHITE);
-    akira_display_hline(px + 8, py + 20, WIFI_POPUP_W - 16, C_WHITE);
-    char line[24];
-    snprintf(line, sizeof(line), "Scanning%.*s", dots, "...");
-    akira_display_text(px + 8, py + 30, line, C_WHITE);
-    akira_display_flush();
 }
 
 /* Returns false if the user cancelled the scan with HOME/B, true otherwise
@@ -299,7 +334,7 @@ static bool do_scan(void) {
     int64_t deadline = k_uptime_get() + 10000;
     uint32_t prev = akira_input_get_bitmask();
     int dots = 0, tick = 0;
-    draw_scanning_popup(dots);
+    draw_wifi_popup("Scanning", dots);
     while (k_uptime_get() < deadline) {
         if (k_sem_take(&g_scan_done, K_MSEC(20)) == 0) {
             size_t count = 0;
@@ -310,7 +345,7 @@ static bool do_scan(void) {
         if (++tick >= WIFI_POPUP_DOT_TICKS) {
             tick = 0;
             dots = (dots + 1) % 4;
-            draw_scanning_popup(dots);
+            draw_wifi_popup("Scanning", dots);
         }
         uint32_t btns = akira_input_get_bitmask();
         uint32_t just = btns & ~prev;
@@ -416,7 +451,6 @@ void wifi_screen_load(void)
                 initial_psk = saved_psk;
             }
             if (enter_password(g_networks[g_sel].ssid,pass,PASS_MAX,initial_psk)) {
-                draw_list("Connecting...");
                 bool ok = do_connect(g_networks[g_sel].ssid,pass);
                 draw_list(ok ? "Connected!" : "Failed");
                 k_sleep(K_MSEC(1200));
