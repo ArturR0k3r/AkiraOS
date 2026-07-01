@@ -32,6 +32,7 @@ LOG_MODULE_REGISTER(akira_home_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include "settings_screen.h"
 #include "shell_theme.h"
 #include "akira_os_shell.h"
+#include "ui/akira_ui.h"
 
 #include <zephyr/kernel.h>
 #include <string.h>
@@ -654,39 +655,35 @@ static void glass_rect_dim(int x, int y, int w, int h, int r)
 
 static void draw_status_bar(void)
 {
-    akira_display_rect(0, SBAR_Y, SCR_W, SBAR_H, C_BLACK);
-
-    /* Segmented battery: 5 segments at (4,7), outline 22x10 */
-    int batt_pct = 0;
-    for (int i = 0; g_batt_str[i] && g_batt_str[i] != '%'; i++)
+    /* Shared chrome: the kit's one inverted top bar (akira_ui). The carousel
+     * below stays a bespoke screen — only this chrome is migrated. */
+    int batt_pct = -1;
+    if (g_batt_str[0] && g_batt_str[0] != '-')
     {
-        if (g_batt_str[i] >= '0' && g_batt_str[i] <= '9')
+        batt_pct = 0;
+        for (int i = 0; g_batt_str[i] && g_batt_str[i] != '%'; i++)
         {
-            batt_pct = batt_pct * 10 + (g_batt_str[i] - '0');
+            if (g_batt_str[i] >= '0' && g_batt_str[i] <= '9')
+            {
+                batt_pct = batt_pct * 10 + (g_batt_str[i] - '0');
+            }
         }
+        if (batt_pct > 100)
+            batt_pct = 100;
     }
-    if (batt_pct > 100)
-        batt_pct = 100;
 
-    akira_display_rect_outline(4, 7, 22, 10, C_WHITE);
-    akira_display_rect(26, 10, 2, 4, C_WHITE); /* nub */
-    int segs = (batt_pct * 5 + 50) / 100;
-    for (int s = 0; s < 5; s++)
-    {
-        akira_display_rect(6 + s * 4, 9, 3, 6, (s < segs) ? C_WHITE : C_BLACK);
-    }
-    akira_display_text(30, 7, g_batt_str, C_WHITE);
-
-    /* WiFi + BT icons centred — dim if not connected */
-    int cx = SCR_W / 2;
-    draw_icon_nx(cx - 26, 4, 1, ICON_WIFI, g_wifi_conn ? C_WHITE : C_DKGRAY, C_BLACK);
-    draw_icon_nx(cx + 6, 4, 1, ICON_BT, g_bt_conn ? C_WHITE : C_DKGRAY, C_BLACK);
-
-    /* HH:MM:SS clock — right aligned */
-    int tw = (int)strlen(g_time_str) * 8;
-    akira_display_text(SCR_W - tw - 4, 7, g_time_str, C_WHITE);
-
-    akira_display_hline(0, SBAR_H, SCR_W, C_WHITE);
+    akira_ui_status_t sb = {
+        .title = NULL,
+        .clock = g_time_str,
+        .battery_pct = batt_pct,
+        .show_wifi = true,
+        .wifi_on = g_wifi_conn,
+        .show_bt = true,
+        .bt_on = g_bt_conn,
+        .icon_wifi = ICON_WIFI,
+        .icon_bt = ICON_BT,
+    };
+    akira_ui_status_bar(&sb);
 }
 
 /* ================================================================== */
