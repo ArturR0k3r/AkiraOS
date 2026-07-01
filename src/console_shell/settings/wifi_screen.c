@@ -17,6 +17,20 @@ LOG_MODULE_REGISTER(akira_wifi_screen, CONFIG_AKIRA_LOG_LEVEL);
 
 #include <connectivity/wifi/wifi_manager.h>
 
+/* Tighter row height + narrower item width than the shell_theme.h default so
+ * 6 networks fit on screen with a thin scrollbar strip on the right.
+ * LIST_Y reclaims the 2px gap below the header (header-to-footer is exactly
+ * 192px = 6*32) — the status text drawn at LIST_Y+4 is already hidden behind
+ * row 0's opaque fill whenever the list is non-empty, so no space is lost. */
+#undef LIST_Y
+#define LIST_Y SBAR_H
+#undef ITEM_H
+#define ITEM_H 32
+#define WIFI_SBAR_W 4
+#define WIFI_SBAR_X (SCR_W - 4 - WIFI_SBAR_W)
+#undef ITEM_W
+#define ITEM_W (WIFI_SBAR_X - 2 - ITEM_X)
+
 #define WIFI_MAX_NETWORKS 16
 static wifi_mgr_scan_result_t g_networks[WIFI_MAX_NETWORKS] __attribute__((section(".ext_ram.bss")));
 static int g_network_count;
@@ -384,8 +398,7 @@ static void build_idle_status(char *buf, size_t sz) {
 static void draw_signal_lock(int idx, int sel, int8_t rssi, bool secured) {
     bool hi = (idx == sel);
     int iy = LIST_Y + idx * ITEM_H;
-    uint16_t on  = hi ? C_BLACK : C_WHITE;
-    uint16_t off = hi ? C_GRAY  : C_DKGRAY;
+    uint16_t on = hi ? C_BLACK : C_WHITE;
 
     int bars = (rssi >= -55) ? 4 : (rssi >= -65) ? 3 : (rssi >= -75) ? 2 : 1;
     int bars_right = ITEM_X + ITEM_W - 8;
@@ -393,7 +406,12 @@ static void draw_signal_lock(int idx, int sel, int8_t rssi, bool secured) {
     int base_y = iy + 3 + (ITEM_H - 6) / 2 + 5;
     for (int i = 0; i < 4; i++) {
         int bh = 3 + i * 3;
-        akira_display_rect(bars_left + i * 6, base_y - bh, 4, bh, (i < bars) ? on : off);
+        int bx = bars_left + i * 6, by = base_y - bh;
+        if (i < bars) {
+            akira_display_rect(bx, by, 4, bh, on);
+        } else {
+            akira_display_rect_outline(bx, by, 4, bh, on);
+        }
     }
 
     if (secured) {
@@ -408,13 +426,23 @@ static void draw_signal_lock(int idx, int sel, int8_t rssi, bool secured) {
 static void draw_list(const char *status) {
     akira_display_clear(C_BLACK); lc_header("WIFI");
     akira_display_text(ITEM_X+4,LIST_Y+4,status,C_GRAY);
-    int vis=(FOOT_Y-LIST_Y-18)/ITEM_H;
+    int vis=(FOOT_Y-LIST_Y)/ITEM_H;
     if (g_scroll>g_network_count-vis) g_scroll=g_network_count>vis?g_network_count-vis:0;
     if (g_scroll<0) g_scroll=0;
     for (int i=g_scroll;i<g_network_count&&i<g_scroll+vis;i++) {
         lc_item(i-g_scroll,g_sel-g_scroll,g_networks[i].ssid,"");
         draw_signal_lock(i-g_scroll, g_sel-g_scroll, g_networks[i].rssi,
                           g_networks[i].security != 0 /* 0 == WIFI_SECURITY_TYPE_NONE */);
+    }
+    if (g_network_count > vis) {
+        int track_y = LIST_Y;
+        int track_h = vis * ITEM_H;
+        akira_display_rect(WIFI_SBAR_X, track_y, WIFI_SBAR_W, track_h, C_BLACK);
+        int thumb_h = track_h * vis / g_network_count;
+        if (thumb_h < 8) thumb_h = 8;
+        int max_off = g_network_count - vis;
+        int thumb_y = track_y + (track_h - thumb_h) * g_scroll / max_off;
+        akira_display_rect(WIFI_SBAR_X, thumb_y, WIFI_SBAR_W, thumb_h, C_WHITE);
     }
     lc_footer("A-Connect  |  B-Back");
     akira_display_flush();
@@ -437,7 +465,7 @@ void wifi_screen_load(void)
         k_sleep(K_MSEC(20));
         uint32_t btns=akira_input_get_bitmask(), just=btns&~prev; prev=btns;
         if (!just) continue;
-        int vis=(FOOT_Y-LIST_Y-18)/ITEM_H;
+        int vis=(FOOT_Y-LIST_Y)/ITEM_H;
         if (just&BIT(AKIRA_BTN_UP)) { if(g_sel>0){g_sel--;if(g_sel<g_scroll)g_scroll--;draw_list("Select network");} }
         if (just&BIT(AKIRA_BTN_DOWN)) { if(g_sel<g_network_count-1){g_sel++;if(g_sel>=g_scroll+vis)g_scroll++;draw_list("Select network");} }
         if ((just&BIT(AKIRA_BTN_A)) && g_network_count>0) {
