@@ -34,6 +34,7 @@ LOG_MODULE_REGISTER(akira_shell_settings, CONFIG_AKIRA_LOG_LEVEL);
 #include "settings_screen.h"
 #include "home_screen.h"
 #include "shell_theme.h"
+#include "ui/akira_ui.h"
 #include "settings/datetime_screen.h"
 #include "settings/display_screen.h"
 #include "settings/power_screen.h"
@@ -292,10 +293,15 @@ static void draw_right(int rx, int y, const char *s, uint16_t col)
 
 static void draw_header(const char *title)
 {
-    akira_display_rect(0, 0, SCR_W, SBAR_H, C_BLACK);
-    draw_centred(0, (SBAR_H - 10) / 2, SCR_W, title, C_WHITE, C_BLACK);
-    akira_display_hline(0, SBAR_H, SCR_W, C_WHITE);
-    akira_display_hline(0, SBAR_H + 1, SCR_W, C_WHITE);
+    /* Shared chrome: the kit's one inverted top bar (title left-aligned). */
+    akira_ui_status_t sb = {
+        .title = title,
+        .clock = NULL,
+        .battery_pct = -1,
+        .show_wifi = false,
+        .show_bt = false,
+    };
+    akira_ui_status_bar(&sb);
 }
 
 static void draw_ribbon(const char *left, const char *right)

@@ -13,18 +13,11 @@ LOG_MODULE_REGISTER(akira_ble_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include <api/akira_input_api.h>
 
 #include "shell_theme.h"
+#include "ui/akira_ui.h"
 #include <connectivity/bluetooth/bt_manager.h>
 #include "ble_screen.h"
 
 
-
-static void centred(int x, int y, int w, const char *s, uint16_t fg, uint16_t bg)
-{
-    int tw = (int)(strlen(s) * 8);
-    int lx = x + (tw < w ? (w - tw) / 2 : 0);
-    akira_display_rect(x, y, w, 10, bg);
-    akira_display_text(lx, y, s, fg);
-}
 
 static void draw_item(int idx, int sel, const char *lbl, const char *rv)
 {
@@ -64,10 +57,14 @@ static void draw(int sel)
     bool on       = (st != BT_STATE_OFF && st != BT_STATE_ERROR);
 
     akira_display_clear(C_BLACK);
-    akira_display_rect(0, 0, SCR_W, SBAR_H, C_BLACK);
-    centred(0, (SBAR_H - 10) / 2, SCR_W, "BLUETOOTH", C_WHITE, C_BLACK);
-    akira_display_hline(0, SBAR_H,     SCR_W, C_WHITE);
-    akira_display_hline(0, SBAR_H + 1, SCR_W, C_WHITE);
+    akira_ui_status_t sb = {
+        .title = "BLUETOOTH",
+        .clock = NULL,
+        .battery_pct = -1,
+        .show_wifi = false,
+        .show_bt = false,
+    };
+    akira_ui_status_bar(&sb);
 
     draw_item(0, sel, "Bluetooth",    on ? "ON" : "OFF");
     draw_item(1, sel, "Pairing Mode", state_label(st));

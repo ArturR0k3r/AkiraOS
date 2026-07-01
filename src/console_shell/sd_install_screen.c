@@ -27,6 +27,7 @@ LOG_MODULE_REGISTER(akira_sd_install, CONFIG_AKIRA_LOG_LEVEL);
 #include "install_progress_screen.h"
 #include "home_screen.h"
 #include "shell_theme.h"
+#include "ui/akira_ui.h"
 
 #include <api/akira_display_api.h>
 #include <api/akira_input_api.h>
@@ -106,15 +107,25 @@ static void draw_centred(int x, int y, int w, const char *s, uint16_t fg, uint16
     akira_display_text(lx, y, s, fg);
 }
 
+/* Shared chrome: the kit's inverted top bar. */
+static void sd_draw_header(void)
+{
+    akira_ui_status_t sb = {
+        .title = "SD APPS",
+        .clock = NULL,
+        .battery_pct = -1,
+        .show_wifi = false,
+        .show_bt = false,
+    };
+    akira_ui_status_bar(&sb);
+}
+
 static void draw_screen(void)
 {
     akira_display_clear(C_BLACK);
 
     /* Status bar */
-    akira_display_rect(0, 0, SCR_W, SBAR_H, C_BLACK);
-    draw_centred(0, (SBAR_H - 10) / 2, SCR_W, "SD APPS", C_WHITE, C_BLACK);
-    akira_display_hline(0, SBAR_H, SCR_W, C_WHITE);
-    akira_display_hline(0, SBAR_H + 1, SCR_W, C_WHITE);
+    sd_draw_header();
 
     /* List area */
     akira_display_rect(0, LIST_Y, SCR_W, LIST_H, C_BLACK);
@@ -251,10 +262,7 @@ void sd_install_screen_load(void)
     if (!fs_manager_sd_available())
     {
         akira_display_clear(C_BLACK);
-        akira_display_rect(0, 0, SCR_W, SBAR_H, C_BLACK);
-        draw_centred(0, (SBAR_H - 10) / 2, SCR_W, "SD APPS", C_WHITE, C_BLACK);
-        akira_display_hline(0, SBAR_H, SCR_W, C_WHITE);
-        akira_display_hline(0, SBAR_H + 1, SCR_W, C_WHITE);
+        sd_draw_header();
         draw_centred(0, SCR_H / 2 - 10, SCR_W, "No SD card detected", C_GRAY, C_BLACK);
         draw_centred(0, SCR_H / 2 + 4, SCR_W, "Insert card and reboot", C_DKGRAY, C_BLACK);
         akira_display_hline(0, FOOT_Y - 1, SCR_W, C_WHITE);

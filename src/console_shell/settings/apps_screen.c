@@ -14,6 +14,7 @@ LOG_MODULE_REGISTER(akira_apps_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include <runtime/app_manager/app_manager.h>
 #include "apps_screen.h"
 #include "../settings_shared.h"
+#include "ui/akira_ui.h"
 
 #define MAX_APPS CONFIG_AKIRA_APP_MAX_INSTALLED
 
@@ -85,63 +86,6 @@ static void draw(void)
     akira_display_flush();
 }
 
-static void draw_confirm(const char *name)
-{
-    /* Modal confirmation dialog using glass buttons */
-    int pw = 240, ph = 80;
-    int px = (SS_SCR_W - pw) / 2;
-    int py = (SS_SCR_H - ph) / 2;
-
-    akira_display_rounded_rect_fill(px, py, pw, ph, 6, SS_C_BLACK);
-    akira_display_rounded_rect(px, py, pw, ph, 6, SS_C_WHITE);
-    akira_display_rounded_rect(px + 1, py + 1, pw - 2, ph - 2, 5, SS_C_DKGRAY);
-
-    char msg[40];
-    snprintf(msg, sizeof(msg), "Uninstall %s?", name);
-    ss_draw_centred(px + 4, py + 10, pw - 8, msg, SS_C_WHITE, SS_C_BLACK);
-    akira_display_hline(px + 4, py + 24, pw - 8, SS_C_DKGRAY);
-
-    /* YES button — dimmed (not default) */
-    ss_glass_rect_dim  (px + 8,        py + 30, (pw - 24) / 2, 24, 4);
-    ss_draw_centred    (px + 8,        py + 40, (pw - 24) / 2, "YES", SS_C_DKGRAY, SS_C_GLASS_BODY);
-
-    /* CANCEL button — focused (default) */
-    ss_glass_rect_focus(px + 8 + (pw - 24) / 2 + 8, py + 30, (pw - 24) / 2, 24, 4);
-    ss_draw_centred    (px + 8 + (pw - 24) / 2 + 8, py + 40, (pw - 24) / 2, "CANCEL", SS_C_WHITE, SS_C_GLASS_BODY);
-
-    akira_display_flush();
-}
-
-static void draw_confirm_sel(const char *name, int cs)
-{
-    /* Re-render just the two confirm buttons with updated selection */
-    int pw = 240, ph = 80;
-    int px = (SS_SCR_W - pw) / 2;
-    int py = (SS_SCR_H - ph) / 2;
-
-    int bw = (pw - 24) / 2;
-    int by = py + 30;
-
-    /* YES */
-    if (cs == 0) {
-        ss_glass_rect_focus(px + 8,          by, bw, 24, 4);
-        ss_draw_centred    (px + 8,          by + 10, bw, "YES", SS_C_WHITE, SS_C_GLASS_BODY);
-    } else {
-        ss_glass_rect_dim  (px + 8,          by, bw, 24, 4);
-        ss_draw_centred    (px + 8,          by + 10, bw, "YES", SS_C_DKGRAY, SS_C_GLASS_BODY);
-    }
-    /* CANCEL */
-    if (cs == 1) {
-        ss_glass_rect_focus(px + 8 + bw + 8, by, bw, 24, 4);
-        ss_draw_centred    (px + 8 + bw + 8, by + 10, bw, "CANCEL", SS_C_WHITE, SS_C_GLASS_BODY);
-    } else {
-        ss_glass_rect_dim  (px + 8 + bw + 8, by, bw, 24, 4);
-        ss_draw_centred    (px + 8 + bw + 8, by + 10, bw, "CANCEL", SS_C_DKGRAY, SS_C_GLASS_BODY);
-    }
-    akira_display_flush();
-    (void)name;
-}
-
 void apps_screen_load(void)
 {
     extern void settings_screen_load(void);
@@ -174,28 +118,18 @@ void apps_screen_load(void)
         }
 
         if ((just & BIT(AKIRA_BTN_A)) && g_count > 0) {
-            int cs = 1;  /* 0=YES, 1=CANCEL — default to CANCEL */
-            draw_confirm(g_apps[g_sel].name);
-            uint32_t cp = akira_input_get_bitmask();
-            while (true) {
-                k_sleep(K_MSEC(20));
-                uint32_t cb = akira_input_get_bitmask(), cj = cb & ~cp;
-                cp = cb;
-                if (!cj) continue;
-                if (cj & BIT(AKIRA_BTN_LEFT))  { if (cs > 0) { cs--; draw_confirm_sel(g_apps[g_sel].name, cs); } }
-                if (cj & BIT(AKIRA_BTN_RIGHT)) { if (cs < 1) { cs++; draw_confirm_sel(g_apps[g_sel].name, cs); } }
-                if (cj & BIT(AKIRA_BTN_A)) {
-                    if (cs == 0) {
-                        app_manager_uninstall(g_apps[g_sel].name);
-                        g_count = app_manager_list(g_apps, MAX_APPS);
-                        if (g_count < 0) g_count = 0;
-                        if (g_sel >= g_count) g_sel = g_count > 0 ? g_count - 1 : 0;
-                        g_scroll = 0;
-                    }
-                    break;
-                }
-                if ((cj & BIT(AKIRA_BTN_B)) || (cj & BIT(AKIRA_BTN_HOME))) break;
+            /* Uninstalling an installed app is a guarded action — route it
+             * through the shared 3px Capability-Guard confirmation. */
+            char q[48];
+            snprintf(q, sizeof(q), "Uninstall %s?", g_apps[g_sel].name);
+            if (akira_ui_confirm_dialog("APP_UNINSTALL", q)) {
+                app_manager_uninstall(g_apps[g_sel].name);
+                g_count = app_manager_list(g_apps, MAX_APPS);
+                if (g_count < 0) g_count = 0;
+                if (g_sel >= g_count) g_sel = g_count > 0 ? g_count - 1 : 0;
+                g_scroll = 0;
             }
+            prev = akira_input_get_bitmask();  /* swallow buttons held from dialog */
             draw();
         }
 
