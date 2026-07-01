@@ -164,6 +164,28 @@ int akira_rf_deinit(void)
     return 0;
 }
 
+int akira_rf_release_all(void)
+{
+    LOG_INF("RF release ownership (no power-down)");
+
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) {
+        return -EBUSY;
+    }
+
+    for (int c = AKIRA_RF_CHIP_NONE + 1; c < AKIRA_RF_CHIP_MAX; c++) {
+        if (!s_inited[c]) continue;
+        radio_handle_t *h = map_chip_to_handle((akira_rf_chip_t)c);
+        if (h) {
+            radio_manager_release(h, "rf");
+        }
+    }
+    g_active_handle = NULL;
+    g_active_chip = AKIRA_RF_CHIP_NONE;
+
+    k_mutex_unlock(&s_chip_lock);
+    return 0;
+}
+
 int akira_rf_select(akira_rf_chip_t chip)
 {
     LOG_INF("RF select: chip=%d", chip);

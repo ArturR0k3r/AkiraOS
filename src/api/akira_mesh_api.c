@@ -90,8 +90,7 @@ int akira_native_mesh_init(wasm_exec_env_t exec_env, int32_t node_id,
     cfg.max_hops = AKIRA_MESH_MAX_HOPS;
     cfg.beacon_interval_ms = beacon_interval_ms ? beacon_interval_ms : 5000;
 
-    /* Release RF API ownership so mesh can acquire the LR2021. */
-    akira_rf_deinit();
+    akira_rf_release_all();
 
     int ret = akira_mesh_init(&cfg);
     if (ret) return ret;

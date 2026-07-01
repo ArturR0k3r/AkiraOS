@@ -28,6 +28,10 @@ typedef enum {
 /* Core RF API functions (no security checks) */
 int akira_rf_init(akira_rf_chip_t chip);
 int akira_rf_deinit(void);
+/* Release radio-manager ownership of all RF-held chips WITHOUT powering them
+ * down (no ops->deinit). Lets the mesh acquire the LR2021 that main() inits at
+ * boot, avoiding the deinit-induced BUSY/boot timeout. */
+int akira_rf_release_all(void);
 /* Make `chip` the active RF chip. Hardware-inits it on first select, then just
  * flips the active pointer on later switches, preserving each chip's config. */
 int akira_rf_select(akira_rf_chip_t chip);
