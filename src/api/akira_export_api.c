@@ -3,6 +3,9 @@
 #include "akira_net_api.h"
 #include "akira_power_api.h"
 #include "akira_rf_api.h"
+#ifdef CONFIG_AKIRA_MESH
+#include "akira_mesh_api.h"
+#endif
 #ifdef CONFIG_AKIRA_WASM_INPUT
 #include "akira_input_api.h"
 #endif
@@ -107,6 +110,17 @@ bool akira_register_native_apis()
         /* Raw OOK/ASK signal capture and replay */
         {"rf_raw_capture",         (void *)akira_native_rf_raw_capture,         "(iiii)i", NULL},
         {"rf_raw_replay",          (void *)akira_native_rf_raw_replay,          "(iiii)i", NULL},
+#endif
+#if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_AKIRA_MESH)
+        {"mesh_init",              (void *)akira_native_mesh_init,              "(i$ii)i", NULL},
+        {"mesh_start",             (void *)akira_native_mesh_start,             "()i",     NULL},
+        {"mesh_stop",              (void *)akira_native_mesh_stop,              "()i",     NULL},
+        {"mesh_send",              (void *)akira_native_mesh_send,              "(iii)i",  NULL},
+        {"mesh_broadcast",         (void *)akira_native_mesh_broadcast,         "(iii)i",  NULL},
+        {"mesh_recv_pop",          (void *)akira_native_mesh_recv_pop,          "(iiii)i", NULL},
+        {"mesh_get_nodes",         (void *)akira_native_mesh_get_nodes,         "(ii)i",   NULL},
+        {"mesh_get_stats",         (void *)akira_native_mesh_get_stats,         "(i)i",    NULL},
+        {"mesh_distribute_app",    (void *)akira_native_mesh_distribute_app,    "($ii)i",  NULL},
 #endif
 #if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_WIFI)
         /* Passive 802.11 spectrum scan -- per-channel max RSSI */

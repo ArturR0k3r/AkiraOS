@@ -99,6 +99,10 @@ extern "C" {
  * Elevated privilege — requires explicit user consent.
  * Manifest string: "wifi.inject" */
 #define AKIRA_CAP_WIFI_INJECT   (1ULL << 34)
+/* AkiraMesh networking: init/start/stop, send/broadcast, node/stat queries,
+ * WASM app distribution over the mesh.
+ * Manifest string: "mesh" */
+#define AKIRA_CAP_MESH          (1ULL << 35)
 
 /*
  * Capability check macro using security subsystem.

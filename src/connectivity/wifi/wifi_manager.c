@@ -22,6 +22,8 @@ LOG_MODULE_REGISTER(wifi_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 /* ── internal state ─────────────────────────────────────────────────────── */
 
+#define WIFI_MGR_MAX_SCAN_RESULTS 16
+
 struct wifi_mgr_listener {
     wifi_mgr_event_cb_t cb;
     void               *user_data;
@@ -34,6 +36,9 @@ static struct {
     struct net_mgmt_event_callback wifi_cb;
     struct net_mgmt_event_callback ipv4_cb;
     struct k_mutex      lock;
+    wifi_mgr_scan_result_t scan_results[WIFI_MGR_MAX_SCAN_RESULTS];
+    size_t              scan_count;
+    bool                scanning;
 } mgr;
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
@@ -47,12 +52,36 @@ static void fire_event(wifi_mgr_event_t evt)
     }
 }
 
+static int load_saved_credentials(char *ssid, size_t ssid_sz, char *psk, size_t psk_sz)
+{
+    /* Try the combined atomic key first; fall back to legacy individual keys
+     * for devices that were provisioned before this format was introduced. */
+    char combined[MAX_VALUE_LEN * 2 + 2];
+    if (akira_settings_get(AKIRA_SETTINGS_WIFI_CREDS_KEY, combined, sizeof(combined)) == 0) {
+        char *tab = strchr(combined, '\t');
+        if (!tab) {
+            LOG_ERR("Malformed combined WiFi credentials");
+            return -EINVAL;
+        }
+        *tab = '\0';
+        strncpy(ssid, combined, ssid_sz - 1);
+        ssid[ssid_sz - 1] = '\0';
+        strncpy(psk, tab + 1, psk_sz - 1);
+        psk[psk_sz - 1] = '\0';
+        return 0;
+    }
+    if (akira_settings_get(AKIRA_SETTINGS_WIFI_SSID_KEY, ssid, ssid_sz) != 0 ||
+        akira_settings_get(AKIRA_SETTINGS_WIFI_PSK_KEY,  psk,  psk_sz)  != 0) {
+        return -ENOENT;
+    }
+    return 0;
+}
+
 /* ── net_mgmt callbacks ──────────────────────────────────────────────────── */
 
 static void wifi_event_handler(struct net_mgmt_event_callback *cb,
                                 uint64_t event, struct net_if *iface)
 {
-    ARG_UNUSED(cb);
     ARG_UNUSED(iface);
 
     k_mutex_lock(&mgr.lock, K_FOREVER);
@@ -84,6 +113,28 @@ static void wifi_event_handler(struct net_mgmt_event_callback *cb,
             return;
         }
         break;
+
+    case NET_EVENT_WIFI_SCAN_RESULT: {
+        if (!mgr.scanning || mgr.scan_count >= WIFI_MGR_MAX_SCAN_RESULTS) {
+            break;
+        }
+        const struct wifi_scan_result *entry =
+            (const struct wifi_scan_result *)cb->info;
+        wifi_mgr_scan_result_t *dst = &mgr.scan_results[mgr.scan_count++];
+        size_t len = MIN((size_t)entry->ssid_length, sizeof(dst->ssid) - 1);
+        memcpy(dst->ssid, entry->ssid, len);
+        dst->ssid[len] = '\0';
+        dst->rssi     = entry->rssi;
+        dst->security = (uint8_t)entry->security;
+        dst->channel  = entry->channel;
+        break;
+    }
+
+    case NET_EVENT_WIFI_SCAN_DONE:
+        mgr.scanning = false;
+        k_mutex_unlock(&mgr.lock);
+        fire_event(WIFI_MGR_EVT_SCAN_DONE);
+        return;
 
     default:
         break;
@@ -137,27 +188,11 @@ int wifi_manager_connect(void)
 
     char ssid[MAX_VALUE_LEN];
     char psk[MAX_VALUE_LEN];
-
-    /* Try the combined atomic key first; fall back to legacy individual keys
-     * for devices that were provisioned before this format was introduced. */
-    char combined[MAX_VALUE_LEN * 2 + 2];
-    if (akira_settings_get(AKIRA_SETTINGS_WIFI_CREDS_KEY, combined, sizeof(combined)) == 0) {
-        char *tab = strchr(combined, '\t');
-        if (!tab) {
-            k_mutex_unlock(&mgr.lock);
-            LOG_ERR("Malformed combined WiFi credentials");
-            return -EINVAL;
-        }
-        *tab = '\0';
-        strncpy(ssid, combined, sizeof(ssid) - 1);
-        ssid[sizeof(ssid) - 1] = '\0';
-        strncpy(psk, tab + 1, sizeof(psk) - 1);
-        psk[sizeof(psk) - 1] = '\0';
-    } else if (akira_settings_get(AKIRA_SETTINGS_WIFI_SSID_KEY, ssid, sizeof(ssid)) != 0 ||
-               akira_settings_get(AKIRA_SETTINGS_WIFI_PSK_KEY,  psk,  sizeof(psk))  != 0) {
+    int cred_ret = load_saved_credentials(ssid, sizeof(ssid), psk, sizeof(psk));
+    if (cred_ret) {
         k_mutex_unlock(&mgr.lock);
-        LOG_ERR("No WiFi credentials in NVS");
-        return -ENOENT;
+        LOG_ERR("No WiFi credentials in NVS: %d", cred_ret);
+        return cred_ret;
     }
 
     struct wifi_connect_req_params params = {
@@ -213,26 +248,88 @@ int wifi_manager_disconnect(void)
     return 0;
 }
 
+int wifi_manager_scan(void)
+{
+    k_mutex_lock(&mgr.lock, K_FOREVER);
+
+    if (mgr.scanning) {
+        k_mutex_unlock(&mgr.lock);
+        return -EBUSY;
+    }
+
+    struct net_if *iface = net_if_get_default();
+    if (!iface) {
+        k_mutex_unlock(&mgr.lock);
+        LOG_ERR("No network interface for WiFi scan");
+        return -ENODEV;
+    }
+
+    mgr.scan_count = 0;
+
+    int ret = net_mgmt(NET_REQUEST_WIFI_SCAN, iface, NULL, 0);
+    if (ret) {
+        k_mutex_unlock(&mgr.lock);
+        LOG_ERR("WiFi scan request failed: %d", ret);
+        return ret;
+    }
+
+    mgr.scanning = true;
+    k_mutex_unlock(&mgr.lock);
+    return 0;
+}
+
+int wifi_manager_get_scan_results(wifi_mgr_scan_result_t *out, size_t max, size_t *count_out)
+{
+    if (!out || !count_out) {
+        return -EINVAL;
+    }
+
+    k_mutex_lock(&mgr.lock, K_FOREVER);
+
+    size_t n = MIN(max, mgr.scan_count);
+    memcpy(out, mgr.scan_results, n * sizeof(wifi_mgr_scan_result_t));
+    *count_out = n;
+
+    k_mutex_unlock(&mgr.lock);
+    return 0;
+}
+
+int wifi_manager_get_saved_credentials(char *ssid_out, size_t ssid_sz, char *psk_out, size_t psk_sz)
+{
+    if (!ssid_out || !psk_out) {
+        return -EINVAL;
+    }
+    return load_saved_credentials(ssid_out, ssid_sz, psk_out, psk_sz);
+}
+
 int wifi_manager_update_credentials(const char *ssid, const char *psk)
 {
     if (!ssid || !psk) {
         return -EINVAL;
     }
 
-    /* Write SSID and PSK as one tab-delimited value so the single NVS write is
-     * atomic — a power-loss between two separate writes can leave stale PSK or
-     * SSID and cause a permanent connection failure on next boot. */
-    char combined[MAX_VALUE_LEN * 2 + 2];
-    int n = snprintf(combined, sizeof(combined), "%s\t%s", ssid, psk);
-    if (n < 0 || (size_t)n >= sizeof(combined)) {
-        return -ENAMETOOLONG;
-    }
-
-    int ret = akira_settings_set(AKIRA_SETTINGS_WIFI_CREDS_KEY, combined, true);
+    /* SSID is public (broadcast in the clear over the air) — only the PSK is
+     * sensitive. Matches the `settings set_wifi` shell command's format. */
+    int ret = akira_settings_set(AKIRA_SETTINGS_WIFI_SSID_KEY, ssid, false);
     if (ret) {
-        LOG_ERR("Failed to save WiFi credentials: %d", ret);
+        LOG_ERR("Failed to save WiFi SSID: %d", ret);
         return ret;
     }
+
+#ifdef CONFIG_AKIRA_SETTINGS_ENCRYPTION
+    ret = akira_settings_set(AKIRA_SETTINGS_WIFI_PSK_KEY, psk, true);
+#else
+    ret = akira_settings_set(AKIRA_SETTINGS_WIFI_PSK_KEY, psk, false);
+#endif
+    if (ret) {
+        LOG_ERR("Failed to save WiFi PSK: %d", ret);
+        akira_settings_delete(AKIRA_SETTINGS_WIFI_SSID_KEY);
+        return ret;
+    }
+
+    /* Drop any stale combined-format entry from an older firmware build so
+     * load_saved_credentials() doesn't prefer it over these fresh values. */
+    akira_settings_delete(AKIRA_SETTINGS_WIFI_CREDS_KEY);
 
     LOG_INF("WiFi credentials updated (ssid='%s')", ssid);
     return 0;
@@ -362,7 +459,9 @@ static int wifi_manager_init(void)
 
     net_mgmt_init_event_callback(&mgr.wifi_cb, wifi_event_handler,
                                  NET_EVENT_WIFI_CONNECT_RESULT |
-                                 NET_EVENT_WIFI_DISCONNECT_RESULT);
+                                 NET_EVENT_WIFI_DISCONNECT_RESULT |
+                                 NET_EVENT_WIFI_SCAN_RESULT |
+                                 NET_EVENT_WIFI_SCAN_DONE);
     net_mgmt_add_event_callback(&mgr.wifi_cb);
 
     net_mgmt_init_event_callback(&mgr.ipv4_cb, ipv4_event_handler,
