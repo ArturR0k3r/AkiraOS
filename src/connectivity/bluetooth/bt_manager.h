@@ -195,6 +195,21 @@ extern "C"
      */
     bt_manager_mode_t bt_manager_get_mode(void);
 
+/** NVS key persisting the boot-time BLE mode ("hid" | "companion"). */
+#define AKIRA_BT_MODE_KEY "akira/bt/mode"
+
+    /**
+     * @brief Whether the persisted boot BLE mode selects the Companion service.
+     *
+     * Reads @ref AKIRA_BT_MODE_KEY from settings. HID and Companion are mutually
+     * exclusive (single BLE connection); this decides which one claims the radio
+     * at boot. Returns false (→ HID) when the key is unset, so existing units
+     * keep their current behaviour.
+     *
+     * @return true if the boot mode is "companion", false otherwise.
+     */
+    bool bt_manager_boot_mode_is_companion(void);
+
     /**
      * @brief Start advertising with a custom 128-bit service UUID.
      *

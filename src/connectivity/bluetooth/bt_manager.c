@@ -31,7 +31,28 @@
 #include "ble_app_service.h"
 #endif
 
+#if defined(CONFIG_AKIRA_SETTINGS)
+#include "../../settings/settings.h"
+#endif
+
+#if defined(CONFIG_SHELL)
+#include <zephyr/shell/shell.h>
+#include <zephyr/sys/reboot.h>
+#endif
+
 LOG_MODULE_REGISTER(bt_manager, CONFIG_AKIRA_LOG_LEVEL);
+
+bool bt_manager_boot_mode_is_companion(void)
+{
+#if defined(CONFIG_AKIRA_BT_COMPANION) && defined(CONFIG_AKIRA_SETTINGS)
+    char v[16] = "";
+    if (akira_settings_get(AKIRA_BT_MODE_KEY, v, sizeof(v)) == 0 &&
+        strcmp(v, "companion") == 0) {
+        return true;
+    }
+#endif
+    return false;
+}
 
 /*===========================================================================*/
 /* Internal State                                                            */
@@ -671,12 +692,59 @@ int bt_manager_start_advertising_custom(const uint8_t svc_uuid128[16])
 }
 
 #ifdef CONFIG_AKIRA_BT_HID
-/* HID mode: eagerly initialise at boot so HID profile is ready immediately */
+/* HID mode: eagerly initialise at boot so HID profile is ready immediately.
+ * When the persisted boot mode selects the Companion service, HID must NOT
+ * claim the radio here — otherwise the later companion SYS_INIT (prio 90) is
+ * rejected with -EBUSY and the companion service never advertises. The BT stack
+ * is then lazily initialised by the companion path (bt_manager_set_mode). */
 static int bt_manager_sys_init(void)
 {
+    if (bt_manager_boot_mode_is_companion()) {
+        LOG_INF("BT boot mode = companion; HID auto-init skipped");
+        return 0;
+    }
     bt_mgr.mode = BT_MODE_HID;
     bt_mgr.hid_active = true;
     return bt_manager_init(NULL);
 }
 SYS_INIT(bt_manager_sys_init, APPLICATION, CONFIG_AKIRA_BT_INIT_PRIORITY);
+#endif
+
+#if defined(CONFIG_SHELL) && defined(CONFIG_AKIRA_BT_COMPANION) && defined(CONFIG_AKIRA_SETTINGS)
+/* `btmode [hid|companion]` — HID and the Companion service are mutually
+ * exclusive on a single BLE connection, and switching cleanly means claiming
+ * the radio from boot, so the setter persists the choice and cold-reboots. */
+static int cmd_btmode(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        char v[16] = "";
+        int have = akira_settings_get(AKIRA_BT_MODE_KEY, v, sizeof(v));
+        bt_manager_mode_t m = bt_manager_get_mode();
+        shell_print(sh, "boot mode : %s", have == 0 && v[0] ? v : "hid (default)");
+        shell_print(sh, "active    : %s",
+                    m == BT_MODE_COMPANION ? "companion" :
+                    m == BT_MODE_HID       ? "hid" :
+                    m == BT_MODE_BLE_APP   ? "ble_app" : "none");
+        shell_print(sh, "usage: btmode <hid|companion>  (persists + reboots)");
+        return 0;
+    }
+
+    const char *mode = argv[1];
+    if (strcmp(mode, "hid") != 0 && strcmp(mode, "companion") != 0) {
+        shell_error(sh, "invalid mode '%s' (use: hid | companion)", mode);
+        return -EINVAL;
+    }
+
+    int rc = akira_settings_set(AKIRA_BT_MODE_KEY, mode, 0);
+    if (rc) {
+        shell_error(sh, "failed to persist mode: %d", rc);
+        return rc;
+    }
+    shell_print(sh, "BLE mode set to '%s' — rebooting to apply...", mode);
+    k_sleep(K_MSEC(300));
+    sys_reboot(SYS_REBOOT_COLD);
+    return 0;
+}
+SHELL_CMD_REGISTER(btmode, NULL,
+                   "Get/set boot BLE mode: btmode <hid|companion>", cmd_btmode);
 #endif

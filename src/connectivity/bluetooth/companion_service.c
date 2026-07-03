@@ -1049,6 +1049,14 @@ bool companion_svc_is_ready(void)
 #if defined(CONFIG_AKIRA_BT_COMPANION)
 static int companion_auto_init(void)
 {
+    /* HID and Companion are mutually exclusive on the single BLE connection.
+     * Only claim the radio when the persisted boot mode selects companion;
+     * otherwise stay dormant so the HID profile keeps working. Switch modes
+     * with the `btmode companion` shell command (persists + reboots). */
+    if (!bt_manager_boot_mode_is_companion()) {
+        LOG_INF("Companion: boot mode != companion; service dormant");
+        return 0;
+    }
     return companion_svc_init();
 }
 SYS_INIT(companion_auto_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);

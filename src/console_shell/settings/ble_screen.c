@@ -17,6 +17,15 @@ LOG_MODULE_REGISTER(akira_ble_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include <connectivity/bluetooth/bt_manager.h>
 #include "ble_screen.h"
 
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+#include <zephyr/sys/reboot.h>
+#include <settings/settings.h>
+/* One extra row ("BLE Mode") when the companion service is available. */
+#define BLE_ITEM_MAX 2
+#else
+#define BLE_ITEM_MAX 1
+#endif
+
 
 
 static void draw_item(int idx, int sel, const char *lbl, const char *rv)
@@ -65,11 +74,15 @@ static void draw(int sel)
 
     draw_item(0, sel, "Bluetooth",    on ? "ON" : "OFF");
     draw_item(1, sel, "Pairing Mode", state_label(st));
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+    draw_item(2, sel, "BLE Mode",
+              bt_manager_boot_mode_is_companion() ? "Companion" : "HID");
+#endif
 
     /* Connection info */
     char addr[48] = "";
     bt_manager_get_address(addr, sizeof(addr));
-    int info_y = LIST_Y + 2 * ITEM_H + 10;
+    int info_y = LIST_Y + (BLE_ITEM_MAX + 1) * ITEM_H + 10;
     if (bt_manager_is_connected()) {
         char buf[64];
         snprintf(buf, sizeof(buf), "Connected: %s", addr);
@@ -104,7 +117,7 @@ void ble_screen_load(void)
             if (sel > 0) { sel--; draw(sel); }
         }
         if (just & BIT(AKIRA_BTN_DOWN)) {
-            if (sel < 1) { sel++; draw(sel); }
+            if (sel < BLE_ITEM_MAX) { sel++; draw(sel); }
         }
         if (just & BIT(AKIRA_BTN_A)) {
             bt_state_t st = bt_manager_get_state();
@@ -125,6 +138,22 @@ void ble_screen_load(void)
                     if (r < 0) LOG_ERR("bt_manager_start_advertising: %d", r);
                 }
             }
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+            else if (sel == 2) {
+                /* HID and Companion are mutually exclusive and are claimed at
+                 * boot, so persist the new mode and cold-reboot to apply it. */
+                const char *next =
+                    bt_manager_boot_mode_is_companion() ? "hid" : "companion";
+                akira_settings_set(AKIRA_BT_MODE_KEY, next, 0);
+                akira_display_clear(C_BLACK);
+                akira_display_text(20, 60, "Switching BLE mode:", C_WHITE);
+                akira_display_text(20, 78, next, C_GRAY);
+                akira_display_text(20, 104, "Rebooting...", C_GRAY);
+                akira_display_flush();
+                k_sleep(K_MSEC(900));
+                sys_reboot(SYS_REBOOT_COLD);
+            }
+#endif
             draw(sel);
         }
         if ((just & BIT(AKIRA_BTN_B)) || (just & BIT(AKIRA_BTN_HOME))) {
