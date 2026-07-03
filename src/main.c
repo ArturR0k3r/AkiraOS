@@ -16,6 +16,9 @@
 #endif
 #ifdef CONFIG_BT
 #include <connectivity/bluetooth/bt_manager.h>
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+#include <connectivity/bluetooth/companion_service.h>
+#endif
 #endif
 #include <connectivity/hid/hid_manager.h>
 #ifdef CONFIG_AKIRA_BT_HID
@@ -170,6 +173,24 @@ int main(void)
 
 
 #ifdef CONFIG_BT
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+    if (bt_manager_boot_mode_is_companion())
+    {
+        /* Companion service owns the radio in this mode. Ensure it is up (the
+         * SYS_INIT hook may already have started it) and do NOT run the default
+         * HID bring-up, which would re-init BT and start HID advertising. */
+        if (companion_svc_is_ready() || companion_svc_init() == 0)
+        {
+            LOG_INF("BT boot mode: companion");
+        }
+        else
+        {
+            LOG_WRN("Companion start failed; falling back to default BT");
+            bt_manager_init(NULL);
+        }
+    }
+    else
+#endif
     if(bt_manager_init(NULL) < 0)
     {
         LOG_WRN("Bluetooth manager init failed");

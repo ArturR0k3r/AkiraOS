@@ -33,6 +33,7 @@
 #include <zephyr/fs/fs.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
+#include <zephyr/sys/reboot.h>
 
 #include <string.h>
 #include <stdio.h>
@@ -45,7 +46,8 @@ LOG_MODULE_REGISTER(companion_svc, CONFIG_AKIRA_LOG_LEVEL);
 /* Forward-declared internal headers (pulled in via include paths) */
 #include "../../runtime/app_manager/app_manager.h"
 #include "../../connectivity/ota/ota_manager.h"
-#include "../../settings/akira_settings.h"
+#include <settings/settings.h>
+#include <akira.h>
 
 /* --------------------------------------------------------------------------
  * UUID definitions
@@ -68,11 +70,6 @@ static uint8_t s_cmd_buf[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")))
 static uint8_t s_resp_buf[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
 static uint8_t s_data_dn_buf[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
 static uint8_t s_status_buf[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
-
-/* CCC descriptors for NOTIFY characteristics */
-static struct bt_gatt_ccc_cfg s_resp_ccc[BT_GATT_CCC_MAX];
-static struct bt_gatt_ccc_cfg s_data_dn_ccc[BT_GATT_CCC_MAX];
-static struct bt_gatt_ccc_cfg s_status_ccc[BT_GATT_CCC_MAX];
 
 /* --------------------------------------------------------------------------
  * State
@@ -175,7 +172,7 @@ static void send_resp(const char *op, int id, bool ok,
     }
 
     /* attr pointer retrieved from the GATT table via the extern below */
-    extern const struct bt_gatt_attr companion_attrs[];
+    extern const struct bt_gatt_attr *companion_attrs;
     /* RESP_CHAR is at index 3 in the attribute table (svc, cmd_decl, cmd_val,
      * resp_decl, resp_val, resp_ccc, ...) — use bt_gatt_notify with attr=NULL
      * to let Zephyr look it up by CCCD. */
@@ -197,7 +194,7 @@ static void handle_device_info(const char *op, int id, const char *params)
     snprintf(buf, sizeof(buf),
              "{\"fw\":\"%s\",\"model\":\"AkiraConsole\","
              "\"bt_addr\":\"<addr>\"}",
-             akira_version_string());
+             AKIRA_VERSION_STRING);
     send_resp(op, id, true, buf);
 }
 
@@ -212,23 +209,25 @@ static void handle_device_reboot(const char *op, int id, const char *params)
 static void handle_apps_list(const char *op, int id, const char *params)
 {
     ARG_UNUSED(params);
-    /* Build JSON array of installed apps */
+    /* Build JSON array of installed apps. RESP is a single 244-byte notify, so
+     * the list truncates for large app counts — still valid JSON. */
+    static app_info_t list[16];
+    int count = app_manager_list(list, (int)(sizeof(list) / sizeof(list[0])));
+    if (count < 0) {
+        count = 0;
+    }
+
     char buf[CHAR_BUF_SIZE];
     int pos = 0;
     pos += snprintf(buf + pos, sizeof(buf) - pos, "[");
-
-    int count = app_manager_get_count();
     for (int i = 0; i < count && (size_t)pos < sizeof(buf) - 40; i++) {
-        app_info_t info;
-        if (app_manager_get_info(i, &info) == 0) {
-            pos += snprintf(buf + pos, sizeof(buf) - pos,
-                            "%s{\"name\":\"%s\",\"state\":\"%s\","
-                            "\"version\":\"%s\"}",
-                            i > 0 ? "," : "",
-                            info.name,
-                            app_state_string(info.state),
-                            info.version);
-        }
+        pos += snprintf(buf + pos, sizeof(buf) - pos,
+                        "%s{\"name\":\"%s\",\"state\":\"%s\","
+                        "\"version\":\"%s\"}",
+                        i > 0 ? "," : "",
+                        list[i].name,
+                        app_state_to_str(list[i].state),
+                        list[i].version);
     }
     pos += snprintf(buf + pos, sizeof(buf) - pos, "]");
     send_resp(op, id, true, buf);
@@ -400,17 +399,43 @@ static void handle_settings_set(const char *op, int id, const char *params)
         send_resp(op, id, false, "missing key");
         return;
     }
-    int rc = akira_settings_set(key, value);
+    int rc = akira_settings_set(key, value, 0 /* not encrypted */);
     send_resp(op, id, rc == 0, rc == 0 ? NULL : "set failed");
 }
 
 static void handle_settings_list(const char *op, int id, const char *params)
 {
     ARG_UNUSED(params);
-    /* Returns compact JSON array of all settings keys */
+    /* No bulk enumeration API in NVS settings; return the known device keys
+     * (mirrors the HTTP /api/v1/settings surface) as [{key,value}, ...]. */
+    static const char *const keys[] = {
+        "akira/display/brightness",
+        "akira/display/timeout_en",
+        "akira/display/timeout_s",
+        "akira/power/sleep_s",
+        "akira/power/dispoff_s",
+        "akira/devmode/enabled",
+    };
+
     char buf[CHAR_BUF_SIZE];
-    int rc = akira_settings_list_json(buf, sizeof(buf));
-    send_resp(op, id, rc == 0, rc == 0 ? buf : "list failed");
+    int pos = 0;
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "[");
+    bool first = true;
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        char val[48] = "";
+        if (akira_settings_get(keys[i], val, sizeof(val)) != 0) {
+            continue; /* unset — skip */
+        }
+        if ((size_t)pos >= sizeof(buf) - 80) {
+            break;
+        }
+        pos += snprintf(buf + pos, sizeof(buf) - pos,
+                        "%s{\"key\":\"%s\",\"value\":\"%s\"}",
+                        first ? "" : ",", keys[i], val);
+        first = false;
+    }
+    snprintf(buf + pos, sizeof(buf) - pos, "]");
+    send_resp(op, id, true, buf);
 }
 
 static void handle_shell_exec(const char *op, int id, const char *params)
@@ -422,14 +447,9 @@ static void handle_shell_exec(const char *op, int id, const char *params)
         return;
     }
 
-    /* Run command; output streamed via DATA_DOWN SHELL_OUT frames.
-     * For short output that fits in one frame, we also include it in data. */
-    char out[CHAR_BUF_SIZE - 64] = "";
-    akira_shell_exec(cmd, out, sizeof(out));
-
-    char body[CHAR_BUF_SIZE];
-    snprintf(body, sizeof(body), "{\"output\":\"%s\"}", out);
-    send_resp(op, id, true, body);
+    /* No shell-exec-with-output implementation exists in this firmware, so
+     * remote shell over BLE is not supported. */
+    send_resp(op, id, false, "shell exec not supported");
 }
 
 static void handle_files_list(const char *op, int id, const char *params)
@@ -487,7 +507,7 @@ static void handle_files_read(const char *op, int id, const char *params)
     }
 
     /* Send data in COMP_DATA_PAYLOAD_MAX chunks via DATA_DOWN notifications */
-    extern const struct bt_gatt_attr companion_attrs[];
+    extern const struct bt_gatt_attr *companion_attrs;
     uint8_t frame[4 + COMP_DATA_PAYLOAD_MAX];
     ssize_t got;
     bool error = false;
@@ -510,7 +530,7 @@ static void handle_files_read(const char *op, int id, const char *params)
         frame[1] = flags;
         frame[2] = (uint8_t)(got & 0xFF);
         frame[3] = (uint8_t)((got >> 8) & 0xFF);
-        int nr = bt_gatt_notify(s_conn, &companion_attrs[10], /* data_dn val */
+        int nr = bt_gatt_notify(s_conn, &companion_attrs[9], /* data_dn val */
                                 frame, (uint16_t)(4 + got));
         if (nr) {
             error = true;
@@ -525,7 +545,7 @@ static void handle_files_read(const char *op, int id, const char *params)
         frame[1] = COMP_FLAG_LAST | COMP_FLAG_ERROR;
         frame[2] = 0;
         frame[3] = 0;
-        bt_gatt_notify(s_conn, &companion_attrs[10], frame, 4);
+        bt_gatt_notify(s_conn, &companion_attrs[9], frame, 4);
     }
 
     fs_close(&f);
@@ -598,44 +618,23 @@ static void handle_files_mkdir(const char *op, int id, const char *params)
 
 static void handle_ota_start(const char *op, int id, const char *params)
 {
-    char url[200]       = "";
-    char version[16]    = "";
-    char signature[132] = "";
-
-    json_get_str(params, "url",       url,       sizeof(url));
-    json_get_str(params, "version",   version,   sizeof(version));
-    json_get_str(params, "signature", signature, sizeof(signature));
-
-    if (!url[0] || !signature[0]) {
-        send_resp(op, id, false, "missing url or signature");
-        return;
-    }
-
-    struct ota_request req = {
-        .url = url,
-        .version = version,
-        .signature_hex = signature,
-    };
-
-    int rc = ota_manager_start(&req);
-    if (rc) {
-        char err[32];
-        snprintf(err, sizeof(err), "ota start failed: %d", rc);
-        send_resp(op, id, false, err);
-    } else {
-        send_resp(op, id, true, NULL);
-    }
+    ARG_UNUSED(params);
+    /* The firmware OTA manager is streaming/local only (ota_start_update /
+     * write_chunk / finalize). There is no URL+signature pull entry point, so
+     * BLE-initiated OTA is not yet supported — firmware updates go over WiFi
+     * (HTTP /api/v1/ota/upload). Report clearly so the app can fall back. */
+    send_resp(op, id, false, "ota over BLE not supported; use WiFi");
 }
 
 static void handle_ota_status(const char *op, int id, const char *params)
 {
     ARG_UNUSED(params);
     char buf[CHAR_BUF_SIZE];
-    struct ota_status st;
-    ota_manager_get_status(&st);
+    const struct ota_progress *st = ota_get_progress();
     snprintf(buf, sizeof(buf),
-             "{\"state\":\"%s\",\"progress\":%u,\"version\":\"%s\"}",
-             ota_state_string(st.state), st.progress_pct, st.version);
+             "{\"state\":\"%s\",\"progress\":%u,\"version\":\"\"}",
+             st ? ota_state_to_string(st->state) : "idle",
+             st ? st->percentage : 0);
     send_resp(op, id, true, buf);
 }
 
@@ -876,7 +875,7 @@ BT_GATT_SERVICE_DEFINE(companion_svc_def,
                             BT_GATT_CHRC_NOTIFY,
                             BT_GATT_PERM_NONE,
                             NULL, NULL, s_resp_buf),
-    BT_GATT_CCC(s_resp_ccc, resp_ccc_changed,
+    BT_GATT_CCC(resp_ccc_changed,
                 BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
     /* DATA_UP: WRITE_WITHOUT_RSP */
@@ -890,7 +889,7 @@ BT_GATT_SERVICE_DEFINE(companion_svc_def,
                             BT_GATT_CHRC_NOTIFY,
                             BT_GATT_PERM_NONE,
                             NULL, NULL, s_data_dn_buf),
-    BT_GATT_CCC(s_data_dn_ccc, data_dn_ccc_changed,
+    BT_GATT_CCC(data_dn_ccc_changed,
                 BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
     /* STATUS: READ + NOTIFY */
@@ -898,7 +897,7 @@ BT_GATT_SERVICE_DEFINE(companion_svc_def,
                             BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
                             BT_GATT_PERM_READ,
                             status_read, NULL, s_status_buf),
-    BT_GATT_CCC(s_status_ccc, status_ccc_changed,
+    BT_GATT_CCC(status_ccc_changed,
                 BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 );
 
@@ -1019,12 +1018,13 @@ void companion_svc_notify_status(void)
         return;
     }
 
-    /* Build the same JSON as cloud device.status */
+    /* Build the same JSON as cloud device.status. free_heap is reported as 0:
+     * there is no portable free-heap query here and passing NULL to a slab
+     * accessor would fault. */
     int n = snprintf((char *)s_status_buf, sizeof(s_status_buf),
-                     "{\"fw\":\"%s\",\"free_heap\":%u,"
+                     "{\"fw\":\"%s\",\"free_heap\":0,"
                      "\"running_apps\":[],\"bt_rssi\":0}",
-                     akira_version_string(),
-                     (unsigned int)k_mem_slab_num_free_get(NULL));
+                     AKIRA_VERSION_STRING);
 
     if (n <= 0 || (size_t)n >= sizeof(s_status_buf)) {
         return;

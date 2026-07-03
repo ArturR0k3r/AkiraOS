@@ -598,6 +598,13 @@ int bt_manager_set_mode(bt_manager_mode_t mode)
         if ((bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_BLE_APP) ||
             (bt_mgr.mode == BT_MODE_BLE_APP && mode == BT_MODE_HID)) {
             LOG_INF("BT: HID and BLE_APP sharing stack, switching to mode %d", mode);
+        } else if ((bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_COMPANION) ||
+                   (bt_mgr.mode == BT_MODE_COMPANION && mode == BT_MODE_HID)) {
+            /* HID and Companion are exclusive but may be swapped at boot before
+             * any connection exists. Drop the current advertising so the new
+             * mode can start its own. */
+            LOG_INF("BT: switching BLE mode %d -> %d (takeover)", bt_mgr.mode, mode);
+            bt_manager_stop_advertising();
         } else {
             k_mutex_unlock(&bt_mgr.mutex);
             LOG_ERR("BT mode conflict: active=%d requested=%d", bt_mgr.mode, mode);

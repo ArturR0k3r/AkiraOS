@@ -662,6 +662,10 @@ if(CONFIG_AKIRA_BT_HID)
     target_sources(app PRIVATE src/connectivity/bluetooth/bt_hid.c)
 endif()
 
+if(CONFIG_AKIRA_BT_COMPANION)
+    target_sources(app PRIVATE src/connectivity/bluetooth/companion_service.c)
+endif()
+
 if(CONFIG_AKIRA_BT_ECHO)
     target_sources(app PRIVATE src/connectivity/bluetooth/bt_echo.c)
 endif()
