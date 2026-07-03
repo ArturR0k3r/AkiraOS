@@ -23,12 +23,9 @@ static void draw_item(int idx, int sel, const char *lbl, const char *rv)
 {
     int iy = LIST_Y + idx * ITEM_H;
     bool hi = (idx == sel);
-    uint16_t ibg = hi ? C_WHITE : C_BLACK;
     uint16_t ifg = hi ? C_BLACK : C_WHITE;
 
-    akira_display_rounded_rect_fill(ITEM_X, iy + 3, ITEM_W, ITEM_H - 6, 5, ibg);
-    akira_display_rounded_rect(ITEM_X, iy + 3, ITEM_W, ITEM_H - 6, 5,
-                               hi ? C_BLACK : C_DKGRAY);
+    akira_ui_dither_card(ITEM_X, iy + 3, ITEM_W, ITEM_H - 6, 8, hi, hi ? 3 : 2);
     int ty = iy + 3 + (ITEM_H - 6 - 10) / 2;
     akira_display_text(ITEM_X + 10, ty, lbl, ifg);
     if (rv && rv[0]) {

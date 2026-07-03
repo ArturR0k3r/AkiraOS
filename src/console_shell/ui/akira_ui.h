@@ -77,7 +77,18 @@ void akira_ui_status_bar(const akira_ui_status_t *s);
 void akira_ui_list_row(int y, int h, const char *text, const char *meta,
                        int meter_0_5, bool selected);
 
-/** Home-menu-style icon tile. Selected inverts to solid fill. */
+/**
+ * Dither-shadow rounded card — the signature Playdate-style elevation
+ * primitive that every tappable element composes from. Draws a rounded card
+ * plus a checkerboard-dithered copy of its silhouette offset down-right by
+ * @p shadow_offset px (3-6; larger = more elevated). Selected = paper-on-ink
+ * fill; idle = ink body + paper outline. The dither shadow stays visible
+ * behind the selected fill. 1-bit only — depth is the dither, never grey.
+ */
+void akira_ui_dither_card(int x, int y, int w, int h, int radius,
+                          bool selected, int shadow_offset);
+
+/** Home-menu-style icon tile — a dither-shadow card with icon + label. */
 void akira_ui_grid_tile(int x, int y, int w, int h, int scale,
                         const uint32_t *icon, int icon_w, int icon_rows,
                         const char *label, bool selected);

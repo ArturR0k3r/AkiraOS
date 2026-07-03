@@ -291,17 +291,11 @@ static void draw_menu_at(const char **labels, int count, int sel,
         bool hi = (i == sel);
         int bx = MENU_X, by = iy + 2, bw = MENU_W, bh = MENU_ITH - 4;
 
-        if (hi)
-        {
-            glass_rect_focus(bx, by, bw, bh, 5);
-        }
-        else
-        {
-            glass_rect_dim(bx, by, bw, bh, 5);
-        }
+        akira_ui_dither_card(bx, by, bw, bh, 8, hi, hi ? 3 : 2);
         int ty = by + (bh - 10) / 2;
-        uint16_t fg = hi ? C_WHITE : C_DKGRAY;
-        draw_centred(bx + 4, ty, bw - 28, labels[i], fg, C_GLASS_BODY);
+        uint16_t fg = hi ? C_BLACK : C_WHITE;
+        uint16_t cbg = hi ? C_WHITE : C_BLACK;
+        draw_centred(bx + 4, ty, bw - 28, labels[i], fg, cbg);
         akira_display_text(bx + bw - 18, ty, ">", fg);
     }
 

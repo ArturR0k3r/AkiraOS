@@ -30,13 +30,9 @@ static void draw_app_item(int row, bool hi, const char *name, const char *sz)
     int bw = SS_MENU_W;
     int bh = SS_MENU_ITH - 4;
 
-    if (hi) {
-        ss_glass_rect_focus(bx, by, bw, bh, 5);
-    } else {
-        ss_glass_rect_dim(bx, by, bw, bh, 5);
-    }
+    akira_ui_dither_card(bx, by, bw, bh, 8, hi, hi ? 3 : 2);
     int ty = by + (bh - 10) / 2;
-    uint16_t fg = hi ? SS_C_WHITE : SS_C_DKGRAY;
+    uint16_t fg = hi ? SS_C_BLACK : SS_C_WHITE;
     akira_display_text(bx + 10, ty, name, fg);
     if (sz && sz[0]) {
         int szlen = (int)strlen(sz);

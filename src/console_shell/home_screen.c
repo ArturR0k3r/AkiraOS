@@ -756,89 +756,57 @@ static void draw_carousel(int car_h, bool dimmed)
         return;
     }
 
-    /* Dynamic focus scale: fit icon + label + 2*pad inside car_h */
-    int pad_f = 10;
-    int avail = car_h - pad_f * 2 - 4; /* label is outside the box */
-    int fscale = avail / ICON_H;
-    if (fscale > CAR_FOCUS_SCALE)
-        fscale = CAR_FOCUS_SCALE;
-    if (fscale < 1)
-        fscale = 1;
-    int ascale = (fscale > 1) ? fscale - 1 : 1;
-    if (ascale > CAR_ADJ_SCALE)
-        ascale = CAR_ADJ_SCALE;
-
-    int centre_x = SCR_W / 2;
+    /* Vertical carousel of Playdate dither-shadow cards: the focused app is a
+     * large filled card centred in the band, neighbours are smaller idle cards
+     * stacked above/below. */
+    int cx = SCR_W / 2;
     int cy = CAR_Y + car_h / 2;
     int focus_pop_y = anim_value(&g_anim_focus_pop);
 
-    /* XMB-style curved glowing ribbon */
-    draw_xmb_ribbon(cy, CAR_Y + car_h);
+    const int sel_h = 58, adj_h = 40, gap = 8;
+    const int card_w = SCR_W - 40;
 
-    /* Draw adjacent tiles first so focus renders on top */
+    /* Draw neighbours first, focus last so its shadow sits on top. */
     for (int pass = 0; pass < 2; pass++)
     {
-        for (int slot = -1; slot <= 1; slot++)
+        for (int slot = -2; slot <= 2; slot++)
         {
             bool is_focus = (slot == 0);
-            if (pass == 0 && is_focus)
-                continue; /* focus on second pass */
-            if (pass == 1 && !is_focus)
+            if ((pass == 0) == is_focus)
                 continue;
 
             int idx = ((g_sel + slot) % g_total_tiles + g_total_tiles) % g_total_tiles;
-            int scale = is_focus ? fscale : ascale;
-            int iw = ICON_W * scale;
-            int ih = ICON_H * scale;
-            int sx = centre_x + slot * CAR_SLOT_W - iw / 2;
-            int sy = cy - ih / 2;
-            if (!is_focus)
-                sy += CAR_ADJ_SINK; /* perspective: neighbours recede */
+            int ch = is_focus ? sel_h : adj_h;
+            int cw = is_focus ? card_w : card_w - 28;
+            int cardx = cx - cw / 2;
+            int cardy = cy - ch / 2 + slot * (adj_h + gap);
             if (is_focus)
-                sy += focus_pop_y;
-            if (sy < CAR_Y)
-                sy = CAR_Y;
+                cardy += focus_pop_y;
+            if (cardy + ch <= CAR_Y || cardy >= CAR_Y + car_h)
+                continue; /* fully outside the band */
+
+            akira_ui_dither_card(cardx, cardy, cw, ch, 12, is_focus,
+                                 is_focus ? 5 : 2);
+
+            uint16_t fg = is_focus ? C_BLACK : C_WHITE; /* content on the card */
+            uint16_t bg = is_focus ? C_WHITE : C_BLACK;
+
+            int isc = is_focus ? 2 : 1;
+            int iw = ICON_W * isc, ih = ICON_H * isc;
+            int iy = cardy + (ch - ih) / 2;
+            akira_ui_icon_1bpp(cardx + 18, iy, isc, g_all_tiles[idx].icon,
+                               ICON_W, ICON_H, fg, bg, AKIRA_UI_TRANSPARENT);
 
             char upper[32] = {0};
             for (int i = 0; g_all_tiles[idx].name[i] && i < 31; i++)
             {
                 upper[i] = (char)toupper((unsigned char)g_all_tiles[idx].name[i]);
             }
-
-            if (is_focus)
-            {
-                /* Liquid Glass focus tile — always bright, even when panel open */
-                int bx = sx - pad_f;
-                int by = sy - pad_f;
-                int bw = iw + pad_f * 2;
-                int bh = ih + pad_f * 2; /* icon box, no label inside */
-                if (by < CAR_Y)
-                    by = CAR_Y;
-                glass_rect_focus(bx, by, bw, bh, 6);
-                draw_icon_nx(sx, by + pad_f, fscale, g_all_tiles[idx].icon, C_WHITE, C_BLACK);
-                /* Label below the box */
-                draw_centred_text(bx - 10, by + bh + 3, bw + 20, upper, C_WHITE, C_BLACK);
-            }
-            else
-            {
-                /* Adjacent tile */
-                int pad_a = 5;
-                int bx = sx - pad_a;
-                int by = sy - pad_a;
-                int bw = iw + pad_a * 2;
-                int bh = ih + pad_a * 2;
-                if (by < CAR_Y)
-                    by = CAR_Y;
-                glass_rect_dim(bx, by, bw, bh, 4);
-                draw_icon_nx(sx, by + pad_a, scale,
-                             g_all_tiles[idx].icon, C_DKGRAY, C_BLACK);
-                draw_centred_text(bx - 10, by + bh + 3, bw + 20, upper,
-                                  C_DKGRAY, C_BLACK);
-            }
+            akira_display_text(cardx + 18 + iw + 14, cardy + (ch - 10) / 2,
+                               upper, fg);
         }
     }
-
-    /* Page dots removed */
+    (void)dimmed;
 }
 
 /* ================================================================== */
@@ -890,20 +858,11 @@ static void draw_options_panel(int panel_y)
         bool hi = (i == g_opts_focused);
         int ty = iy + 3 + (OPT_ITEM_H - 6 - 10) / 2;
 
-        if (hi)
-        {
-            glass_rect_focus(OPT_BTN_X, iy + 3, OPT_BTN_W, OPT_ITEM_H - 6, 5);
-            draw_centred_text(OPT_BTN_X + OPT_TXT_PAD, ty,
-                              OPT_BTN_W - OPT_TXT_PAD * 2,
-                              labels[i], C_WHITE, C_GLASS_BODY);
-        }
-        else
-        {
-            glass_rect_dim(OPT_BTN_X, iy + 3, OPT_BTN_W, OPT_ITEM_H - 6, 5);
-            draw_centred_text(OPT_BTN_X + OPT_TXT_PAD, ty,
-                              OPT_BTN_W - OPT_TXT_PAD * 2,
-                              labels[i], C_DKGRAY, C_GLASS_BODY);
-        }
+        akira_ui_dither_card(OPT_BTN_X, iy + 3, OPT_BTN_W, OPT_ITEM_H - 6, 8, hi,
+                             hi ? 3 : 2);
+        draw_centred_text(OPT_BTN_X + OPT_TXT_PAD, ty,
+                          OPT_BTN_W - OPT_TXT_PAD * 2, labels[i],
+                          hi ? C_BLACK : C_WHITE, hi ? C_WHITE : C_BLACK);
     }
 
     /* Scrollbar — only shown when content overflows */
