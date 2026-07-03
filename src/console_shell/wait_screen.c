@@ -192,7 +192,7 @@ static void draw_frame(void)
     akira_display_clear(C_BLACK);
 
     /* Wordmark */
-    draw_centred_large(28, "AKIRA Console", C_WHITE);
+    draw_centred_large(28, "Akira Console", C_WHITE);
 
     /* Clock in an elevated dither-shadow card — the focal point. */
     int cw = SCR_W - 80, cardh = 74;
