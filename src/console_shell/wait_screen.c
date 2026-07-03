@@ -29,6 +29,7 @@ LOG_MODULE_REGISTER(akira_wait_screen, CONFIG_AKIRA_LOG_LEVEL);
 
 #include "wait_screen.h"
 #include "shell_theme.h"
+#include "ui/akira_ui.h"
 
 #include <zephyr/kernel.h>
 #include <string.h>
@@ -190,30 +191,24 @@ static void draw_frame(void)
 
     akira_display_clear(C_BLACK);
 
-    /* Top hairline */
-    akira_display_hline(0, 26, SCR_W, C_WHITE);
-
     /* Wordmark */
-    draw_centred_large(42, "AKIRA", C_WHITE);
+    draw_centred_large(28, "AKIRA", C_WHITE);
 
-    /* Hairline under wordmark */
-    akira_display_hline(0, 76, SCR_W, C_WHITE);
-
-    /* Clock — the focal point */
-    draw_centred_large(104, time_str, C_WHITE);
-    draw_centred_small(140, date_str, C_GRAY);
-
-    /* Lower hairline */
-    akira_display_hline(0, 178, SCR_W, C_WHITE);
+    /* Clock in an elevated dither-shadow card — the focal point. */
+    int cw = SCR_W - 80, cardh = 74;
+    int cardx = (SCR_W - cw) / 2, cardy = 70;
+    akira_ui_dither_card(cardx, cardy, cw, cardh, 14, /*selected=*/false, /*shadow=*/5);
+    draw_centred_large(cardy + 16, time_str, C_WHITE);
+    draw_centred_small(cardy + 48, date_str, C_WHITE);
 
     /* Battery level */
     if (batt_str[0])
     {
-        draw_centred_small(192, batt_str, C_DKGRAY);
+        draw_centred_small(178, batt_str, C_WHITE);
     }
 
     /* Wake hint */
-    draw_centred_small(214, "Hold HOME to wake", C_DKGRAY);
+    draw_centred_small(212, "Hold HOME to wake", C_WHITE);
 
     akira_display_flush();
 }
