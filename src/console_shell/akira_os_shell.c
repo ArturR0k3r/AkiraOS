@@ -703,6 +703,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                  * before app_manager_stop() blocks for the abort timeout. */
                 g_wasm_active = false;
                 akira_display_claim_shell();
+                s_prev_btns = akira_input_get_bitmask();
                 home_screen_load();
 
                 /* Stop any running WASM apps (may block up to abort timeout) */
@@ -746,9 +747,15 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                     }
                     else if (!any_running && g_wasm_active)
                     {
-                        /* All apps stopped — reclaim display */
+                        /* All apps stopped — reclaim display.
+                         * Resync s_prev_btns to the button state at the moment
+                         * of reclaim: if the app exited because the user is
+                         * still holding a button (e.g. A), the home screen
+                         * must not see that same physical press as a fresh
+                         * "just pressed" edge on the next tick. */
                         g_wasm_active = false;
                         akira_display_claim_shell();
+                        s_prev_btns = akira_input_get_bitmask();
                         home_screen_refresh();
                         LOG_INF("Display reclaimed by shell (all apps stopped)");
                     }
