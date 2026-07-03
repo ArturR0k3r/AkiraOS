@@ -782,8 +782,10 @@ static void draw_carousel(int car_h, bool dimmed)
             int cardy = cy - ch / 2 + slot * (adj_h + gap);
             if (is_focus)
                 cardy += focus_pop_y;
-            if (cardy + ch <= CAR_Y || cardy >= CAR_Y + car_h)
-                continue; /* fully outside the band */
+            /* Only draw cards fully inside the band so nothing overlaps the
+             * status-bar header (above CAR_Y) or the footer. */
+            if (cardy < CAR_Y || cardy + ch > CAR_Y + car_h)
+                continue;
 
             akira_ui_dither_card(cardx, cardy, cw, ch, 12, is_focus,
                                  is_focus ? 5 : 2);
@@ -1324,21 +1326,20 @@ void home_screen_handle_key(uint32_t just_pressed)
         return;
     }
 
-    /* IDLE — carousel navigation */
-    if (just_pressed & BIT(AKIRA_BTN_LEFT))
+    /* IDLE — vertical carousel navigation: UP = previous app, DOWN = next. */
+    if (just_pressed & BIT(AKIRA_BTN_UP))
     {
         g_sel = (g_sel - 1 + g_total_tiles) % g_total_tiles;
         anim_start_pop(&g_anim_focus_pop);
         g_dirty = true;
     }
-    if (just_pressed & BIT(AKIRA_BTN_RIGHT))
+    if (just_pressed & BIT(AKIRA_BTN_DOWN))
     {
         g_sel = (g_sel + 1) % g_total_tiles;
         anim_start_pop(&g_anim_focus_pop);
         g_dirty = true;
     }
-    if ((just_pressed & BIT(AKIRA_BTN_DOWN)) ||
-        (just_pressed & BIT(AKIRA_BTN_HOME)))
+    if (just_pressed & BIT(AKIRA_BTN_HOME))
     {
         opts_open();
         return;

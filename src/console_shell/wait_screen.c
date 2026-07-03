@@ -130,7 +130,7 @@ static struct wall_clock wait_now(void)
         mo++;
     }
     wc.year = y;
-    wc.mon = mo;            /* 0-based */
+    wc.mon = mo; /* 0-based */
     wc.day = (int)days + 1;
     return wc;
 }
@@ -192,7 +192,7 @@ static void draw_frame(void)
     akira_display_clear(C_BLACK);
 
     /* Wordmark */
-    draw_centred_large(28, "AKIRA", C_WHITE);
+    draw_centred_large(28, "AKIRA Console", C_WHITE);
 
     /* Clock in an elevated dither-shadow card — the focal point. */
     int cw = SCR_W - 80, cardh = 74;
@@ -288,12 +288,18 @@ void wait_screen_exit(void)
 
 void wait_screen_prepare_deep_sleep(void)
 {
+    /* Paint the panel fully black before sleeping — the bistable Sharp panel
+     * would otherwise hold the last clock frame. Wakes on HOME hold. */
+    akira_display_clear(C_BLACK);
+    akira_display_flush();
+
     /* Blank backlit displays before cutting power.
      * Sharp LS0XX is a bistable reflective display — it holds the image
      * without power and does not support display_blanking_on(). Skip it. */
 #if defined(CONFIG_DISPLAY) && !defined(CONFIG_LS0XX)
     const struct device *disp = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
-    if (device_is_ready(disp)) {
+    if (device_is_ready(disp))
+    {
         display_blanking_on(disp);
     }
 #endif
