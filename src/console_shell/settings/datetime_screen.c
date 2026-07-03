@@ -137,7 +137,7 @@ static void draw_item(int idx, int sel, const char *lbl, const char *rv)
         ss_glass_rect_dim(bx, by, bw, bh, 5);
     }
     int ty = by + (bh - 10) / 2;
-    uint16_t fg = hi ? SS_C_WHITE : SS_C_DKGRAY;
+    uint16_t fg = hi ? SS_C_BLACK : SS_C_WHITE;
     akira_display_text(bx + 10, ty, lbl, fg);
     if (rv && rv[0]) {
         int rvlen = (int)strlen(rv);
@@ -213,7 +213,7 @@ static void draw(int sel)
             ss_glass_rect_dim(bx, by, bw, bh, 5);
         }
         int ty = by + (bh - 10) / 2;
-        uint16_t fg = hi ? SS_C_WHITE : SS_C_DKGRAY;
+        uint16_t fg = hi ? SS_C_BLACK : SS_C_WHITE;
         akira_display_text(bx + 10, ty, labels[i], fg);
         if (rvals[i] && rvals[i][0]) {
             int rvlen = (int)strlen(rvals[i]);

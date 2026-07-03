@@ -319,8 +319,10 @@ static void draw_menu_at(const char **labels, int count, int sel,
 /* ------------------------------------------------------------------ */
 /* Shared draw helpers — non-static, used by settings sub-screens     */
 /* ------------------------------------------------------------------ */
-void ss_glass_rect_focus(int x, int y, int w, int h, int r) { glass_rect_focus(x, y, w, h, r); }
-void ss_glass_rect_dim(int x, int y, int w, int h, int r) { glass_rect_dim(x, y, w, h, r); }
+/* Playdate dither-shadow cards: focus = filled + elevated, dim = idle. Callers
+ * must draw selected text in INK (C_BLACK) and idle text in PAPER (C_WHITE). */
+void ss_glass_rect_focus(int x, int y, int w, int h, int r) { (void)r; akira_ui_dither_card(x, y, w, h, 8, true, 3); }
+void ss_glass_rect_dim(int x, int y, int w, int h, int r) { (void)r; akira_ui_dither_card(x, y, w, h, 8, false, 2); }
 void ss_draw_centred(int x, int y, int w, const char *s, uint16_t fg, uint16_t bg) { draw_centred(x, y, w, s, fg, bg); }
 void ss_draw_header(const char *title) { draw_header(title); }
 void ss_draw_ribbon(const char *left, const char *right) { draw_ribbon(left, right); }

@@ -75,7 +75,7 @@ static void draw(int sel)
             ss_glass_rect_dim(bx, by, bw, bh, 5);
         }
         int ty = by + (bh - 10) / 2;
-        uint16_t fg = (hi && !inactive) ? SS_C_WHITE : SS_C_DKGRAY;
+        uint16_t fg = (hi && !inactive) ? SS_C_BLACK : SS_C_WHITE;
         akira_display_text(bx + 10, ty, labels[i], fg);
         int rvlen = (int)strlen(rvalues[i]);
         akira_display_text(bx + bw - rvlen * 8 - 10, ty, rvalues[i], fg);
