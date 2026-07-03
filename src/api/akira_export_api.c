@@ -65,6 +65,7 @@ bool akira_register_native_apis()
         {"display_rect", (void *)akira_native_display_rect, "(iiiii)i", NULL},
         {"display_text", (void *)akira_native_display_text, "(ii$i)i", NULL},
         {"display_text_large", (void *)akira_native_display_text_large, "(ii$i)i", NULL},
+        {"display_text_huge", (void *)akira_native_display_text_huge, "(ii$i)i", NULL},
         {"display_clear", (void *)akira_native_display_clear, "(i)i", NULL},
         {"display_pixel", (void *)akira_native_display_pixel, "(iii)i", NULL},
         {"display_flush", (void *)akira_native_display_flush, "()i", NULL},

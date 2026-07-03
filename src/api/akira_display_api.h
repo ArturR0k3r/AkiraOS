@@ -26,6 +26,7 @@ void akira_display_pixel(int x, int y, uint16_t color);
 void akira_display_rect(int x, int y, int w, int h, uint16_t color);
 void akira_display_text(int x, int y, const char *text, uint16_t color);
 void akira_display_text_large(int x, int y, const char *text, uint16_t color);
+void akira_display_text_huge(int x, int y, const char *text, uint16_t color);
 void akira_display_flush(void);
 void akira_display_get_size(int *width, int *height);
 
@@ -62,6 +63,7 @@ int akira_native_display_pixel(wasm_exec_env_t exec_env, int32_t x, int32_t y, u
 int akira_native_display_rect(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color);
 int akira_native_display_text(wasm_exec_env_t exec_env, int32_t x, int32_t y, const char *text, uint32_t color);
 int akira_native_display_text_large(wasm_exec_env_t exec_env, int x, int y, const char *text, uint32_t color);
+int akira_native_display_text_huge(wasm_exec_env_t exec_env, int x, int y, const char *text, uint32_t color);
 int akira_native_display_flush(wasm_exec_env_t exec_env);
 int akira_native_display_get_size(wasm_exec_env_t exec_env, int32_t *w_out, int32_t *h_out);
 int akira_native_display_get_width(wasm_exec_env_t exec_env);

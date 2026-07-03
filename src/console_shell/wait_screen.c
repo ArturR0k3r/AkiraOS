@@ -198,8 +198,10 @@ static void draw_frame(void)
     int cw = SCR_W - 80, cardh = 74;
     int cardx = (SCR_W - cw) / 2, cardy = 70;
     akira_ui_dither_card(cardx, cardy, cw, cardh, 14, /*selected=*/false, /*shadow=*/5);
-    draw_centred_large(cardy + 16, time_str, C_WHITE);
-    draw_centred_small(cardy + 48, date_str, C_WHITE);
+    /* Hero font (16x28) for the clock — the one value being read. */
+    int htw = (int)strlen(time_str) * 16;
+    akira_display_text_huge((SCR_W - htw) / 2, cardy + 12, time_str, C_WHITE);
+    draw_centred_small(cardy + 50, date_str, C_WHITE);
 
     /* Battery level */
     if (batt_str[0])

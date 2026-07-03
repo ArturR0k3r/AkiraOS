@@ -135,6 +135,12 @@ void akira_display_text_large(int x, int y, const char *text, uint16_t color)
     draw_string(x, y, text, color, akira_display_pixel, FONT_11X18);
 }
 
+void akira_display_text_huge(int x, int y, const char *text, uint16_t color)
+{
+    if (!text) return;
+    draw_string(x, y, text, color, akira_display_pixel, FONT_HERO);
+}
+
 void akira_display_flush(void)
 {
 #if AKIRA_PLATFORM_NATIVE_SIM
@@ -510,6 +516,15 @@ int akira_native_display_text_large(wasm_exec_env_t exec_env, int x, int y, cons
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EACCES);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
     akira_display_text_large(x, y, text, (uint16_t)color);
+    schedule_auto_flush();
+    return 0;
+}
+
+int akira_native_display_text_huge(wasm_exec_env_t exec_env, int x, int y, const char *text, uint32_t color)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EACCES);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    akira_display_text_huge(x, y, text, (uint16_t)color);
     schedule_auto_flush();
     return 0;
 }
