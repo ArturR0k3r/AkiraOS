@@ -94,7 +94,7 @@ static void lc_item(int idx, int sel, const char *lbl, const char *rv) {
     int iy=LIST_Y+idx*ITEM_H; bool hi=(idx==sel);
     uint16_t ibg=hi?C_WHITE:C_BLACK, ifg=hi?C_BLACK:C_WHITE;
     akira_display_rounded_rect_fill(ITEM_X,iy+3,ITEM_W,ITEM_H-6,5,ibg);
-    akira_display_rounded_rect(ITEM_X,iy+3,ITEM_W,ITEM_H-6,5,hi?C_BLACK:C_DKGRAY);
+    akira_display_rounded_rect(ITEM_X,iy+3,ITEM_W,ITEM_H-6,5,hi?C_BLACK:C_WHITE);
     int ty=iy+3+(ITEM_H-6-10)/2;
     akira_display_text(ITEM_X+10,ty,lbl,ifg);
     if (rv&&rv[0]){int tw=(int)strlen(rv)*8; akira_display_text(ITEM_X+ITEM_W-tw-10,ty,rv,ifg);}
@@ -102,7 +102,7 @@ static void lc_item(int idx, int sel, const char *lbl, const char *rv) {
 static void lc_bar(int x, int y, int w, int h, int pct) {
     akira_display_rect_outline(x-1,y-1,w+2,h+2,C_WHITE);
     int fw = pct*w/100;
-    akira_display_rect(x,y,w,h,C_DKGRAY);
+    akira_display_rect(x,y,w,h,C_WHITE);
     if (fw>0) akira_display_rect(x,y,fw,h,C_WHITE);
 }
 
@@ -168,7 +168,7 @@ static void draw_keyboard(const char *ssid) {
             uint16_t bg = hi ? C_WHITE : C_BLACK;
             uint16_t fg = hi ? C_BLACK : C_WHITE;
             akira_display_rounded_rect_fill(x, y, KB_CELL_W - 2, KB_ROW_H - 4, 3, bg);
-            akira_display_rounded_rect(x, y, KB_CELL_W - 2, KB_ROW_H - 4, 3, hi ? C_BLACK : C_DKGRAY);
+            akira_display_rounded_rect(x, y, KB_CELL_W - 2, KB_ROW_H - 4, 3, hi ? C_BLACK : C_WHITE);
             char cs[2] = {chars[col], 0};
             akira_display_text(x + KB_CELL_W / 2 - 4, y + (KB_ROW_H - 4 - 10) / 2, cs, fg);
         }
@@ -183,7 +183,7 @@ static void draw_keyboard(const char *ssid) {
         uint16_t bg = hi ? C_WHITE : C_BLACK;
         uint16_t fg = hi ? C_BLACK : C_WHITE;
         akira_display_rounded_rect_fill(x, y, w, KB_ROW_H - 4, 3, bg);
-        akira_display_rounded_rect(x, y, w, KB_ROW_H - 4, 3, hi ? C_BLACK : C_DKGRAY);
+        akira_display_rounded_rect(x, y, w, KB_ROW_H - 4, 3, hi ? C_BLACK : C_WHITE);
         akira_display_text(x + w / 2 - 20, y + (KB_ROW_H - 4 - 10) / 2, "SPACE", fg);
     }
 
@@ -425,7 +425,7 @@ static void draw_signal_lock(int idx, int sel, int8_t rssi, bool secured) {
 
 static void draw_list(const char *status) {
     akira_display_clear(C_BLACK); lc_header("WIFI");
-    akira_display_text(ITEM_X+4,LIST_Y+4,status,C_GRAY);
+    akira_display_text(ITEM_X+4,LIST_Y+4,status,C_WHITE);
     int vis=(FOOT_Y-LIST_Y)/ITEM_H;
     if (g_scroll>g_network_count-vis) g_scroll=g_network_count>vis?g_network_count-vis:0;
     if (g_scroll<0) g_scroll=0;

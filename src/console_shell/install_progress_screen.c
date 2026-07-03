@@ -79,7 +79,7 @@ void install_progress_show(const char *name, int pct, const char *msg)
     int filled = pct * segs / 100;
     for (int i = 0; i < segs; i++) {
         int sx  = bar_x + i * (sw + 1);
-        uint16_t sc = (i < filled) ? C_WHITE : C_DKGRAY;
+        uint16_t sc = (i < filled) ? C_WHITE : C_BLACK; /* empty = inside the outline track */
         akira_display_rect(sx, bar_y, sw, bar_h, sc);
     }
 
@@ -90,7 +90,7 @@ void install_progress_show(const char *name, int pct, const char *msg)
 
     /* Status message */
     if (msg && *msg) {
-        draw_centred(OVL_X + 4, OVL_Y + 74, OVL_W - 8, msg, C_GRAY, C_BLACK);
+        draw_centred(OVL_X + 4, OVL_Y + 74, OVL_W - 8, msg, C_WHITE, C_BLACK);
     }
 
     akira_display_flush();

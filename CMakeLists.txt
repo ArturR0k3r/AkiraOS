@@ -828,7 +828,6 @@ if(CONFIG_AKIRA_OS_SHELL)
         src/console_shell/sd_install_screen.c
         src/console_shell/install_progress_screen.c
         src/console_shell/settings_screen.c
-        src/console_shell/settings/wifi_screen.c
         src/console_shell/settings/display_screen.c
         src/console_shell/settings/ble_screen.c
         src/console_shell/settings/power_screen.c
@@ -837,6 +836,10 @@ if(CONFIG_AKIRA_OS_SHELL)
         src/console_shell/settings/apps_screen.c
         src/console_shell/settings/devmode_screen.c
     )
+    # WiFi settings screen depends on the WiFi manager (WIFI must be enabled).
+    if(CONFIG_AKIRA_WIFI_MANAGER)
+        target_sources(app PRIVATE src/console_shell/settings/wifi_screen.c)
+    endif()
     target_include_directories(app PRIVATE src/console_shell)
 endif()
 

@@ -448,7 +448,9 @@ static void handle_main(uint32_t k)
         {
         case MAIN_ITEM_WIFI:
             g_active = false;
+#ifdef CONFIG_AKIRA_WIFI_MANAGER
             wifi_screen_load();
+#endif
             return;
         case MAIN_ITEM_BLUETOOTH:
             g_bt_sel = 0;

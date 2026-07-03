@@ -31,7 +31,7 @@ static void draw(void)
     int pw = SS_MENU_W, ph = 26;
 
     akira_display_rounded_rect_fill(px, py, pw, ph, 4, SS_C_BLACK);
-    akira_display_rounded_rect(px, py, pw, ph, 4, SS_C_DKGRAY);
+    akira_display_rounded_rect(px, py, pw, ph, 4, SS_C_WHITE);
     akira_display_text(px + 8, py + 8, ver, SS_C_WHITE);
 
     akira_display_text(px + 8, py + ph + 10,
@@ -40,7 +40,7 @@ static void draw(void)
 #else
         "OTA not enabled in this build",
 #endif
-        SS_C_GRAY);
+        SS_C_WHITE);
 
     ss_draw_ribbon("", "[B] Back");
     akira_display_flush();

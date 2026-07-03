@@ -135,9 +135,9 @@ static void draw_screen(void)
     if (g_entry_count == 0)
     {
         draw_centred(0, LIST_Y + LIST_H / 2 - 10, SCR_W,
-                     "No apps found", C_GRAY, C_BLACK);
+                     "No apps found", C_WHITE, C_BLACK);
         draw_centred(0, LIST_Y + LIST_H / 2 + 4, SCR_W,
-                     "in /SD:/apps/", C_DKGRAY, C_BLACK);
+                     "in /SD:/apps/", C_WHITE, C_BLACK);
     }
     else
     {
@@ -161,7 +161,7 @@ static void draw_screen(void)
             }
             else
             {
-                akira_display_rounded_rect(ITEM_X, iy + 2, ITEM_W, ITEM_H - 4, 3, C_DKGRAY);
+                akira_display_rounded_rect(ITEM_X, iy + 2, ITEM_W, ITEM_H - 4, 3, C_WHITE);
             }
 
             /* Name (left) */
@@ -187,11 +187,11 @@ static void draw_screen(void)
         /* Scroll indicators */
         if (g_scroll > 0)
         {
-            akira_display_text(SCR_W - 12, LIST_Y + 2, "^", C_GRAY);
+            akira_display_text(SCR_W - 12, LIST_Y + 2, "^", C_WHITE);
         }
         if (g_scroll + vis < g_entry_count)
         {
-            akira_display_text(SCR_W - 12, LIST_Y + vis * ITEM_H + 2, "v", C_GRAY);
+            akira_display_text(SCR_W - 12, LIST_Y + vis * ITEM_H + 2, "v", C_WHITE);
         }
     }
 
@@ -263,8 +263,8 @@ void sd_install_screen_load(void)
     {
         akira_display_clear(C_BLACK);
         sd_draw_header();
-        draw_centred(0, SCR_H / 2 - 10, SCR_W, "No SD card detected", C_GRAY, C_BLACK);
-        draw_centred(0, SCR_H / 2 + 4, SCR_W, "Insert card and reboot", C_DKGRAY, C_BLACK);
+        draw_centred(0, SCR_H / 2 - 10, SCR_W, "No SD card detected", C_WHITE, C_BLACK);
+        draw_centred(0, SCR_H / 2 + 4, SCR_W, "Insert card and reboot", C_WHITE, C_BLACK);
         akira_display_hline(0, FOOT_Y - 1, SCR_W, C_WHITE);
         akira_display_hline(0, FOOT_Y - 2, SCR_W, C_WHITE);
         akira_display_rect(0, FOOT_Y, SCR_W, FOOT_H, C_BLACK);
