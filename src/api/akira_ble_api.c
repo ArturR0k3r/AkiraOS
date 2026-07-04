@@ -290,6 +290,67 @@ int akira_native_ble_event_pop(wasm_exec_env_t exec_env,
 	return evt_type;
 }
 
+int akira_native_ble_scan_start(wasm_exec_env_t exec_env, int32_t active)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE_SCAN, -EACCES);
+
+	return bt_manager_scan_start(active != 0);
+}
+
+int akira_native_ble_scan_stop(wasm_exec_env_t exec_env)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE_SCAN, -EACCES);
+
+	return bt_manager_scan_stop();
+}
+
+int akira_native_ble_scan_pop(wasm_exec_env_t exec_env,
+			      uint32_t buf_ptr, uint32_t len)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE_SCAN, -EACCES);
+
+	if (len < sizeof(struct ble_scan_report)) {
+		return -EINVAL;
+	}
+
+	uint8_t *buf = (uint8_t *)wasm_ptr_to_native(exec_env, buf_ptr, len);
+
+	if (!buf) {
+		return -EFAULT;
+	}
+
+	struct ble_scan_report rep;
+	int ret = bt_manager_scan_pop(&rep);
+
+	if (ret <= 0) {
+		return ret; /* 0 = empty, <0 = errno */
+	}
+
+	memcpy(buf, &rep, sizeof(rep));
+	return 1;
+}
+
+int akira_native_ble_spam_start(wasm_exec_env_t exec_env, int32_t preset)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE_SPAM, -EACCES);
+
+	return bt_manager_spam_start((int)preset);
+}
+
+int akira_native_ble_spam_stop(wasm_exec_env_t exec_env)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE_SPAM, -EACCES);
+
+	return bt_manager_spam_stop();
+}
+
+int akira_native_ble_spam_packet_count(wasm_exec_env_t exec_env)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE_SPAM, -EACCES);
+
+	return (int)bt_manager_spam_packet_count();
+}
+
 #else /* !CONFIG_AKIRA_WASM_BLE */
 
 /* Stubs so the linker does not complain if the header is included elsewhere */
@@ -321,5 +382,14 @@ int akira_native_ble_char_read(wasm_exec_env_t e, int32_t h,
 { (void)e; (void)h; (void)p; (void)l; return -ENOTSUP; }
 int akira_native_ble_event_pop(wasm_exec_env_t e, uint32_t p, uint32_t l)
 { (void)e; (void)p; (void)l; return -ENOTSUP; }
+int akira_native_ble_scan_start(wasm_exec_env_t e, int32_t a)
+{ (void)e; (void)a; return -ENOTSUP; }
+int akira_native_ble_scan_stop(wasm_exec_env_t e) { (void)e; return -ENOTSUP; }
+int akira_native_ble_scan_pop(wasm_exec_env_t e, uint32_t p, uint32_t l)
+{ (void)e; (void)p; (void)l; return -ENOTSUP; }
+int akira_native_ble_spam_start(wasm_exec_env_t e, int32_t p)
+{ (void)e; (void)p; return -ENOTSUP; }
+int akira_native_ble_spam_stop(wasm_exec_env_t e) { (void)e; return -ENOTSUP; }
+int akira_native_ble_spam_packet_count(wasm_exec_env_t e) { (void)e; return -ENOTSUP; }
 
 #endif /* CONFIG_AKIRA_WASM_BLE */

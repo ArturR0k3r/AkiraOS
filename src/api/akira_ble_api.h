@@ -159,6 +159,43 @@ int akira_native_ble_char_read(wasm_exec_env_t exec_env,
 int akira_native_ble_event_pop(wasm_exec_env_t exec_env,
 			       uint32_t buf_ptr, uint32_t len);
 
+/**
+ * @brief Start BLE observer scanning.
+ * @param active  1 = active scan (requests names), 0 = passive.
+ */
+int akira_native_ble_scan_start(wasm_exec_env_t exec_env, int32_t active);
+
+/**
+ * @brief Stop BLE observer scanning.
+ */
+int akira_native_ble_scan_stop(wasm_exec_env_t exec_env);
+
+/**
+ * @brief Pop one queued advertisement report into a WASM buffer.
+ * Copies sizeof(struct ble_scan_report) bytes verbatim (addr, rssi, name,
+ * adv_len, adv_data, in that field order — see bt_manager.h).
+ * @return 1 if a report was popped, 0 if queue empty, negative errno on error.
+ */
+int akira_native_ble_scan_pop(wasm_exec_env_t exec_env,
+                              uint32_t buf_ptr, uint32_t len);
+
+/**
+ * @brief Start BLE spam/spoof rotating-advertiser mode.
+ * @param preset  One of BLE_SPAM_PRESET_* (0=Apple continuity, 1=Fast Pair,
+ *                2=Swift Pair, 3=random flood — see bt_manager.h).
+ */
+int akira_native_ble_spam_start(wasm_exec_env_t exec_env, int32_t preset);
+
+/**
+ * @brief Stop BLE spam/spoof mode.
+ */
+int akira_native_ble_spam_stop(wasm_exec_env_t exec_env);
+
+/**
+ * @brief Number of advertisement payloads sent since the last spam_start().
+ */
+int akira_native_ble_spam_packet_count(wasm_exec_env_t exec_env);
+
 #ifdef __cplusplus
 }
 #endif

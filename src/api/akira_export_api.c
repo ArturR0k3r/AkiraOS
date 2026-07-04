@@ -158,6 +158,12 @@ bool akira_register_native_apis()
         {"ble_char_write", (void *)akira_native_ble_char_write, "(iii)i", NULL},
         {"ble_char_read", (void *)akira_native_ble_char_read, "(iii)i", NULL},
         {"ble_event_pop", (void *)akira_native_ble_event_pop, "(ii)i", NULL},
+        {"ble_scan_start", (void *)akira_native_ble_scan_start, "(i)i", NULL},
+        {"ble_scan_stop", (void *)akira_native_ble_scan_stop, "()i", NULL},
+        {"ble_scan_pop", (void *)akira_native_ble_scan_pop, "(ii)i", NULL},
+        {"ble_spam_start", (void *)akira_native_ble_spam_start, "(i)i", NULL},
+        {"ble_spam_stop", (void *)akira_native_ble_spam_stop, "()i", NULL},
+        {"ble_spam_packet_count", (void *)akira_native_ble_spam_packet_count, "()i", NULL},
 #endif
 
 #ifdef CONFIG_AKIRA_WASM_HID

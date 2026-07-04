@@ -103,6 +103,13 @@ extern "C" {
  * WASM app distribution over the mesh.
  * Manifest string: "mesh" */
 #define AKIRA_CAP_MESH          (1ULL << 35)
+/* BLE observer role: scan for nearby advertisers (no GATT connect).
+ * Manifest string: "ble.scan" */
+#define AKIRA_CAP_BLE_SCAN      (1ULL << 36)
+/* BLE rotating raw-advertiser (pairing-popup spam/spoof presets).
+ * Elevated privilege — broadcasts affect nearby devices, do not grant
+ * to untrusted apps by default. Manifest string: "ble.spam" */
+#define AKIRA_CAP_BLE_SPAM      (1ULL << 37)
 
 /*
  * Capability check macro using security subsystem.

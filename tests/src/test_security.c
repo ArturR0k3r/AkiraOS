@@ -73,6 +73,30 @@ ZTEST(security, test_cap_wildcard_input)
                   "input.* mask wrong: 0x%08x", mask);
 }
 
+ZTEST(security, test_cap_str_known_ble_scan)
+{
+    uint64_t mask = akira_capability_str_to_mask("ble.scan");
+
+    zassert_equal(mask, AKIRA_CAP_BLE_SCAN,
+                  "ble.scan mask wrong: 0x%016llx", mask);
+}
+
+ZTEST(security, test_cap_str_known_ble_spam)
+{
+    uint64_t mask = akira_capability_str_to_mask("ble.spam");
+
+    zassert_equal(mask, AKIRA_CAP_BLE_SPAM,
+                  "ble.spam mask wrong: 0x%016llx", mask);
+}
+
+ZTEST(security, test_cap_mask_to_str_ble_scan)
+{
+    const char *s = akira_capability_mask_to_str(AKIRA_CAP_BLE_SCAN);
+
+    zassert_true(strcmp(s, "ble.scan") == 0,
+                 "expected \"ble.scan\", got \"%s\"", s);
+}
+
 ZTEST(security, test_cap_native_check_always_permits)
 {
     /*

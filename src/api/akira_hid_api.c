@@ -528,7 +528,11 @@ int akira_native_hid_fido_send(wasm_exec_env_t exec_env,
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
 
-#ifdef CONFIG_AKIRA_HID
+    /* usb_hid_fido_send() lives in usb_hid.c, which CMake compiles only under
+     * CONFIG_AKIRA_USB_HID. Gate on that (not CONFIG_AKIRA_HID) so a build with
+     * HID enabled but USB HID disabled links cleanly, matching how the FIDO ISR
+     * handler is registered above. */
+#ifdef CONFIG_AKIRA_USB_HID
     if (len == 0 || len > USB_HID_FIDO_PAYLOAD_SIZE) {
         return -EINVAL;
     }
