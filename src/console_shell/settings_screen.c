@@ -47,6 +47,10 @@ LOG_MODULE_REGISTER(akira_shell_settings, CONFIG_AKIRA_LOG_LEVEL);
 
 #ifdef CONFIG_BT
 #include <connectivity/bluetooth/bt_manager.h>
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+#include <settings/settings.h>
+#include <zephyr/sys/reboot.h>
+#endif
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -111,9 +115,17 @@ static const char *s_main_labels[MAIN_ITEMS] = {
 static int g_main_sel;
 
 /* ---- Bluetooth menu (4 items) ------------------------------------ */
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+#define BT_ITEMS 5
+/* Label text is refreshed in draw_bluetooth() to show the current boot mode. */
+static char s_bt_mode_label[24] = "BLE Mode: HID";
+static const char *s_bt_labels[BT_ITEMS] = {
+    "Adv ON", "Adv OFF", "Unpair All", s_bt_mode_label, "Back"};
+#else
 #define BT_ITEMS 4
 static const char *s_bt_labels[BT_ITEMS] = {
     "Adv ON", "Adv OFF", "Unpair All", "Back"};
+#endif
 static int g_bt_sel;
 
 /* ---- Scroll offsets (index of first visible item per menu) ------- */
@@ -392,6 +404,11 @@ static void draw_bluetooth(void)
     akira_display_text(10, CONT_Y + 10, l1, C_WHITE);
     akira_display_text(10, CONT_Y + 24, l2, C_WHITE);
 
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+    snprintf(s_bt_mode_label, sizeof(s_bt_mode_label), "BLE Mode: %s",
+             bt_manager_boot_mode_is_companion() ? "Companion" : "HID");
+#endif
+
     draw_menu_at(s_bt_labels, BT_ITEMS, g_bt_sel, CONT_Y + 44, g_bt_scroll);
     draw_ribbon("[A] SELECT", "[B] BACK");
 }
@@ -554,9 +571,29 @@ static void handle_bluetooth(uint32_t k)
             bt_manager_unpair_all();
 #endif
             break;
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+        case 3: /* BLE Mode — toggle HID <-> Companion (persist + reboot) */
+        {
+            const char *next =
+                bt_manager_boot_mode_is_companion() ? "hid" : "companion";
+            akira_settings_set(AKIRA_BT_MODE_KEY, next, 0);
+            akira_display_clear(C_BLACK);
+            akira_display_text(20, 60, "Switching BLE mode:", C_WHITE);
+            akira_display_text(20, 78, next, C_GRAY);
+            akira_display_text(20, 104, "Rebooting...", C_GRAY);
+            akira_display_flush();
+            k_sleep(K_MSEC(900));
+            sys_reboot(SYS_REBOOT_COLD);
+            break;
+        }
+        case 4: /* Back */
+            g_page = SS_MAIN;
+            break;
+#else
         case 3: /* Back */
             g_page = SS_MAIN;
             break;
+#endif
         }
         redraw();
         return;
