@@ -66,6 +66,11 @@ endif()
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(akira_os VERSION 1.6.2)
 
+# Allow multiple symbol definitions — used to override the closed-source
+# ieee80211_raw_frame_sanity_check from libnet80211.a (the ESP-IDF binary
+# blob) with our own version that allows deauth management frames.
+zephyr_ld_options(-Wl,--allow-multiple-definition)
+
 # When this repository is present as a west module, MCUboot bootloader builds
 # also evaluate this CMakeLists. In that context (CONFIG_MCUBOOT=y), pulling
 # Akira application sources into the bootloader image causes unresolved symbols.
