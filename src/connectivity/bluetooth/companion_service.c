@@ -206,22 +206,55 @@ static void handle_device_reboot(const char *op, int id, const char *params)
     sys_reboot(SYS_REBOOT_COLD);
 }
 
+/* Stream a byte buffer to the peer over DATA_DOWN in <=240-byte frames. Used
+ * for payloads that exceed the single-notify RESP limit (e.g. apps.list on a
+ * device with many apps). Sends at least one frame (LAST set on the final one).
+ * Staging buffers live in PSRAM (.ext_ram.bss) to spare internal DRAM. */
+static void stream_bytes_down(const uint8_t *data, int len)
+{
+    extern const struct bt_gatt_attr *companion_attrs;
+    uint8_t frame[4 + COMP_DATA_PAYLOAD_MAX];
+    int off = 0;
+    do {
+        int chunk = len - off;
+        if (chunk > COMP_DATA_PAYLOAD_MAX) {
+            chunk = COMP_DATA_PAYLOAD_MAX;
+        }
+        bool last = (off + chunk >= len);
+        frame[0] = COMP_XFER_FILE_DATA;
+        frame[1] = last ? COMP_FLAG_LAST : 0;
+        frame[2] = (uint8_t)(chunk & 0xFF);
+        frame[3] = (uint8_t)((chunk >> 8) & 0xFF);
+        if (chunk > 0) {
+            memcpy(frame + 4, data + off, chunk);
+        }
+        if (bt_gatt_notify(s_conn, &companion_attrs[9], frame, (uint16_t)(4 + chunk))) {
+            break;
+        }
+        off += chunk;
+        if (!last) {
+            k_sleep(K_MSEC(10)); /* let the peer's BLE stack drain */
+        }
+    } while (off < len);
+}
+
+static char s_list_json[2048] __attribute__((section(".ext_ram.bss")));
+
 static void handle_apps_list(const char *op, int id, const char *params)
 {
     ARG_UNUSED(params);
-    /* Build JSON array of installed apps. RESP is a single 244-byte notify, so
-     * the list truncates for large app counts — still valid JSON. */
-    static app_info_t list[16];
+    /* The list can exceed one 244-byte notify (many SD-card apps), so ACK on
+     * RESP and stream the JSON array over DATA_DOWN. */
+    static app_info_t list[32] __attribute__((section(".ext_ram.bss")));
     int count = app_manager_list(list, (int)(sizeof(list) / sizeof(list[0])));
     if (count < 0) {
         count = 0;
     }
 
-    char buf[CHAR_BUF_SIZE];
     int pos = 0;
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "[");
-    for (int i = 0; i < count && (size_t)pos < sizeof(buf) - 40; i++) {
-        pos += snprintf(buf + pos, sizeof(buf) - pos,
+    pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos, "[");
+    for (int i = 0; i < count && (size_t)pos < sizeof(s_list_json) - 96; i++) {
+        pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos,
                         "%s{\"name\":\"%s\",\"state\":\"%s\","
                         "\"version\":\"%s\"}",
                         i > 0 ? "," : "",
@@ -229,8 +262,10 @@ static void handle_apps_list(const char *op, int id, const char *params)
                         app_state_to_str(list[i].state),
                         list[i].version);
     }
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "]");
-    send_resp(op, id, true, buf);
+    pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos, "]");
+
+    send_resp(op, id, true, NULL);   /* ACK; array follows on DATA_DOWN */
+    stream_bytes_down((const uint8_t *)s_list_json, pos);
 }
 
 static void handle_apps_start(const char *op, int id, const char *params)
