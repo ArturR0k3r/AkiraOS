@@ -4,11 +4,48 @@
 
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/spi/spi.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
 
 
 // Enable USB OTG for device mode (CDC ACM console)
 &usb_otg {
     status = "okay";
+};
+
+// -----------------------------------------------------------------------------
+// LEDC PWM — RGB controller on GPIO4 (R), GPIO5 (G), GPIO6 (B).
+// Channel index maps directly to pwm_set() channel:
+//   channel0 -> GPIO4 (R), channel1 -> GPIO5 (G), channel2 -> GPIO6 (B).
+// The akira PWM native API resolves the controller by nodelabel "ledc0".
+// -----------------------------------------------------------------------------
+&pinctrl {
+    ledc0_default: ledc0_default {
+        group1 {
+            pinmux = <LEDC_CH0_GPIO4>, <LEDC_CH1_GPIO5>, <LEDC_CH2_GPIO6>;
+            output-enable;
+        };
+    };
+};
+
+&ledc0 {
+    pinctrl-0 = <&ledc0_default>;
+    pinctrl-names = "default";
+    status = "okay";
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    channel0@0 {
+        reg = <0x0>;
+        timer = <0>;
+    };
+    channel1@1 {
+        reg = <0x1>;
+        timer = <0>;
+    };
+    channel2@2 {
+        reg = <0x2>;
+        timer = <0>;
+    };
 };
 
 / {
