@@ -18,6 +18,8 @@
 #include "../drivers/platform_hal.h"
 #include "../settings/settings.h"
 #if defined(CONFIG_BT)
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/uuid.h>
 #include "connectivity/bluetooth/bt_manager.h"
 #if defined(CONFIG_AKIRA_BT_ECHO)
 #include "connectivity/bluetooth/bt_echo.h"
@@ -1461,6 +1463,35 @@ static int cmd_bt_echo(const struct shell *sh, size_t argc, char **argv)
 }
 #endif
 
+static uint8_t gatt_svc_dump_cb(const struct bt_gatt_attr *attr, uint16_t handle,
+                                void *user_data)
+{
+    const struct shell *sh = user_data;
+    char attr_uuid[BT_UUID_STR_LEN];
+
+    bt_uuid_to_str(attr->uuid, attr_uuid, sizeof(attr_uuid));
+
+    if (bt_uuid_cmp(attr->uuid, BT_UUID_GATT_PRIMARY) == 0 ||
+        bt_uuid_cmp(attr->uuid, BT_UUID_GATT_SECONDARY) == 0) {
+        char svc_uuid[BT_UUID_STR_LEN];
+        bt_uuid_to_str((const struct bt_uuid *)attr->user_data,
+                       svc_uuid, sizeof(svc_uuid));
+        shell_print(sh, "  [0x%04x] SERVICE %s", handle, svc_uuid);
+    } else {
+        shell_print(sh, "  [0x%04x]   attr %s", handle, attr_uuid);
+    }
+    return BT_GATT_ITER_CONTINUE;
+}
+
+static int cmd_bt_gatt(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+    shell_print(sh, "=== Registered GATT services ===");
+    bt_gatt_foreach_attr(0x0001, 0xffff, gatt_svc_dump_cb, (void *)sh);
+    return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(bt_adv_cmds,
                                SHELL_CMD(start, NULL, "Start advertising", cmd_bt_adv_start),
                                SHELL_CMD(stop, NULL, "Stop advertising", cmd_bt_adv_stop),
@@ -1473,6 +1504,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(bt_cmds,
                                SHELL_CMD(addr, NULL, "Show local BT address", cmd_bt_addr),
                                SHELL_CMD(disconnect, NULL, "Disconnect current connection", cmd_bt_disconnect),
                                SHELL_CMD(unpair, NULL, "Delete all bonds", cmd_bt_unpair),
+                               SHELL_CMD(gatt, NULL, "Dump registered GATT services", cmd_bt_gatt),
 #if defined(CONFIG_AKIRA_BT_ECHO)
                                SHELL_CMD(echo, NULL, "Echo service: <on|off|status|send [msg]>", cmd_bt_echo),
 #endif
