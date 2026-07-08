@@ -259,6 +259,15 @@ static struct bt_conn_cb conn_callbacks = {
 /* Advertising data */
 static const struct bt_data ad[] = {
     BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
+    /* App-Transfer service UUID (414b4952-0001-0001-0001-000000000001).
+     * AkiraApp (Web Bluetooth) filters devices by this service UUID, and the
+     * browser only matches UUIDs present in the advertisement — being in the
+     * GATT table alone is not enough. Without this the device advertises but
+     * never appears in the requestDevice() chooser. 18 bytes; the device name
+     * is carried in the scan response (sd[]), so the 31-byte AD budget fits. */
+    BT_DATA_BYTES(BT_DATA_UUID128_ALL,
+                  BT_UUID_128_ENCODE(0x414B4952, 0x0001, 0x0001, 0x0001,
+                                     0x000000000001)),
 #if CONFIG_AKIRA_HID_MODE_KB_MOUSE
     BT_DATA_BYTES(BT_DATA_GAP_APPEARANCE,
                 BT_BYTES_LIST_LE16(0x03C1)), /* Keyboard */
