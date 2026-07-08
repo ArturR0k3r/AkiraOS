@@ -1532,6 +1532,16 @@ static int cmd_wifi_status(const struct shell *sh, size_t argc, char **argv)
         return -ENODEV;
     }
 
+    /* Print the WiFi (STA) MAC — used as the device identifier when
+     * registering with AkiraHub. */
+    struct net_linkaddr *linkaddr = net_if_get_link_addr(iface);
+    if (linkaddr && linkaddr->len == 6)
+    {
+        shell_print(sh, "MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                    linkaddr->addr[0], linkaddr->addr[1], linkaddr->addr[2],
+                    linkaddr->addr[3], linkaddr->addr[4], linkaddr->addr[5]);
+    }
+
     struct wifi_iface_status status = {0};
     int ret = net_mgmt(NET_REQUEST_WIFI_IFACE_STATUS, iface, &status, sizeof(status));
 

@@ -173,12 +173,14 @@ if(CONFIG_AKIRA_WASM_RUNTIME)
     endif()
 
     set(WAMR_BUILD_LIBC_WASI 0)
-    set(WAMR_BUILD_GLOBAL_HEAP_POOL 1)
-    if(CONFIG_WAMR_HEAP_SIZE)
-        set(WAMR_BUILD_GLOBAL_HEAP_SIZE ${CONFIG_WAMR_HEAP_SIZE})
-    else()
-        set(WAMR_BUILD_GLOBAL_HEAP_SIZE 131072)
-    endif()
+    # The runtime initializes WAMR with Alloc_With_Allocator (see
+    # akira_runtime_init(): wamr_malloc/free/realloc route to PSRAM-first
+    # akira_malloc_buffer()). The WAMR global heap pool is therefore unused —
+    # leaving it enabled reserves a static global_heap_buf[CONFIG_WAMR_HEAP_SIZE]
+    # (256 KB) in DRAM .bss for nothing, overflowing dram0_0_seg once WiFi is on.
+    # Keep it disabled so DRAM is not wasted; CONFIG_WAMR_HEAP_SIZE no longer
+    # backs a static pool.
+    set(WAMR_BUILD_GLOBAL_HEAP_POOL 0)
     # Enable reference-types support so WAMR can load WASM binaries produced by
     # WASI SDK 19+ / LLVM 17+.  Those toolchains emit element sections in the
     # extended multi-table format (non-zero segment-kind prefix) even when user
