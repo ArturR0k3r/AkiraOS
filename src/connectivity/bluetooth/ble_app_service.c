@@ -73,6 +73,19 @@ K_MSGQ_DEFINE(g_evt_q, sizeof(struct ble_event),
 static struct k_mutex g_mutex;
 static bool g_initialized;
 
+/* Persistent UUID objects for the standard declaration attributes. The Zephyr
+ * BT_UUID_GATT_* macros expand to compound literals; used inside a function
+ * they have automatic (stack) storage, so storing their address in a
+ * long-lived attr table leaves a dangling pointer once the function returns
+ * (the service decl then reads garbage and no client can discover it). These
+ * file-scope statics have static storage and are safe to point at. */
+static const struct bt_uuid_16 g_uuid_primary =
+	BT_UUID_INIT_16(BT_UUID_GATT_PRIMARY_VAL);
+static const struct bt_uuid_16 g_uuid_chrc =
+	BT_UUID_INIT_16(BT_UUID_GATT_CHRC_VAL);
+static const struct bt_uuid_16 g_uuid_ccc =
+	BT_UUID_INIT_16(BT_UUID_GATT_CCC_VAL);
+
 /*===========================================================================*/
 /* Internal Helpers                                                          */
 /*===========================================================================*/
@@ -272,6 +285,14 @@ int ble_app_svc_alloc(const char *uuid128_str)
 		return -EINVAL;
 	}
 
+	/* Initialize the service layer on first use. The Arduino-style app flow
+	 * (ble_led sample) creates and registers services BEFORE calling
+	 * ble_init() — which also runs ble_app_svc_init(). Without this early
+	 * init, that later call would still see g_initialized==false and
+	 * memset(g_svcs) — wiping the attrs of an already bt_gatt-registered
+	 * service, making it vanish from the GATT. Idempotent via g_initialized. */
+	ble_app_svc_init();
+
 	k_mutex_lock(&g_mutex, K_FOREVER);
 
 	for (int i = 0; i < CONFIG_AKIRA_BLE_MAX_SERVICES; i++) {
@@ -305,6 +326,8 @@ int ble_app_char_alloc(const char *uuid128_str, uint8_t props, uint16_t max_len)
 	    max_len > CONFIG_AKIRA_BLE_CHAR_MAX_LEN) {
 		return -EINVAL;
 	}
+
+	ble_app_svc_init(); /* idempotent; ensures g_mutex is initialized */
 
 	k_mutex_lock(&g_mutex, K_FOREVER);
 
@@ -408,7 +431,7 @@ int ble_app_svc_register(int svc_h)
 	uint8_t ai = 0;
 
 	/* Service declaration attr */
-	sv->attrs[ai].uuid      = BT_UUID_GATT_PRIMARY;
+	sv->attrs[ai].uuid      = (struct bt_uuid *)&g_uuid_primary;
 	sv->attrs[ai].perm      = BT_GATT_PERM_READ;
 	sv->attrs[ai].read      = bt_gatt_attr_read_service;
 	sv->attrs[ai].write     = NULL;
@@ -440,7 +463,7 @@ int ble_app_svc_register(int svc_h)
 			LOG_ERR("Attr pool overflow for service %d", svc_h);
 			break;
 		}
-		sv->attrs[ai].uuid      = BT_UUID_GATT_CHRC;
+		sv->attrs[ai].uuid      = (struct bt_uuid *)&g_uuid_chrc;
 		sv->attrs[ai].perm      = BT_GATT_PERM_READ;
 		sv->attrs[ai].read      = bt_gatt_attr_read_chrc;
 		sv->attrs[ai].write     = NULL;
@@ -468,7 +491,7 @@ int ble_app_svc_register(int svc_h)
 				LOG_ERR("Attr pool overflow for service %d", svc_h);
 				break;
 			}
-			sv->attrs[ai].uuid      = BT_UUID_GATT_CCC;
+			sv->attrs[ai].uuid      = (struct bt_uuid *)&g_uuid_ccc;
 			sv->attrs[ai].perm      = BT_GATT_PERM_READ |
 						  BT_GATT_PERM_WRITE;
 			sv->attrs[ai].read      = bt_gatt_attr_read_ccc;
@@ -493,8 +516,8 @@ int ble_app_svc_register(int svc_h)
 	sv->registered = true;
 	k_mutex_unlock(&g_mutex);
 
-	LOG_INF("Service %d registered (%d attrs, %d chars)",
-		svc_h, ai, sv->char_count);
+	LOG_INF("Service %d registered (%d attrs, %d chars) svc_handle=0x%04x @%p",
+		svc_h, ai, sv->char_count, sv->attrs[0].handle, (void *)&sv->svc);
 	return 0;
 }
 

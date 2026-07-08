@@ -29,6 +29,7 @@ LOG_MODULE_REGISTER(akira_ble_api, CONFIG_AKIRA_LOG_LEVEL);
 
 #ifdef CONFIG_BT
 #include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
 #endif
 
 /*
@@ -70,6 +71,15 @@ int akira_native_ble_init(wasm_exec_env_t exec_env)
 		LOG_ERR("ble_init: set_mode failed: %d", ret);
 		return ret;
 	}
+
+#if defined(CONFIG_BT_SMP)
+	/* A WASM app's GATT services are added dynamically and differ between
+	 * apps/boots. If the peer bonds, it caches this attribute table and will
+	 * not re-discover our service on later connections (the classic "service
+	 * not found" after a service was added). Disable bonding in app mode so
+	 * every connection re-discovers the current GATT. */
+	bt_set_bondable(false);
+#endif
 
 	ret = ble_app_svc_init();
 	if (ret < 0) {
