@@ -623,6 +623,29 @@ config AKIRA_WASM_MATTER
       symbol table so WASM apps can interact with the Matter fabric.
       Gated behind AKIRA_CAP_MATTER ("matter" in app manifest).
 
+config AKIRA_MATTER_ACCESSORY
+    bool "Expose AkiraOS hardware as a Matter accessory (device-as-endpoint)"
+    default n
+    depends on AKIRA_MATTER_COPROC_UART
+    help
+      Enables the accessory (device-as-endpoint) direction: AkiraOS can
+      register its own endpoints (lights, sensors, switches) with the
+      co-processor and be adopted by Home Assistant, Google Home, Alexa or
+      Apple Home. Adds the accessory IPC commands, the matter_endpoint_add /
+      matter_report_attr / matter_cmd_poll / matter_open_pairing /
+      matter_get_pairing WASM natives (when AKIRA_WASM_MATTER is set), and the
+      "matter pair" / "matter status" shell commands.
+
+config AKIRA_MATTER_COPROC_MOCK
+    bool "Built-in mock Matter co-processor (testing)"
+    default n
+    depends on AKIRA_MATTER_COPROC_UART
+    help
+      Compiles an in-firmware responder that answers the co-processor IPC
+      frames locally, so the AkiraOS-side Matter accessory path can be run
+      end-to-end on native_sim (or hardware) without a real esp-matter
+      co-processor. For development and CI only — never enable in production.
+
 endif # AKIRA_MATTER
 
 config AKIRA_THREAD

@@ -155,3 +155,138 @@ int akira_native_matter_poll(wasm_exec_env_t exec_env,
     }
     return (int)copy;
 }
+
+#ifdef CONFIG_AKIRA_MATTER_ACCESSORY
+/* --------------------------------------------------------------------------
+ * Accessory direction — expose AkiraOS's own hardware as a Matter device.
+ * ------------------------------------------------------------------------- */
+
+/* matter_endpoint_add — sig "(i*~)i": device_type, clusters, n_clusters */
+int akira_native_matter_endpoint_add(wasm_exec_env_t exec_env,
+                                     int device_type,
+                                     const uint32_t *clusters,
+                                     int n_clusters)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MATTER, MATTER_ERR_NOPERM);
+
+    if (!clusters || device_type < 0 || device_type > 0xFFFF ||
+        n_clusters <= 0 || n_clusters > 8) {
+        return MATTER_ERR_INVALID;
+    }
+
+    int rc = ensure_ipc();
+    if (rc != 0) { return MATTER_ERR_NO_COPROC; }
+
+    uint8_t endpoint = 0;
+    rc = akira_matter_ipc_endpoint_add((uint16_t)device_type, clusters,
+                                       (uint8_t)n_clusters, &endpoint);
+    if (rc != 0) {
+        return (rc == -ETIMEDOUT) ? MATTER_ERR_TIMEOUT : MATTER_ERR_IO;
+    }
+    return (int)endpoint;
+}
+
+/* matter_report_attr — sig "(iii*~)i": endpoint, cluster, attr, val, len */
+int akira_native_matter_report_attr(wasm_exec_env_t exec_env,
+                                    int endpoint, int cluster, int attr,
+                                    const void *val, int len)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MATTER, MATTER_ERR_NOPERM);
+
+    if (!val || endpoint < 0 || endpoint > 0xFF || len <= 0 || len > 0xFF) {
+        return MATTER_ERR_INVALID;
+    }
+
+    int rc = ensure_ipc();
+    if (rc != 0) { return MATTER_ERR_NO_COPROC; }
+
+    rc = akira_matter_ipc_report((uint8_t)endpoint, (uint32_t)cluster,
+                                 (uint32_t)attr, (const uint8_t *)val,
+                                 (uint16_t)len);
+    if (rc != 0) {
+        return (rc == -ETIMEDOUT) ? MATTER_ERR_TIMEOUT : MATTER_ERR_IO;
+    }
+    return MATTER_OK;
+}
+
+/* matter_cmd_poll — sig "(****~i)i": endpoint*, cluster*, cmd*, buf, buf_len, timeout */
+int akira_native_matter_cmd_poll(wasm_exec_env_t exec_env,
+                                 int *endpoint, int *cluster, int *cmd,
+                                 uint8_t *buf, int buf_len, int timeout_ms)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MATTER, MATTER_ERR_NOPERM);
+
+    if (!endpoint || !cluster || !cmd || !buf || buf_len <= 0) {
+        return MATTER_ERR_INVALID;
+    }
+
+    int rc = ensure_ipc();
+    if (rc != 0) { return MATTER_ERR_NO_COPROC; }
+
+    struct akira_matter_event evt;
+    k_timeout_t to = (timeout_ms < 0) ? K_FOREVER : K_MSEC(timeout_ms);
+
+    rc = akira_matter_ipc_poll(&evt, to);
+    if (rc == -EAGAIN) {
+        return MATTER_ERR_TIMEOUT;
+    }
+    if (rc != 0) {
+        return MATTER_ERR_IO;
+    }
+    /* This poll only serves accessory-direction commands. A controller-attr
+     * event here means the app mixed both roles; drop it and report timeout. */
+    if (evt.kind != AKIRA_MATTER_EVT_ACC_CMD) {
+        return MATTER_ERR_TIMEOUT;
+    }
+
+    *endpoint = (int)evt.endpoint_id;
+    *cluster = (int)evt.cluster_id;
+    *cmd = (int)evt.cmd_id;
+
+    uint16_t copy = MIN((uint16_t)buf_len, evt.value_len);
+    if (copy > 0) {
+        memcpy(buf, evt.value, copy);
+    }
+    return (int)copy;
+}
+
+/* matter_open_pairing — sig "(i)i": timeout_sec */
+int akira_native_matter_open_pairing(wasm_exec_env_t exec_env, int timeout_sec)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MATTER, MATTER_ERR_NOPERM);
+
+    if (timeout_sec < 0 || timeout_sec > 0xFFFF) {
+        return MATTER_ERR_INVALID;
+    }
+
+    int rc = ensure_ipc();
+    if (rc != 0) { return MATTER_ERR_NO_COPROC; }
+
+    rc = akira_matter_ipc_open_pairing((uint16_t)timeout_sec);
+    if (rc != 0) {
+        return (rc == -ETIMEDOUT) ? MATTER_ERR_TIMEOUT : MATTER_ERR_IO;
+    }
+    return MATTER_OK;
+}
+
+/* matter_get_pairing — sig "(*~*~)i": qr, qr_len, manual, manual_len */
+int akira_native_matter_get_pairing(wasm_exec_env_t exec_env,
+                                    char *qr, int qr_len,
+                                    char *manual, int manual_len)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MATTER, MATTER_ERR_NOPERM);
+
+    if (!qr || qr_len <= 0 || !manual || manual_len <= 0) {
+        return MATTER_ERR_INVALID;
+    }
+
+    int rc = ensure_ipc();
+    if (rc != 0) { return MATTER_ERR_NO_COPROC; }
+
+    rc = akira_matter_ipc_get_qr(qr, (size_t)qr_len, manual, (size_t)manual_len);
+    if (rc != 0) {
+        return (rc == -ETIMEDOUT) ? MATTER_ERR_TIMEOUT : MATTER_ERR_IO;
+    }
+    return MATTER_OK;
+}
+#endif /* CONFIG_AKIRA_MATTER_ACCESSORY */

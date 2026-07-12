@@ -22,17 +22,53 @@
 LOG_MODULE_REGISTER(akira_matter_ipc, CONFIG_AKIRA_LOG_LEVEL);
 
 /* -------------------------------------------------------------------------
- * Device binding — resolved at init from Kconfig alias
+ * Transport binding.
+ *
+ * Normally the transport is UART1 to the co-processor (resolved from the
+ * "matter-coproc-uart" DT alias). When CONFIG_AKIRA_MATTER_COPROC_MOCK is set
+ * the byte stream is looped back into an in-firmware mock responder instead,
+ * so the accessory path is testable without real co-processor hardware.
  * ---------------------------------------------------------------------- */
+#if defined(CONFIG_AKIRA_MATTER_COPROC_MOCK) && \
+    !DT_NODE_EXISTS(DT_ALIAS(matter_coproc_uart))
+#define MATTER_COPROC_UART NULL
+#else
 #define MATTER_COPROC_UART DEVICE_DT_GET(DT_ALIAS(matter_coproc_uart))
+#endif
+
+#ifdef CONFIG_AKIRA_MATTER_COPROC_MOCK
+/* Provided by src/connectivity/matter/matter_coproc_mock.c */
+void matter_coproc_mock_rx_byte(uint8_t b);
+int  matter_coproc_mock_tx_byte(uint8_t *out);
+
+static inline void io_write_byte(const struct device *dev, uint8_t b)
+{
+    ARG_UNUSED(dev);
+    matter_coproc_mock_rx_byte(b);
+}
+static inline int io_read_byte(const struct device *dev, uint8_t *b)
+{
+    ARG_UNUSED(dev);
+    return matter_coproc_mock_tx_byte(b);
+}
+#else
+static inline void io_write_byte(const struct device *dev, uint8_t b)
+{
+    uart_poll_out(dev, b);
+}
+static inline int io_read_byte(const struct device *dev, uint8_t *b)
+{
+    return uart_poll_in(dev, b);
+}
+#endif /* CONFIG_AKIRA_MATTER_COPROC_MOCK */
 
 /* -------------------------------------------------------------------------
  * Internal state
  * ---------------------------------------------------------------------- */
 #define RX_THREAD_STACK_SIZE 1024
 #define RX_THREAD_PRIORITY   7
-#define MAX_INFLIGHT         4   /* max concurrent in-flight requests */
-#define EVENT_QUEUE_DEPTH    8
+#define MAX_INFLIGHT         3   /* max concurrent in-flight requests */
+#define EVENT_QUEUE_DEPTH    4
 
 K_THREAD_STACK_DEFINE(s_rx_stack, RX_THREAD_STACK_SIZE);
 static struct k_thread s_rx_thread;
@@ -42,7 +78,7 @@ typedef struct {
     uint8_t  seq;
     bool     used;
     int      status;
-    uint8_t  payload[AKIRA_MATTER_IPC_MAX_PAYLOAD];
+    uint8_t  payload[AKIRA_MATTER_IPC_RESP_LEN];
     uint16_t payload_len;
     struct k_sem sem;
 } inflight_t;
@@ -77,14 +113,14 @@ static uint16_t frame_crc(const uint8_t *hdr, uint8_t hdr_len,
  * ---------------------------------------------------------------------- */
 static void uart_write_byte(const struct device *dev, uint8_t b)
 {
-    uart_poll_out(dev, b);
+    io_write_byte(dev, b);
 }
 
 static void uart_write_buf(const struct device *dev,
                            const uint8_t *buf, uint16_t len)
 {
     for (uint16_t i = 0; i < len; i++) {
-        uart_poll_out(dev, buf[i]);
+        io_write_byte(dev, buf[i]);
     }
 }
 
@@ -211,7 +247,7 @@ static void rx_thread_fn(void *p1, void *p2, void *p3)
     uint8_t  b;
 
     while (true) {
-        while (uart_poll_in(dev, &b) != 0) {
+        while (io_read_byte(dev, &b) != 0) {
             k_sleep(K_USEC(200));
         }
 
@@ -271,18 +307,44 @@ static void rx_thread_fn(void *p1, void *p2, void *p3)
 
             /* Dispatch */
             if (rx_cmd == AKIRA_MATTER_CMD_EVENT) {
-                /* Async event — push to event queue */
+                /* Controller async event: [eui64:8][attr_id:2][value:N] */
                 if (rx_len >= AKIRA_MATTER_IPC_EUI64_LEN + 2) {
-                    struct akira_matter_event evt;
+                    struct akira_matter_event evt = {
+                        .kind = AKIRA_MATTER_EVT_ATTR,
+                    };
                     memcpy(evt.src_eui64, rx_payload,
                            AKIRA_MATTER_IPC_EUI64_LEN);
                     evt.attr_id = (uint16_t)(rx_payload[8] << 8) |
                                   rx_payload[9];
                     uint16_t vlen = rx_len - AKIRA_MATTER_IPC_EUI64_LEN - 2;
                     evt.value_len = MIN(vlen,
-                                       AKIRA_MATTER_IPC_MAX_PAYLOAD);
+                                       AKIRA_MATTER_IPC_EVENT_VALUE_LEN);
                     if (evt.value_len > 0) {
                         memcpy(evt.value, &rx_payload[10], evt.value_len);
+                    }
+                    if (k_msgq_put(&s_event_msgq, &evt, K_NO_WAIT) != 0) {
+                        LOG_WRN("matter ipc: event queue full");
+                    }
+                }
+            } else if (rx_cmd == AKIRA_MATTER_CMD_ACC_CMD_EVENT) {
+                /* Accessory inbound command: [ep:1][cluster:4][cmd:4][value:N] */
+                if (rx_len >= 9) {
+                    struct akira_matter_event evt = {
+                        .kind = AKIRA_MATTER_EVT_ACC_CMD,
+                    };
+                    evt.endpoint_id = rx_payload[0];
+                    evt.cluster_id = ((uint32_t)rx_payload[1] << 24) |
+                                     ((uint32_t)rx_payload[2] << 16) |
+                                     ((uint32_t)rx_payload[3] << 8)  |
+                                      (uint32_t)rx_payload[4];
+                    evt.cmd_id = ((uint32_t)rx_payload[5] << 24) |
+                                 ((uint32_t)rx_payload[6] << 16) |
+                                 ((uint32_t)rx_payload[7] << 8)  |
+                                  (uint32_t)rx_payload[8];
+                    uint16_t vlen = rx_len - 9;
+                    evt.value_len = MIN(vlen, AKIRA_MATTER_IPC_EVENT_VALUE_LEN);
+                    if (evt.value_len > 0) {
+                        memcpy(evt.value, &rx_payload[9], evt.value_len);
                     }
                     if (k_msgq_put(&s_event_msgq, &evt, K_NO_WAIT) != 0) {
                         LOG_WRN("matter ipc: event queue full");
@@ -301,7 +363,7 @@ static void rx_thread_fn(void *p1, void *p2, void *p3)
                                         rx_payload[3]);
                         if (rx_len > 4) {
                             slot->payload_len = MIN(rx_len - 4,
-                                                    AKIRA_MATTER_IPC_MAX_PAYLOAD);
+                                                    AKIRA_MATTER_IPC_RESP_LEN);
                             memcpy(slot->payload, &rx_payload[4],
                                    slot->payload_len);
                         }
@@ -334,10 +396,15 @@ int akira_matter_ipc_init(void)
         return 0;
     }
 
+#ifdef CONFIG_AKIRA_MATTER_COPROC_MOCK
+    ARG_UNUSED(dev);
+    LOG_WRN("matter ipc: using in-firmware MOCK co-processor (test build)");
+#else
     if (!device_is_ready(dev)) {
         LOG_ERR("matter coproc uart not ready");
         return -ENODEV;
     }
+#endif
 
     k_msgq_init(&s_event_msgq, (char *)s_event_buf,
                 sizeof(struct akira_matter_event), EVENT_QUEUE_DEPTH);
@@ -439,3 +506,134 @@ int akira_matter_ipc_status(void)
     return send_and_wait(AKIRA_MATTER_CMD_STATUS_REQ, seq,
                          NULL, 0, NULL, NULL);
 }
+
+#ifdef CONFIG_AKIRA_MATTER_ACCESSORY
+/* -------------------------------------------------------------------------
+ * Accessory direction
+ * ---------------------------------------------------------------------- */
+#define MATTER_MAX_CLUSTERS 8
+
+int akira_matter_ipc_endpoint_add(uint16_t device_type, const uint32_t *clusters,
+                                  uint8_t n_clusters, uint8_t *endpoint_out)
+{
+    if (!s_initialised) { return -EAGAIN; }
+    if (!clusters || !endpoint_out || n_clusters == 0 ||
+        n_clusters > MATTER_MAX_CLUSTERS) {
+        return -EINVAL;
+    }
+
+    /* payload: [device_type:2][n_clusters:1][cluster:4 * n] */
+    uint8_t payload[3 + 4 * MATTER_MAX_CLUSTERS];
+    payload[0] = (uint8_t)(device_type >> 8);
+    payload[1] = (uint8_t)(device_type & 0xFF);
+    payload[2] = n_clusters;
+    for (uint8_t i = 0; i < n_clusters; i++) {
+        uint8_t *p = &payload[3 + i * 4];
+        p[0] = (uint8_t)(clusters[i] >> 24);
+        p[1] = (uint8_t)(clusters[i] >> 16);
+        p[2] = (uint8_t)(clusters[i] >> 8);
+        p[3] = (uint8_t)(clusters[i] & 0xFF);
+    }
+    uint16_t payload_len = 3 + 4 * n_clusters;
+
+    uint8_t seq = alloc_seq();
+    inflight_t *slot = alloc_inflight(seq);
+    if (!slot) { return -ENOMEM; }
+
+    uint8_t resp[1];
+    uint16_t rlen = sizeof(resp);
+    int rc = send_and_wait(AKIRA_MATTER_CMD_EP_ADD_REQ, seq,
+                           payload, payload_len, resp, &rlen);
+    if (rc == 0 && rlen >= 1) {
+        *endpoint_out = resp[0];
+    }
+    return rc;
+}
+
+int akira_matter_ipc_report(uint8_t endpoint, uint32_t cluster, uint32_t attr,
+                            const uint8_t *val, uint16_t len)
+{
+    if (!s_initialised) { return -EAGAIN; }
+    if (!val || len == 0 || len > 0xFF ||
+        len > AKIRA_MATTER_IPC_MAX_PAYLOAD - 10) {
+        return -EINVAL;
+    }
+
+    /* payload: [endpoint:1][cluster:4][attr:4][len:1][value:len] */
+    uint8_t payload[10 + 0xFF];
+    payload[0] = endpoint;
+    payload[1] = (uint8_t)(cluster >> 24);
+    payload[2] = (uint8_t)(cluster >> 16);
+    payload[3] = (uint8_t)(cluster >> 8);
+    payload[4] = (uint8_t)(cluster & 0xFF);
+    payload[5] = (uint8_t)(attr >> 24);
+    payload[6] = (uint8_t)(attr >> 16);
+    payload[7] = (uint8_t)(attr >> 8);
+    payload[8] = (uint8_t)(attr & 0xFF);
+    payload[9] = (uint8_t)len;
+    memcpy(&payload[10], val, len);
+
+    uint8_t seq = alloc_seq();
+    inflight_t *slot = alloc_inflight(seq);
+    if (!slot) { return -ENOMEM; }
+
+    return send_and_wait(AKIRA_MATTER_CMD_ATTR_REPORT_REQ, seq,
+                         payload, (uint16_t)(10 + len), NULL, NULL);
+}
+
+int akira_matter_ipc_open_pairing(uint16_t timeout_sec)
+{
+    if (!s_initialised) { return -EAGAIN; }
+
+    uint8_t payload[2] = {
+        (uint8_t)(timeout_sec >> 8),
+        (uint8_t)(timeout_sec & 0xFF),
+    };
+
+    uint8_t seq = alloc_seq();
+    inflight_t *slot = alloc_inflight(seq);
+    if (!slot) { return -ENOMEM; }
+
+    return send_and_wait(AKIRA_MATTER_CMD_PAIR_OPEN_REQ, seq,
+                         payload, sizeof(payload), NULL, NULL);
+}
+
+int akira_matter_ipc_get_qr(char *qr, size_t qr_len,
+                            char *manual, size_t manual_len)
+{
+    if (!s_initialised) { return -EAGAIN; }
+    if (!qr || qr_len == 0 || !manual || manual_len == 0) {
+        return -EINVAL;
+    }
+
+    uint8_t seq = alloc_seq();
+    inflight_t *slot = alloc_inflight(seq);
+    if (!slot) { return -ENOMEM; }
+
+    /* resp: [qr NUL-terminated][manual NUL-terminated] */
+    uint8_t resp[AKIRA_MATTER_IPC_QR_LEN + AKIRA_MATTER_IPC_MANUAL_LEN];
+    uint16_t rlen = sizeof(resp);
+    int rc = send_and_wait(AKIRA_MATTER_CMD_QR_GET_REQ, seq,
+                           NULL, 0, resp, &rlen);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* Parse the two NUL-terminated strings, staying within rlen. */
+    size_t i = 0;
+    size_t o = 0;
+    while (i < rlen && resp[i] != '\0' && o < qr_len - 1) {
+        qr[o++] = (char)resp[i++];
+    }
+    qr[o] = '\0';
+    while (i < rlen && resp[i] != '\0') { i++; }   /* skip to NUL */
+    if (i < rlen) { i++; }                         /* step over NUL */
+
+    o = 0;
+    while (i < rlen && resp[i] != '\0' && o < manual_len - 1) {
+        manual[o++] = (char)resp[i++];
+    }
+    manual[o] = '\0';
+    return 0;
+}
+#endif /* CONFIG_AKIRA_MATTER_ACCESSORY */

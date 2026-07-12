@@ -20,6 +20,7 @@ target_include_directories(app PRIVATE
     ${AKIRA_SRC}/runtime/app_manager
     ${AKIRA_SRC}/connectivity
     ${AKIRA_SRC}/connectivity/ota
+    ${AKIRA_SRC}/connectivity/matter
     ${AKIRA_INC}
     ${CMAKE_CURRENT_LIST_DIR}/../AkiraSDK/include
     ${CMAKE_CURRENT_LIST_DIR}/stubs
@@ -37,11 +38,27 @@ target_sources(app PRIVATE
     # Stubs
     stubs/stub_mcuboot.c
 
+    # Matter accessory path + in-firmware mock co-processor
+    ${AKIRA_SRC}/runtime/akira_matter_ipc.c
+    ${AKIRA_SRC}/connectivity/matter/matter_coproc_mock.c
+
     # Test suites
     src/test_manifest_parser.c
     src/test_security.c
     src/test_app_lifecycle.c
     src/test_ota_state.c
+    src/test_matter_accessory.c
+)
+
+# The Matter accessory sources are normally gated by Kconfig symbols whose
+# dependency chain (AKIRA_MATTER -> AKIRA_RADIO_MANAGER, SERIAL, ...) is not
+# satisfiable on native_sim. Define the two relevant switches directly so the
+# accessory path + mock compile against the flat test build (same technique as
+# the CONFIG_BOOTLOADER_MCUBOOT define below). The mock replaces the UART, so
+# no serial hardware is required.
+target_compile_definitions(app PRIVATE
+    CONFIG_AKIRA_MATTER_ACCESSORY=1
+    CONFIG_AKIRA_MATTER_COPROC_MOCK=1
 )
 
 # ota_manager.c guards its flash_area and mcuboot includes behind:

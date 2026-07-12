@@ -330,6 +330,13 @@ bool akira_register_native_apis()
         {"matter_send",       (void *)akira_native_matter_send,       "(*~*~i)i",  NULL},
         {"matter_subscribe",  (void *)akira_native_matter_subscribe,  "(*~i)i",    NULL},
         {"matter_poll",       (void *)akira_native_matter_poll,       "(*~*i*~ii)i", NULL},
+#ifdef CONFIG_AKIRA_MATTER_ACCESSORY
+        {"matter_endpoint_add", (void *)akira_native_matter_endpoint_add, "(i*~)i",    NULL},
+        {"matter_report_attr",  (void *)akira_native_matter_report_attr,  "(iii*~)i",  NULL},
+        {"matter_cmd_poll",     (void *)akira_native_matter_cmd_poll,     "(****~i)i", NULL},
+        {"matter_open_pairing", (void *)akira_native_matter_open_pairing, "(i)i",      NULL},
+        {"matter_get_pairing",  (void *)akira_native_matter_get_pairing,  "(*~*~)i",   NULL},
+#endif
 #endif
 
     };

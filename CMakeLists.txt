@@ -740,6 +740,10 @@ if(CONFIG_AKIRA_MATTER_COPROC_UART)
     target_sources(app PRIVATE src/runtime/akira_matter_ipc.c)
 endif()
 
+if(CONFIG_AKIRA_MATTER_COPROC_MOCK)
+    target_sources(app PRIVATE src/connectivity/matter/matter_coproc_mock.c)
+endif()
+
 if(CONFIG_AKIRA_WASM_MATTER)
     target_sources(app PRIVATE src/api/akira_matter_api.c)
 endif()

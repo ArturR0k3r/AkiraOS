@@ -70,6 +70,12 @@
 #if defined(CONFIG_AKIRA_MATTER)
 #include "connectivity/matter_manager.h"
 #endif
+#if defined(CONFIG_AKIRA_MATTER_ACCESSORY)
+#include "runtime/akira_matter_ipc.h"
+#endif
+#if defined(CONFIG_AKIRA_MATTER_COPROC_MOCK)
+#include "connectivity/matter/matter_coproc_mock.h"
+#endif
 #if defined(CONFIG_AKIRA_THREAD)
 #include "connectivity/thread_manager.h"
 #endif
@@ -2065,22 +2071,108 @@ static int cmd_matter_reset(const struct shell *sh, size_t argc, char **argv)
 {
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
-    
+
     shell_print(sh, "Performing Matter factory reset...");
     int ret = matter_factory_reset();
     if (ret) {
         shell_error(sh, "Factory reset failed: %d", ret);
         return ret;
     }
-    
+
     shell_print(sh, "Matter factory reset complete");
     return 0;
 }
+
+#ifdef CONFIG_AKIRA_MATTER_ACCESSORY
+static int cmd_matter_pair(const struct shell *sh, size_t argc, char **argv)
+{
+    uint32_t timeout = 300;  /* 5 minutes default */
+    if (argc > 1) {
+        timeout = strtoul(argv[1], NULL, 10);
+    }
+
+    int ret = matter_start_commissioning(timeout);
+    if (ret) {
+        shell_error(sh, "Failed to open pairing window: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "Pairing window open for %u sec.", timeout);
+    shell_print(sh, "Add this device in Home Assistant / Google Home using:");
+
+    char qr_code[AKIRA_MATTER_IPC_QR_LEN];
+    char manual_code[AKIRA_MATTER_IPC_MANUAL_LEN];
+    if (matter_get_qr_code(qr_code, sizeof(qr_code)) == 0) {
+        shell_print(sh, "  QR    : %s", qr_code);
+    }
+    if (matter_get_manual_code(manual_code, sizeof(manual_code)) == 0) {
+        shell_print(sh, "  Manual: %s", manual_code);
+    }
+    return 0;
+}
+
+static int cmd_matter_status(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    int rc = akira_matter_ipc_status();
+    shell_print(sh, "Co-processor: %s", (rc == 0) ? "reachable" : "UNREACHABLE");
+    shell_print(sh, "Commissioning state: %d", matter_get_commissioning_state());
+    return (rc == 0) ? 0 : rc;
+}
+#endif /* CONFIG_AKIRA_MATTER_ACCESSORY */
+
+#ifdef CONFIG_AKIRA_MATTER_COPROC_MOCK
+/* Inject a fabric command through the mock co-processor, simulating a
+ * controller (Home Assistant / Google Home) acting on a local endpoint.
+ * Lets you drive an accessory app (e.g. matter_rgb) with no real co-processor.
+ *   matter inject <ep> on|off|toggle
+ *   matter inject <ep> level <0-254>
+ *   matter inject <ep> color <r> <g> <b>
+ */
+static int cmd_matter_mock_cmd(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 3) {
+        shell_error(sh, "usage: matter inject <ep> <on|off|toggle|level <v>|color <r> <g> <b>>");
+        return -EINVAL;
+    }
+    uint8_t ep = (uint8_t)strtoul(argv[1], NULL, 10);
+    const char *op = argv[2];
+
+    if (strcmp(op, "on") == 0) {
+        matter_coproc_mock_inject_command(ep, 0x0006, 0x0001, NULL, 0);
+    } else if (strcmp(op, "off") == 0) {
+        matter_coproc_mock_inject_command(ep, 0x0006, 0x0000, NULL, 0);
+    } else if (strcmp(op, "toggle") == 0) {
+        matter_coproc_mock_inject_command(ep, 0x0006, 0x0002, NULL, 0);
+    } else if (strcmp(op, "level") == 0 && argc >= 4) {
+        uint8_t lvl = (uint8_t)strtoul(argv[3], NULL, 10);
+        matter_coproc_mock_inject_command(ep, 0x0008, 0x0000, &lvl, 1);
+    } else if (strcmp(op, "color") == 0 && argc >= 6) {
+        uint8_t rgb[3] = { (uint8_t)strtoul(argv[3], NULL, 10),
+                           (uint8_t)strtoul(argv[4], NULL, 10),
+                           (uint8_t)strtoul(argv[5], NULL, 10) };
+        matter_coproc_mock_inject_command(ep, 0x0300, 0x0000, rgb, 3);
+    } else {
+        shell_error(sh, "bad op '%s'", op);
+        return -EINVAL;
+    }
+    shell_print(sh, "mock: injected '%s' to endpoint %u", op, ep);
+    return 0;
+}
+#endif /* CONFIG_AKIRA_MATTER_COPROC_MOCK */
 
 SHELL_STATIC_SUBCMD_SET_CREATE(matter_cmds,
     SHELL_CMD(info, NULL, "Show Matter status", cmd_matter_info),
     SHELL_CMD(commission, NULL, "Start commissioning [timeout_sec]", cmd_matter_commission),
     SHELL_CMD(reset, NULL, "Factory reset", cmd_matter_reset),
+#ifdef CONFIG_AKIRA_MATTER_ACCESSORY
+    SHELL_CMD(pair, NULL, "Open pairing window & print QR/manual code [timeout_sec]", cmd_matter_pair),
+    SHELL_CMD(status, NULL, "Show co-processor reachability & pairing state", cmd_matter_status),
+#endif
+#ifdef CONFIG_AKIRA_MATTER_COPROC_MOCK
+    SHELL_CMD(inject, NULL, "Inject a fabric command via the mock: <ep> <on|off|toggle|level|color> [args]", cmd_matter_mock_cmd),
+#endif
     SHELL_SUBCMD_SET_END);
 SHELL_CMD_REGISTER(matter, &matter_cmds, "Matter protocol commands", NULL);
 #endif
