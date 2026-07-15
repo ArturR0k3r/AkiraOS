@@ -29,16 +29,45 @@ extern "C"
     /* Version Information                                                       */
     /*===========================================================================*/
 
+/* The firmware version is owned by the top-level VERSION file; Zephyr
+ * generates <app_version.h> from it. Derive from those macros so there is a
+ * single source of truth (the previous hardcoded "1.5.8" had drifted from
+ * VERSION's 1.6.2 and was being reported to clients as fw_version). Literals
+ * are only a fallback for TUs built without the generated header. */
+#if defined(__has_include)
+#  if __has_include(<app_version.h>)
+#    include <app_version.h>
+#  endif
+#endif
+
 #ifndef AKIRA_VERSION_MAJOR
-#define AKIRA_VERSION_MAJOR 1
+#  ifdef APP_VERSION_MAJOR
+#    define AKIRA_VERSION_MAJOR APP_VERSION_MAJOR
+#  else
+#    define AKIRA_VERSION_MAJOR 1
+#  endif
 #endif
 #ifndef AKIRA_VERSION_MINOR
-#define AKIRA_VERSION_MINOR 5
+#  ifdef APP_VERSION_MINOR
+#    define AKIRA_VERSION_MINOR APP_VERSION_MINOR
+#  else
+#    define AKIRA_VERSION_MINOR 6
+#  endif
 #endif
 #ifndef AKIRA_VERSION_PATCH
-#define AKIRA_VERSION_PATCH 8
+#  ifdef APP_PATCHLEVEL
+#    define AKIRA_VERSION_PATCH APP_PATCHLEVEL
+#  else
+#    define AKIRA_VERSION_PATCH 2
+#  endif
 #endif
-#define AKIRA_VERSION_STRING "1.5.8"
+#ifndef AKIRA_VERSION_STRING
+#  ifdef APP_VERSION_STRING
+#    define AKIRA_VERSION_STRING APP_VERSION_STRING
+#  else
+#    define AKIRA_VERSION_STRING "1.6.2"
+#  endif
+#endif
 #define AKIRA_CODENAME "C1PH3R"
 
     /* Simple version struct */
