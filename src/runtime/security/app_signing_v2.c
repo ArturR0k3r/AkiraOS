@@ -589,7 +589,15 @@ __weak int akira_platform_allowlist_verify(const uint8_t *app_hash, size_t hash_
 {
     ARG_UNUSED(app_hash);
     ARG_UNUSED(hash_len);
+#ifdef CONFIG_AKIRA_REQUIRE_SIGNED_APPS
+    /* Fail closed: signed apps are required but no strong platform allowlist
+     * verifier is linked, so no binary can be attested — reject rather than
+     * let an app self-assert its capabilities. */
+    LOG_ERR("REQUIRE_SIGNED_APPS: no platform allowlist verifier linked; rejecting app");
+    return -EACCES;
+#else
     return 0; /* Default: allow all */
+#endif
 }
 
 /* ===== PQC Signature Verification (Dilithium-2 / FIPS 204) ===== */
@@ -659,5 +667,12 @@ __weak int akira_platform_pqc_verify(const uint8_t *digest, size_t digest_len,
     ARG_UNUSED(digest_len);
     ARG_UNUSED(sig);
     ARG_UNUSED(sig_len);
+#ifdef CONFIG_AKIRA_REQUIRE_SIGNED_APPS
+    /* Fail closed: signed apps are required but no strong platform PQC
+     * verifier is linked, so the signature cannot be checked — reject. */
+    LOG_ERR("REQUIRE_SIGNED_APPS: no platform PQC verifier linked; rejecting package");
+    return -EACCES;
+#else
     return 0; /* Default: PQC not enforced */
+#endif
 }

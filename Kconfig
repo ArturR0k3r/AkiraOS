@@ -1591,6 +1591,21 @@ config AKIRA_ALLOW_UNSIGNED_APPS
       rejected. Set y only in development builds — never in production.
       Checked directly in app_signing_v2.c; independent of AKIRA_APP_SIGNING.
 
+config AKIRA_REQUIRE_SIGNED_APPS
+    bool "Fail closed when no platform signature verifier is linked"
+    default n
+    depends on AKIRA_APP_SIGNING
+    help
+      The app allowlist and PQC-signature checks are platform hooks
+      (akira_platform_allowlist_verify / akira_platform_pqc_verify) whose
+      in-tree default implementations allow every app; a strong verifier is
+      provided by AkiraPlatform (AKIRA_PLATFORM_APP_ALLOWLIST /
+      AKIRA_PLATFORM_PQC_SIGNING). When this option is set and no such strong
+      verifier is linked, the default hooks fail closed (reject the app)
+      instead of allowing it — so an app can never self-assert its capability
+      mask on an unverified build. Leave n for development builds that
+      intentionally run unsigned apps.
+
 config AKIRA_SANDBOX
     bool "Enable runtime sandbox"
     default y
