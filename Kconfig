@@ -1033,6 +1033,16 @@ config AKIRA_WS_CLIENT
       Enable WebSocket client for connecting to remote servers.
       Supports secure (wss://) and insecure (ws://) connections.
 
+config AKIRA_WS_TLS_SEC_TAG
+    int "TLS credential sec-tag for the wss:// server CA certificate"
+    default 42
+    depends on AKIRA_WS_CLIENT
+    help
+      Zephyr TLS credential sec-tag under which the CA certificate for
+      wss:// endpoints is registered. A wss:// URL only connects when
+      NET_SOCKETS_SOCKOPT_TLS is enabled; otherwise the connection is
+      refused rather than silently downgraded to plaintext.
+
 config AKIRA_WS_AUTO_RECONNECT
     bool "Enable WebSocket auto-reconnect"
     default y
