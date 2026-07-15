@@ -511,9 +511,12 @@ ssize_t fs_manager_write_file(const char *path, const void *data, size_t size)
     int ret = fs_open(&file, path, FS_O_CREATE | FS_O_WRITE);
     if (ret < 0)
     {
-        LOG_ERR("Failed to open %s for writing: %d", path, ret);
-        /* Fall back to RAM */
-        return ram_write_file(path, data, size);
+        /* Do NOT silently divert a persistent write to volatile RAM and
+         * report success — the caller would lose the data on reboot without
+         * knowing. Fail loud; RAM-backed paths are handled above via
+         * is_ram_path(). */
+        LOG_ERR("Failed to open %s for writing: %d (not persisted)", path, ret);
+        return ret;
     }
 
     /* Truncate file */
@@ -525,9 +528,13 @@ ssize_t fs_manager_write_file(const char *path, const void *data, size_t size)
 
     if (written < 0)
     {
-        LOG_ERR("Failed to write to %s: %zd", path, written);
-        /* Fall back to RAM */
-        return ram_write_file(path, data, size);
+        LOG_ERR("Failed to write to %s: %zd (not persisted)", path, written);
+        return (int)written;
+    }
+    if ((size_t)written != size)
+    {
+        LOG_ERR("Short write to %s: %zd/%zu bytes persisted", path, written, size);
+        return -EIO;
     }
 
     return written;
