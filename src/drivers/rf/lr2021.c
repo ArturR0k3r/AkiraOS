@@ -41,6 +41,7 @@ LOG_MODULE_REGISTER(akira_lr2021, LOG_LEVEL_INF);
 #define LR2021_CMD_CLEAR_TX_FIFO        0x011F
 #define LR2021_CMD_SET_DIO_FUNC         0x0112
 #define LR2021_CMD_SET_DIO_IRQ_CFG      0x0115
+#define LR2021_CMD_CALIB_FE              0x0123
 #define LR2021_CMD_SET_SLEEP            0x0127
 #define LR2021_CMD_SET_STANDBY          0x0128
 #define LR2021_CMD_SET_FS               0x0129
@@ -57,14 +58,17 @@ LOG_MODULE_REGISTER(akira_lr2021, LOG_LEVEL_INF);
 #define LR2021_CMD_SET_RF_FREQUENCY     0x0200
 #define LR2021_CMD_SET_RX_PATH          0x0201
 #define LR2021_CMD_SET_PA_CONFIG        0x0202
+#define LR2021_CMD_SEL_PA               0x020F
 #define LR2021_CMD_SET_TX_PARAMS        0x0203
 #define LR2021_CMD_SET_RX_TX_FALLBACK   0x0206
 #define LR2021_CMD_SET_PACKET_TYPE      0x0207
 #define LR2021_CMD_GET_RX_FIFO_LEVEL    0x011C
+#define LR2021_CMD_GET_TX_FIFO_LEVEL    0x011D
 #define LR2021_CMD_GET_RX_PKT_LENGTH    0x0212
 #define LR2021_CMD_GET_RSSI_INST        0x020B
 #define LR2021_CMD_SET_RX               0x020C
 #define LR2021_CMD_SET_TX               0x020D
+#define LR2021_CMD_SET_TX_TEST          0x020E
 #define LR2021_CMD_SET_DEFAULT_TIMEOUT  0x0215
 
 /* FSK packet radio (§5.6.4.3) */
@@ -78,6 +82,14 @@ LOG_MODULE_REGISTER(akira_lr2021, LOG_LEVEL_INF);
 #define LR2021_CMD_SET_LORA_PKT_PARAMS  0x0221
 #define LR2021_CMD_SET_LORA_SYNCWORD    0x0223
 #define LR2021_CMD_GET_LORA_PKT_STATUS  0x022A  /* reserved: future SNR, not wired */
+
+#define LR2021_CMD_SET_BLE_MOD_PARAMS   0x0260
+#define LR2021_CMD_SET_BLE_CHAN_PARAMS  0x0261
+#define LR2021_CMD_SET_BLE_TX           0x0262  /* combines SetBleTxPduLen + SetTx(0) */
+#define LR2021_CMD_SET_BLE_TX_PDU_LEN   0x0266
+
+#define LR2021_BLE_MODE_1M              0x00
+#define LR2021_BLE_MODE_2M              0x01
 
 /* =========================================================================
  * Packet types (datasheet Table 8-1)
@@ -154,6 +166,9 @@ static struct {
     uint8_t fsk_rx_bw_code;         /* manual FSK rx_bw code; 0 => auto (Carson) */
     uint32_t frequency_hz;
     uint32_t bitrate_bps;
+    uint32_t ble_bitrate_bps;       /* separate from bitrate_bps: FSK and BLE
+                                      * PHY rate must not clobber each other
+                                      * across `rf mod` switches. */
     int8_t tx_power_dbm;
     radio_event_cb_t event_cb;
     void *event_user_data;
@@ -165,8 +180,7 @@ static int lr2021_set_modulation(radio_modulation_t mod);
 static int lr2021_set_bitrate(uint32_t bps);
 
 static void lr2021_irq_handler(const struct device *port, struct gpio_callback *cb,
-                               gpio_port_pins_t pins)
-{
+                               gpio_port_pins_t pins) {
     ARG_UNUSED(port);
     ARG_UNUSED(cb);
     ARG_UNUSED(pins);
@@ -178,8 +192,7 @@ static void lr2021_irq_handler(const struct device *port, struct gpio_callback *
  * ========================================================================= */
 
 /** Wait for BUSY pin to go low, with timeout. */
-static int lr2021_wait_busy(void)
-{
+static int lr2021_wait_busy(void) {
     if (!gpio_is_ready_dt(&g_lr2021.busy)) {
         return -ENODEV;
     }
@@ -195,27 +208,23 @@ static int lr2021_wait_busy(void)
     return 0;
 }
 
-static inline void lr2021_cs_low(void)
-{
+static inline void lr2021_cs_low(void) {
     gpio_pin_set_dt(&g_lr2021.cs, 1);
     k_usleep(1);
 }
 
-static inline void lr2021_cs_high(void)
-{
+static inline void lr2021_cs_high(void) {
     k_usleep(1);
     gpio_pin_set_dt(&g_lr2021.cs, 0);
 }
 
-static int lr2021_spi_write(const uint8_t *data, size_t len)
-{
+static int lr2021_spi_write(const uint8_t *data, size_t len) {
     struct spi_buf tx = { .buf = (void *)data, .len = len };
     struct spi_buf_set tx_set = { .buffers = &tx, .count = 1 };
     return spi_write_dt(&g_lr2021.spi, &tx_set);
 }
 
-static int lr2021_spi_transceive(const uint8_t *tx, uint8_t *rx, size_t len)
-{
+static int lr2021_spi_transceive(const uint8_t *tx, uint8_t *rx, size_t len) {
     struct spi_buf tx_buf = { .buf = (void *)tx, .len = len };
     struct spi_buf rx_buf = { .buf = rx, .len = len };
     struct spi_buf_set tx_set = { .buffers = &tx_buf, .count = 1 };
@@ -233,8 +242,7 @@ static int lr2021_spi_transceive(const uint8_t *tx, uint8_t *rx, size_t len)
  * SPI frame: Op(16) | Arg0 | Arg1 | ... | ArgN
  * MISO:      Stat(16) | Irq(32) | 0...
  */
-static int lr2021_write_command(uint16_t opcode, const uint8_t *args, size_t args_len)
-{
+static int lr2021_write_command(uint16_t opcode, const uint8_t *args, size_t args_len) {
     int ret;
 
     ret = lr2021_wait_busy();
@@ -281,8 +289,7 @@ static int lr2021_write_command(uint16_t opcode, const uint8_t *args, size_t arg
  *          The first 2 response bytes are the status; actual data starts at rsp[2].
  */
 static int lr2021_read_command(uint16_t opcode, const uint8_t *args,
-                                size_t args_len, uint8_t *rsp, size_t rsp_len)
-{
+                                size_t args_len, uint8_t *rsp, size_t rsp_len) {
     int ret;
 
     if (!rsp || rsp_len == 0) {
@@ -352,11 +359,10 @@ static int lr2021_read_command(uint16_t opcode, const uint8_t *args,
 /**
  * @brief Direct FIFO read — single SPI frame, data starts immediately.
  *
- * SPI frame: Op(16) | 0x00... 
+ * SPI frame: Op(16) | 0x00...
  * MISO:      Stat(16) | Data0 | Data1 | ...
  */
-static int lr2021_read_fifo(uint8_t *data, size_t len)
-{
+static int lr2021_read_fifo(uint8_t *data, size_t len) {
     int ret = lr2021_wait_busy();
     if (ret < 0) {
         return ret;
@@ -390,8 +396,7 @@ static int lr2021_read_fifo(uint8_t *data, size_t len)
 
 /* Map a LoRa bandwidth in Hz to the chip's bw code (datasheet Table 9-3).
  * Clamps to the closest supported bandwidth; always returns a valid code. */
-static int lr2021_bw_hz_to_code(uint32_t bw_hz)
-{
+static int lr2021_bw_hz_to_code(uint32_t bw_hz) {
     static const struct { uint32_t hz; uint8_t code; } table[] = {
         {  31000, 0x2 },
         {  41000, 0xA },
@@ -426,8 +431,7 @@ static int lr2021_bw_hz_to_code(uint32_t bw_hz)
  * Picks the narrowest supported bandwidth >= bw_hz from the common subset used by
  * set_bitrate's auto-Carson path. Used for both the auto value (passed the Carson
  * bandwidth) and the manual override (passed the requested bandwidth). */
-static uint8_t lr2021_fsk_bw_hz_to_code(uint32_t bw_hz)
-{
+static uint8_t lr2021_fsk_bw_hz_to_code(uint32_t bw_hz) {
     if      (bw_hz <=   9600) return  38;  /* BW_9_6  */
     else if (bw_hz <=  12000) return  30;  /* BW_12   */
     else if (bw_hz <=  19200) return  37;  /* BW_19   */
@@ -445,8 +449,7 @@ static uint8_t lr2021_fsk_bw_hz_to_code(uint32_t bw_hz)
 
 /* Apply the full FSK configuration: packet type, modulation, packet params,
  * CRC, syncword. Chip must be in STANDBY. Caller sets g_lr2021.modulation. */
-static int lr2021_fsk_apply(void)
-{
+static int lr2021_fsk_apply(void) {
     uint8_t pkt_type = LR2021_PKT_TYPE_FSK;
     int ret = lr2021_write_command(LR2021_CMD_SET_PACKET_TYPE, &pkt_type, 1);
     if (ret < 0) {
@@ -482,15 +485,13 @@ static int lr2021_fsk_apply(void)
 
 /* LoRa low-data-rate optimize: on for SF >= 11 at the in-scope bandwidths
  * (datasheet §9.9.1 recommendation). */
-static uint8_t lr2021_lora_ldro(uint8_t sf)
-{
+static uint8_t lr2021_lora_ldro(uint8_t sf) {
     return (sf >= 11) ? 1 : 0;
 }
 
 /* Apply LoRa configuration: packet type, modulation params, syncword.
  * Chip must be in STANDBY. Caller sets g_lr2021.modulation. */
-static int lr2021_lora_apply(void)
-{
+static int lr2021_lora_apply(void) {
     uint8_t pkt_type = LR2021_PKT_TYPE_LORA;
     int ret = lr2021_write_command(LR2021_CMD_SET_PACKET_TYPE, &pkt_type, 1);
     if (ret < 0) {
@@ -521,8 +522,59 @@ static int lr2021_lora_apply(void)
     return 0;
 }
 
-static int lr2021_init(void)
-{
+/* SetBleModulationParams: mode(1M/2M) + rx_bw(auto). bps >= 1.5Mbps selects
+ * 2M PHY, else 1M PHY — Coded PHY modes are not selectable (see opcode note). */
+static int lr2021_ble_set_mod(uint32_t bps) {
+    uint8_t mode = (bps >= 1500000) ? LR2021_BLE_MODE_2M : LR2021_BLE_MODE_1M;
+    uint8_t args[2] = { mode, 0xFF };  /* rx_bw: 0xFF = auto */
+
+    int ret = lr2021_write_command(LR2021_CMD_SET_BLE_MOD_PARAMS, args, 2);
+    if (ret == 0) {
+        g_lr2021.ble_bitrate_bps = (mode == LR2021_BLE_MODE_2M) ? 2000000 : 1000000;
+        LOG_INF("LR2021 BLE PHY: %s", (mode == LR2021_BLE_MODE_2M) ? "2M" : "1M");
+    }
+    return ret;
+}
+
+/* Apply BLE PHY configuration: packet type, modulation, channel params.
+ * Chip must be in STANDBY. Caller sets g_lr2021.modulation.
+ *
+ * BLE is used here as a private point-to-point PHY (like the private LoRa/FSK
+ * syncwords above), not a spec-compliant Bluetooth link: whitening is
+ * disabled and a fixed access address / CRC seed are used instead of the
+ * per-channel values real BLE would compute. channel_type is fixed to
+ * Advertiser — lr2021_tx()/lr2021_rx() synthesize/strip a 2-byte
+ * Advertising-shaped {flags, len} header transparently so callers pass raw
+ * payload bytes, matching the FSK/LoRa send()/recv() contract (datasheet:
+ * BLE headers are never generated by the transceiver itself). */
+static int lr2021_ble_apply(void) {
+    uint8_t pkt_type = LR2021_PKT_TYPE_BLE;
+    int ret = lr2021_write_command(LR2021_CMD_SET_PACKET_TYPE, &pkt_type, 1);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = lr2021_ble_set_mod(g_lr2021.ble_bitrate_bps);
+    if (ret < 0) {
+        return ret;
+    }
+
+    /* SetBleChannelParams: crc_in_fifo=0, channel_type=0x0 (Advertiser),
+     * whit_init=0 (whitening off), crc_init/Syncword = fixed constants.
+     * channel_type picks the internal PDU header bit-layout, not just
+     * header length — Data-channel mode (0x1/0x2) expects an LLID-packed
+     * header, while our synthesized 2-byte header ({flags, len}, see
+     * lr2021_tx()) is shaped like an Advertising PDU header. */
+    uint8_t chan_args[9] = {
+        0x00,                    /* crc_in_fifo(0)=0 | channel_type(3:0)=0 (Advertiser) */
+        0x00,                    /* whit_init: 0 = whitening disabled */
+        0x55, 0x55, 0x55,        /* crc_init (24-bit) */
+        0x8E, 0x89, 0xBE, 0xD6,  /* Syncword / access address (32-bit) */
+    };
+    return lr2021_write_command(LR2021_CMD_SET_BLE_CHAN_PARAMS, chan_args, 9);
+}
+
+static int lr2021_init(void) {
     int ret;
 
     if (g_lr2021.initialized) {
@@ -681,6 +733,7 @@ static int lr2021_init(void)
     /* --- Set defaults from DT --- */
     g_lr2021.frequency_hz = LR2021_DT_FREQ_HZ;
     g_lr2021.bitrate_bps  = LR2021_DT_BITRATE;
+    g_lr2021.ble_bitrate_bps = 1000000;  /* default to 1M PHY */
     g_lr2021.modulation = RADIO_MOD_FSK;   /* FSK default at boot */
     g_lr2021.lora_sf    = LR2021_DT_LORA_SF;
     g_lr2021.lora_cr    = (uint8_t)(LR2021_DT_LORA_CR - 4);  /* 5..8 → 1..4 */
@@ -726,8 +779,7 @@ static int lr2021_init(void)
     return 0;
 }
 
-static int lr2021_deinit(void)
-{
+static int lr2021_deinit(void) {
     if (!g_lr2021.initialized) {
         return 0;
     }
@@ -746,8 +798,7 @@ static int lr2021_deinit(void)
     return 0;
 }
 
-static int lr2021_set_mode(radio_mode_t mode)
-{
+static int lr2021_set_mode(radio_mode_t mode) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
     }
@@ -791,14 +842,15 @@ static int lr2021_set_mode(radio_mode_t mode)
     return ret;
 }
 
-static int lr2021_set_frequency(uint32_t freq_hz)
-{
+static int lr2021_set_frequency(uint32_t freq_hz) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
     }
 
-    if (freq_hz < 150000000 || freq_hz > 960000000) {
-        LOG_ERR("Frequency %u Hz out of range (150-960 MHz)", freq_hz);
+    /* Synthesizer covers 150MHz-2.5GHz (datasheet §1091): LF path 150-960MHz,
+     * HF path 1.5-2.5GHz (covers the 2.4GHz ISM band used by BLE PHY). */
+    if (freq_hz < 150000000 || freq_hz > 2500000000U) {
+        LOG_ERR("Frequency %u Hz out of range (150MHz-2.5GHz)", freq_hz);
         return -EINVAL;
     }
 
@@ -812,37 +864,88 @@ static int lr2021_set_frequency(uint32_t freq_hz)
     if (ret == 0) {
         g_lr2021.frequency_hz = freq_hz;
         LOG_INF("LR2021 frequency: %u Hz", freq_hz);
+    } else {
+        return ret;
     }
-    return ret;
+
+    /* CalibFe (front-end: ADC offset, PPF, image calibration) — required
+     * after every frequency change. Not optional per datasheet §5.6.3:
+     * "will not work if device is in Rx or Tx mode", so force Standby
+     * first. No args = calibrate at the frequency just set. */
+    {
+        uint8_t standby = LR2021_STANDBY_XOSC;
+        lr2021_write_command(LR2021_CMD_SET_STANDBY, &standby, 1);
+        /* Forcing Standby here bypasses lr2021_set_mode()'s state tracking —
+         * without this, rx_armed stays stale true and the RX daemon thinks
+         * it's still in continuous RX (skips re-arming) while the chip is
+         * actually sitting in Standby, silently deaf until something else
+         * re-arms it. */
+        g_lr2021.current_mode = RADIO_MODE_STANDBY;
+        g_lr2021.rx_armed = false;
+    }
+    ret = lr2021_write_command(LR2021_CMD_CALIB_FE, NULL, 0);
+    if (ret < 0) {
+        LOG_WRN("LR2021 CalibFe failed: %d", ret);
+    }
+    return 0;
 }
 
-static int lr2021_set_power(int8_t dbm)
-{
+/* SetPaConfig (§7.3.1): selects LF or HF power amplifier and drive strength.
+ * Must be issued before SetTxParams — the chip does not auto-select PA from
+ * RF frequency, so without this TX stays on whichever PA was active at POR. */
+static int lr2021_pa_select(bool hf) {
+    uint8_t pa_sel = hf ? 1 : 0;
+    uint8_t args[2] = {
+        (uint8_t)((pa_sel << 7) | (6 << 4)),  /* pa_sel(1)|pa_lf_duty_cycle=6(4)|pa_lf_mode=0(2) */
+        7,                                      /* pa_lf_slices=7 */
+    };
+    int ret = lr2021_write_command(LR2021_CMD_SET_PA_CONFIG, args, 2);
+    if (ret < 0) {
+        return ret;
+    }
+
+    /* SelPa (§7.3.2): "SetPaConfig must be called before any call to SelPa" —
+     * explicit switch, in case SetPaConfig's pa_sel bit alone doesn't commit
+     * the active PA on this chip revision. */
+    uint8_t sel_args[1] = { pa_sel };
+    return lr2021_write_command(LR2021_CMD_SEL_PA, sel_args, 1);
+}
+
+/* Reads the band (LF/HF) from the frequency already applied via
+ * lr2021_set_frequency() — call set_frequency() before set_power() when
+ * switching bands, same ordering requirement as the other per-band setters. */
+static int lr2021_set_power(int8_t dbm) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
     }
 
-    /* Clamp to chip limits (-17 to +22 dBm sub-GHz) */
-    if (dbm < -17) dbm = -17;
-    if (dbm > 22)  dbm = 22;
+    bool hf = (g_lr2021.frequency_hz >= 1000000000U);
+    /* Clamp to chip limits: -17..+22 dBm on LF PA, 0..+12 dBm on HF PA. */
+    int8_t lo = hf ? 0 : -17, hi = hf ? 12 : 22;
+    if (dbm < lo) dbm = lo;
+    if (dbm > hi) dbm = hi;
 
-    /* SetTxParams: tx_power(8) | ramp_time(8)
-     *   tx_power is the target power in dBm (chip handles PA config internally
-     *   for LR2021 when using default PA settings). */
+    int ret = lr2021_pa_select(hf);
+    if (ret < 0) {
+        LOG_ERR("SetPaConfig failed: %d", ret);
+        return ret;
+    }
+
+    /* SetTxParams: tx_power(8) | ramp_time(8). tx_power is in 0.5 dB units
+     * (dbm*2, not raw dbm). */
     uint8_t args[2];
-    args[0] = (uint8_t)dbm;
-    args[1] = 0x02;  /* ramp_time: 40 µs */
+    args[0] = (uint8_t)(dbm * 2);
+    args[1] = 0x02;  /* ramp_time: 8 µs (datasheet Table 7-21) */
 
-    int ret = lr2021_write_command(LR2021_CMD_SET_TX_PARAMS, args, 2);
+    ret = lr2021_write_command(LR2021_CMD_SET_TX_PARAMS, args, 2);
     if (ret == 0) {
         g_lr2021.tx_power_dbm = dbm;
-        LOG_INF("LR2021 power: %d dBm", dbm);
+        LOG_INF("LR2021 power: %d dBm (%s PA)", dbm, hf ? "HF" : "LF");
     }
     return ret;
 }
 
-static int lr2021_set_modulation(radio_modulation_t mod)
-{
+static int lr2021_set_modulation(radio_modulation_t mod) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
     }
@@ -864,6 +967,10 @@ static int lr2021_set_modulation(radio_modulation_t mod)
         g_lr2021.modulation = RADIO_MOD_LORA;
         ret = lr2021_lora_apply();
         break;
+    case RADIO_MOD_BLE_PHY:
+        g_lr2021.modulation = RADIO_MOD_BLE_PHY;
+        ret = lr2021_ble_apply();
+        break;
     default:
         LOG_WRN("Modulation %d not supported", mod);
         return -ENOSYS;
@@ -873,10 +980,13 @@ static int lr2021_set_modulation(radio_modulation_t mod)
     return ret;
 }
 
-static int lr2021_set_bitrate(uint32_t bps)
-{
+static int lr2021_set_bitrate(uint32_t bps) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
+    }
+
+    if (g_lr2021.modulation == RADIO_MOD_BLE_PHY) {
+        return lr2021_ble_set_mod(bps);
     }
 
     /* FSK modulation params: bitrate(32) | pulse_shape(8) | rx_bw(8) | fdev(24)
@@ -915,8 +1025,7 @@ static int lr2021_set_bitrate(uint32_t bps)
 
 /* Re-issue SetLoraModParams from current lora_* state. Chip must already be in
  * LoRa packet type (guaranteed: setters guard on modulation == LORA). */
-static int lr2021_lora_reissue_mod(void)
-{
+static int lr2021_lora_reissue_mod(void) {
     uint8_t args[2] = {
         (uint8_t)((g_lr2021.lora_sf << 4) | (g_lr2021.lora_bw_code & 0x0F)),
         (uint8_t)((g_lr2021.lora_cr << 4) | lr2021_lora_ldro(g_lr2021.lora_sf)),
@@ -924,8 +1033,7 @@ static int lr2021_lora_reissue_mod(void)
     return lr2021_write_command(LR2021_CMD_SET_LORA_MOD_PARAMS, args, 2);
 }
 
-static int lr2021_set_spreading_factor(uint8_t sf)
-{
+static int lr2021_set_spreading_factor(uint8_t sf) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
     }
@@ -944,8 +1052,7 @@ static int lr2021_set_spreading_factor(uint8_t sf)
     return ret;
 }
 
-static int lr2021_set_bandwidth(uint32_t bw_hz)
-{
+static int lr2021_set_bandwidth(uint32_t bw_hz) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
     }
@@ -979,8 +1086,7 @@ static int lr2021_set_bandwidth(uint32_t bw_hz)
     return -ENOTSUP;
 }
 
-static int lr2021_set_coding_rate(uint8_t cr)
-{
+static int lr2021_set_coding_rate(uint8_t cr) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
     }
@@ -1001,17 +1107,24 @@ static int lr2021_set_coding_rate(uint8_t cr)
 
 /* Apply packet params for the active modulation. pld_len is the TX payload
  * length, or 0 on RX-arm (LoRa: accept any length; FSK: max length 0xFF). */
-static int lr2021_apply_pkt_params(size_t pld_len)
-{
+static int lr2021_apply_pkt_params(size_t pld_len) {
     if (g_lr2021.modulation == RADIO_MOD_LORA) {
         /* SetLoraPktParams: pbl_len(16)=8, payload_len(8), flags byte.
-         * Flags bit layout (verified against reference driver
-         * tmp/docling_out/ref_lr2021_cmd_lora.rs set_lora_packet_params_cmd):
-         *   bit2 = header_type (0=explicit), bit1 = CRC (1=on), bit0 = invert_iq (0=normal).
+         * flags: bit2=header_type(0=explicit), bit1=CRC(1=on), bit0=invert_iq(0=normal).
          * Profile = explicit + CRC on + normal IQ = 0x02. */
         uint8_t lp = (pld_len > 0xFF) ? 0xFF : (uint8_t)pld_len;
         uint8_t args[4] = { 0x00, 0x08, lp, 0x02 };
         return lr2021_write_command(LR2021_CMD_SET_LORA_PKT_PARAMS, args, 4);
+    }
+
+    if (g_lr2021.modulation == RADIO_MOD_BLE_PHY) {
+        if (pld_len == 0) {
+            return 0;  /* RX: BLE packet handler parses length from the PDU header */
+        }
+        /* SetBleTxPduLen: pdu_len = 16-bit header(2) + payload, max 0xFF. */
+        size_t pdu_len = pld_len + 2;
+        uint8_t args[1] = { (pdu_len > 0xFF) ? 0xFF : (uint8_t)pdu_len };
+        return lr2021_write_command(LR2021_CMD_SET_BLE_TX_PDU_LEN, args, 1);
     }
 
     /* FSK: variable length, 8-bit header, CRC2 + whitening.
@@ -1023,12 +1136,14 @@ static int lr2021_apply_pkt_params(size_t pld_len)
     return lr2021_write_command(LR2021_CMD_SET_FSK_PKT_PARAMS, args, 7);
 }
 
-static int lr2021_tx(const uint8_t *data, size_t len)
-{
+static int lr2021_tx(const uint8_t *data, size_t len) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
     }
-    if (!data || len == 0 || len > 255) {
+    /* BLE PDU length (header+payload) is an 8-bit field, so payload caps at
+     * 255-2=253 once the synthesized 16-bit header is accounted for. */
+    size_t max_len = (g_lr2021.modulation == RADIO_MOD_BLE_PHY) ? 253 : 255;
+    if (!data || len == 0 || len > max_len) {
         return -EINVAL;
     }
 
@@ -1041,14 +1156,32 @@ static int lr2021_tx(const uint8_t *data, size_t len)
         lr2021_write_command(LR2021_CMD_SET_STANDBY, &mode, 1);
     }
 
+    /* Re-assert PA selection right before every TX. lr2021_set_power() only
+     * runs on an explicit `rf power` call — the packet-type/standby cycling
+     * below silently drops SelPa's HF selection back to LF, so without this
+     * the chip still accepts SetTx/SetBleTx (CMD_OK) and fires TX_DONE, but
+     * keys the wrong PA/antenna path for the current band and radiates
+     * nothing on HF. */
+    lr2021_pa_select(g_lr2021.frequency_hz >= 1000000000U);
+
+    /* BLE: re-establish packet type + modulation + channel params right
+     * before TX. SetBleTx silently CMD_FAILs if the active packet type
+     * isn't BLE, and config can be disturbed between `rf mod ble` and send
+     * by an intervening `rf freq` (runs CalibFe) or the RX daemon. */
+    if (g_lr2021.modulation == RADIO_MOD_BLE_PHY) {
+        lr2021_ble_apply();
+    }
+
     lr2021_write_command(LR2021_CMD_CLEAR_TX_FIFO, NULL, 0);
 
     /* Update packet params for the active modulation (FSK: pld_len=len; LoRa: pld_len=len). */
     lr2021_apply_pkt_params(len);
 
-    /* --- Write payload only to TX FIFO (official driver scheme).
-     * In variable-length mode the hardware adds the 8-bit length header on air;
-     * do NOT add a manual length byte (it corrupts byte alignment). */
+    /* Write payload to TX FIFO. In variable-length mode the hardware adds
+     * the 8-bit length header on air; do NOT add a manual length byte for
+     * FSK/LoRa (corrupts byte alignment). BLE is the exception: the chip
+     * never generates the PDU header itself (datasheet §15.2), so it's
+     * prepended here to keep send() taking raw payload bytes. */
     {
         int ret = lr2021_wait_busy();
         if (ret < 0) {
@@ -1057,15 +1190,27 @@ static int lr2021_tx(const uint8_t *data, size_t len)
 
         uint8_t op_buf[2] = { (LR2021_CMD_WRITE_TX_FIFO >> 8) & 0xFF,
                                LR2021_CMD_WRITE_TX_FIFO & 0xFF };
+        uint8_t ble_hdr[2] = { 0x00, (uint8_t)len };  /* flags=0, Length=payload len */
+        bool is_ble = (g_lr2021.modulation == RADIO_MOD_BLE_PHY);
 
         lr2021_cs_low();
 
-        struct spi_buf tx[2] = {
-            { .buf = op_buf, .len = 2 },
-            { .buf = (void *)data, .len = len },
-        };
-        struct spi_buf_set tx_set = { .buffers = tx, .count = 2 };
-        ret = spi_write_dt(&g_lr2021.spi, &tx_set);
+        if (is_ble) {
+            struct spi_buf tx[3] = {
+                { .buf = op_buf, .len = 2 },
+                { .buf = ble_hdr, .len = 2 },
+                { .buf = (void *)data, .len = len },
+            };
+            struct spi_buf_set tx_set = { .buffers = tx, .count = 3 };
+            ret = spi_write_dt(&g_lr2021.spi, &tx_set);
+        } else {
+            struct spi_buf tx[2] = {
+                { .buf = op_buf, .len = 2 },
+                { .buf = (void *)data, .len = len },
+            };
+            struct spi_buf_set tx_set = { .buffers = tx, .count = 2 };
+            ret = spi_write_dt(&g_lr2021.spi, &tx_set);
+        }
 
         lr2021_cs_high();
 
@@ -1075,7 +1220,23 @@ static int lr2021_tx(const uint8_t *data, size_t len)
         }
     }
 
-    {
+    /* Transition through FS (PLL-locked) before triggering TX. Firing
+     * SetTx/SetBleTx straight from STANDBY_XOSC starts the ramp before the
+     * synth has locked, so short packets finish without ever radiating.
+     * The trigger command below waits on BUSY before sending, which
+     * naturally blocks until the lock completes. */
+    lr2021_write_command(LR2021_CMD_SET_FS, NULL, 0);
+
+    if (g_lr2021.modulation == RADIO_MOD_BLE_PHY) {
+        /* SetBleTx (§15.3.4): combines SetBleTxPduLen(pld_len) + SetTx(0).
+         * pld_len = 16-bit header + payload (excludes 3-byte CRC). The
+         * generic SetTx (0x020D) does not start a BLE transmission. */
+        uint8_t pld_len = (uint8_t)(len + 2);
+        int ret = lr2021_write_command(LR2021_CMD_SET_BLE_TX, &pld_len, 1);
+        if (ret < 0) {
+            return ret;
+        }
+    } else {
         uint8_t timeout[3] = { (LR2021_TX_TIMEOUT_3S >> 16) & 0xFF,
                                (LR2021_TX_TIMEOUT_3S >> 8) & 0xFF,
                                 LR2021_TX_TIMEOUT_3S & 0xFF };
@@ -1114,15 +1275,14 @@ static int lr2021_tx(const uint8_t *data, size_t len)
 
     g_lr2021.current_mode = RADIO_MODE_STANDBY;  /* Auto fallback to standby */
     g_lr2021.rx_armed = false;  /* left RX for TX — recv() re-arms continuous RX */
-    LOG_DBG("LR2021 TX: %zu bytes at %u Hz, %d dBm",
+    LOG_INF("LR2021 TX: %zu bytes at %u Hz, %d dBm",
             len, g_lr2021.frequency_hz, g_lr2021.tx_power_dbm);
     return 0;
 }
 
 /* Read one payload from the FIFO (polling path only — interrupt path reads
  * FIFO level before GET_AND_CLEAR_IRQ and bypasses this function). */
-static int lr2021_read_packet(uint8_t *buffer, size_t max_len)
-{
+static int lr2021_read_packet(uint8_t *buffer, size_t max_len) {
     uint8_t len_buf[2] = { 0 };
     int ret = lr2021_read_command(LR2021_CMD_GET_RX_FIFO_LEVEL, NULL, 0, len_buf, 2);
     if (ret < 0) {
@@ -1139,6 +1299,17 @@ static int lr2021_read_packet(uint8_t *buffer, size_t max_len)
         LOG_ERR("RX FIFO read failed: %d", ret);
         return ret;
     }
+    /* BLE FIFO contains the 2-byte PDU header lr2021_tx() synthesized on the
+     * peer's side (datasheet: the chip never strips it) — drop it here so
+     * recv() returns raw payload bytes like FSK/LoRa. */
+    if (g_lr2021.modulation == RADIO_MOD_BLE_PHY) {
+        if (pkt_len < 2) {
+            LOG_WRN("LR2021 BLE packet too short for header: %zu", pkt_len);
+            return 0;
+        }
+        memmove(buffer, buffer + 2, pkt_len - 2);
+        pkt_len -= 2;
+    }
     if (g_lr2021.event_cb) {
         radio_event_t ev = {
             .type = RADIO_EVENT_RX_DONE, .data = buffer, .len = pkt_len,
@@ -1151,8 +1322,7 @@ static int lr2021_read_packet(uint8_t *buffer, size_t max_len)
 
 /* Arm the chip in continuous RX (interrupt-driven mode). Stays in RX across
  * packets — FIFO reads advance the read pointer without leaving RX. */
-static int lr2021_rx_arm_continuous(void)
-{
+static int lr2021_rx_arm_continuous(void) {
     uint8_t mode = LR2021_STANDBY_XOSC;
     lr2021_write_command(LR2021_CMD_SET_STANDBY, &mode, 1);
     lr2021_write_command(LR2021_CMD_CLEAR_RX_FIFO, NULL, 0);
@@ -1186,8 +1356,7 @@ static int lr2021_rx_arm_continuous(void)
     return 0;
 }
 
-static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
-{
+static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
     }
@@ -1243,14 +1412,23 @@ static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
         if (n < 0) {
             return n;
         }
+        size_t out_len = pre_level;
+        if (g_lr2021.modulation == RADIO_MOD_BLE_PHY) {
+            if (pre_level < 2) {
+                LOG_WRN("LR2021 BLE packet too short for header: %zu", pre_level);
+                return 0;
+            }
+            memmove(buffer, buffer + 2, pre_level - 2);
+            out_len = pre_level - 2;
+        }
         if (g_lr2021.event_cb) {
             radio_event_t ev = {
-                .type = RADIO_EVENT_RX_DONE, .data = buffer, .len = pre_level,
+                .type = RADIO_EVENT_RX_DONE, .data = buffer, .len = out_len,
                 .rssi = 0, .user_data = g_lr2021.event_user_data,
             };
             g_lr2021.event_cb(&ev, g_lr2021.event_user_data);
         }
-        return (int)pre_level;
+        return (int)out_len;
     }
 
     /* --- Polling fallback: arm RX for one packet, poll, read, standby. --- */
@@ -1306,8 +1484,7 @@ static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
 
 /* Lock-free: block until the IRQ semaphore fires (RX_DONE/TIMEOUT) or timeout.
  * Caller must NOT hold the chip lock — this does no SPI. */
-static int lr2021_rx_wait(uint32_t timeout_ms)
-{
+static int lr2021_rx_wait(uint32_t timeout_ms) {
     if (!g_lr2021.use_irq) {
         return -ENOTSUP;
     }
@@ -1316,8 +1493,7 @@ static int lr2021_rx_wait(uint32_t timeout_ms)
     return (r == 0) ? 0 : -EAGAIN;
 }
 
-static int lr2021_get_rssi(int16_t *rssi)
-{
+static int lr2021_get_rssi(int16_t *rssi) {
     if (!g_lr2021.initialized || !rssi) {
         return -ENODEV;
     }
@@ -1359,8 +1535,7 @@ static int lr2021_get_rssi(int16_t *rssi)
     return 0;
 }
 
-static int lr2021_set_event_callback(radio_handle_t *handle, radio_event_cb_t cb, void *user_data)
-{
+static int lr2021_set_event_callback(radio_handle_t *handle, radio_event_cb_t cb, void *user_data) {
     ARG_UNUSED(handle);
     g_lr2021.event_cb = cb;
     g_lr2021.event_user_data = user_data;
@@ -1414,8 +1589,7 @@ static radio_handle_t lr2021_handle = {
     .ops          = &lr2021_ops,
 };
 
-radio_handle_t *lr2021_get_handle(void)
-{
+radio_handle_t *lr2021_get_handle(void) {
     return &lr2021_handle;
 }
 
@@ -1424,8 +1598,7 @@ radio_handle_t *lr2021_get_handle(void)
  * ========================================================================= */
 
 #ifdef CONFIG_AKIRA_LR2021
-static int lr2021_auto_register(void)
-{
+static int lr2021_auto_register(void) {
     int ret = radio_manager_register(&lr2021_handle);
     if (ret < 0 && ret != -EALREADY) {
         LOG_ERR("Failed to register LR2021: %d", ret);

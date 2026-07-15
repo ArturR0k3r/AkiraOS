@@ -48,7 +48,7 @@ static int cmd_rf_freq(const struct shell *sh, size_t argc, char **argv)
         return -EINVAL;
     }
 
-    uint32_t freq = (uint32_t)atol(argv[1]);
+    uint32_t freq = (uint32_t)strtoul(argv[1], NULL, 10);
     shell_print(sh, "Setting frequency to %u Hz...", freq);
 
     int ret = akira_rf_set_frequency(freq);
@@ -80,6 +80,28 @@ static int cmd_rf_power(const struct shell *sh, size_t argc, char **argv)
     }
 
     shell_print(sh, "TX power set successfully");
+    return 0;
+}
+
+/* Shell command: rf bitrate <bps> */
+static int cmd_rf_bitrate(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: rf bitrate <bps>");
+        shell_print(sh, "  Example: rf bitrate 9600");
+        return -EINVAL;
+    }
+
+    uint32_t bps = (uint32_t)strtoul(argv[1], NULL, 10);
+    shell_print(sh, "Setting bitrate to %u bps...", bps);
+
+    int ret = akira_rf_set_bitrate(bps);
+    if (ret < 0) {
+        shell_error(sh, "Failed to set bitrate: %d", ret);
+        return ret;
+    }
+
+    shell_print(sh, "Bitrate set successfully");
     return 0;
 }
 
@@ -376,11 +398,11 @@ static int cmd_rf_test_nohandle(const struct shell *sh, size_t argc, char **argv
     return 0;
 }
 
-/* rf mod <fsk|ook|lora> */
+/* rf mod <fsk|ook|lora|ble> */
 static int cmd_rf_mod(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 2) {
-        shell_error(sh, "Usage: rf mod <fsk|ook|lora>");
+        shell_error(sh, "Usage: rf mod <fsk|ook|lora|ble>");
         return -EINVAL;
     }
     radio_modulation_t mod;
@@ -390,8 +412,10 @@ static int cmd_rf_mod(const struct shell *sh, size_t argc, char **argv)
         mod = RADIO_MOD_OOK;
     } else if (strcmp(argv[1], "lora") == 0) {
         mod = RADIO_MOD_LORA;
+    } else if (strcmp(argv[1], "ble") == 0) {
+        mod = RADIO_MOD_BLE_PHY;
     } else {
-        shell_error(sh, "Unknown modulation '%s' (fsk|ook|lora)", argv[1]);
+        shell_error(sh, "Unknown modulation '%s' (fsk|ook|lora|ble)", argv[1]);
         return -EINVAL;
     }
     int ret = akira_rf_set_modulation(mod);
@@ -505,8 +529,9 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf,
     SHELL_CMD_ARG(select,  NULL,         "Select active chip",      cmd_rf_select, 2, 0),
     SHELL_CMD_ARG(freq,    NULL,         "Set frequency (Hz)",      cmd_rf_freq,   2, 0),
     SHELL_CMD_ARG(power,   NULL,         "Set TX power (dBm)",      cmd_rf_power,  2, 0),
-    SHELL_CMD_ARG(mod,     NULL,         "Set modulation (fsk|ook|lora)", cmd_rf_mod,  2, 0),
+    SHELL_CMD_ARG(mod,     NULL,         "Set modulation (fsk|ook|lora|ble)", cmd_rf_mod,  2, 0),
     SHELL_CMD_ARG(bw,      NULL,         "Set bandwidth Hz (FSK or LoRa)", cmd_rf_bw, 2, 0),
+    SHELL_CMD_ARG(bitrate, NULL,         "Set FSK bitrate (bps)", cmd_rf_bitrate, 2, 0),
     SHELL_CMD(lora, &sub_rf_lora,        "LoRa parameters (sf|cr)", NULL),
     SHELL_CMD_ARG(send,    NULL,         "Send data",               cmd_rf_send,   2, 0),
     SHELL_CMD_ARG(sweep,   NULL,         "Send multiple packets",   cmd_rf_sweep,  2, 2),

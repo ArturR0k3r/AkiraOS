@@ -108,6 +108,7 @@ bool akira_register_native_apis()
         {"rf_set_spreading_factor",(void *)akira_native_rf_set_spreading_factor,"(i)i",    NULL},
         {"rf_set_bandwidth",       (void *)akira_native_rf_set_bandwidth,       "(i)i",    NULL},
         {"rf_set_coding_rate",     (void *)akira_native_rf_set_coding_rate,     "(i)i",    NULL},
+        {"rf_set_bitrate",         (void *)akira_native_rf_set_bitrate,          "(i)i",    NULL},
         /* Raw OOK/ASK signal capture and replay */
         {"rf_raw_capture",         (void *)akira_native_rf_raw_capture,         "(iiii)i", NULL},
         {"rf_raw_replay",          (void *)akira_native_rf_raw_replay,          "(iiii)i", NULL},

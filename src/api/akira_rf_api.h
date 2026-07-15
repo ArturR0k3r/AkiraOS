@@ -47,6 +47,7 @@ int akira_rf_send(const uint8_t *data, size_t len);
 int akira_rf_receive(uint8_t *buffer, size_t max_len, uint32_t timeout_ms);
 int akira_rf_set_frequency(uint32_t freq_hz);
 int akira_rf_set_power(int8_t dbm);
+int akira_rf_set_bitrate(uint32_t bps);
 int akira_rf_set_modulation(radio_modulation_t mod);
 int akira_rf_set_spreading_factor(uint8_t sf);
 int akira_rf_set_bandwidth(uint32_t bw_hz);
@@ -58,7 +59,7 @@ radio_handle_t *akira_rf_get_active_handle(void);
 /* WASM native export functions (with capability checks) */
 int akira_native_rf_select(wasm_exec_env_t exec_env, int chip);
 int akira_native_rf_recv_pop(wasm_exec_env_t exec_env, uint32_t buf_ptr, uint32_t max_len, uint32_t timeout_ms);
-int akira_native_rf_send(wasm_exec_env_t exec_env, uint32_t payload_ptr, uint32_t len);
+int akira_native_rf_send(wasm_exec_env_t exec_env, void *payload, uint32_t len);
 int akira_native_rf_receive(wasm_exec_env_t exec_env, uint32_t buffer_ptr, uint32_t max_len, uint32_t timeout_ms);
 int akira_native_rf_set_frequency(wasm_exec_env_t exec_env, uint32_t freq_hz);
 int akira_native_rf_get_rssi(wasm_exec_env_t exec_env);
@@ -67,6 +68,7 @@ int akira_native_rf_set_modulation(wasm_exec_env_t exec_env, int mod);
 int akira_native_rf_set_spreading_factor(wasm_exec_env_t exec_env, int sf);
 int akira_native_rf_set_bandwidth(wasm_exec_env_t exec_env, uint32_t bw_hz);
 int akira_native_rf_set_coding_rate(wasm_exec_env_t exec_env, int cr);
+int akira_native_rf_set_bitrate(wasm_exec_env_t exec_env, int32_t bps);
 
 #if defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
 /* WiFi spectrum scan (per-channel max RSSI) */

@@ -286,6 +286,16 @@ int akira_rf_set_power(int8_t dbm)
     return ret;
 }
 
+int akira_rf_set_bitrate(uint32_t bps)
+{
+    LOG_INF("RF set bitrate: %u bps", bps);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->set_bitrate) ? h->ops->set_bitrate(h, bps) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
 int akira_rf_set_modulation(radio_modulation_t mod)
 {
     LOG_INF("RF set modulation: %d", mod);
@@ -495,19 +505,13 @@ int akira_native_rf_recv_pop(wasm_exec_env_t exec_env, uint32_t buf_ptr,
     return akira_rf_recv_pop(buf, (size_t)max_len, timeout_ms);
 }
 
-int akira_native_rf_send(wasm_exec_env_t exec_env, uint32_t payload_ptr, uint32_t len)
+int akira_native_rf_send(wasm_exec_env_t exec_env, void *payload, uint32_t len)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst)
-        return -1;
+    if (!payload || len == 0) return -EINVAL;
 
-    uint8_t *ptr = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst, payload_ptr);
-    if (!ptr)
-        return -EFAULT;
-
-    return akira_rf_send(ptr, len);
+    return akira_rf_send((const uint8_t *)payload, len);
 }
 
 int akira_native_rf_receive(wasm_exec_env_t exec_env, uint32_t buffer_ptr,
@@ -576,6 +580,13 @@ int akira_native_rf_set_power(wasm_exec_env_t exec_env, int8_t dbm)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
     return akira_rf_set_power(dbm);
+}
+
+int akira_native_rf_set_bitrate(wasm_exec_env_t exec_env, int32_t bps)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+    if (bps < 0) return -EINVAL;
+    return akira_rf_set_bitrate((uint32_t)bps);
 }
 
 /* ── Raw Sub-GHz OOK capture / replay ──────────────────────────────────── */
