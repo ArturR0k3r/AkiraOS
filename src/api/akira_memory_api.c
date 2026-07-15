@@ -140,6 +140,10 @@ void akira_wasm_free(wasm_exec_env_t exec_env, void *ptr)
 
 /* WASM Native export api */
 
+/* Bytes reserved in front of each mem_alloc block to record its size for
+ * quota accounting. 8 bytes keeps the app-visible pointer 8-byte aligned. */
+#define AKIRA_WASM_ALLOC_HDR 8u
+
 uint32_t akira_native_mem_alloc(wasm_exec_env_t exec_env, uint32_t size)
 {
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
@@ -151,53 +155,52 @@ uint32_t akira_native_mem_alloc(wasm_exec_env_t exec_env, uint32_t size)
         return 0;
     }
 
-    /* Allocate from quota-enforced pool */
-    void *ptr = akira_wasm_malloc(exec_env, size);
-    if (!ptr) {
-        return 0;  /* Quota exceeded or allocation failed */
-    }
-
-    /* Convert native pointer to WASM address space */
     wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
     if (!module_inst) {
-        akira_wasm_free(exec_env, ptr);
         return 0;
     }
 
-    /* The allocated memory is outside WASM linear memory, so we need to
-     * use module heap allocation for WASM-accessible memory.
-     * For now, return 0 as this requires WAMR's module_malloc.
-     *
-     * TODO: Use wasm_runtime_module_malloc() for WASM-accessible allocation
-     */
-    akira_wasm_free(exec_env, ptr);
-
-    /* Use WAMR's module malloc for WASM-accessible memory with quota check */
     int slot = get_slot_for_module_inst(module_inst);
     if (slot < 0) {
         return 0;
     }
-
     akira_managed_app_t *app = &g_apps[slot];
 
-    /* Check quota before WAMR allocation */
+    /* Allocate size + header so free() can recover the block size. */
+    uint32_t total = size + AKIRA_WASM_ALLOC_HDR;
+
+    /* Enforce the per-app quota before allocating (quota == 0 => unlimited). */
     uint32_t quota = app->memory_quota;
-    if (quota > 0 && (uint32_t)atomic_get(&app->memory_used) + size > quota) {
-        LOG_WRN("mem_alloc: quota exceeded for app %s", app->name);
+    if (quota > 0 && (uint32_t)atomic_get(&app->memory_used) + total > quota) {
+        LOG_WRN("mem_alloc: quota exceeded for app %s (used=%ld, req=%u, quota=%u)",
+                app->name, atomic_get(&app->memory_used), total, quota);
         return 0;
     }
 
-    uint32_t wasm_ptr = (uint32_t)wasm_runtime_module_malloc(module_inst, size, NULL);
-    if (wasm_ptr == 0) {
-        LOG_WRN("mem_alloc: WAMR module malloc failed");
+    uint32_t base = (uint32_t)wasm_runtime_module_malloc(module_inst, total, NULL);
+    if (base == 0) {
+        LOG_WRN("mem_alloc: WAMR module malloc failed for %u bytes", total);
         return 0;
     }
 
-    /* Track allocation in quota */
-    atomic_add(&app->memory_used, (atomic_val_t)size);
-    LOG_DBG("mem_alloc: app %s allocated %u bytes (used: %ld)", app->name, size, atomic_get(&app->memory_used));
+    /* Record the block size in the header, validating the range first. */
+    if (!wasm_runtime_validate_app_addr(module_inst, base, AKIRA_WASM_ALLOC_HDR)) {
+        wasm_runtime_module_free(module_inst, base);
+        return 0;
+    }
+    uint32_t *hdr = (uint32_t *)wasm_runtime_addr_app_to_native(module_inst, base);
+    if (!hdr) {
+        wasm_runtime_module_free(module_inst, base);
+        return 0;
+    }
+    *hdr = total;
 
-    return wasm_ptr;
+    atomic_add(&app->memory_used, (atomic_val_t)total);
+    LOG_DBG("mem_alloc: app %s allocated %u bytes (used: %ld)",
+            app->name, size, atomic_get(&app->memory_used));
+
+    /* Hand the app the region just past the header. */
+    return base + AKIRA_WASM_ALLOC_HDR;
 #else
     (void)exec_env; (void)size;
     return 0;
@@ -214,7 +217,7 @@ void akira_native_mem_free(wasm_exec_env_t exec_env, uint32_t ptr)
         return;
     }
 
-    if (ptr == 0) {
+    if (ptr == 0 || ptr < AKIRA_WASM_ALLOC_HDR) {
         return;
     }
 
@@ -223,16 +226,30 @@ void akira_native_mem_free(wasm_exec_env_t exec_env, uint32_t ptr)
         return;
     }
 
+    /* Recover the header written by mem_alloc() to learn the block size,
+     * validating the range so a forged pointer cannot cause an OOB read. */
+    uint32_t base = ptr - AKIRA_WASM_ALLOC_HDR;
+    if (!wasm_runtime_validate_app_addr(module_inst, base, AKIRA_WASM_ALLOC_HDR)) {
+        LOG_WRN("mem_free: invalid pointer 0x%08x", ptr);
+        return;
+    }
+    uint32_t total = *(uint32_t *)wasm_runtime_addr_app_to_native(module_inst, base);
+
+    /* Return the block's bytes to the app's quota. */
     int slot = get_slot_for_module_inst(module_inst);
-    if (slot >= 0) {
-        /* Note: We can't easily track size for WAMR module_free
-         * For accurate quota tracking, we'd need to store allocation sizes
-         * or use WAMR's internal tracking. For now, we just free.
-         */
-        LOG_DBG("mem_free: app %s freeing ptr 0x%08x", g_apps[slot].name, ptr);
+    if (slot >= 0 && slot < AKIRA_MAX_WASM_INSTANCES && g_apps[slot].used) {
+        atomic_val_t used = atomic_get(&g_apps[slot].memory_used);
+        if (used >= (atomic_val_t)total) {
+            atomic_sub(&g_apps[slot].memory_used, (atomic_val_t)total);
+        } else {
+            LOG_WRN("mem_free: quota accounting underflow for app %s", g_apps[slot].name);
+            atomic_set(&g_apps[slot].memory_used, 0);
+        }
+        LOG_DBG("mem_free: app %s freed %u bytes (remaining: %ld)",
+                g_apps[slot].name, total, atomic_get(&g_apps[slot].memory_used));
     }
 
-    wasm_runtime_module_free(module_inst, ptr);
+    wasm_runtime_module_free(module_inst, base);
 #else
     (void)exec_env; (void)ptr;
 #endif
