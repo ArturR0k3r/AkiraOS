@@ -132,8 +132,11 @@ Install the [AkiraSDK toolchain](AkiraSDK/README.md) (clang/wasi-sdk used as a c
 cd AkiraSDK/wasm_apps/hello_world
 ../../build_wasm_app.sh -o hello_world.wasm main.c
 
-# Deploy to a running device over WiFi — no reflash needed
-curl -X POST -F "file=@hello_world.wasm" http://<device-ip>/upload
+# Deploy to a running device over WiFi — no reflash needed.
+# The app binary is streamed raw to the app-manager install route
+# (/upload is the firmware-flash endpoint, not for apps).
+curl -X POST --data-binary @hello_world.wasm \
+  "http://<device-ip>/api/apps/install?name=hello_world"
 ```
 
 **Example apps in `AkiraSDK/wasm_apps/`:**

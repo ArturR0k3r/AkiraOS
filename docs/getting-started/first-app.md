@@ -125,7 +125,10 @@ AkiraOS:~$ app run hello_world
 The device must be connected to WiFi. Find its IP from the serial console (`net iface`).
 
 ```bash
-curl -X POST -F "file=@bin/hello_world.wasm" http://<device-ip>/upload
+# The app binary is streamed raw to the app-manager install route.
+# (/upload is the firmware-flash endpoint and must not be used for apps.)
+curl -X POST --data-binary @bin/hello_world.wasm \
+  "http://<device-ip>/api/apps/install?name=hello_world"
 ```
 
 

@@ -246,10 +246,10 @@ wamrc --target=x86-64 \
 %.aot: %.wasm
 	wamrc --target=xtensa --cpu=esp32s3 --size-level=3 -o $@ $<
 
-# Hybrid deployment
+# Hybrid deployment (app binaries stream raw to the app-manager route)
 deploy: app.wasm app_esp32s3.aot
-	curl -F "file=@app.wasm" http://$(DEVICE_IP)/upload
-	curl -F "file=@app_esp32s3.aot" http://$(DEVICE_IP)/upload
+	curl --data-binary @app.wasm "http://$(DEVICE_IP)/api/apps/install?name=app"
+	curl --data-binary @app_esp32s3.aot "http://$(DEVICE_IP)/api/apps/install?name=app"
 ```
 
 ---

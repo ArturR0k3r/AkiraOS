@@ -258,8 +258,9 @@ ls -lh myapp.wasm
 
 # Current limit: ~1MB for HTTP uploads
 
-# Check upload endpoint
-curl -X POST -F "file=@myapp.wasm" http://192.168.x.x/upload -v
+# Check the app-install endpoint (raw body; /upload is firmware only)
+curl -X POST --data-binary @myapp.wasm \
+  "http://192.168.x.x/api/apps/install?name=myapp" -v
 ```
 
 ---

@@ -230,8 +230,10 @@ cd ~/akira-workspace/AkiraOS/AkiraSDK/wasm_apps
 ./build.sh hello_world
 # produces bin/hello_world.wasm
 
-# Upload to device over HTTP (device must be on WiFi)
-curl -X POST -F "file=@bin/hello_world.wasm" http://<device-ip>/upload
+# Install to device over HTTP (device must be on WiFi).
+# App binary is streamed raw to the app-manager route; /upload is firmware only.
+curl -X POST --data-binary @bin/hello_world.wasm \
+  "http://<device-ip>/api/apps/install?name=hello_world"
 ```
 
 ### Perform an OTA firmware update

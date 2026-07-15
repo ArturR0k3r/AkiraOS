@@ -377,21 +377,17 @@ See [AOT Compilation Architecture](../architecture/aot-compilation.md) for detai
 
 ### Upload via HTTP
 
-The device provides two upload endpoints:
+Apps install through the app-manager route, which streams the **raw** body
+(no multipart) — so use `--data-binary`, not `-F`. `/upload` is the firmware
+flash endpoint and must not be used for apps.
 
 ```bash
-# Simple file upload (saved to /lfs/apps/ or /SD:/apps/)
-curl -X POST -F "file=@app.wasm" http://192.168.1.100/upload
-
-# Named app installation (recommended)
-curl -X POST \
-  -F "file=@app.wasm" \
+# Named app installation (name is optional; defaults to "uploaded_app")
+curl -X POST --data-binary @app.wasm \
   "http://192.168.1.100/api/apps/install?name=myapp"
 
-# Hybrid deployment with AOT (best performance)
-curl -X POST -F "file=@app.wasm" \
-  "http://192.168.1.100/api/apps/install?name=myapp"
-curl -X POST -F "file=@app-xtensa.aot" \
+# Hybrid deployment with AOT (best performance): install the .aot the same way
+curl -X POST --data-binary @app-xtensa.aot \
   "http://192.168.1.100/api/apps/install?name=myapp"
 ```
 
