@@ -58,6 +58,7 @@ uint64_t akira_capability_str_to_mask(const char *cap)
     if (strcmp(cap, "rtc.write") == 0)      return AKIRA_CAP_RTC_WRITE;
     if (strcmp(cap, "rtc.*") == 0)          return AKIRA_CAP_RTC_READ | AKIRA_CAP_RTC_WRITE;
     if (strcmp(cap, "wifi.inject") == 0)    return AKIRA_CAP_WIFI_INJECT;
+    if (strcmp(cap, "ota.trigger") == 0)    return AKIRA_CAP_OTA_TRIGGER;
     if (strcmp(cap, "crypto") == 0)         return AKIRA_CAP_CRYPTO;
     /* Wildcard patterns */
     if (strcmp(cap, "display.*") == 0)      return AKIRA_CAP_DISPLAY_WRITE;
