@@ -749,6 +749,14 @@ static void handle_ota_message(const cloud_message_t *msg, msg_source_t source)
     case MSG_TYPE_FW_CHUNK:
         if (msg->payload && client.ota_transfer.active)
         {
+            /* Reject undersized payloads before subtracting the header, or the
+             * unsigned length underflows and chunk->data is read out of bounds. */
+            if (msg->header.payload_len < sizeof(payload_chunk_t))
+            {
+                LOG_ERR("Invalid FW chunk payload (%u bytes)",
+                        (unsigned)msg->header.payload_len);
+                break;
+            }
             payload_chunk_t *chunk = (payload_chunk_t *)msg->payload;
             size_t data_len = msg->header.payload_len - offsetof(payload_chunk_t, data);
 
@@ -817,6 +825,14 @@ static void handle_app_message(const cloud_message_t *msg, msg_source_t source)
     case MSG_TYPE_APP_CHUNK:
         if (msg->payload && client.app_transfer.active)
         {
+            /* Reject undersized payloads before subtracting the header, or the
+             * unsigned length underflows and chunk->data is read out of bounds. */
+            if (msg->header.payload_len < sizeof(payload_chunk_t))
+            {
+                LOG_ERR("Invalid app chunk payload (%u bytes)",
+                        (unsigned)msg->header.payload_len);
+                break;
+            }
             payload_chunk_t *chunk = (payload_chunk_t *)msg->payload;
             size_t data_len = msg->header.payload_len - offsetof(payload_chunk_t, data);
 
