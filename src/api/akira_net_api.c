@@ -42,7 +42,7 @@ LOG_MODULE_REGISTER(akira_net_api, CONFIG_AKIRA_LOG_LEVEL);
 
 int akira_native_net_open(wasm_exec_env_t exec_env, int32_t type)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EPERM);
 
 	if (type != NET_TYPE_TCP && type != NET_TYPE_UDP)
 	{
@@ -85,7 +85,7 @@ __weak int akira_net_policy_check(uint32_t app_id, const char *host, uint16_t po
 int akira_native_net_connect(wasm_exec_env_t exec_env, int32_t handle,
 							 const char *host, int32_t port)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EPERM);
 
 	if (!host || port <= 0 || port > 65535)
 	{
@@ -111,7 +111,7 @@ int akira_native_net_connect(wasm_exec_env_t exec_env, int32_t handle,
 int akira_native_net_bind(wasm_exec_env_t exec_env, int32_t handle,
 						  int32_t port)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EPERM);
 
 	if (port < 0 || port > 65535)
 	{
@@ -124,7 +124,7 @@ int akira_native_net_bind(wasm_exec_env_t exec_env, int32_t handle,
 int akira_native_net_listen(wasm_exec_env_t exec_env, int32_t handle,
 							int32_t backlog)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EPERM);
 
 	if (backlog <= 0)
 	{
@@ -136,7 +136,7 @@ int akira_native_net_listen(wasm_exec_env_t exec_env, int32_t handle,
 
 int akira_native_net_close(wasm_exec_env_t exec_env, int32_t handle)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EPERM);
 
 	return net_stream_close((int)handle);
 }
@@ -144,7 +144,7 @@ int akira_native_net_close(wasm_exec_env_t exec_env, int32_t handle)
 int akira_native_net_tx_bind(wasm_exec_env_t exec_env, int32_t handle,
 							 int32_t wasm_ptr, int32_t total_size)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EPERM);
 
 	if (total_size <= NET_RING_HDR_SIZE)
 	{
@@ -169,7 +169,7 @@ int akira_native_net_tx_bind(wasm_exec_env_t exec_env, int32_t handle,
 int akira_native_net_rx_bind(wasm_exec_env_t exec_env, int32_t handle,
 							 int32_t wasm_ptr, int32_t total_size)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EPERM);
 
 	if (total_size <= NET_RING_HDR_SIZE)
 	{
@@ -193,7 +193,7 @@ int akira_native_net_rx_bind(wasm_exec_env_t exec_env, int32_t handle,
 
 int akira_native_net_tx_flush(wasm_exec_env_t exec_env, int32_t handle)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EPERM);
 
 	return net_stream_tx_flush((int)handle);
 }
@@ -201,7 +201,7 @@ int akira_native_net_tx_flush(wasm_exec_env_t exec_env, int32_t handle)
 int akira_native_net_event_pop(wasm_exec_env_t exec_env,
 							   uint32_t buf_ptr, uint32_t len)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EPERM);
 
 	/* Minimum: 1 (type) + 1 (handle) + 2 (extra) = 4 bytes */
 	if (len < 4)
@@ -241,7 +241,7 @@ int akira_native_net_event_pop(wasm_exec_env_t exec_env,
 int akira_native_net_get_ip(wasm_exec_env_t exec_env,
 							uint32_t buf_ptr, uint32_t len)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EPERM);
 
 	if (len < 16)
 	{

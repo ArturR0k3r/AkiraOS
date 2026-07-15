@@ -57,7 +57,7 @@ int akira_native_crypto_sha256(wasm_exec_env_t exec_env,
                                 void *data_ptr, uint32_t data_len,
                                 void *out_ptr)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EPERM);
 
     if (data_len > CONFIG_AKIRA_WASM_CRYPTO_MAX_INPUT) {
         return -EMSGSIZE;
@@ -83,7 +83,7 @@ int akira_native_crypto_aes256_encrypt(wasm_exec_env_t exec_env,
                                         void *in_ptr, uint32_t in_len,
                                         void *out_ptr)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EPERM);
 
     if (in_len == 0 || (in_len % TC_AES_BLOCK_SIZE) != 0) {
         return -EINVAL;
@@ -123,7 +123,7 @@ int akira_native_crypto_aes256_decrypt(wasm_exec_env_t exec_env,
                                         void *in_ptr, uint32_t in_len,
                                         void *out_ptr)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EPERM);
 
     if (in_len == 0 || (in_len % TC_AES_BLOCK_SIZE) != 0) {
         return -EINVAL;
@@ -162,7 +162,7 @@ int akira_native_crypto_hmac_sha256(wasm_exec_env_t exec_env,
                                      void *data_ptr, uint32_t data_len,
                                      void *out_ptr)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EPERM);
 
     if (key_len == 0 || key_len > TC_SHA256_BLOCK_SIZE) {
         return -EINVAL;
@@ -197,7 +197,7 @@ int akira_native_crypto_hmac_sha256(wasm_exec_env_t exec_env,
 int akira_native_crypto_random(wasm_exec_env_t exec_env,
                                 void *buf_ptr, uint32_t len)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EPERM);
 
     if (len == 0 || len > CONFIG_AKIRA_WASM_CRYPTO_MAX_INPUT) {
         return -EINVAL;
@@ -217,7 +217,7 @@ int akira_native_crypto_aes256_ctr(wasm_exec_env_t exec_env,
                                     void *in_ptr, uint32_t in_len,
                                     void *out_ptr)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EPERM);
 
     if (in_len == 0 || in_len > CONFIG_AKIRA_WASM_CRYPTO_MAX_INPUT) {
         return -EINVAL;
@@ -269,7 +269,7 @@ static int psa_ensure_init(void)
 int akira_native_crypto_ed25519_keygen(wasm_exec_env_t exec_env,
                                         void *seed_ptr, void *pub_ptr)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EPERM);
 
 	wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
 	WASM_ADDR_CHECK(inst, seed_ptr, 32);
@@ -318,7 +318,7 @@ int akira_native_crypto_ed25519_sign(wasm_exec_env_t exec_env,
                                       void *msg_ptr, uint32_t msg_len,
                                       void *sig_ptr)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EPERM);
 
 	if (msg_len == 0 || msg_len > CONFIG_AKIRA_WASM_CRYPTO_MAX_INPUT) {
 		return -EINVAL;

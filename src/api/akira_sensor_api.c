@@ -133,7 +133,7 @@ int akira_sensor_read(int channel, float *out)
 
 int akira_native_sensor_read(wasm_exec_env_t exec_env, int32_t channel)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_SENSOR_READ, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_SENSOR_READ, -EPERM);
 
     float v = 0.0f;
     int ret = akira_sensor_read((int)channel, &v);

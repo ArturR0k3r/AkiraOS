@@ -52,7 +52,7 @@ static int g_adv_svc_handle = -1;
 
 int akira_native_ble_init(wasm_exec_env_t exec_env)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	int ret = bt_manager_set_mode(BT_MODE_BLE_APP);
 
@@ -83,7 +83,7 @@ int akira_native_ble_init(wasm_exec_env_t exec_env)
 
 int akira_native_ble_deinit(wasm_exec_env_t exec_env)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	bt_manager_stop_advertising();
 	ble_app_svc_deinit();
@@ -97,7 +97,7 @@ int akira_native_ble_deinit(wasm_exec_env_t exec_env)
 int akira_native_ble_set_local_name(wasm_exec_env_t exec_env,
 				    const char *name)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	if (!name) {
 		return -EINVAL;
@@ -119,7 +119,7 @@ int akira_native_ble_set_local_name(wasm_exec_env_t exec_env,
 int akira_native_ble_service_create(wasm_exec_env_t exec_env,
 				    const char *uuid128_str)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	if (!uuid128_str) {
 		return -EINVAL;
@@ -133,7 +133,7 @@ int akira_native_ble_char_create(wasm_exec_env_t exec_env,
 				 int32_t props,
 				 int32_t max_len)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	if (!uuid128_str || max_len <= 0) {
 		return -EINVAL;
@@ -147,14 +147,14 @@ int akira_native_ble_char_create(wasm_exec_env_t exec_env,
 int akira_native_ble_service_add_char(wasm_exec_env_t exec_env,
 				      int32_t svc_h, int32_t char_h)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	return ble_app_svc_add_char(svc_h, char_h);
 }
 
 int akira_native_ble_add_service(wasm_exec_env_t exec_env, int32_t svc_h)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	return ble_app_svc_register((int)svc_h);
 }
@@ -162,7 +162,7 @@ int akira_native_ble_add_service(wasm_exec_env_t exec_env, int32_t svc_h)
 int akira_native_ble_set_advertised_service(wasm_exec_env_t exec_env,
 					    int32_t svc_h)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	g_adv_svc_handle = (int)svc_h;
 	LOG_DBG("Advertised service handle set to %d", g_adv_svc_handle);
@@ -171,7 +171,7 @@ int akira_native_ble_set_advertised_service(wasm_exec_env_t exec_env,
 
 int akira_native_ble_advertise(wasm_exec_env_t exec_env)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	if (bt_manager_get_mode() != BT_MODE_BLE_APP) {
 		LOG_ERR("ble_advertise: not in BLE_APP mode (call ble_init first)");
@@ -189,14 +189,14 @@ int akira_native_ble_advertise(wasm_exec_env_t exec_env)
 
 int akira_native_ble_stop_advertise(wasm_exec_env_t exec_env)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	return bt_manager_stop_advertising();
 }
 
 int akira_native_ble_is_connected(wasm_exec_env_t exec_env)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	return bt_manager_is_connected() ? 1 : 0;
 }
@@ -205,7 +205,7 @@ int akira_native_ble_char_write(wasm_exec_env_t exec_env,
 				int32_t char_h,
 				uint32_t data_ptr, uint32_t len)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	if (len == 0) {
 		return -EINVAL;
@@ -227,7 +227,7 @@ int akira_native_ble_char_read(wasm_exec_env_t exec_env,
 			       int32_t char_h,
 			       uint32_t buf_ptr, uint32_t len)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	if (len == 0) {
 		return -EINVAL;
@@ -246,7 +246,7 @@ int akira_native_ble_char_read(wasm_exec_env_t exec_env,
 int akira_native_ble_event_pop(wasm_exec_env_t exec_env,
 			       uint32_t buf_ptr, uint32_t len)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	/* Minimum buffer: 1 (type) + 1 (char_h) + 2 (data_len) = 4 bytes */
 	if (len < 4) {

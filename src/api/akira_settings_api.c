@@ -53,7 +53,7 @@ int akira_native_settings_get(wasm_exec_env_t exec_env,
                                const char *key,
                                uint32_t buf_ptr, uint32_t buf_len)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_SETTINGS, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_SETTINGS, -EPERM);
 
     if (!key || key[0] == '\0' || buf_len == 0) return -EINVAL;
     if (!setting_filter(key)) return -EACCES;
@@ -74,7 +74,7 @@ int akira_native_settings_get(wasm_exec_env_t exec_env,
 int akira_native_settings_set(wasm_exec_env_t exec_env,
                                const char *key, const char *value)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_SETTINGS, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_SETTINGS, -EPERM);
 
     if (!key || key[0] == '\0') return -EINVAL;
     if (!value) return -EINVAL;
@@ -86,7 +86,7 @@ int akira_native_settings_set(wasm_exec_env_t exec_env,
 /* ── settings_delete ──────────────────────────────────────────────────── */
 int akira_native_settings_delete(wasm_exec_env_t exec_env, const char *key)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_SETTINGS, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_SETTINGS, -EPERM);
 
     if (!key || key[0] == '\0') return -EINVAL;
     if (!setting_filter(key)) return -EACCES;

@@ -52,7 +52,7 @@ int akira_native_sd_scan_wasm(wasm_exec_env_t exec_env,
                                uint32_t buf_ptr, uint32_t buf_len)
 {
     /* Only the shell (holding app.control) may browse the SD directly. */
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_CONTROL, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_CONTROL, -EPERM);
 
     if (buf_len == 0) {
         return -EINVAL;
@@ -136,7 +136,7 @@ int akira_native_sd_scan_wasm(wasm_exec_env_t exec_env,
  */
 int akira_native_app_install_from_sd(wasm_exec_env_t exec_env, const char *name)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_CONTROL, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_CONTROL, -EPERM);
 
     if (!name || name[0] == '\0') {
         return -EINVAL;

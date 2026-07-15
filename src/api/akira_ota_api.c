@@ -60,7 +60,7 @@ static int validate_https_url(const char *url)
 
 int akira_native_ota_check(wasm_exec_env_t exec_env, const char *manifest_url)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EPERM);
 
     if (!manifest_url) {
         return -EINVAL;
@@ -90,7 +90,7 @@ int akira_native_ota_check(wasm_exec_env_t exec_env, const char *manifest_url)
 int akira_native_ota_fetch_and_apply(wasm_exec_env_t exec_env,
                                       const char *manifest_url)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EPERM);
 
     if (!manifest_url) {
         return -EINVAL;
@@ -130,7 +130,7 @@ int akira_native_ota_fetch_and_apply(wasm_exec_env_t exec_env,
 
 int akira_native_ota_get_state(wasm_exec_env_t exec_env)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EPERM);
 
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
     const struct ota_progress *p = ota_get_progress();
@@ -147,7 +147,7 @@ int akira_native_ota_get_state(wasm_exec_env_t exec_env)
 
 int akira_native_ota_confirm(wasm_exec_env_t exec_env)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EPERM);
 
 #ifdef CONFIG_AKIRA_BOOT_GUARD
     return akira_boot_guard_confirm();
@@ -163,7 +163,7 @@ int akira_native_ota_confirm(wasm_exec_env_t exec_env)
 
 int akira_native_ota_rollback(wasm_exec_env_t exec_env)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EPERM);
 
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
     enum ota_result r = ota_request_rollback();

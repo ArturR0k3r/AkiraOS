@@ -22,7 +22,7 @@ LOG_MODULE_REGISTER(akira_mqtt_api, CONFIG_AKIRA_LOG_LEVEL);
 int akira_native_mqtt_publish(wasm_exec_env_t exec_env, const char *topic,
                               const void *payload, int len, int qos, int retain)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MQTT, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MQTT, -EPERM);
     if (!topic || len < 0) {
         return -EINVAL;
     }
@@ -32,7 +32,7 @@ int akira_native_mqtt_publish(wasm_exec_env_t exec_env, const char *topic,
 /* mqtt_subscribe — sig "($)i" */
 int akira_native_mqtt_subscribe(wasm_exec_env_t exec_env, const char *topic)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MQTT, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MQTT, -EPERM);
     if (!topic) {
         return -EINVAL;
     }
@@ -43,7 +43,7 @@ int akira_native_mqtt_subscribe(wasm_exec_env_t exec_env, const char *topic)
 int akira_native_mqtt_poll(wasm_exec_env_t exec_env, char *topic, int topic_cap,
                            uint8_t *payload, int payload_cap, int timeout_ms)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MQTT, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MQTT, -EPERM);
     if (!topic || !payload || topic_cap <= 0 || payload_cap <= 0) {
         return -EINVAL;
     }
@@ -69,7 +69,7 @@ int akira_native_mqtt_poll(wasm_exec_env_t exec_env, char *topic, int topic_cap,
 /* mqtt_connected — sig "()i" */
 int akira_native_mqtt_connected(wasm_exec_env_t exec_env)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MQTT, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MQTT, -EPERM);
     return mqtt_service_is_connected() ? 1 : 0;
 }
 
@@ -79,7 +79,7 @@ int akira_native_mqtt_connected(wasm_exec_env_t exec_env)
 int akira_native_ha_light_register(wasm_exec_env_t exec_env,
                                    const char *object_id, const char *name)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MQTT, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MQTT, -EPERM);
     if (!object_id || !name) {
         return -EINVAL;
     }
@@ -90,7 +90,7 @@ int akira_native_ha_light_register(wasm_exec_env_t exec_env,
 int akira_native_ha_light_report(wasm_exec_env_t exec_env, const char *object_id,
                                  int on, int brightness, int r, int g, int b)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MQTT, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MQTT, -EPERM);
     if (!object_id) {
         return -EINVAL;
     }
@@ -102,7 +102,7 @@ int akira_native_ha_light_poll(wasm_exec_env_t exec_env, const char *object_id,
                                int *on, int *brightness, int *r, int *g, int *b,
                                int timeout_ms)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MQTT, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MQTT, -EPERM);
     if (!object_id || !on || !brightness || !r || !g || !b) {
         return -EINVAL;
     }
