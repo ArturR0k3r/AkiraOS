@@ -264,11 +264,6 @@ target_sources(app PRIVATE
 # resource_manager and scheduler are implemented elsewhere or intentionally omitted for this build.
 
 
-# UI Framework
-target_sources(app PRIVATE
-    src/ui/ui_framework.c
-)
-
 # App Loader/Manager are implemented under src/runtime (loader/ and manager/) — included above
 
 # ===== Core Libraries =====
@@ -854,7 +849,6 @@ target_include_directories(app PRIVATE
     src/settings/
     src/shell/
     src/storage/
-    src/ui/
 )
 
 # SDL2 simulator uses external viewer (tools/akira_viewer)
