@@ -93,7 +93,7 @@ bool akira_register_native_apis()
         {"rf_set_frequency",       (void *)akira_native_rf_set_frequency,       "(i)i",    NULL},
         {"rf_set_power",           (void *)akira_native_rf_set_power,           "(i)i",    NULL},
         {"rf_get_rssi",            (void *)akira_native_rf_get_rssi,            "()i",     NULL},
-        {"rf_send",                (void *)akira_native_rf_send,                "(*i)i",   NULL},
+        {"rf_send",                (void *)akira_native_rf_send,                "(ii)i",   NULL},
         {"rf_select",              (void *)akira_native_rf_select,              "(i)i",    NULL},
         {"rf_recv_pop",            (void *)akira_native_rf_recv_pop,            "(iii)i",  NULL},
         {"rf_receive",             (void *)akira_native_rf_receive,             "(iii)i",  NULL},

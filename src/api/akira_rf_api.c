@@ -5,6 +5,7 @@
 
 #include "akira_api.h"
 #include "akira_rf_api.h"
+#include "akira_wasm_mem.h"
 #include <runtime/security.h>
 #include <zephyr/logging/log.h>
 #include "connectivity/radio_interface.h"
@@ -448,14 +449,11 @@ int akira_native_rf_recv_pop(wasm_exec_env_t exec_env, uint32_t buf_ptr,
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst)
-        return -1;
-
     if (max_len == 0)
         return -EINVAL;
 
-    uint8_t *buf = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+    /* Validate the whole [buf_ptr, buf_ptr+max_len) range, not just the base. */
+    uint8_t *buf = (uint8_t *)akira_wasm_ptr_to_native(exec_env, buf_ptr, max_len);
     if (!buf)
         return -EFAULT;
 
@@ -466,11 +464,11 @@ int akira_native_rf_send(wasm_exec_env_t exec_env, uint32_t payload_ptr, uint32_
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst)
-        return -1;
+    if (len == 0)
+        return -EINVAL;
 
-    uint8_t *ptr = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst, payload_ptr);
+    /* payload_ptr is a raw app offset (signature "(ii)i"); validate base+len. */
+    uint8_t *ptr = (uint8_t *)akira_wasm_ptr_to_native(exec_env, payload_ptr, len);
     if (!ptr)
         return -EFAULT;
 
@@ -482,14 +480,11 @@ int akira_native_rf_receive(wasm_exec_env_t exec_env, uint32_t buffer_ptr,
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst)
-        return -1;
-
     if (max_len == 0)
         return -EINVAL;
 
-    uint8_t *ptr = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst, buffer_ptr);
+    /* Validate the whole [buffer_ptr, buffer_ptr+max_len) range, not just the base. */
+    uint8_t *ptr = (uint8_t *)akira_wasm_ptr_to_native(exec_env, buffer_ptr, max_len);
     if (!ptr)
         return -EFAULT;
 
