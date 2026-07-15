@@ -25,40 +25,56 @@ AkiraOS implements a **multi-layered security architecture** combining WASM sand
 
 **Purpose:** Fine-grained permission control for native API access.
 
-**Capability Bits (23 total):**
+**Capability Bits (36 total, 64-bit mask).** These are generated from
+`src/runtime/security.h` — keep the two in sync:
 ```c
-// Hardware Access (Bits 0-4)
-#define AKIRA_CAP_DISPLAY_WRITE  (1U << 0)  // Screen rendering
-#define AKIRA_CAP_INPUT_READ     (1U << 1)  // Button/touch input
-#define AKIRA_CAP_INPUT_WRITE    (1U << 2)  // Input device control
-#define AKIRA_CAP_SENSOR_READ    (1U << 3)  // IMU, temp, etc.
-#define AKIRA_CAP_RF_TRANSCEIVE  (1U << 4)  // WiFi/LoRa send/recv
+// Hardware access (bits 0-4)
+#define AKIRA_CAP_DISPLAY_WRITE  (1ULL << 0)   // Screen rendering
+#define AKIRA_CAP_INPUT_READ     (1ULL << 1)   // Button/touch input
+#define AKIRA_CAP_INPUT_WRITE    (1ULL << 2)   // Input device control
+#define AKIRA_CAP_SENSOR_READ    (1ULL << 3)   // IMU, temp, etc.
+#define AKIRA_CAP_RF_TRANSCEIVE  (1ULL << 4)   // WiFi/LoRa send/recv
 
-// Communication (Bits 5, 8, 15)
-#define AKIRA_CAP_BLE            (1U << 5)  // Bluetooth LE
-#define AKIRA_CAP_NETWORK        (1U << 8)  // TCP/UDP/HTTP
-#define AKIRA_CAP_HID            (1U << 15) // HID devices (ELEVATED)
+// Communication + storage (bits 5-8)
+#define AKIRA_CAP_BLE            (1ULL << 5)   // BLE app service
+#define AKIRA_CAP_STORAGE_READ   (1ULL << 6)   // File system read
+#define AKIRA_CAP_STORAGE_WRITE  (1ULL << 7)   // File system write
+#define AKIRA_CAP_NETWORK        (1ULL << 8)   // TCP/UDP/HTTP
 
-// Storage (Bits 6-7)
-#define AKIRA_CAP_STORAGE_READ   (1U << 6)  // File system read
-#define AKIRA_CAP_STORAGE_WRITE  (1U << 7)  // File system write
+// Peripherals (bits 9-14)
+#define AKIRA_CAP_GPIO_READ      (1ULL << 9)   // GPIO input
+#define AKIRA_CAP_GPIO_WRITE     (1ULL << 10)  // GPIO output
+#define AKIRA_CAP_TIMER          (1ULL << 11)  // Timer APIs
+#define AKIRA_CAP_UART           (1ULL << 12)  // Serial communication
+#define AKIRA_CAP_I2C            (1ULL << 13)  // I2C bus access
+#define AKIRA_CAP_PWM            (1ULL << 14)  // PWM output
 
-// Peripherals (Bits 9-14)
-#define AKIRA_CAP_GPIO_READ      (1U << 9)  // GPIO input
-#define AKIRA_CAP_GPIO_WRITE     (1U << 10) // GPIO output
-#define AKIRA_CAP_TIMER          (1U << 11) // Timer APIs
-#define AKIRA_CAP_UART           (1U << 12) // Serial communication
-#define AKIRA_CAP_I2C            (1U << 13) // I2C bus access
-#define AKIRA_CAP_PWM            (1U << 14) // PWM output
+// System & app control (bits 15-22)
+#define AKIRA_CAP_HID            (1ULL << 15)  // HID devices (ELEVATED)
+#define AKIRA_CAP_APP_CONTROL    (1ULL << 16)  // Start/stop apps (ELEVATED)
+#define AKIRA_CAP_IPC            (1ULL << 17)  // Inter-process messaging
+#define AKIRA_CAP_APP_SWITCH     (1ULL << 18)  // Handoff to another app
+#define AKIRA_CAP_MEMORY         (1ULL << 19)  // Quota-enforced heap APIs
+#define AKIRA_CAP_APP_INFO       (1ULL << 20)  // App status queries
+#define AKIRA_CAP_POWER_READ     (1ULL << 21)  // Battery level queries
+#define AKIRA_CAP_POWER_CTRL     (1ULL << 22)  // Sleep mode control (ELEVATED)
 
-// System & App Control (Bits 16-22) - ELEVATED PRIVILEGES
-#define AKIRA_CAP_APP_CONTROL    (1U << 16) // Start/stop apps (ELEVATED)
-#define AKIRA_CAP_IPC            (1U << 17) // Inter-process messaging
-#define AKIRA_CAP_APP_SWITCH     (1U << 18) // Switch to another app
-#define AKIRA_CAP_MEMORY         (1U << 19) // Heap allocation APIs
-#define AKIRA_CAP_APP_INFO       (1U << 20) // App status queries
-#define AKIRA_CAP_POWER_READ     (1U << 21) // Battery level queries
-#define AKIRA_CAP_POWER_CTRL     (1U << 22) // Sleep mode control (ELEVATED)
+// Services & peripherals (bits 23-30)
+#define AKIRA_CAP_SETTINGS       (1ULL << 23)  // NVS key-value settings
+#define AKIRA_CAP_ADC            (1ULL << 24)  // ADC channel read
+#define AKIRA_CAP_WDT            (1ULL << 25)  // Feed system watchdog
+#define AKIRA_CAP_FS_READ        (1ULL << 26)  // Sandboxed FS read
+#define AKIRA_CAP_FS_WRITE       (1ULL << 27)  // Sandboxed FS write
+#define AKIRA_CAP_CRYPTO         (1ULL << 28)  // Hash/encrypt/random
+#define AKIRA_CAP_RTC_READ       (1ULL << 29)  // RTC read
+#define AKIRA_CAP_RTC_WRITE      (1ULL << 30)  // RTC write / alarm
+
+// Elevated & connectivity (bits 31-35)
+#define AKIRA_CAP_OTA_TRIGGER    (1ULL << 31)  // Trigger OTA (ELEVATED)
+#define AKIRA_CAP_AIINFER        (1ULL << 32)  // TFLite Micro inference
+#define AKIRA_CAP_MATTER         (1ULL << 33)  // Matter/Thread IPC bridge
+#define AKIRA_CAP_WIFI_INJECT    (1ULL << 34)  // 802.11 frame injection (ELEVATED)
+#define AKIRA_CAP_MQTT           (1ULL << 35)  // MQTT + Home Assistant
 ```
 
 **Elevated Privilege Capabilities:**
@@ -66,6 +82,8 @@ The following capabilities grant significant system control and should **not** b
 - `AKIRA_CAP_HID` - Can emulate keyboards/mice
 - `AKIRA_CAP_APP_CONTROL` - Can terminate other apps
 - `AKIRA_CAP_POWER_CTRL` - Can modify power state
+- `AKIRA_CAP_OTA_TRIGGER` - Can trigger a firmware update
+- `AKIRA_CAP_WIFI_INJECT` - Can inject raw 802.11 management frames (deauth/disassoc)
 
 **Enforcement:**
 ```c

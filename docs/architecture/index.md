@@ -91,7 +91,7 @@ Custom WASM runtime managing application lifecycle, security, and native API bri
 - **App Management:** Load, start, stop, unload
 - **Security:** Inline capability checks (~60ns overhead, estimated)
 - **Memory:** PSRAM allocation with per-app quotas
-- **Native APIs:** 18 modules including BLE, Display, GPIO, HID, I2C, IPC (pub/sub), Lifecycle, Memory, Net (sockets), Power, PWM, RF, Sensor, Storage, Timer, UART, and common utilities (printf, delay)
+- **Native APIs:** ~29 modules / ~190 registered symbols, including BLE, Crypto, Display, FS, GPIO, HID, I2C, IPC (pub/sub), Lifecycle, Matter, Memory, MQTT, Net (sockets), OTA, Power, PWM, RF, RTC, Sensor, Settings, Storage, System, Timer, UART, WDT, AI inference, and common utilities (printf, delay)
 - **UI Framework:** 32 widgets, 8 screens, touch support
 - **Shell System:** System stats, command history, diagnostics
 

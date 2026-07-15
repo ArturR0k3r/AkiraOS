@@ -298,41 +298,12 @@ int akira_native_example_process(wasm_exec_env_t exec_env,
 
 Custom capability-based access control system.
 
-**Capability Bits (23 total):**
-```c
-// Hardware Access (Bits 0-4)
-#define AKIRA_CAP_DISPLAY_WRITE  (1U << 0)
-#define AKIRA_CAP_INPUT_READ     (1U << 1)
-#define AKIRA_CAP_INPUT_WRITE    (1U << 2)
-#define AKIRA_CAP_SENSOR_READ    (1U << 3)
-#define AKIRA_CAP_RF_TRANSCEIVE  (1U << 4)
-
-// Communication (Bits 5, 8, 15)
-#define AKIRA_CAP_BLE            (1U << 5)
-#define AKIRA_CAP_NETWORK        (1U << 8)
-#define AKIRA_CAP_HID            (1U << 15)
-
-// Storage (Bits 6-7)
-#define AKIRA_CAP_STORAGE_READ   (1U << 6)
-#define AKIRA_CAP_STORAGE_WRITE  (1U << 7)
-
-// Peripherals (Bits 9-10, 11-14)
-#define AKIRA_CAP_GPIO_READ      (1U << 9)
-#define AKIRA_CAP_GPIO_WRITE     (1U << 10)
-#define AKIRA_CAP_TIMER          (1U << 11)
-#define AKIRA_CAP_UART           (1U << 12)
-#define AKIRA_CAP_I2C            (1U << 13)
-#define AKIRA_CAP_PWM            (1U << 14)
-
-// System & App Control (Bits 16-22)
-#define AKIRA_CAP_APP_CONTROL    (1U << 16)  // Start/stop apps
-#define AKIRA_CAP_IPC            (1U << 17)  // Inter-process communication
-#define AKIRA_CAP_APP_SWITCH     (1U << 18)  // Switch to another app
-#define AKIRA_CAP_MEMORY         (1U << 19)  // Quota-enforced heap allocation
-#define AKIRA_CAP_APP_INFO       (1U << 20)  // Read app status/list
-#define AKIRA_CAP_POWER_READ     (1U << 21)  // Battery level queries
-#define AKIRA_CAP_POWER_CTRL     (1U << 22)  // Sleep mode control
-```
+**Capability Bits:** 36 capabilities in a 64-bit mask (`1ULL << 0` ..
+`1ULL << 35`), defined in `src/runtime/security.h`. The full list — hardware
+access, storage, peripherals, system/app control, and the elevated
+OTA/WiFi-inject/Matter/MQTT capabilities — is documented in
+[security.md](security.md#2-capability-system-akiraruntime-layer), which is
+kept in sync with the header. Do not maintain a second copy here.
 
 **Inline Enforcement:**
 ```c
