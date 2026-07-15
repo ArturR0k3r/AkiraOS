@@ -285,7 +285,9 @@ const struct device *akira_get_spi_device(const char *label)
     ARG_UNUSED(label);
     return NULL;
 #else
-    /* On ESP32/ESP32-S3, use device tree */
+    /* On ESP32/ESP32-S3, use device tree. Guard on the node existing so boards
+     * that only expose spi0/spi1 (e.g. RP2040/RP2350) still compile. */
+#if DT_NODE_EXISTS(DT_NODELABEL(spi2))
     if (strcmp(label, "spi2") == 0)
     {
         const struct device *dev = DEVICE_DT_GET(DT_NODELABEL(spi2));
@@ -296,6 +298,9 @@ const struct device *akira_get_spi_device(const char *label)
         }
         return dev;
     }
+#else
+    ARG_UNUSED(label);
+#endif
     return NULL;
 #endif
 }

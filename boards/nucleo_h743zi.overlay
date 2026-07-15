@@ -11,44 +11,50 @@
  */
 
 /*
- * Partition layout (bank 1 = 1 MB, bank 2 = 1 MB):
- *   Bank 1: MCUBoot (64 KB) + slot-0 (960 KB)
- *   Bank 2: slot-1 for DFU (960 KB) + NVS (32 KB) + LittleFS (64 KB)
- *
- * Note: Zephyr's STM32H7 flash driver handles dual-bank automatically.
+ * STM32H743 flash: 2 MB, 128 KB sectors. The upstream board already defines a
+ * partition table under &flash0 (boot/storage/slot0@40000/slot1/scratch), so
+ * delete those nodes first — otherwise our labels collide with theirs (the
+ * duplicate slot0_partition was the build error). Then lay AkiraOS out on
+ * 128 KB (sector) boundaries, which the H7 flash driver requires for erase.
+ * AkiraOS builds MCUboot images, so keep equal slot0/slot1 (768 KB each) for
+ * A/B DFU, then settings-NVS + LittleFS in the remaining sectors.
  */
+/delete-node/ &boot_partition;
+/delete-node/ &storage_partition;
+/delete-node/ &slot0_partition;
+/delete-node/ &slot1_partition;
+/delete-node/ &scratch_partition;
+
 &flash0 {
     partitions {
         compatible = "fixed-partitions";
         #address-cells = <1>;
         #size-cells = <1>;
 
-        /* Bank 1 */
         boot_partition: partition@0 {
             label = "mcuboot";
-            reg = <0x00000000 DT_SIZE_K(64)>;
+            reg = <0x00000000 DT_SIZE_K(128)>;
             read-only;
         };
 
-        slot0_partition: partition@10000 {
+        slot0_partition: partition@20000 {
             label = "image-0";
-            reg = <0x00010000 DT_SIZE_K(960)>;
+            reg = <0x00020000 DT_SIZE_K(768)>;
         };
 
-        /* Bank 2 (offset relative to flash0 start = 0x00100000) */
-        slot1_partition: partition@100000 {
+        slot1_partition: partition@e0000 {
             label = "image-1";
-            reg = <0x00100000 DT_SIZE_K(960)>;
+            reg = <0x000e0000 DT_SIZE_K(768)>;
         };
 
-        akira_settings_nvs_partition: partition@1f0000 {
+        akira_settings_nvs_partition: partition@1a0000 {
             label = "akira_settings_nvs";
-            reg = <0x001f0000 DT_SIZE_K(32)>;
+            reg = <0x001a0000 DT_SIZE_K(128)>;
         };
 
-        lfs1_partition: partition@1f8000 {
+        lfs1_partition: partition@1c0000 {
             label = "lfs_storage";
-            reg = <0x001f8000 DT_SIZE_K(32)>;
+            reg = <0x001c0000 DT_SIZE_K(256)>;
         };
     };
 };

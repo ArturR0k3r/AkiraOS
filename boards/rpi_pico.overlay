@@ -8,40 +8,40 @@
  */
 
 /*
- * RP2040 has 2 MB external QSPI Flash (W25Q16JV on standard Pico).
- * Zephyr's default partition table from the board file leaves a
- * storage_partition at the end of flash.  We remap it into:
- *   32 KB NVS  — settings / key-value store
- *   96 KB LittleFS — WASM app storage
+ * RP2040 has 2 MB external QSPI flash (&flash0). AkiraOS builds MCUboot images
+ * (CONFIG_BOOTLOADER_MCUBOOT=y), so mirror the upstream MCUboot partitioning
+ * (see partitions_2M_sysbuild.dtsi): the boot_partition@0 subsumes the 256-byte
+ * second-stage bootloader, and the app is linked into slot0. Delete the base
+ * full-flash code_partition first, then add equal slot0/slot1 + AkiraOS
+ * settings-NVS + LittleFS.
  */
-&w25q16jv {
-    partitions {
-        compatible = "fixed-partitions";
-        #address-cells = <1>;
-        #size-cells = <1>;
+/delete-node/ &code_partition;
 
-        /* Keep MCUBoot slot-0 at the start if MCUBoot is enabled.
-         * Without MCUBoot this can be ignored — Zephyr loads from 0x10000000.
-         */
+&flash0 {
+    partitions {
         boot_partition: partition@0 {
             label = "mcuboot";
             reg = <0x00000000 DT_SIZE_K(64)>;
-            read-only;
         };
 
         slot0_partition: partition@10000 {
             label = "image-0";
-            reg = <0x00010000 DT_SIZE_K(1792)>;
+            reg = <0x00010000 DT_SIZE_K(832)>;
         };
 
-        akira_settings_nvs_partition: partition@1d0000 {
+        slot1_partition: partition@e0000 {
+            label = "image-1";
+            reg = <0x000e0000 DT_SIZE_K(832)>;
+        };
+
+        akira_settings_nvs_partition: partition@1b0000 {
             label = "akira_settings_nvs";
-            reg = <0x001d0000 DT_SIZE_K(32)>;
+            reg = <0x001b0000 DT_SIZE_K(64)>;
         };
 
-        lfs1_partition: partition@1d8000 {
+        lfs1_partition: partition@1c0000 {
             label = "lfs_storage";
-            reg = <0x001d8000 DT_SIZE_K(96)>;
+            reg = <0x001c0000 DT_SIZE_K(256)>;
         };
     };
 };
@@ -49,6 +49,7 @@
 / {
     chosen {
         zephyr,settings-partition = &akira_settings_nvs_partition;
+        zephyr,code-partition = &slot0_partition;
     };
 
     fstab {

@@ -13,6 +13,7 @@
 / {
     chosen {
         zephyr,settings-partition = &akira_settings_nvs_partition;
+        zephyr,code-partition = &slot0_partition;
     };
 
     fstab {
@@ -31,7 +32,14 @@
     };
 };
 
-&w25q32jv {
+/*
+ * RP2350 4 MB flash (&flash0). AkiraOS builds MCUboot images
+ * (CONFIG_BOOTLOADER_MCUBOOT=y); the upstream non-MCUboot board defines no
+ * partitions, so lay out the full MCUboot table (mirroring
+ * partitions_4M_sysbuild.dtsi) — boot + equal slot0/slot1 — plus AkiraOS
+ * settings-NVS + LittleFS. The app is linked into slot0.
+ */
+&flash0 {
     partitions {
         compatible = "fixed-partitions";
         #address-cells = <1>;
@@ -40,22 +48,26 @@
         boot_partition: partition@0 {
             label = "mcuboot";
             reg = <0x00000000 DT_SIZE_K(64)>;
-            read-only;
         };
 
         slot0_partition: partition@10000 {
             label = "image-0";
-            reg = <0x00010000 DT_SIZE_K(3712)>;
+            reg = <0x00010000 DT_SIZE_K(832)>;
         };
 
-        akira_settings_nvs_partition: partition@3b0000 {
+        slot1_partition: partition@e0000 {
+            label = "image-1";
+            reg = <0x000e0000 DT_SIZE_K(832)>;
+        };
+
+        akira_settings_nvs_partition: partition@1b0000 {
             label = "akira_settings_nvs";
-            reg = <0x003b0000 DT_SIZE_K(32)>;
+            reg = <0x001b0000 DT_SIZE_K(64)>;
         };
 
-        lfs1_partition: partition@3b8000 {
+        lfs1_partition: partition@1c0000 {
             label = "lfs_storage";
-            reg = <0x003b8000 DT_SIZE_K(128)>;
+            reg = <0x001c0000 DT_SIZE_K(2304)>;
         };
     };
 };
