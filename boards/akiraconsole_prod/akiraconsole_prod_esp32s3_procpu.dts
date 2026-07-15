@@ -78,17 +78,17 @@
 		btn_b: btn_b {
 			gpios = <&gpio0 16 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
 			label = "BTN B (SW3)";
-			zephyr,code = <7>;
+			zephyr,code = <8>;
 		};
 		btn_x: btn_x {
 			gpios = <&gpio0 17 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
 			label = "BTN X (SW4)";
-			zephyr,code = <8>;
+			zephyr,code = <9>;
 		};
 		btn_y: btn_y {
 			gpios = <&gpio1 9 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>; // GPIO41
 			label = "BTN Y (SW1)";
-			zephyr,code = <9>;
+			zephyr,code = <7>;
 		};
 	};
 
