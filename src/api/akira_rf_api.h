@@ -55,6 +55,11 @@ int akira_rf_set_coding_rate(uint8_t cr);
 int akira_rf_get_rssi(int16_t *rssi);
 radio_handle_t *akira_rf_get_active_handle(void);
 
+/* Continuous-wave (CW) TX for jamming / range testing. */
+int akira_rf_tx_cw_start(void);
+int akira_rf_tx_cw_stop(void);
+int akira_rf_tx_cw_set_freq(uint32_t freq_hz);
+
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 /* WASM native export functions (with capability checks) */
 int akira_native_rf_select(wasm_exec_env_t exec_env, int chip);
@@ -69,6 +74,11 @@ int akira_native_rf_set_spreading_factor(wasm_exec_env_t exec_env, int sf);
 int akira_native_rf_set_bandwidth(wasm_exec_env_t exec_env, uint32_t bw_hz);
 int akira_native_rf_set_coding_rate(wasm_exec_env_t exec_env, int cr);
 int akira_native_rf_set_bitrate(wasm_exec_env_t exec_env, int32_t bps);
+
+/* Continuous-wave TX (CW) — type string: "()i" */
+int akira_native_rf_tx_cw_start(wasm_exec_env_t exec_env);
+int akira_native_rf_tx_cw_stop(wasm_exec_env_t exec_env);
+int akira_native_rf_tx_cw_set_freq(wasm_exec_env_t exec_env, uint32_t freq_hz);
 
 #if defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
 /* WiFi spectrum scan (per-channel max RSSI) */

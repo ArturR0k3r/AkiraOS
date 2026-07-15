@@ -476,6 +476,71 @@ int akira_rf_recv_pop(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
 }
 #endif /* CONFIG_AKIRA_RF_RX_DAEMON */
 
+/* =========================================================================
+ * Continuous-wave (CW) test tone — for jamming / range testing.
+ * Chip must already be selected and frequency+power configured.
+ * ========================================================================= */
+
+int akira_rf_tx_cw_start(void)
+{
+    LOG_INF("RF CW start");
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+
+    int ret = -ENODEV;
+#if defined(CONFIG_AKIRA_LR2021)
+    if (g_active_chip == AKIRA_RF_CHIP_LR2021) {
+        ret = lr2021_tx_cw_start();
+    }
+#endif
+    /* Other chips can add their CW implementation here. */
+
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
+int akira_rf_tx_cw_stop(void)
+{
+    LOG_INF("RF CW stop");
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+
+    int ret = -ENODEV;
+#if defined(CONFIG_AKIRA_LR2021)
+    if (g_active_chip == AKIRA_RF_CHIP_LR2021) {
+        ret = lr2021_tx_cw_stop();
+    }
+#endif
+
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
+/**
+ * @brief Fast frequency hop while CW is active — skips CalibFe for speed.
+ *
+ * Stops CW, sets new frequency (PLL lock only, no calibration),
+ * restarts CW.  ~1ms vs ~20ms for a full rf_set_frequency() cycle.
+ */
+int akira_rf_tx_cw_set_freq(uint32_t freq_hz)
+{
+    LOG_DBG("RF CW hop: %u Hz", freq_hz);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+
+    int ret = -ENODEV;
+#if defined(CONFIG_AKIRA_LR2021)
+    if (g_active_chip == AKIRA_RF_CHIP_LR2021) {
+        /* Stop CW, fast-set frequency, restart CW in one atomic sequence. */
+        lr2021_tx_cw_stop();
+        ret = lr2021_tx_cw_set_freq_fast(freq_hz);
+        if (ret == 0) {
+            ret = lr2021_tx_cw_start();
+        }
+    }
+#endif
+
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 
 /* WASM Native export API */
@@ -587,6 +652,27 @@ int akira_native_rf_set_bitrate(wasm_exec_env_t exec_env, int32_t bps)
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
     if (bps < 0) return -EINVAL;
     return akira_rf_set_bitrate((uint32_t)bps);
+}
+
+/* ── Continuous-wave TX (CW) for jamming / range testing ──────────────── */
+
+int akira_native_rf_tx_cw_start(wasm_exec_env_t exec_env)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+    return akira_rf_tx_cw_start();
+}
+
+int akira_native_rf_tx_cw_stop(wasm_exec_env_t exec_env)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+    return akira_rf_tx_cw_stop();
+}
+
+/* Fast frequency hop while CW is active. Type: "(i)i" */
+int akira_native_rf_tx_cw_set_freq(wasm_exec_env_t exec_env, uint32_t freq_hz)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+    return akira_rf_tx_cw_set_freq(freq_hz);
 }
 
 /* ── Raw Sub-GHz OOK capture / replay ──────────────────────────────────── */

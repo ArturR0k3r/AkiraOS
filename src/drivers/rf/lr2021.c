@@ -1543,6 +1543,112 @@ static int lr2021_set_event_callback(radio_handle_t *handle, radio_event_cb_t cb
 }
 
 /* =========================================================================
+ * Continuous-wave (CW) test tone — bypasses packet framing for jamming,
+ * range testing, and spectral analysis.
+ *
+ * Uses SetTxTest(tone=0x01) which keys the carrier at the current frequency
+ * and power indefinitely.  Call lr2021_tx_cw_stop() (SetStandby) to stop.
+ * ========================================================================= */
+
+int lr2021_tx_cw_start(void)
+{
+    if (!g_lr2021.initialized) {
+        return -ENODEV;
+    }
+
+    /* Ensure PA selection matches the current frequency band.
+     * lr2021_set_power() may not have been called yet if the caller
+     * configured frequency directly, so do it here unconditionally. */
+    bool hf = (g_lr2021.frequency_hz >= 1000000000U);
+    int ret = lr2021_pa_select(hf);
+    if (ret < 0) {
+        LOG_ERR("CW: pa_select failed: %d", ret);
+        return ret;
+    }
+
+    /* SetTxParams must be current for the PA to drive correctly. */
+    uint8_t tp_args[2];
+    tp_args[0] = (uint8_t)(g_lr2021.tx_power_dbm * 2);
+    tp_args[1] = 0x02;  /* ramp_time: 8 µs */
+    ret = lr2021_write_command(LR2021_CMD_SET_TX_PARAMS, tp_args, 2);
+    if (ret < 0) {
+        LOG_ERR("CW: SetTxParams failed: %d", ret);
+        return ret;
+    }
+
+    /* SetTxTest(tone=0x02): PN9 pseudo-random modulated carrier.
+     * Spreads energy across ~1 MHz vs <1 kHz for CW (tone=0x01),
+     * saturating the full BLE/BT channel passband. */
+    uint8_t tone = 0x02;
+    ret = lr2021_write_command(LR2021_CMD_SET_TX_TEST, &tone, 1);
+    if (ret < 0) {
+        LOG_ERR("CW: SetTxTest failed: %d", ret);
+        return ret;
+    }
+
+    g_lr2021.current_mode = RADIO_MODE_TX;
+    g_lr2021.rx_armed = false;
+    LOG_INF("LR2021 CW ON: %u Hz, %d dBm (%s)",
+            g_lr2021.frequency_hz, g_lr2021.tx_power_dbm,
+            hf ? "HF" : "LF");
+    return 0;
+}
+
+int lr2021_tx_cw_stop(void)
+{
+    if (!g_lr2021.initialized) {
+        return -ENODEV;
+    }
+
+    uint8_t standby = LR2021_STANDBY_XOSC;
+    int ret = lr2021_write_command(LR2021_CMD_SET_STANDBY, &standby, 1);
+    if (ret == 0) {
+        g_lr2021.current_mode = RADIO_MODE_STANDBY;
+        g_lr2021.rx_armed = false;
+        LOG_INF("LR2021 CW OFF");
+    }
+    return ret;
+}
+
+/**
+ * @brief Fast frequency hop for CW jamming — skips CalibFe.
+ *
+ * CalibFe calibrates ADC offset, polyphase filter, and image rejection
+ * for optimal RX performance.  When transmitting CW for jamming, none
+ * of these matter — we only need the PLL to lock at the new frequency.
+ * This cuts per-hop time from ~20ms to <1ms, matching the nRF24's
+ * channel-switch speed.
+ *
+ * Caller must have already called lr2021_set_frequency() once (with
+ * CalibFe) for initial band/PA setup.  Subsequent hops within the same
+ * band (LF or HF) can use this function.
+ */
+int lr2021_tx_cw_set_freq_fast(uint32_t freq_hz)
+{
+    if (!g_lr2021.initialized) {
+        return -ENODEV;
+    }
+    if (freq_hz < 150000000 || freq_hz > 2500000000U) {
+        return -EINVAL;
+    }
+
+    /* SetRfFrequency only — no CalibFe, no Standby cycle.
+     * The chip stays in the current mode (TX CW), PLL re-locks
+     * at the new frequency within ~50µs (datasheet §4.2.3). */
+    uint8_t args[4];
+    args[0] = (freq_hz >> 24) & 0xFF;
+    args[1] = (freq_hz >> 16) & 0xFF;
+    args[2] = (freq_hz >> 8) & 0xFF;
+    args[3] = freq_hz & 0xFF;
+
+    int ret = lr2021_write_command(LR2021_CMD_SET_RF_FREQUENCY, args, 4);
+    if (ret == 0) {
+        g_lr2021.frequency_hz = freq_hz;
+    }
+    return ret;
+}
+
+/* =========================================================================
  * radio_ops_t vtable shims (handle param unused — driver uses global state)
  * ========================================================================= */
 
