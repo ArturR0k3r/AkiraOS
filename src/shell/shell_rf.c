@@ -10,6 +10,7 @@
 #include "connectivity/radio_interface.h"
 #include <stdlib.h>
 #include <string.h>
+#include <lib/mem_helper.h>
 
 LOG_MODULE_REGISTER(shell_rf, LOG_LEVEL_INF);
 
@@ -454,7 +455,10 @@ static int cmd_rf_lora_cr(const struct shell *sh, size_t argc, char **argv)
 }
 
 /* Shared raw capture buffer: capture fills it, replay re-sends it. */
-static uint8_t  s_rf_cap_buf[4096];
+/* 4 KB shell-only RF capture scratch — PSRAM on boards that have it. The radio
+ * raw_capture op already accepts caller-provided buffers of any origin (it is
+ * also invoked with WASM linear memory). No-op on non-PSRAM targets. */
+static uint8_t AKIRA_BULK_BSS s_rf_cap_buf[4096];
 static size_t   s_rf_cap_len;
 static uint32_t s_rf_cap_rate;
 

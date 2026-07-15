@@ -23,6 +23,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 #include <string.h>
+#include <lib/mem_helper.h>
 
 LOG_MODULE_REGISTER(akira_mesh, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -76,7 +77,9 @@ static struct {
     struct k_mutex         tables_lock; /* guards tables + node table + counters */
     bool initialized;
     bool started;
-} mesh_state;
+} mesh_state AKIRA_BULK_BSS; /* ~7 KB routing/node tables — PSRAM on boards that
+                              * have it (thread-only, mutex-guarded, never ISR).
+                              * No-op on non-PSRAM targets. */
 
 static K_MUTEX_DEFINE(mesh_init_lock);   /* serialize init/stop */
 

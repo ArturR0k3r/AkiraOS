@@ -16,6 +16,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "runtime/security.h"
+#include <lib/mem_helper.h>
 #ifdef CONFIG_AKIRA_AUDIT_LOG_HMAC
 #include <akira_platform/audit_hmac.h>
 #endif
@@ -24,13 +25,18 @@ LOG_MODULE_REGISTER(akira_sandbox, CONFIG_AKIRA_LOG_LEVEL);
 
 /* ===== Audit Ring Buffer ===== */
 
+/* The ring buffer is the largest static in this file. Place it in PSRAM
+ * (.ext_ram.bss) on boards that have it, keeping it out of scarce internal
+ * DRAM; it is only written on the slow path (syscall-deny / rate-limit /
+ * watchdog events), never on the <100 ns syscall hot path. Zeroed at boot
+ * like any BSS. AKIRA_BULK_BSS is a no-op on non-PSRAM boards. */
 static struct
 {
     audit_entry_t entries[CONFIG_AKIRA_AUDIT_LOG_SIZE];
     atomic_t write_idx;
     atomic_t count;
     bool initialized;
-} g_audit = {0};
+} g_audit AKIRA_BULK_BSS;
 
 static struct k_spinlock g_audit_lock;
 

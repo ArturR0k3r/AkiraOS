@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #include "akira.h"
+#include <lib/mem_helper.h>
 
 /* Include flash and MCUboot APIs only if available */
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
@@ -65,7 +66,13 @@ K_MSGQ_DEFINE(ota_cmd_q, sizeof(struct ota_cmd), 4, 4);
  * preventing TCP/BLE/USB timeouts by keeping connections alive.
  */
 #define OTA_DATA_PIPE_SIZE CONFIG_AKIRA_OTA_DATA_PIPE_SIZE
-K_PIPE_DEFINE(ota_data_pipe, OTA_DATA_PIPE_SIZE, 4);
+/* Backing buffer placed in PSRAM on boards that have it (AKIRA_BULK_BSS is a
+ * no-op elsewhere): it is a thread-only ring — transport threads memcpy in via
+ * k_pipe_write, the worker memcpys out via k_pipe_read into a stack chunk before
+ * touching flash — so it is never accessed while the flash cache is disabled.
+ * The pipe is bound to the buffer at runtime in ota_manager_init(). */
+static struct k_pipe ota_data_pipe;
+static uint8_t AKIRA_BULK_BSS __aligned(4) ota_data_pipe_buf[OTA_DATA_PIPE_SIZE];
 
 /** Signaled by worker when CMD_FINALIZE or CMD_ABORT finishes */
 K_SEM_DEFINE(ota_done_sem, 0, 1);
@@ -717,6 +724,10 @@ static int ota_data_callback(const uint8_t *data, size_t len,
 /* Public API */
 int ota_manager_init(void)
 {
+    /* Bind the data pipe to its PSRAM-resident backing buffer before the worker
+     * thread or any transport handler can touch it. */
+    k_pipe_init(&ota_data_pipe, ota_data_pipe_buf, OTA_DATA_PIPE_SIZE);
+
     memset(&ota_status, 0, sizeof(ota_status));
     ota_status.state = OTA_STATE_IDLE;
     strcpy(ota_status.status_message, "Initialized");
