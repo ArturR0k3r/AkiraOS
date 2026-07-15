@@ -20,6 +20,7 @@ LOG_MODULE_REGISTER(akira_net_api, CONFIG_AKIRA_LOG_LEVEL);
 
 #include "akira_net_api.h"
 #include "akira_api.h"
+#include "akira_wasm_mem.h"
 #include "runtime/security.h"
 #include "connectivity/net/net_stream.h"
 
@@ -32,28 +33,8 @@ LOG_MODULE_REGISTER(akira_net_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/net_ip.h>
 
-/* =========================================================================
- * Internal helpers (mirrors wasm_ptr_to_native in akira_ble_api.c)
- * ======================================================================= */
-
-/**
- * @brief Validate a WASM pointer and return the native C equivalent.
- * @return Native pointer on success; NULL if out-of-bounds.
- */
-static void *wasm_ptr_to_native(wasm_exec_env_t env, uint32_t ptr, uint32_t len)
-{
-	wasm_module_inst_t mi = wasm_runtime_get_module_inst(env);
-
-	if (!mi)
-	{
-		return NULL;
-	}
-	if (!wasm_runtime_validate_app_addr(mi, ptr, len))
-	{
-		return NULL;
-	}
-	return wasm_runtime_addr_app_to_native(mi, ptr);
-}
+/* WASM pointer validation lives in akira_wasm_mem.h (akira_wasm_ptr_to_native). */
+#define wasm_ptr_to_native(env, ptr, len) akira_wasm_ptr_to_native((env), (ptr), (len))
 
 /* =========================================================================
  * WASM native functions

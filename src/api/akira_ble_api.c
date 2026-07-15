@@ -24,6 +24,7 @@ LOG_MODULE_REGISTER(akira_ble_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <string.h>
 #include <errno.h>
 #include <zephyr/kernel.h>
+#include "akira_wasm_mem.h"
 #include "connectivity/bluetooth/ble_app_service.h"
 #include "connectivity/bluetooth/bt_manager.h"
 
@@ -42,20 +43,8 @@ static int g_adv_svc_handle = -1;
 /* Internal helpers                                                    */
 /* ------------------------------------------------------------------ */
 
-/** Resolve WASM pointer to native buffer with length check. */
-static void *wasm_ptr_to_native(wasm_exec_env_t env,
-				uint32_t ptr, uint32_t len)
-{
-	wasm_module_inst_t mi = wasm_runtime_get_module_inst(env);
-
-	if (!mi) {
-		return NULL;
-	}
-	if (!wasm_runtime_validate_app_addr(mi, ptr, len)) {
-		return NULL;
-	}
-	return wasm_runtime_addr_app_to_native(mi, ptr);
-}
+/* WASM pointer validation lives in akira_wasm_mem.h (akira_wasm_ptr_to_native). */
+#define wasm_ptr_to_native(env, ptr, len) akira_wasm_ptr_to_native((env), (ptr), (len))
 
 /* ------------------------------------------------------------------ */
 /* WASM-exported native functions                                      */
