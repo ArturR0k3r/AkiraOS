@@ -73,6 +73,38 @@ ZTEST(security, test_cap_wildcard_input)
                   "input.* mask wrong: 0x%08x", mask);
 }
 
+/* High-bit capabilities (bits 31-35). Regression cover for the ota.trigger
+ * gap (its manifest string used to map to 0, so OTA could never be granted)
+ * and for 64-bit handling of caps above bit 31. */
+ZTEST(security, test_cap_str_ota_trigger)
+{
+	uint64_t mask = akira_capability_str_to_mask("ota.trigger");
+
+	zassert_equal(mask, AKIRA_CAP_OTA_TRIGGER,
+		      "ota.trigger must map to its bit-31 mask, got 0x%016llx",
+		      (unsigned long long)mask);
+	zassert_not_equal(mask, 0ULL, "ota.trigger must not map to 0");
+}
+
+ZTEST(security, test_cap_str_high_bits)
+{
+	uint64_t aiinfer = akira_capability_str_to_mask("ai.infer");
+	uint64_t matter  = akira_capability_str_to_mask("matter");
+	uint64_t inject  = akira_capability_str_to_mask("wifi.inject");
+	uint64_t mqtt    = akira_capability_str_to_mask("mqtt");
+
+	zassert_equal(aiinfer, AKIRA_CAP_AIINFER, "ai.infer mask wrong");
+	zassert_equal(matter,  AKIRA_CAP_MATTER,  "matter mask wrong");
+	zassert_equal(inject,  AKIRA_CAP_WIFI_INJECT, "wifi.inject mask wrong");
+	zassert_equal(mqtt,    AKIRA_CAP_MQTT,
+		      "mqtt mask wrong (bit 35 requires a 64-bit mask)");
+
+	zassert_true(aiinfer && matter && inject && mqtt,
+		     "high-bit caps must all be non-zero");
+	zassert_not_equal(aiinfer, matter, "caps must be distinct");
+	zassert_not_equal(inject, mqtt, "caps must be distinct");
+}
+
 ZTEST(security, test_cap_native_check_always_permits)
 {
     /*
