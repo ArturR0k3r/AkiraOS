@@ -865,10 +865,11 @@ static void status_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 BT_GATT_SERVICE_DEFINE(companion_svc_def,
     BT_GATT_PRIMARY_SERVICE(&svc_uuid),
 
-    /* CMD_CHAR: WRITE */
+    /* CMD_CHAR: WRITE (encrypted link required — carries shell/fs/app/OTA
+     * commands, must never be writable by an unauthenticated peer) */
     BT_GATT_CHARACTERISTIC(&cmd_uuid.uuid,
                             BT_GATT_CHRC_WRITE,
-                            BT_GATT_PERM_WRITE,
+                            BT_GATT_PERM_WRITE_ENCRYPT,
                             NULL, cmd_write, s_cmd_buf),
 
     /* RESP_CHAR: NOTIFY */
@@ -879,10 +880,10 @@ BT_GATT_SERVICE_DEFINE(companion_svc_def,
     BT_GATT_CCC(s_resp_ccc, resp_ccc_changed,
                 BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
-    /* DATA_UP: WRITE_WITHOUT_RSP */
+    /* DATA_UP: WRITE_WITHOUT_RSP (encrypted link required — file upload) */
     BT_GATT_CHARACTERISTIC(&data_up_uuid.uuid,
                             BT_GATT_CHRC_WRITE_WITHOUT_RESP,
-                            BT_GATT_PERM_WRITE,
+                            BT_GATT_PERM_WRITE_ENCRYPT,
                             NULL, data_up_write, NULL),
 
     /* DATA_DOWN: NOTIFY */

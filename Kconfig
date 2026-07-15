@@ -527,6 +527,7 @@ config AKIRA_BT_COMPANION
     bool "Enable Bluetooth Companion Service"
     default n
     depends on BT && BT_PERIPHERAL && BT_GATT_DYNAMIC_DB
+    select BT_SMP
     help
       Enable the AkiraOS Companion GATT service used by the AkiraApp mobile
       application (Android / iOS).  Provides BLE-based remote management:
