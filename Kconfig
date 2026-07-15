@@ -344,6 +344,17 @@ config AKIRA_RF_DAEMON_PRIORITY
     default 14
     depends on AKIRA_RF_RX_DAEMON
 
+config AKIRA_RF_FRAMEWORK
+    bool "802.11 raw management-frame RF framework (scan/inject)"
+    default n
+    depends on AKIRA_WASM_API && WIFI
+    help
+      Build the raw 802.11 management-frame paths (WiFi scan and deauth/
+      disassoc injection) exported to WASM via the RF API. Elevated and
+      regulatory-sensitive: gated additionally by the "wifi.inject"
+      capability (bit 34). When disabled these entry points are not
+      compiled or registered.
+
 endmenu
 
 menu "Peripherals"
@@ -2298,6 +2309,15 @@ config AKIRA_WASM_CRYPTO_MAX_INPUT
       Maximum size of any single crypto operation input buffer.
       Operations exceeding this limit return -EMSGSIZE.
 
+config AKIRA_WASM_CRYPTO_ED25519
+    bool "Ed25519 sign/verify in the WASM crypto API"
+    default n
+    depends on AKIRA_WASM_CRYPTO
+    help
+      Add Ed25519 (PureEdDSA) sign/verify to the WASM crypto API. Requires a
+      PSA crypto provider with PSA_WANT_ALG_PURE_EDDSA; when disabled the
+      Ed25519 entry points compile to a -ENOTSUP stub.
+
 config AKIRA_WASM_RTC
     bool "Export real-time clock API to WASM"
     default n
@@ -2307,6 +2327,15 @@ config AKIRA_WASM_RTC
       rtc_set_alarm / rtc_alarm_fired to WASM.
       Falls back to k_uptime_get() when no RTC hardware is present.
       Capabilities: "rtc.read" (bit 29), "rtc.write" (bit 30).
+
+config AKIRA_RTC_DEVICE
+    bool "Back the WASM RTC API with a hardware RTC device"
+    default n
+    depends on AKIRA_WASM_RTC && RTC
+    help
+      Drive the WASM RTC API from a real RTC device instead of k_uptime_get().
+      When disabled, wall-clock time is derived from uptime and does not
+      persist across resets.
 
 config AKIRA_TELEMETRY
     bool "Structured JSON telemetry sink"
