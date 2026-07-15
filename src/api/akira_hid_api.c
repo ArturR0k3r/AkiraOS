@@ -21,6 +21,7 @@ LOG_MODULE_REGISTER(akira_hid_api, CONFIG_AKIRA_LOG_LEVEL);
  */
 
 #include "akira_hid_api.h"
+#include "akira_wasm_mem.h"
 #include <runtime/security.h>
 #include <zephyr/kernel.h>
 #include <string.h>
@@ -344,17 +345,13 @@ int akira_native_hid_send_raw_report(wasm_exec_env_t exec_env,
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
 
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst) {
-        return -EINVAL;
-    }
-
     if (len == 0 || len > 64) {
         return -EINVAL;
     }
 
+    /* Validate the whole [data_ptr, data_ptr+len) range, not just the base. */
     const uint8_t *ptr =
-        (const uint8_t *)wasm_runtime_addr_app_to_native(module_inst, data_ptr);
+        (const uint8_t *)akira_wasm_ptr_to_native(exec_env, data_ptr, len);
     if (!ptr) {
         return -EFAULT;
     }
@@ -467,12 +464,7 @@ int akira_native_hid_raw_recv(wasm_exec_env_t exec_env,
         return -EINVAL;
     }
 
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst) {
-        return -EINVAL;
-    }
-
-    uint8_t *ptr = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+    uint8_t *ptr = (uint8_t *)akira_wasm_ptr_to_native(exec_env, buf_ptr, len);
     if (!ptr) {
         return -EFAULT;
     }
@@ -499,12 +491,7 @@ int akira_native_hid_fido_recv(wasm_exec_env_t exec_env,
         return -EINVAL;
     }
 
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst) {
-        return -EINVAL;
-    }
-
-    uint8_t *ptr = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+    uint8_t *ptr = (uint8_t *)akira_wasm_ptr_to_native(exec_env, buf_ptr, len);
     if (!ptr) {
         return -EFAULT;
     }
@@ -531,13 +518,9 @@ int akira_native_hid_fido_send(wasm_exec_env_t exec_env,
         return -EINVAL;
     }
 
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst) {
-        return -EINVAL;
-    }
-
+    /* Validate the whole [buf_ptr, buf_ptr+len) range, not just the base. */
     const uint8_t *ptr =
-        (const uint8_t *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+        (const uint8_t *)akira_wasm_ptr_to_native(exec_env, buf_ptr, len);
     if (!ptr) {
         return -EFAULT;
     }
