@@ -32,6 +32,9 @@
 #ifdef CONFIG_AKIRA_WASM_MATTER
 #include "akira_matter_api.h"
 #endif
+#ifdef CONFIG_AKIRA_WASM_MQTT
+#include "akira_mqtt_api.h"
+#endif
 
 #include <runtime/akira_runtime.h>
 #include <runtime/security.h>
@@ -337,6 +340,17 @@ bool akira_register_native_apis()
         {"matter_open_pairing", (void *)akira_native_matter_open_pairing, "(i)i",      NULL},
         {"matter_get_pairing",  (void *)akira_native_matter_get_pairing,  "(*~*~)i",   NULL},
 #endif
+#endif
+
+/* mqtt: MQTT client + Home Assistant discovery */
+#ifdef CONFIG_AKIRA_WASM_MQTT
+        {"mqtt_publish",       (void *)akira_native_mqtt_publish,       "($*~ii)i",  NULL},
+        {"mqtt_subscribe",     (void *)akira_native_mqtt_subscribe,     "($)i",      NULL},
+        {"mqtt_poll",          (void *)akira_native_mqtt_poll,          "(*~*~i)i",  NULL},
+        {"mqtt_connected",     (void *)akira_native_mqtt_connected,     "()i",       NULL},
+        {"ha_light_register",  (void *)akira_native_ha_light_register,  "($$)i",     NULL},
+        {"ha_light_report",    (void *)akira_native_ha_light_report,    "($iiiii)i", NULL},
+        {"ha_light_poll",      (void *)akira_native_ha_light_poll,      "($*****i)i", NULL},
 #endif
 
     };

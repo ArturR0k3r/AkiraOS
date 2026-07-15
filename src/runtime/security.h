@@ -100,6 +100,10 @@ extern "C" {
  * Manifest string: "wifi.inject" */
 #define AKIRA_CAP_WIFI_INJECT   (1ULL << 34)
 
+/* MQTT publish/subscribe + Home Assistant discovery.
+ * Manifest string: "mqtt" */
+#define AKIRA_CAP_MQTT          (1ULL << 35)
+
 /*
  * Capability check macro using security subsystem.
  * Delegates to akira_security_check_exec() for centralized permission validation.

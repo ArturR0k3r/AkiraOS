@@ -76,6 +76,9 @@
 #if defined(CONFIG_AKIRA_MATTER_COPROC_MOCK)
 #include "connectivity/matter/matter_coproc_mock.h"
 #endif
+#if defined(CONFIG_AKIRA_MQTT)
+#include "connectivity/mqtt/mqtt_service.h"
+#endif
 #if defined(CONFIG_AKIRA_THREAD)
 #include "connectivity/thread_manager.h"
 #endif
@@ -2175,6 +2178,78 @@ SHELL_STATIC_SUBCMD_SET_CREATE(matter_cmds,
 #endif
     SHELL_SUBCMD_SET_END);
 SHELL_CMD_REGISTER(matter, &matter_cmds, "Matter protocol commands", NULL);
+#endif
+
+/* ===== MQTT / Home Assistant Commands ===== */
+#if defined(CONFIG_AKIRA_MQTT)
+static int cmd_mqtt_set(const struct shell *sh, size_t argc, char **argv)
+{
+    /* mqtt set <host> <port> [user] [pass] */
+    if (argc < 3) {
+        shell_error(sh, "usage: mqtt set <host> <port> [user] [pass]");
+        return -EINVAL;
+    }
+    const char *host = argv[1];
+    uint16_t port = (uint16_t)strtoul(argv[2], NULL, 10);
+    const char *user = (argc > 3) ? argv[3] : "";
+    const char *pass = (argc > 4) ? argv[4] : "";
+
+    int rc = mqtt_service_set_broker(host, port, user, pass);
+    if (rc) {
+        shell_error(sh, "failed to save broker config: %d", rc);
+        return rc;
+    }
+    shell_print(sh, "Broker set to %s:%u. Run 'mqtt connect' to apply.", host, port);
+    return 0;
+}
+
+static int cmd_mqtt_connect(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc); ARG_UNUSED(argv);
+    shell_print(sh, "Connecting to broker...");
+    return mqtt_service_start();
+}
+
+static int cmd_mqtt_disconnect(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc); ARG_UNUSED(argv);
+    return mqtt_service_stop();
+}
+
+static int cmd_mqtt_status(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc); ARG_UNUSED(argv);
+    static const char *names[] = { "disconnected", "connecting", "connected" };
+    shell_print(sh, "MQTT: %s", names[mqtt_service_get_state()]);
+    shell_print(sh, "Node id: %s", mqtt_service_node_id());
+    return 0;
+}
+
+static int cmd_mqtt_pub(const struct shell *sh, size_t argc, char **argv)
+{
+    /* mqtt pub <topic> <payload> [retain] */
+    if (argc < 3) {
+        shell_error(sh, "usage: mqtt pub <topic> <payload> [retain]");
+        return -EINVAL;
+    }
+    bool retain = (argc > 3) && (strtoul(argv[3], NULL, 10) != 0);
+    int rc = mqtt_service_publish(argv[1], argv[2], strlen(argv[2]), 0, retain);
+    if (rc) {
+        shell_error(sh, "publish failed: %d", rc);
+        return rc;
+    }
+    shell_print(sh, "published to %s", argv[1]);
+    return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(mqtt_cmds,
+    SHELL_CMD(set,        NULL, "Set broker: <host> <port> [user] [pass]", cmd_mqtt_set),
+    SHELL_CMD(connect,    NULL, "Connect to the broker", cmd_mqtt_connect),
+    SHELL_CMD(disconnect, NULL, "Disconnect from the broker", cmd_mqtt_disconnect),
+    SHELL_CMD(status,     NULL, "Show connection state & node id", cmd_mqtt_status),
+    SHELL_CMD(pub,        NULL, "Publish: <topic> <payload> [retain]", cmd_mqtt_pub),
+    SHELL_SUBCMD_SET_END);
+SHELL_CMD_REGISTER(mqtt, &mqtt_cmds, "MQTT / Home Assistant commands", NULL);
 #endif
 
 /* ===== Thread Commands ===== */

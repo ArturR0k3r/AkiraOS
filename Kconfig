@@ -648,6 +648,107 @@ config AKIRA_MATTER_COPROC_MOCK
 
 endif # AKIRA_MATTER
 
+#
+# MQTT / Home Assistant
+#
+config AKIRA_MQTT
+    bool "Enable MQTT client (Home Assistant integration)"
+    default n
+    depends on NETWORKING
+    select MQTT_LIB
+    select NET_SOCKETS
+    select DNS_RESOLVER
+    help
+      Enable the AkiraOS MQTT client. Connects to an MQTT broker (e.g.
+      Mosquitto or the Home Assistant Mosquitto add-on) over the device's
+      WiFi link and provides Home Assistant MQTT-Discovery so AkiraOS
+      hardware appears automatically as entities in Home Assistant.
+
+if AKIRA_MQTT
+
+config AKIRA_MQTT_TLS
+    bool "MQTT over TLS (port 8883)"
+    default n
+    select MQTT_LIB_TLS
+    select NET_SOCKETS_SOCKOPT_TLS
+    select TLS_CREDENTIALS
+    select MBEDTLS
+    help
+      Use TLS for the broker connection (port 8883). Requires a CA
+      certificate provisioned under TLS credential sec-tag
+      AKIRA_MQTT_TLS_SEC_TAG. When disabled, MQTT runs in plaintext on
+      port 1883.
+
+config AKIRA_MQTT_TLS_SEC_TAG
+    int "TLS credential sec-tag for the broker CA certificate"
+    default 42
+    depends on AKIRA_MQTT_TLS
+    help
+      Zephyr TLS credential sec-tag under which the broker CA cert is
+      registered (via tls_credential_add / AKIRA_MQTT_CA_CERT).
+
+config AKIRA_MQTT_AUTO_CONNECT
+    bool "Auto-connect to the broker when WiFi comes up"
+    default y
+    depends on AKIRA_WIFI_MANAGER
+    help
+      Register a wifi_manager callback that connects to the broker as soon
+      as an IP is assigned, and reconnects on WiFi drops.
+
+config AKIRA_MQTT_BROKER_HOST
+    string "Default broker hostname / IP"
+    default "homeassistant.local"
+    help
+      Fallback broker address used when no "mqtt/host" setting is stored
+      in NVS. Overridden at runtime by the `mqtt set` shell command.
+
+config AKIRA_MQTT_BROKER_PORT
+    int "Default broker port"
+    default 8883 if AKIRA_MQTT_TLS
+    default 1883
+    help
+      Fallback broker port used when no "mqtt/port" setting is stored.
+
+config AKIRA_MQTT_CLIENT_ID
+    string "MQTT client ID prefix"
+    default "akiraos"
+    help
+      Client ID prefix; the device's hardware ID is appended for uniqueness.
+
+config AKIRA_MQTT_NODE_ID
+    string "Home Assistant node / device id prefix"
+    default "akira"
+    help
+      Used to namespace discovery + state/command topics
+      (e.g. akira_<hwid>/light/<object>/set).
+
+config AKIRA_MQTT_RX_QUEUE_DEPTH
+    int "Inbound message queue depth"
+    default 4
+    help
+      Number of received MQTT messages buffered for consumers
+      (mqtt_poll / HA command handling).
+
+config AKIRA_MQTT_KEEPALIVE_SEC
+    int "MQTT keepalive interval (seconds)"
+    default 60
+
+config AKIRA_MQTT_THREAD_STACK_SIZE
+    int "MQTT service thread stack size"
+    default 2560
+
+config AKIRA_WASM_MQTT
+    bool "Register mqtt_* / ha_light_* as WASM native symbols"
+    default n
+    depends on AKIRA_WASM_RUNTIME
+    help
+      Registers mqtt_publish/subscribe/poll/connected and the Home
+      Assistant light helpers (ha_light_register/report/poll) in the WAMR
+      native symbol table. Gated behind AKIRA_CAP_MQTT ("mqtt" in app
+      manifest). Lets WASM apps expose HA entities (see the ha_rgb app).
+
+endif # AKIRA_MQTT
+
 config AKIRA_THREAD
     bool "Enable Thread protocol support"
     default n

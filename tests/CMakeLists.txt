@@ -21,6 +21,7 @@ target_include_directories(app PRIVATE
     ${AKIRA_SRC}/connectivity
     ${AKIRA_SRC}/connectivity/ota
     ${AKIRA_SRC}/connectivity/matter
+    ${AKIRA_SRC}/connectivity/mqtt
     ${AKIRA_INC}
     ${CMAKE_CURRENT_LIST_DIR}/../AkiraSDK/include
     ${CMAKE_CURRENT_LIST_DIR}/stubs
@@ -42,12 +43,16 @@ target_sources(app PRIVATE
     ${AKIRA_SRC}/runtime/akira_matter_ipc.c
     ${AKIRA_SRC}/connectivity/matter/matter_coproc_mock.c
 
+    # Home Assistant discovery JSON helpers (transport stubbed in the test)
+    ${AKIRA_SRC}/connectivity/mqtt/ha_discovery.c
+
     # Test suites
     src/test_manifest_parser.c
     src/test_security.c
     src/test_app_lifecycle.c
     src/test_ota_state.c
     src/test_matter_accessory.c
+    src/test_mqtt_ha.c
 )
 
 # The Matter accessory sources are normally gated by Kconfig symbols whose

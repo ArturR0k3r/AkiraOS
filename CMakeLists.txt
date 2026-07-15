@@ -748,6 +748,18 @@ if(CONFIG_AKIRA_WASM_MATTER)
     target_sources(app PRIVATE src/api/akira_matter_api.c)
 endif()
 
+# MQTT / Home Assistant
+if(CONFIG_AKIRA_MQTT)
+    target_sources(app PRIVATE
+        src/connectivity/mqtt/mqtt_service.c
+        src/connectivity/mqtt/ha_discovery.c
+    )
+endif()
+
+if(CONFIG_AKIRA_WASM_MQTT)
+    target_sources(app PRIVATE src/api/akira_mqtt_api.c)
+endif()
+
 # Thread protocol
 if(CONFIG_AKIRA_THREAD)
     target_sources(app PRIVATE
