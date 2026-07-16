@@ -1477,6 +1477,35 @@ config AKIRA_WASM_OTA
     help
       Expose ota_check / ota_fetch_and_apply / ota_get_state / ota_confirm /
       ota_rollback to WASM apps holding the AKIRA_CAP_OTA_TRIGGER capability.
+      ota_check / ota_fetch_and_apply perform a real HTTP(S) manifest fetch and
+      firmware download when CONFIG_HTTP_CLIENT and CONFIG_NET_SOCKETS are
+      enabled (as they are on WiFi boards); otherwise they return -ENOSYS.
+
+config AKIRA_OTA_TLS_SEC_TAG
+    int "TLS credential sec-tag for OTA https fetch"
+    default 42
+    depends on AKIRA_OTA
+    help
+      TLS credential sec-tag under which the OTA server's CA certificate is
+      registered (via tls_credential_add). Used for https:// manifest/firmware
+      downloads. Mirrors the wss:// / mqtts credential handling.
+
+config AKIRA_OTA_HTTP_TIMEOUT_MS
+    int "OTA HTTP request timeout (ms)"
+    default 30000
+    range 1000 600000
+    depends on AKIRA_OTA
+    help
+      Per-request timeout for the OTA manifest fetch and firmware download.
+
+config AKIRA_OTA_ALLOW_INSECURE_HTTP
+    bool "Allow plaintext http:// firmware URLs (development only)"
+    default n
+    depends on AKIRA_OTA
+    help
+      When set, a manifest may point the firmware image at a plaintext http://
+      URL. Off by default: firmware download is required to be https so the
+      transport is authenticated. Development only.
 
 config AKIRA_BOOT_GUARD
     bool "AkiraOS software boot counter / rollback guard"
