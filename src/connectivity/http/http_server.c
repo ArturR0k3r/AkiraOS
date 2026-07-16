@@ -13,6 +13,12 @@
 #include <zephyr/fs/fs.h>
 #include <strings.h> /* strcasecmp() for case-insensitive extension match */
 #endif
+#if defined(CONFIG_AKIRA_HTTP_WEBSOCKET)
+#include <errno.h>
+#include <strings.h>           /* strcasecmp */
+#include <mbedtls/sha1.h>      /* mbedtls_sha1 (needs CONFIG_MBEDTLS_SHA1=y) */
+#include <zephyr/sys/base64.h> /* base64_encode (needs CONFIG_BASE64=y) */
+#endif
 
 LOG_MODULE_REGISTER(http_server, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -501,6 +507,348 @@ static bool try_serve_static(response_ctx_t *ctx, const char *path)
 #endif /* CONFIG_AKIRA_HTTP_STATIC_FILES */
 
 /*===========================================================================*/
+/* WebSocket Protocol (RFC 6455)                                             */
+/*===========================================================================*/
+
+#if defined(CONFIG_AKIRA_HTTP_WEBSOCKET)
+
+/* Magic GUID appended to the client key before hashing (RFC 6455 s1.3). */
+#define WS_GUID "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+/* Frame opcodes (RFC 6455 s5.2). */
+#define WS_OP_CONT  0x0
+#define WS_OP_TEXT  0x1
+#define WS_OP_BIN   0x2
+#define WS_OP_CLOSE 0x8
+#define WS_OP_PING  0x9
+#define WS_OP_PONG  0xA
+
+/* Send exactly @len bytes, looping over partial TCP writes. */
+static int ws_write_all(int fd, const uint8_t *buf, size_t len)
+{
+    size_t off = 0;
+    while (off < len)
+    {
+        ssize_t n = send(fd, buf + off, len - off, 0);
+        if (n < 0)
+        {
+            if (errno == EINTR)
+                continue;
+            return -errno;
+        }
+        if (n == 0)
+            return -EIO;
+        off += (size_t)n;
+        http_srv.stats.bytes_sent += (size_t)n;
+    }
+    return 0;
+}
+
+/* Receive exactly @len bytes, looping over short reads. */
+static int ws_read_all(int fd, uint8_t *buf, size_t len)
+{
+    size_t off = 0;
+    while (off < len)
+    {
+        ssize_t n = recv(fd, buf + off, len - off, 0);
+        if (n < 0)
+        {
+            if (errno == EINTR)
+                continue;
+            return -errno;
+        }
+        if (n == 0)
+            return -ENOTCONN; /* peer closed the connection */
+        off += (size_t)n;
+        http_srv.stats.bytes_received += (size_t)n;
+    }
+    return 0;
+}
+
+/* Compute Sec-WebSocket-Accept = base64(SHA1(key + GUID)).
+ * @out must hold at least 29 bytes; the result is NUL-terminated. */
+static int ws_compute_accept(const char *key, char *out, size_t out_len)
+{
+    char concat[64];
+    unsigned char digest[20];
+    size_t olen = 0;
+
+    /* key is <=24 base64 chars, GUID is 36 -> 60 chars, fits concat[64]. */
+    int n = snprintf(concat, sizeof(concat), "%s%s", key, WS_GUID);
+    if (n < 0 || n >= (int)sizeof(concat))
+        return -EINVAL;
+
+    if (mbedtls_sha1((const unsigned char *)concat, (size_t)n, digest) != 0)
+        return -EIO;
+
+    /* base64_encode writes a trailing NUL and needs dlen >= 28+1. */
+    if (base64_encode((uint8_t *)out, out_len, &olen, digest, sizeof(digest)) != 0)
+        return -ENOMEM;
+
+    return 0;
+}
+
+/* Encode and transmit one unfragmented, unmasked server->client frame. */
+static int ws_send_frame(int fd, uint8_t opcode, const uint8_t *data, size_t len)
+{
+    uint8_t hdr[10];
+    size_t hlen;
+
+    hdr[0] = 0x80 | (opcode & 0x0F); /* FIN=1, RSV=0, opcode */
+
+    if (len < 126)
+    {
+        hdr[1] = (uint8_t)len; /* MASK=0 for server frames */
+        hlen = 2;
+    }
+    else if (len <= 0xFFFF)
+    {
+        hdr[1] = 126;
+        hdr[2] = (uint8_t)((len >> 8) & 0xFF);
+        hdr[3] = (uint8_t)(len & 0xFF);
+        hlen = 4;
+    }
+    else
+    {
+        hdr[1] = 127;
+        for (int i = 0; i < 8; i++)
+            hdr[2 + i] = (uint8_t)(((uint64_t)len >> (56 - 8 * i)) & 0xFF);
+        hlen = 10;
+    }
+
+    int ret = ws_write_all(fd, hdr, hlen);
+    if (ret != 0)
+        return ret;
+
+    if (data && len > 0)
+        return ws_write_all(fd, data, len);
+
+    return 0;
+}
+
+/* Send @data as a frame to one client id, or to all clients when id == -1. */
+static int ws_send_to_client(int client_id, uint8_t opcode,
+                             const uint8_t *data, size_t len)
+{
+    if (!http_srv.ws_enabled)
+        return -ENOTSUP;
+
+    if (client_id == -1)
+    {
+        int sent = 0;
+        int last_err = 0;
+        k_mutex_lock(&http_srv.mutex, K_FOREVER);
+        for (int i = 0; i < MAX_WS_CLIENTS; i++)
+        {
+            int fd = http_srv.ws_client_fds[i];
+            if (fd >= 0)
+            {
+                int r = ws_send_frame(fd, opcode, data, len);
+                if (r == 0)
+                    sent++;
+                else
+                    last_err = r;
+            }
+        }
+        k_mutex_unlock(&http_srv.mutex);
+        if (sent > 0)
+            return 0;
+        return last_err ? last_err : -ENOTCONN;
+    }
+
+    if (client_id < 0 || client_id >= MAX_WS_CLIENTS)
+        return -EINVAL;
+
+    k_mutex_lock(&http_srv.mutex, K_FOREVER);
+    int fd = http_srv.ws_client_fds[client_id];
+    k_mutex_unlock(&http_srv.mutex);
+
+    if (fd < 0)
+        return -ENOTCONN;
+
+    return ws_send_frame(fd, opcode, data, len);
+}
+
+/* Blocking receive loop: decode client frames, remove the mask, dispatch data
+ * frames and handle ping/pong/close until the peer closes or a protocol error
+ * occurs. The fd is left OPEN for the caller (accept loop) to close. */
+static void ws_serve_client(int client_fd, int client_id)
+{
+    /* The single accept-loop thread services WS sessions one at a time, so a
+     * shared static reassembly buffer is safe and keeps the stack small. */
+    static uint8_t payload[CONFIG_AKIRA_HTTP_WS_MAX_PAYLOAD];
+
+    for (;;)
+    {
+        uint8_t h[2];
+        if (ws_read_all(client_fd, h, sizeof(h)) != 0)
+            return;
+
+        uint8_t opcode = h[0] & 0x0F;
+        bool masked = (h[1] & 0x80) != 0;
+        uint64_t plen = h[1] & 0x7F;
+
+        if (plen == 126)
+        {
+            uint8_t ext[2];
+            if (ws_read_all(client_fd, ext, sizeof(ext)) != 0)
+                return;
+            plen = ((uint64_t)ext[0] << 8) | ext[1];
+        }
+        else if (plen == 127)
+        {
+            uint8_t ext[8];
+            if (ws_read_all(client_fd, ext, sizeof(ext)) != 0)
+                return;
+            plen = 0;
+            for (int i = 0; i < 8; i++)
+                plen = (plen << 8) | ext[i];
+        }
+
+        /* RFC 6455 s5.1: every client->server frame MUST be masked. */
+        if (!masked)
+        {
+            uint8_t code[2] = {0x03, 0xEA}; /* 1002 protocol error */
+            ws_send_frame(client_fd, WS_OP_CLOSE, code, sizeof(code));
+            return;
+        }
+
+        uint8_t mask[4];
+        if (ws_read_all(client_fd, mask, sizeof(mask)) != 0)
+            return;
+
+        if (plen > sizeof(payload))
+        {
+            LOG_WRN("WS frame too large (%llu bytes)", (unsigned long long)plen);
+            uint8_t code[2] = {0x03, 0xF1}; /* 1009 message too big */
+            ws_send_frame(client_fd, WS_OP_CLOSE, code, sizeof(code));
+            return;
+        }
+
+        if (plen > 0)
+        {
+            if (ws_read_all(client_fd, payload, (size_t)plen) != 0)
+                return;
+            for (uint64_t i = 0; i < plen; i++)
+                payload[i] ^= mask[i & 3];
+        }
+
+        switch (opcode)
+        {
+        case WS_OP_CONT:
+        case WS_OP_TEXT:
+        case WS_OP_BIN:
+            /* Deliver data frames to the application. Fragmented messages are
+             * passed through fragment-by-fragment (no reassembly). */
+            if (http_srv.ws_msg_cb)
+                http_srv.ws_msg_cb(client_id, payload, (size_t)plen,
+                                   http_srv.ws_msg_user_data);
+            break;
+
+        case WS_OP_PING:
+            ws_send_frame(client_fd, WS_OP_PONG, payload, (size_t)plen);
+            break;
+
+        case WS_OP_PONG:
+            /* keepalive response - ignore */
+            break;
+
+        case WS_OP_CLOSE:
+            /* Echo the close frame to complete the closing handshake. */
+            ws_send_frame(client_fd, WS_OP_CLOSE, payload, (size_t)plen);
+            return;
+
+        default:
+        {
+            uint8_t code[2] = {0x03, 0xEA}; /* 1002 protocol error */
+            ws_send_frame(client_fd, WS_OP_CLOSE, code, sizeof(code));
+            return;
+        }
+        }
+    }
+}
+
+/* Perform the RFC 6455 opening handshake on @client_fd using the already-read
+ * request text in @raw, then service the connection until it closes. The fd is
+ * closed by the accept loop (server_thread_fn) after handle_request returns. */
+static void ws_handle_upgrade(int client_fd, const char *raw)
+{
+    char key[32] = {0};
+    extract_header_value(raw, "Sec-WebSocket-Key:", key, sizeof(key));
+    if (key[0] == '\0')
+    {
+        const char *bad = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n";
+        send(client_fd, bad, strlen(bad), 0);
+        return;
+    }
+
+    char accept[32] = {0};
+    if (ws_compute_accept(key, accept, sizeof(accept)) != 0)
+    {
+        const char *err = "HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n";
+        send(client_fd, err, strlen(err), 0);
+        return;
+    }
+
+    /* Reserve a client slot in the shared fd table. */
+    int client_id = -1;
+    k_mutex_lock(&http_srv.mutex, K_FOREVER);
+    for (int i = 0; i < MAX_WS_CLIENTS; i++)
+    {
+        if (http_srv.ws_client_fds[i] < 0)
+        {
+            http_srv.ws_client_fds[i] = client_fd;
+            client_id = i;
+            break;
+        }
+    }
+    k_mutex_unlock(&http_srv.mutex);
+
+    if (client_id < 0)
+    {
+        const char *full = "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n";
+        send(client_fd, full, strlen(full), 0);
+        return;
+    }
+
+    char resp[192];
+    int n = snprintf(resp, sizeof(resp),
+                     "HTTP/1.1 101 Switching Protocols\r\n"
+                     "Upgrade: websocket\r\n"
+                     "Connection: Upgrade\r\n"
+                     "Sec-WebSocket-Accept: %s\r\n\r\n",
+                     accept);
+    if (n < 0 || n >= (int)sizeof(resp) ||
+        ws_write_all(client_fd, (const uint8_t *)resp, (size_t)n) != 0)
+    {
+        k_mutex_lock(&http_srv.mutex, K_FOREVER);
+        http_srv.ws_client_fds[client_id] = -1;
+        k_mutex_unlock(&http_srv.mutex);
+        return;
+    }
+
+    LOG_INF("WebSocket client %d connected", client_id);
+    if (http_srv.ws_event_cb)
+        http_srv.ws_event_cb(client_id, true, http_srv.ws_event_user_data);
+
+    /* Blocks this accept-loop iteration until the client disconnects. */
+    ws_serve_client(client_fd, client_id);
+
+    if (http_srv.ws_event_cb)
+        http_srv.ws_event_cb(client_id, false, http_srv.ws_event_user_data);
+
+    k_mutex_lock(&http_srv.mutex, K_FOREVER);
+    if (http_srv.ws_client_fds[client_id] == client_fd)
+        http_srv.ws_client_fds[client_id] = -1;
+    k_mutex_unlock(&http_srv.mutex);
+
+    LOG_INF("WebSocket client %d disconnected", client_id);
+}
+
+#endif /* CONFIG_AKIRA_HTTP_WEBSOCKET */
+
+
+/*===========================================================================*/
 /* Request Handling                                                          */
 /*===========================================================================*/
 
@@ -558,6 +906,24 @@ static int handle_request(int client_fd, char *buffer, size_t len)
     }
 
     LOG_INF("HTTP %s %s", method_str, path);
+
+#if defined(CONFIG_AKIRA_HTTP_WEBSOCKET)
+    /* Intercept a WebSocket opening handshake before normal route dispatch.
+     * A valid request is: GET + "Upgrade: websocket". ws_handle_upgrade()
+     * runs the entire session (handshake + frame loop) inline; the accept
+     * loop closes client_fd after we return. */
+    if (http_srv.ws_enabled && method == HTTP_GET)
+    {
+        char upgrade_hdr[24] = {0};
+        extract_header_value(buffer, "Upgrade:", upgrade_hdr, sizeof(upgrade_hdr));
+        if (strcasecmp(upgrade_hdr, "websocket") == 0)
+        {
+            ws_handle_upgrade(client_fd, buffer);
+            http_srv.stats.requests_handled++;
+            return 0;
+        }
+    }
+#endif
 
     /* Build request struct */
     http_request_t req = {
@@ -1018,25 +1384,29 @@ int akira_http_ws_register_event_cb(ws_event_cb_t callback, void *user_data)
 
 int akira_http_ws_send(int client_id, const uint8_t *data, size_t len)
 {
-    if (!http_srv.ws_enabled)
-    {
-        return -ENOTSUP;
-    }
-
+#if defined(CONFIG_AKIRA_HTTP_WEBSOCKET)
+    /* Raw byte payloads are sent as binary frames (opcode 0x2). */
+    return ws_send_to_client(client_id, WS_OP_BIN, data, len);
+#else
     ARG_UNUSED(client_id);
     ARG_UNUSED(data);
     ARG_UNUSED(len);
-
-    /* RFC 6455 frame encoding is not implemented. The previous code sent the
-     * raw payload with no WebSocket framing, which no compliant client can
-     * decode — worse than sending nothing. Refuse with -ENOSYS until real
-     * frame encoding (and the opening handshake) exist. */
-    return -ENOSYS;
+    return -ENOTSUP;
+#endif
 }
 
 int akira_http_ws_send_text(int client_id, const char *text)
 {
-    return akira_http_ws_send(client_id, (const uint8_t *)text, strlen(text));
+    if (!text)
+        return -EINVAL;
+#if defined(CONFIG_AKIRA_HTTP_WEBSOCKET)
+    /* Text frames (opcode 0x1) carry UTF-8 payloads. */
+    return ws_send_to_client(client_id, WS_OP_TEXT,
+                             (const uint8_t *)text, strlen(text));
+#else
+    ARG_UNUSED(client_id);
+    return -ENOTSUP;
+#endif
 }
 
 int akira_http_ws_disconnect(int client_id)

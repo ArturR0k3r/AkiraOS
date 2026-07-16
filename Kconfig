@@ -986,6 +986,18 @@ config AKIRA_HTTP_WEBSOCKET
       Enable WebSocket protocol support in HTTP server.
       Allows real-time bidirectional communication.
 
+config AKIRA_HTTP_WS_MAX_PAYLOAD
+    int "WebSocket maximum inbound frame payload (bytes)"
+    default 1024
+    range 64 65536
+    depends on AKIRA_HTTP_WEBSOCKET
+    help
+      Maximum size, in bytes, of a single decoded WebSocket frame payload the
+      server will accept from a client. Frames whose payload exceeds this are
+      rejected with close code 1009 (message too big). This value is used to
+      size a static receive/unmask buffer, so raising it increases the .bss
+      footprint by the same amount.
+
 config AKIRA_HTTP_MAX_CONNECTIONS
     int "Maximum HTTP connections"
     default 4
