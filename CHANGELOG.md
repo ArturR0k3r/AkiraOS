@@ -7,6 +7,67 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.6.4] — Unreleased
+
+> Development series on the `v1.6.x` branch. `VERSION` tracks 1.6.4; this section
+> is backfilled from the commits since 1.5.8 plus the production-readiness
+> hardening pass, and is not yet tagged/released.
+
+### Implemented (previously stubbed)
+- `feat(sensors)`: BME280 register writes over I2C (`i2c_reg_write_byte`) — was `-ENOTSUP`.
+- `feat(cloud)`: Real device telemetry in the status payload — battery via the power
+  manager, free heap via `sys_heap_runtime_stats_get`, CPU% via Zephyr thread runtime
+  stats — replacing hardcoded `3700 mV / 85% / 0 / 0`.
+- `feat(http)`: Static file serving from the filesystem (`CONFIG_AKIRA_HTTP_STATIC_FILES`,
+  default n) with extension→Content-Type mapping and path-traversal protection.
+
+### Security & hardening (production-readiness pass)
+- `feat(ota)`: Verify a downloaded image's SHA-256 against authenticated metadata
+  before it is ever marked bootable (`CONFIG_AKIRA_OTA_REQUIRE_HASH`,
+  `ota_set_expected_sha256()`); the old 4-byte magic-only check is no longer
+  sufficient.
+- `feat(security)`: Clamp the capability mask an app can self-assert from its
+  (unauthenticated) manifest — `"*"` is bounded to defined capabilities and
+  unsigned apps are limited by `CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK`; privileged
+  grants to unattested apps are audit-logged.
+- `feat(settings)`: Derive a per-device AES-256 key from the hardware unique ID
+  (`CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY`, fail-closed) instead of a shared
+  compile-time key.
+- `fix(license)`: Relicense first-party USB CDC serial + BLE companion service
+  from GPL-3.0 to Apache-2.0; add a CI SPDX/copyleft gate and a `NOTICE` file.
+- `docs`: Correct README secure-boot/OTA claims to the real (in-progress) status.
+- `ci`: Version-consistency gate, expanded board matrix, pinned container image.
+- Advertised-but-incomplete entry points now return `-ENOSYS`/`-ENOTSUP` instead
+  of reporting fake success (pending full implementation, see below).
+
+### Added
+- `feat(security)`: Fail-closed app verification gate (`CONFIG_AKIRA_REQUIRE_SIGNED_APPS`).
+- `feat(pqc)`: Dilithium-2 post-quantum signature verify path in the runtime.
+- `feat(matter)`: Device-as-endpoint (accessory) support with an in-firmware mock co-processor for tests; accessory mock build enabled on esp32c6.
+- `feat(mqtt)`: Home Assistant MQTT client integration (discovery + `ha_light_*`/`mqtt_*` WASM natives).
+- `feat(mesh)`: AODV routing with reliable delivery and capability-based transport.
+- `feat(radio)`: CC1121 OOK modulation, raw OOK capture/replay, continuous RX with frequency-offset registers; LR2021 LoRa modulation (runtime-selectable with FSK).
+- `feat(api)`: HID modifier + FIDO/U2F Report ID 4 channel, AES-256-CTR, WiFi deauth, and raw RF capture/replay WASM APIs.
+- `feat(board)`: esp32s3_super_mini — 2 MB Quad PSRAM + WiFi, LEDC PWM, and WASM BLE RGB controller.
+- `feat(shell)`: `bt gatt` command to dump registered GATT services.
+- `feat(bench)`: `akiraclaw_bench` hardware benchmark suite.
+
+### Fixed / Security
+- `fix(ble)`: Require an encrypted link for privileged management writes; make WASM app GATT services discoverable.
+- `fix(security)`: Consistent `-EPERM` for capability denial; map `ota.trigger` capability string to its mask.
+- `fix(wasm)`: Centralized, validated WASM pointer+length translation across HID/RF native APIs; decrement per-app memory quota on `mem_free`.
+- `fix(ws)`: Connect `wss://` over TLS instead of silent cleartext.
+- `fix(fs)`: Fail loud instead of diverting persistent writes to RAM.
+- `fix(akiraconsole_prod)`: Fit `dram0.bss` and right-size the BT system heap to restore BLE.
+- `fix(boards)`: Restore builds for rpi_pico(2), nucleo_h743zi, xiao_esp32c6.
+
+### Changed
+- `fix(version)`: Derive `AKIRA_VERSION_*` from the `VERSION` file.
+- `ci`: Codecov no-regression coverage gate.
+- `refactor(ui)`: Remove the unused stub UI framework.
+
+---
+
 ## [1.5.8] — 2026-05-29
 
 ### Added
