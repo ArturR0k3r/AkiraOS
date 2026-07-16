@@ -13,6 +13,17 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
+#include <stdint.h>
+
+/* Free-heap telemetry: kernel system heap runtime statistics.
+ * Provides sys_heap_runtime_stats_get() and struct sys_memory_stats. */
+#include <zephyr/sys/sys_heap.h>
+
+/* Battery telemetry: project power manager (fuel-gauge / INA219 / ADC backend).
+ * Guarded so the file still builds on boards with power management disabled. */
+#if defined(CONFIG_AKIRA_POWER_MANAGER)
+#include <drivers/power/power_manager.h>
+#endif
 
 LOG_MODULE_REGISTER(cloud_client, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -222,24 +233,22 @@ int cloud_client_connect(const char *url)
     }
 
     LOG_INF("Connecting to %s", target_url);
-    client.cloud_state = CLOUD_STATE_CONNECTING;
+
+    /* The real transport (WebSocket/CoAP/MQTT) is not implemented. The previous
+     * code moved straight to CLOUD_STATE_CONNECTED without opening any socket,
+     * which made every send path believe it had a live link and silently drop
+     * data. Report the honest state (ERROR) and fail with -ENOSYS instead of
+     * simulating a connection. The cloud client is experimental — see the
+     * feature-gate list in the production-readiness plan. */
+    client.cloud_state = CLOUD_STATE_ERROR;
 
     if (client.state_handler)
     {
-        client.state_handler(MSG_SOURCE_CLOUD, CLOUD_STATE_CONNECTING);
+        client.state_handler(MSG_SOURCE_CLOUD, CLOUD_STATE_ERROR);
     }
 
-    /* TODO: Actually connect via WebSocket/CoAP/MQTT */
-    /* For now, simulate connection */
-    client.cloud_state = CLOUD_STATE_CONNECTED;
-
-    if (client.state_handler)
-    {
-        client.state_handler(MSG_SOURCE_CLOUD, CLOUD_STATE_CONNECTED);
-    }
-
-    LOG_INF("Connected to cloud");
-    return 0;
+    LOG_WRN("Cloud connect unimplemented (no real transport)");
+    return -ENOSYS;
 }
 
 int cloud_client_disconnect(void)
@@ -440,6 +449,98 @@ int cloud_client_send_raw(const uint8_t *data, size_t len, msg_source_t dest)
 /* High-Level Operations                                                     */
 /*===========================================================================*/
 
+/*
+ * Telemetry helpers -- gather real device metrics for the status payload.
+ * Each source is independently compile-gated and degrades to 0/unknown when
+ * the underlying subsystem is not present on a given board/build.
+ */
+
+/**
+ * @brief Read live battery voltage (mV) and state-of-charge (%).
+ *
+ * On boards without battery hardware (or CONFIG_AKIRA_POWER_MANAGER=n) both
+ * values are reported as 0 so a consumer can distinguish "unknown" from a
+ * genuine reading.
+ */
+static void telemetry_read_battery(uint16_t *mv, uint8_t *pct)
+{
+    *mv = 0;
+    *pct = 0;
+
+#if defined(CONFIG_AKIRA_POWER_MANAGER)
+    akira_battery_status_t bs;
+
+    if (akira_pm_get_battery_status(&bs) == 0) {
+        if (bs.voltage_mv > 0) {
+            *mv = (bs.voltage_mv > (int32_t)UINT16_MAX)
+                      ? UINT16_MAX
+                      : (uint16_t)bs.voltage_mv;
+        }
+        *pct = bs.level_percent;
+    }
+#else
+    ARG_UNUSED(mv);
+    ARG_UNUSED(pct);
+#endif
+}
+
+/**
+ * @brief Report free space in the kernel system heap, in bytes.
+ *
+ * Returns 0 when heap runtime statistics are not compiled in
+ * (CONFIG_SYS_HEAP_RUNTIME_STATS=n).
+ */
+static uint32_t telemetry_free_memory(void)
+{
+#if defined(CONFIG_SYS_HEAP_RUNTIME_STATS)
+    extern struct k_heap _system_heap;
+    struct sys_memory_stats stats = {0};
+
+    if (sys_heap_runtime_stats_get(&_system_heap.heap, &stats) == 0) {
+        return (stats.free_bytes > (size_t)UINT32_MAX)
+                   ? UINT32_MAX
+                   : (uint32_t)stats.free_bytes;
+    }
+#endif
+    return 0;
+}
+
+/**
+ * @brief Estimate system-wide CPU utilisation as a 0-100 percentage.
+ *
+ * Uses Zephyr thread runtime statistics over the interval since the previous
+ * call. Returns 0 when runtime stats are not enabled.
+ */
+static uint8_t telemetry_cpu_usage(void)
+{
+#if defined(CONFIG_THREAD_RUNTIME_STATS) && defined(CONFIG_SCHED_THREAD_USAGE)
+    static uint64_t prev_total; /* non-idle cycles at last sample         */
+    static uint64_t prev_exec;  /* idle + non-idle cycles at last sample  */
+
+    k_thread_runtime_stats_t stats;
+
+    if (k_thread_runtime_stats_all_get(&stats) != 0) {
+        return 0;
+    }
+
+    uint64_t d_total = stats.total_cycles - prev_total;
+    uint64_t d_exec = stats.execution_cycles - prev_exec;
+
+    prev_total = stats.total_cycles;
+    prev_exec = stats.execution_cycles;
+
+    if (d_exec == 0) {
+        return 0;
+    }
+
+    uint64_t pct = (d_total * 100U) / d_exec;
+
+    return (pct > 100U) ? 100U : (uint8_t)pct;
+#else
+    return 0;
+#endif
+}
+
 int cloud_client_send_status(msg_source_t dest)
 {
     cloud_message_t msg;
@@ -450,10 +551,12 @@ int cloud_client_send_status(msg_source_t dest)
     status.fw_version[1] = 0; /* Minor */
     status.fw_version[2] = 0; /* Patch */
     status.uptime_sec = (uint32_t)(k_uptime_get() / 1000);
-    status.battery_mv = 3700; /* TODO: Real battery reading */
-    status.battery_pct = 85;
-    status.cpu_usage = 0;   /* TODO: Real CPU usage */
-    status.free_memory = 0; /* TODO: Get actual free memory */
+
+    /* Real device telemetry -- each source degrades to 0/unknown when its
+     * backing subsystem is unavailable on this board/build. */
+    telemetry_read_battery(&status.battery_mv, &status.battery_pct);
+    status.cpu_usage = telemetry_cpu_usage();
+    status.free_memory = telemetry_free_memory();
 
     /* Build message */
     cloud_msg_init(&msg.header, MSG_TYPE_STATUS_RESPONSE, MSG_SOURCE_INTERNAL);
@@ -895,7 +998,7 @@ static int send_via_transport(const uint8_t *data, size_t len, msg_source_t dest
             /* TODO: Send via WebSocket client */
             /* ret = akira_ws_send_binary(data, len); */
             LOG_DBG("Send to cloud: %zu bytes", len);
-            ret = 0; /* Stub */
+            ret = -ENOSYS; /* transport unimplemented */
         }
         break;
 
@@ -905,7 +1008,7 @@ static int send_via_transport(const uint8_t *data, size_t len, msg_source_t dest
             /* TODO: Send via Bluetooth */
             /* ret = bt_send_data(data, len); */
             LOG_DBG("Send to BT app: %zu bytes", len);
-            ret = 0; /* Stub */
+            ret = -ENOSYS; /* transport unimplemented */
         }
         break;
 
@@ -915,7 +1018,7 @@ static int send_via_transport(const uint8_t *data, size_t len, msg_source_t dest
             /* TODO: Send via HTTP WebSocket */
             /* ret = akira_http_ws_send_binary(-1, data, len); */
             LOG_DBG("Send to web: %zu bytes", len);
-            ret = 0; /* Stub */
+            ret = -ENOSYS; /* transport unimplemented */
         }
         break;
 
