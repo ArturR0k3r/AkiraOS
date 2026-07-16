@@ -127,6 +127,18 @@ config AKIRA_DISPLAY
       Enable Akira display primitives and native WASM display exports.
       When disabled all display_* native calls return -ENOTSUP.
 
+config AKIRA_LVGL_INPUT_ZEPHYR
+    bool "Bridge Zephyr input events into the LVGL input driver"
+    default y if INPUT
+    depends on LVGL && INPUT
+    help
+      When enabled, src/drivers/display/lvgl_input_driver.c registers an
+      INPUT_CALLBACK_DEFINE handler that feeds real button (gpio-keys / D-pad /
+      gamepad) and touch (INPUT_ABS_X/Y + INPUT_BTN_TOUCH) events from the
+      Zephyr input subsystem into LVGL's keypad and pointer indevs. When
+      disabled, LVGL input is driven only by the explicit
+      lvgl_input_update_touch()/lvgl_input_update_buttons() helpers.
+
 config AKIRA_WIFI
     bool "Enable Akira WiFi support"
     default y if WIFI
