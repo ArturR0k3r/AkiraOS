@@ -20,6 +20,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stats — replacing hardcoded `3700 mV / 85% / 0 / 0`.
 - `feat(http)`: Static file serving from the filesystem (`CONFIG_AKIRA_HTTP_STATIC_FILES`,
   default n) with extension→Content-Type mapping and path-traversal protection.
+- `feat(ota)`: WASM app OTA — real HTTP(S) manifest fetch + firmware download streamed
+  into the OTA manager with SHA-256 verification and anti-rollback (refuses non-newer
+  versions); `-ENOSYS` fallback without `CONFIG_HTTP_CLIENT`.
+- `feat(http)`: RFC 6455 WebSocket server — opening handshake, server→client text/binary
+  frame encoding, client frame decode (mask, ping/pong/close) — replacing the unframed stub.
+- `feat(coap)`: DNS resolution (hostnames), Content-Format option parsing, a fixed
+  `coap_header_get_token()` contract, and RFC 7959 Block2 GET / Block1 PUT transfer.
+- `feat(display)`: LVGL input driven by real Zephyr input events (gpio-keys / D-pad /
+  gamepad / touch) via `INPUT_CALLBACK_DEFINE` (`CONFIG_AKIRA_LVGL_INPUT_ZEPHYR`).
+- `feat(radio)`: 802.15.4 raw receive via net promiscuous mode with real per-frame
+  LQI/RSSI (`CONFIG_AKIRA_RADIO_802154_PROMISC_RX`), replacing a hardcoded LQI of 200.
+
+### Still stubbed (need more than firmware)
+- USB-host mass-storage mount (needs an MSC host class + disk/FAT backend not vendored),
+  Matter non-accessory path (needs the CHIP SDK), Thread (needs OpenThread), and mesh WASM
+  app distribution (large RF-transport change) return `-ENOSYS`/stay gated until integrated.
 
 ### Security & hardening (production-readiness pass)
 - `feat(ota)`: Verify a downloaded image's SHA-256 against authenticated metadata
