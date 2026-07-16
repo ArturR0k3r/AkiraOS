@@ -4,6 +4,13 @@ on:
   push:
   pull_request:
 
+# Single source of truth for the build container. Pin to an immutable digest for
+# reproducible builds — resolve the digest with:
+#   docker buildx imagetools inspect ghcr.io/zephyrproject-rtos/ci:latest
+# then replace the ":latest" tag below with "@sha256:<digest>".
+env:
+  ZEPHYR_CI_IMAGE: ghcr.io/zephyrproject-rtos/ci:latest
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -37,7 +44,25 @@ jobs:
             name: board-nrf54l15dk
             fetch_espressif_blobs: false
             zephyr_toolchain: arm-zephyr-eabi
-    
+          # Boards whose builds were restored in commit 416d8ed — kept in CI so
+          # they cannot silently regress again.
+          - board: rpi_pico
+            name: board-rpi_pico
+            fetch_espressif_blobs: false
+            zephyr_toolchain: arm-zephyr-eabi
+          - board: rpi_pico2/rp2350a/m33
+            name: board-rpi_pico2
+            fetch_espressif_blobs: false
+            zephyr_toolchain: arm-zephyr-eabi
+          - board: nucleo_h743zi
+            name: board-nucleo_h743zi
+            fetch_espressif_blobs: false
+            zephyr_toolchain: arm-zephyr-eabi
+          - board: xiao_esp32c6/esp32c6/hpcore
+            name: board-xiao_esp32c6
+            fetch_espressif_blobs: true
+            zephyr_toolchain: riscv64-zephyr-elf
+
     env:
       ZEPHYR_TOOLCHAIN_VARIANT: zephyr
       ZEPHYR_SDK_INSTALL_DIR: /opt/toolchains/zephyr-sdk-0.17.4
@@ -55,8 +80,8 @@ jobs:
       
       - name: Start container
         run: |
-          docker pull ghcr.io/zephyrproject-rtos/ci:latest
-          docker run -d --name zephyr-ci -v $PWD:/workspace -w /workspace --user root ghcr.io/zephyrproject-rtos/ci:latest tail -f /dev/null
+          docker pull "$ZEPHYR_CI_IMAGE"
+          docker run -d --name zephyr-ci -v $PWD:/workspace -w /workspace --user root "$ZEPHYR_CI_IMAGE" tail -f /dev/null
       
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -111,6 +136,52 @@ jobs:
           docker stop zephyr-ci || true
           docker rm zephyr-ci || true
 
+  # ── version / changelog consistency ─────────────────────────────────────────
+  version-consistency:
+    runs-on: ubuntu-latest
+    name: Version consistency
+    steps:
+      - uses: actions/checkout@v4
+      - name: VERSION matches a CHANGELOG heading
+        run: |
+          set -euo pipefail
+          major=$(sed -n 's/^VERSION_MAJOR *= *//p' VERSION | tr -d ' ')
+          minor=$(sed -n 's/^VERSION_MINOR *= *//p' VERSION | tr -d ' ')
+          patch=$(sed -n 's/^PATCHLEVEL *= *//p' VERSION | tr -d ' ')
+          ver="${major}.${minor}.${patch}"
+          echo "VERSION file reports: $ver"
+          if ! grep -qE "^## \[${ver}\]" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::No '## [${ver}]' section found in CHANGELOG.md for VERSION ${ver}"
+            exit 1
+          fi
+          echo "OK: CHANGELOG.md has a section for ${ver}"
+
+  # ── license / SPDX hygiene ───────────────────────────────────────────────────
+  license-check:
+    runs-on: ubuntu-latest
+    name: License / SPDX check
+    steps:
+      - uses: actions/checkout@v4
+      - name: No copyleft (GPL/AGPL/LGPL) SPDX identifiers in shipped source
+        run: |
+          set -euo pipefail
+          # Apache-2.0 combined distribution is incompatible with GPL/AGPL, and
+          # LGPL static-linking obligations do not fit a firmware image. Fail if
+          # any first-party source under src/ or include/ declares one. This is
+          # the guard against re-introducing the GPL contamination fixed in the
+          # production-readiness pass.
+          if grep -rnE 'SPDX-License-Identifier:.*(AGPL|LGPL|GPL-[0-9])' src/ include/ ; then
+            echo "::error::Copyleft SPDX identifier found in shipped source (see matches above)."
+            exit 1
+          fi
+          echo "OK: no copyleft SPDX identifiers under src/ or include/"
+      - name: Report SPDX header coverage (informational)
+        run: |
+          total=$(find src include -name '*.c' -o -name '*.h' -o -name '*.cpp' | wc -l)
+          withhdr=$(grep -rlE 'SPDX-License-Identifier:' src/ include/ --include='*.c' --include='*.h' --include='*.cpp' | wc -l)
+          echo "SPDX headers present in ${withhdr}/${total} source files."
+          echo "::notice::SPDX header coverage: ${withhdr}/${total} — backfill Apache-2.0 headers over time (REUSE)."
+
   # ── ztest suite on native_sim ───────────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
@@ -137,9 +208,9 @@ jobs:
 
       - name: Start container
         run: |
-          docker pull ghcr.io/zephyrproject-rtos/ci:latest
+          docker pull "$ZEPHYR_CI_IMAGE"
           docker run -d --name zephyr-test -v $PWD:/workspace -w /workspace \
-            --user root ghcr.io/zephyrproject-rtos/ci:latest tail -f /dev/null
+            --user root "$ZEPHYR_CI_IMAGE" tail -f /dev/null
 
       - name: Checkout repository
         uses: actions/checkout@v4
