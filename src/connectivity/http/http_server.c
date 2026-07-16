@@ -18,6 +18,7 @@
 #include <strings.h>           /* strcasecmp */
 #include <mbedtls/sha1.h>      /* mbedtls_sha1 (needs CONFIG_MBEDTLS_SHA1=y) */
 #include <zephyr/sys/base64.h> /* base64_encode (needs CONFIG_BASE64=y) */
+#include <lib/mem_helper.h>    /* AKIRA_BULK_BSS — PSRAM placement for the rx buffer */
 #endif
 
 LOG_MODULE_REGISTER(http_server, CONFIG_AKIRA_LOG_LEVEL);
@@ -675,8 +676,11 @@ static int ws_send_to_client(int client_id, uint8_t opcode,
 static void ws_serve_client(int client_fd, int client_id)
 {
     /* The single accept-loop thread services WS sessions one at a time, so a
-     * shared static reassembly buffer is safe and keeps the stack small. */
-    static uint8_t payload[CONFIG_AKIRA_HTTP_WS_MAX_PAYLOAD];
+     * shared static reassembly buffer is safe and keeps the stack small. Placed
+     * in PSRAM (.ext_ram.bss) on boards that have it — it is only touched on the
+     * slow WS receive path, never on a hot path, and keeping it out of scarce
+     * internal DRAM lets the flagship board fit. No-op on non-PSRAM targets. */
+    static uint8_t payload[CONFIG_AKIRA_HTTP_WS_MAX_PAYLOAD] AKIRA_BULK_BSS;
 
     for (;;)
     {
