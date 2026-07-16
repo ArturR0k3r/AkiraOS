@@ -2208,6 +2208,38 @@ config AKIRA_WASM_CRYPTO
       Capability: "crypto" (bit 28).
       Key material is zeroed in memory after each operation.
 
+config AKIRA_WASM_CRYPTO_ED25519
+    bool "Export Ed25519 keygen/sign to WASM"
+    default n
+    depends on AKIRA_WASM_CRYPTO
+    help
+      Expose Ed25519 key generation and signing to WASM via a standalone
+      RFC 8032 implementation on mbedtls_mpi + mbedtls_sha512 (this
+      mbedTLS vendor drop has no twisted-edwards curve, so PSA can't do
+      Ed25519 here — see src/api/ed25519.c).
+      Capability: "crypto" (bit 28), same as AKIRA_WASM_CRYPTO.
+      Without this, crypto_ed25519_keygen/sign always return -ENOTSUP.
+
+config AKIRA_WASM_CRYPTO_ECDSA_P256
+    bool "Export P-256/ECDSA keygen/sign to WASM"
+    default n
+    depends on AKIRA_WASM_CRYPTO
+    select MBEDTLS_PSA_CRYPTO_C
+    select PSA_WANT_ALG_ECDSA
+    select PSA_WANT_ECC_SECP_R1_256
+    select PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_GENERATE
+    select PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_IMPORT
+    select PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_EXPORT
+    select PSA_WANT_ALG_SHA_256
+    help
+      Expose P-256 (secp256r1) key generation and ECDSA/SHA-256 signing to
+      WASM via PSA Crypto. Unlike Ed25519, this mbedTLS vendor drop DOES
+      support P-256 (it's a Weierstrass curve), so this goes through PSA
+      properly instead of a vendored implementation.
+      Capability: "crypto" (bit 28), same as AKIRA_WASM_CRYPTO.
+      Without this, crypto_p256_keygen/sign always return -ENOTSUP.
+      Needed for U2F (FIDO U2F mandates P-256, no alternative curve).
+
 config AKIRA_WASM_CRYPTO_MAX_INPUT
     int "Maximum crypto input size (bytes)"
     default 65536

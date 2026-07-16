@@ -26,6 +26,7 @@ LOG_MODULE_REGISTER(akira_crypto_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <runtime/security.h>
 #include <runtime/akira_runtime.h>
 #include <zephyr/kernel.h>
+#include <zephyr/init.h>
 #include <string.h>
 #include <errno.h>
 
@@ -262,18 +263,16 @@ int akira_native_crypto_aes256_ctr(wasm_exec_env_t exec_env,
 /* ── ed25519_keygen / ed25519_sign ──────────────────────────────────────── */
 
 #if defined(CONFIG_AKIRA_WASM_CRYPTO_ED25519)
-#include <psa/crypto.h>
+#include "ed25519.h"
 
 /*
- * Lazily initialise PSA Crypto (idempotent after first call).
- * mbedTLS for WiFi/BLE has usually already called psa_crypto_init(), but
- * calling it again is safe.
+ * This mbedTLS vendor drop has no twisted-edwards curve in mbedtls_ecp
+ * (see mbedtls/ecp.h mbedtls_ecp_group_id — only Weierstrass + Curve25519/
+ * 448 Montgomery), so PSA_ECC_FAMILY_TWISTED_EDWARDS / PSA_ALG_PURE_EDDSA
+ * are unimplemented spec constants only; psa_import_key() always returns
+ * PSA_ERROR_NOT_SUPPORTED for them. ed25519.c implements RFC 8032 directly
+ * on mbedtls_mpi + mbedtls_sha512 instead of going through PSA.
  */
-static int psa_ensure_init(void)
-{
-	psa_status_t s = psa_crypto_init();
-	return (s == PSA_SUCCESS || s == PSA_ERROR_ALREADY_EXISTS) ? 0 : -EIO;
-}
 
 int akira_native_crypto_ed25519_keygen(wasm_exec_env_t exec_env,
                                         void *seed_ptr, void *pub_ptr)
@@ -284,38 +283,14 @@ int akira_native_crypto_ed25519_keygen(wasm_exec_env_t exec_env,
 	WASM_ADDR_CHECK(inst, seed_ptr, 32);
 	WASM_ADDR_CHECK(inst, pub_ptr,  32);
 
-	if (psa_ensure_init() != 0) return -EIO;
-
 	/* Generate 32 random bytes from hardware RNG as Ed25519 seed */
 	sys_csrand_get(seed_ptr, 32);
 
-	/* Derive public key from seed via PSA */
-	psa_key_attributes_t attrs = PSA_KEY_ATTRIBUTES_INIT;
-	psa_set_key_type(&attrs,
-	    PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_TWISTED_EDWARDS));
-	psa_set_key_bits(&attrs, 255);
-	psa_set_key_usage_flags(&attrs,
-	    PSA_KEY_USAGE_SIGN_MESSAGE | PSA_KEY_USAGE_EXPORT);
-	psa_set_key_algorithm(&attrs, PSA_ALG_PURE_EDDSA);
-
-	psa_key_id_t key_id;
-	psa_status_t s = psa_import_key(&attrs,
-	                                 (const uint8_t *)seed_ptr, 32,
-	                                 &key_id);
-	if (s != PSA_SUCCESS) {
-		LOG_ERR("ed25519_keygen: import_key failed: %d", (int)s);
+	int ret = ed25519_keygen((const uint8_t *)seed_ptr, (uint8_t *)pub_ptr);
+	if (ret != 0) {
+		LOG_ERR("ed25519_keygen failed: %d", ret);
 		memset(seed_ptr, 0, 32);
-		return -EIO;
-	}
-
-	size_t pub_len;
-	s = psa_export_public_key(key_id, (uint8_t *)pub_ptr, 32, &pub_len);
-	psa_destroy_key(key_id);
-
-	if (s != PSA_SUCCESS || pub_len != 32) {
-		LOG_ERR("ed25519_keygen: export_public_key failed: %d", (int)s);
-		memset(seed_ptr, 0, 32);
-		return -EIO;
+		return ret;
 	}
 
 	LOG_INF("Ed25519 key pair generated");
@@ -338,40 +313,28 @@ int akira_native_crypto_ed25519_sign(wasm_exec_env_t exec_env,
 	WASM_ADDR_CHECK(inst, msg_ptr,  msg_len);
 	WASM_ADDR_CHECK(inst, sig_ptr,  64);
 
-	if (psa_ensure_init() != 0) return -EIO;
-
-	psa_key_attributes_t attrs = PSA_KEY_ATTRIBUTES_INIT;
-	psa_set_key_type(&attrs,
-	    PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_TWISTED_EDWARDS));
-	psa_set_key_bits(&attrs, 255);
-	psa_set_key_usage_flags(&attrs, PSA_KEY_USAGE_SIGN_MESSAGE);
-	psa_set_key_algorithm(&attrs, PSA_ALG_PURE_EDDSA);
-
-	/* Import seed into a volatile key slot */
-	psa_key_id_t key_id;
-	psa_status_t s = psa_import_key(&attrs,
-	                                 (const uint8_t *)seed_ptr, 32,
-	                                 &key_id);
-	if (s != PSA_SUCCESS) {
-		LOG_ERR("ed25519_sign: import_key failed: %d", (int)s);
-		return -EIO;
-	}
-
-	size_t sig_len;
-	s = psa_sign_message(key_id, PSA_ALG_PURE_EDDSA,
-	                     (const uint8_t *)msg_ptr, msg_len,
-	                     (uint8_t *)sig_ptr, 64, &sig_len);
-
-	/* Destroy key slot immediately — seed never lingers on host */
-	psa_destroy_key(key_id);
-
-	if (s != PSA_SUCCESS || sig_len != 64) {
-		LOG_ERR("ed25519_sign: sign_message failed: %d", (int)s);
-		return -EIO;
+	int ret = ed25519_sign((const uint8_t *)seed_ptr,
+	                        (const uint8_t *)msg_ptr, msg_len,
+	                        (uint8_t *)sig_ptr);
+	if (ret != 0) {
+		LOG_ERR("ed25519_sign failed: %d", ret);
+		return ret;
 	}
 
 	return 0;
 }
+
+static int ed25519_boot_self_test(void)
+{
+	int ret = ed25519_self_test();
+	if (ret != 0) {
+		LOG_ERR("ed25519_self_test FAILED: %d", ret);
+	} else {
+		LOG_INF("ed25519_self_test PASSED (RFC 8032 test vector 1)");
+	}
+	return 0;
+}
+SYS_INIT(ed25519_boot_self_test, APPLICATION, 90);
 
 #else /* !CONFIG_AKIRA_WASM_CRYPTO_ED25519 */
 
@@ -393,5 +356,128 @@ int akira_native_crypto_ed25519_sign(wasm_exec_env_t exec_env,
 }
 
 #endif /* CONFIG_AKIRA_WASM_CRYPTO_ED25519 */
+
+/* ── p256_keygen / p256_sign (U2F) ────────────────────────────────────────
+ * Unlike Ed25519, this mbedTLS vendor drop DOES have secp256r1/P-256 (it's
+ * a Weierstrass curve — see mbedtls_ecp_group_id), and PSA_WANT_ECC_SECP_R1_256
+ * / PSA_WANT_ALG_ECDSA are real, wired want-symbols here (confirmed present
+ * in Kconfig.psa.auto + configs/config-psa.h, unlike the missing twisted-
+ * edwards symbols that forced ed25519.c to be vendored standalone). So this
+ * goes through PSA properly instead of a hand-rolled implementation.
+ */
+
+#if defined(CONFIG_AKIRA_WASM_CRYPTO_ECDSA_P256)
+#include <psa/crypto.h>
+
+int akira_native_crypto_p256_keygen(wasm_exec_env_t exec_env,
+                                     void *priv_ptr, void *pub_ptr)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EACCES);
+
+	wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+	WASM_ADDR_CHECK(inst, priv_ptr, 32);
+	WASM_ADDR_CHECK(inst, pub_ptr,  65);
+
+	if (psa_crypto_init() != PSA_SUCCESS) {
+		return -EIO;
+	}
+
+	psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+	psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
+	psa_set_key_bits(&attr, 256);
+	psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_EXPORT);
+	psa_set_key_algorithm(&attr, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
+
+	mbedtls_svc_key_id_t key_id;
+	psa_status_t st = psa_generate_key(&attr, &key_id);
+	if (st != PSA_SUCCESS) {
+		LOG_ERR("p256 psa_generate_key failed: %d", (int)st);
+		return -EIO;
+	}
+
+	size_t priv_len = 0, pub_len = 0;
+	st = psa_export_key(key_id, (uint8_t *)priv_ptr, 32, &priv_len);
+	if (st == PSA_SUCCESS) {
+		st = psa_export_public_key(key_id, (uint8_t *)pub_ptr, 65, &pub_len);
+	}
+	psa_destroy_key(key_id);
+
+	if (st != PSA_SUCCESS || priv_len != 32 || pub_len != 65) {
+		LOG_ERR("p256 export failed: %d", (int)st);
+		memset(priv_ptr, 0, 32);
+		return -EIO;
+	}
+
+	LOG_INF("P-256 key pair generated");
+	return 0;
+}
+
+int akira_native_crypto_p256_sign(wasm_exec_env_t exec_env,
+                                   void *priv_ptr,
+                                   void *msg_ptr, uint32_t msg_len,
+                                   void *sig_ptr)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EACCES);
+
+	if (msg_len == 0 || msg_len > CONFIG_AKIRA_WASM_CRYPTO_MAX_INPUT) {
+		return -EINVAL;
+	}
+
+	wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+	WASM_ADDR_CHECK(inst, priv_ptr, 32);
+	WASM_ADDR_CHECK(inst, msg_ptr,  msg_len);
+	WASM_ADDR_CHECK(inst, sig_ptr,  64);
+
+	if (psa_crypto_init() != PSA_SUCCESS) {
+		return -EIO;
+	}
+
+	psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+	psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
+	psa_set_key_bits(&attr, 256);
+	psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_SIGN_MESSAGE);
+	psa_set_key_algorithm(&attr, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
+
+	mbedtls_svc_key_id_t key_id;
+	psa_status_t st = psa_import_key(&attr, (const uint8_t *)priv_ptr, 32, &key_id);
+	if (st != PSA_SUCCESS) {
+		LOG_ERR("p256 psa_import_key failed: %d", (int)st);
+		return -EIO;
+	}
+
+	size_t sig_len = 0;
+	st = psa_sign_message(key_id, PSA_ALG_ECDSA(PSA_ALG_SHA_256),
+	                       (const uint8_t *)msg_ptr, msg_len,
+	                       (uint8_t *)sig_ptr, 64, &sig_len);
+	psa_destroy_key(key_id);
+
+	if (st != PSA_SUCCESS || sig_len != 64) {
+		LOG_ERR("p256 psa_sign_message failed: %d", (int)st);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+#else /* !CONFIG_AKIRA_WASM_CRYPTO_ECDSA_P256 */
+
+int akira_native_crypto_p256_keygen(wasm_exec_env_t exec_env,
+                                     void *priv_ptr, void *pub_ptr)
+{
+	(void)exec_env; (void)priv_ptr; (void)pub_ptr;
+	return -ENOTSUP;
+}
+
+int akira_native_crypto_p256_sign(wasm_exec_env_t exec_env,
+                                   void *priv_ptr,
+                                   void *msg_ptr, uint32_t msg_len,
+                                   void *sig_ptr)
+{
+	(void)exec_env; (void)priv_ptr; (void)msg_ptr;
+	(void)msg_len; (void)sig_ptr;
+	return -ENOTSUP;
+}
+
+#endif /* CONFIG_AKIRA_WASM_CRYPTO_ECDSA_P256 */
 
 #endif /* CONFIG_AKIRA_WASM_CRYPTO */

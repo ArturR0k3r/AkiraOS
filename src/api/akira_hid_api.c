@@ -39,7 +39,12 @@ LOG_MODULE_REGISTER(akira_hid_api, CONFIG_AKIRA_LOG_LEVEL);
 #ifdef CONFIG_AKIRA_HID
 
 #define HID_RAW_QUEUE_DEPTH  4
-#define HID_FIDO_QUEUE_DEPTH 4
+/* CTAPHID messages reassemble across up to ~18 packets (1024-byte max
+ * payload / 59 bytes per continuation frame). Windows bursts all
+ * continuation packets within ~10ms of each other, far faster than the
+ * WASM app's poll cadence drains them — a shallow queue silently drops
+ * trailing packets and reassembly stalls forever. */
+#define HID_FIDO_QUEUE_DEPTH 20
 
 struct hid_raw_pkt  { uint8_t data[USB_HID_RAW_PAYLOAD_SIZE];  uint8_t len; };
 struct hid_fido_pkt { uint8_t data[USB_HID_FIDO_PAYLOAD_SIZE]; uint8_t len; };

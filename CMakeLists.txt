@@ -441,6 +441,10 @@ if(CONFIG_AKIRA_WASM_CRYPTO)
     target_sources(app PRIVATE src/api/akira_crypto_api.c)
 endif()
 
+if(CONFIG_AKIRA_WASM_CRYPTO_ED25519)
+    target_sources(app PRIVATE src/api/ed25519.c)
+endif()
+
 if(CONFIG_AKIRA_WASM_RTC)
     target_sources(app PRIVATE src/api/akira_rtc_api.c)
 endif()

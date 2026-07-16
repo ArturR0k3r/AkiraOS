@@ -344,6 +344,10 @@ bool akira_register_native_apis()
         {"crypto_ed25519_sign",      (void *)akira_native_crypto_ed25519_sign,      "(**~*)i",   NULL},
         /* key(32B), nonce(16B), in+in_len (validated pair), out (same len as in) */
         {"crypto_aes256_ctr",        (void *)akira_native_crypto_aes256_ctr,        "(***~*)i",  NULL},
+        /* P-256 (U2F) — priv_ptr(32B), pub_ptr(65B) fixed-size, validated inside */
+        {"crypto_p256_keygen",       (void *)akira_native_crypto_p256_keygen,       "(**)i",     NULL},
+        /* priv_ptr(32B), msg_ptr+msg_len pair (auto-validated), sig_ptr(64B raw r||s) */
+        {"crypto_p256_sign",         (void *)akira_native_crypto_p256_sign,         "(**~*)i",   NULL},
 #endif
 
 /* rtc.*: get/set unix time, uptime, alarm */

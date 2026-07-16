@@ -129,6 +129,40 @@ int akira_native_crypto_ed25519_sign(wasm_exec_env_t exec_env,
                                       void *msg_ptr, uint32_t msg_len,
                                       void *sig_ptr);
 
+/**
+ * @brief Generate a new P-256 (secp256r1) key pair from hardware entropy.
+ *
+ * Unlike Ed25519, this goes through PSA properly (P-256 is a supported
+ * Weierstrass curve in this mbedTLS build).
+ *
+ * Gate: CONFIG_AKIRA_WASM_CRYPTO_ECDSA_P256=y.
+ *
+ * @param priv_ptr  WASM pointer to 32-byte output buffer (private scalar).
+ * @param pub_ptr   WASM pointer to 65-byte output buffer (uncompressed point).
+ * @return 0 on success, -ENOTSUP if not compiled in, -EIO on PSA failure.
+ */
+int akira_native_crypto_p256_keygen(wasm_exec_env_t exec_env,
+                                     void *priv_ptr,
+                                     void *pub_ptr);
+
+/**
+ * @brief Sign a message with a P-256 private key (ECDSA/SHA-256).
+ *
+ * Imports the 32-byte private scalar into a volatile PSA key slot, signs
+ * the message, then immediately destroys the slot. Output is raw r||s
+ * (32+32 bytes), NOT DER — caller DER-encodes for CTAP2/U2F if needed.
+ *
+ * @param priv_ptr  WASM pointer to 32-byte private key scalar.
+ * @param msg_ptr   WASM pointer to message buffer.
+ * @param msg_len   Message length in bytes.
+ * @param sig_ptr   WASM pointer to 64-byte signature output (raw r||s).
+ * @return 0 on success, -ENOTSUP if not compiled in, -EIO on PSA failure.
+ */
+int akira_native_crypto_p256_sign(wasm_exec_env_t exec_env,
+                                   void *priv_ptr,
+                                   void *msg_ptr, uint32_t msg_len,
+                                   void *sig_ptr);
+
 #ifdef __cplusplus
 }
 #endif

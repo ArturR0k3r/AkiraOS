@@ -95,6 +95,19 @@
 		in-report-size        = <64>;
 		out-report-size       = <64>;
 	};
+
+	/* FIDO2/CTAP2 authenticator — dedicated interface, no Report ID.
+	 * CTAPHID requires exactly 64-byte packets; a shared Report-ID'd
+	 * interface would need 65 bytes (1 ID + 64 payload), which exceeds
+	 * the 64-byte hard cap for full-speed USB interrupt endpoints. */
+	hid_dev_1: hid_dev_1 {
+		compatible            = "zephyr,hid-device";
+		protocol-code         = "none";
+		in-polling-period-us  = <1000>;
+		out-polling-period-us = <1000>;
+		in-report-size        = <64>;
+		out-report-size       = <64>;
+	};
 };
 
 // =============================================================================
