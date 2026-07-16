@@ -1118,6 +1118,27 @@ config AKIRA_COAP_OBSERVE
     help
       Enable CoAP observe (RFC 7641) for push notifications.
 
+config AKIRA_COAP_BLOCK_TRANSFER
+    bool "Enable CoAP block-wise transfer (RFC 7959)"
+    default y
+    depends on AKIRA_COAP_CLIENT
+    help
+      Enable RFC 7959 block-wise transfer for large CoAP payloads, used by
+      coap_client_download() (Block2 GET) and coap_client_upload()
+      (Block1 PUT). When disabled the code still builds but those two
+      helpers fall back to a single request.
+
+config AKIRA_COAP_BLOCK_SIZE
+    int "CoAP block-wise transfer block size (bytes)"
+    default 256
+    range 16 1024
+    depends on AKIRA_COAP_BLOCK_TRANSFER
+    help
+      Block size in bytes for CoAP block-wise transfers. Must be one of the
+      RFC 7959 sizes: 16, 32, 64, 128, 256, 512 or 1024. Any other value
+      falls back to 256 at runtime. Larger blocks reduce round-trips but
+      need bigger UDP datagrams and per-block scratch buffers.
+
 endmenu
 
 menu "Cloud Connectivity"
