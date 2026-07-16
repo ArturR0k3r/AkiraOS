@@ -267,9 +267,13 @@ int matter_get_qr_code(char *buffer, size_t buffer_len)
     strncpy(buffer, s_qr_cache, buffer_len - 1);
     buffer[buffer_len - 1] = '\0';
 #else
-    /* Generate Matter QR code payload */
-    /* Format: MT:<version><vendor-id><product-id><discriminator><setup-pin> */
-    snprintf(buffer, buffer_len, "MT:Y.K9042C00KA0648G00");  /* Example QR code */
+    /* No real commissioning payload exists without the co-processor
+     * (CONFIG_AKIRA_MATTER_ACCESSORY). The previous code returned a hardcoded
+     * example QR string, which would send a user through a commissioning flow
+     * that cannot succeed. Fail with -ENOSYS instead. */
+    ARG_UNUSED(buffer);
+    LOG_WRN("Matter QR code unavailable: co-processor accessory path not enabled");
+    return -ENOSYS;
 #endif
 
     LOG_DBG("Generated Matter QR code: %s", buffer);
@@ -296,11 +300,11 @@ int matter_get_manual_code(char *buffer, size_t buffer_len)
     strncpy(buffer, s_manual_cache, buffer_len - 1);
     buffer[buffer_len - 1] = '\0';
 #else
-    /* Generate 11-digit manual pairing code */
-    /* Format: discriminator (4 digits) + setup PIN (8 digits with check digit) */
-    snprintf(buffer, buffer_len, "%04d-%08u",
-             matter_state.config.discriminator,
-             matter_state.config.setup_pin_code);
+    /* Without the co-processor accessory path there is no real setup PIN /
+     * discriminator, so any manual code would be non-functional. Fail loud. */
+    ARG_UNUSED(buffer);
+    LOG_WRN("Matter manual code unavailable: co-processor accessory path not enabled");
+    return -ENOSYS;
 #endif
 
     LOG_DBG("Generated Matter manual code: %s", buffer);
@@ -369,16 +373,11 @@ int matter_get_attribute(uint8_t endpoint, uint32_t cluster,
     LOG_DBG("Matter get attribute: EP%d Cluster0x%08x Attr0x%08x",
             endpoint, cluster, attribute);
     
-    /* This would read Matter cluster attribute */
-    /* Example: chip::app::Clusters::OnOff::Attributes::OnOff::Get(endpoint, value) */
-    
-    matter_state.stats.messages_received++;
-    
-    /* Placeholder: return dummy value */
-    if (*value_len >= 1) {
-        *((uint8_t *)value) = 0;
-        *value_len = 1;
-    }
-    
-    return 0;
+    /* Reading a real Matter cluster attribute is not implemented
+     * (would call e.g. chip::app::Clusters::OnOff::Attributes::OnOff::Get).
+     * Returning a hardcoded 0 masqueraded as a real attribute value; fail with
+     * -ENOSYS so callers do not act on fabricated cluster state. */
+    LOG_WRN("Matter get-attribute unimplemented (EP%d Cluster0x%08x Attr0x%08x)",
+            endpoint, cluster, attribute);
+    return -ENOSYS;
 }

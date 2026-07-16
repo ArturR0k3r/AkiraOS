@@ -76,14 +76,14 @@ int thread_start(void)
     };
     radio_configure(thread_state.radio, &radio_cfg);
     
-    /* Initialize OpenThread stack (requires OpenThread module) */
-    /* This would call: otInstance *instance = otInstanceInitSingle() */
-    
-    thread_state.started = true;
-    thread_state.stats.role = THREAD_ROLE_DETACHED;
-    
-    LOG_INF("Thread network started");
-    return 0;
+    /* Initialize OpenThread stack (requires OpenThread module).
+     * This would call: otInstance *instance = otInstanceInitSingle().
+     * OpenThread is not integrated, so the network cannot actually start.
+     * Do NOT mark started/attached — that reported a live Thread network that
+     * does not exist. Fail loud with -ENOSYS. */
+    thread_state.stats.role = THREAD_ROLE_DISABLED;
+    LOG_WRN("Thread start unimplemented (OpenThread not integrated)");
+    return -ENOSYS;
 }
 
 int thread_stop(void)
@@ -124,9 +124,11 @@ int thread_get_dataset(uint8_t *buffer, size_t buffer_len)
         return -ENODEV;
     }
     
-    /* Export Thread operational dataset */
-    /* This would call: otDatasetGetActive(instance, &dataset) */
-    
-    LOG_DBG("Thread dataset export (placeholder)");
-    return 0;
+    ARG_UNUSED(buffer);
+    ARG_UNUSED(buffer_len);
+
+    /* Requires OpenThread (otDatasetGetActive). Not integrated — return
+     * -ENOSYS rather than 0, which would hand back an empty/garbage dataset. */
+    LOG_WRN("Thread dataset export is unimplemented (OpenThread not integrated)");
+    return -ENOSYS;
 }

@@ -757,10 +757,10 @@ int akira_mesh_distribute_app(const char *app_name, const uint8_t *app_data, siz
     if (!mesh_state.initialized || !mesh_state.started) {
         return -ENODEV;
     }
-    LOG_INF("Distributing WASM app '%s' (%zu bytes) across mesh", app_name, app_len);
-
-    /* Placeholder — full implementation would handle chunking, reassembly,
-     * and acknowledgments. */
-    mesh_state.stats.apps_distributed++;
-    return 0;
+    /* Chunking, reassembly, and acknowledgments are not yet implemented.
+     * Returning 0 previously reported a successful distribution while sending
+     * nothing; fail loud with -ENOSYS so callers do not assume delivery. */
+    LOG_WRN("Mesh app distribution is unimplemented (app '%s', %zu bytes)",
+            app_name, app_len);
+    return -ENOSYS;
 }
