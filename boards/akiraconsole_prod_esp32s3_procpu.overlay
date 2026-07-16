@@ -57,7 +57,7 @@
 // here between GPIO_ACTIVE_HIGH and GPIO_ACTIVE_LOW.
 / {
 	zephyr,user {
-		usb-mux-sel-gpios = <&tca6408 0 GPIO_ACTIVE_HIGH>;  // USB_SEL → TCA6408 P0
+		usb-mux-sel-gpios = <&tca6408 0 GPIO_ACTIVE_LOW>;  // USB_SEL → TCA6408 P0
 	};
 };
 
