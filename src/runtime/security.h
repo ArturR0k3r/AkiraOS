@@ -104,6 +104,44 @@ extern "C" {
  * Manifest string: "mqtt" */
 #define AKIRA_CAP_MQTT          (1ULL << 35)
 
+/* Highest capability bit currently defined (MQTT = bit 35). Keep in sync when
+ * adding new AKIRA_CAP_* bits above. */
+#define AKIRA_CAP_MAX_BIT       35
+
+/* Union of every capability bit the runtime actually understands. A manifest
+ * wildcard ("*") is bounded to this — it can never grant undefined future bits
+ * (which UINT64_MAX would have). */
+#define AKIRA_CAP_ALL_KNOWN     ((AKIRA_CAP_MQTT << 1) - 1ULL)
+
+/* Capabilities that let an app affect the world outside the sandbox, persist
+ * state, or attack the RF/network environment. Granting any of these to an
+ * unattested (unsigned) app is security-sensitive and is audit-logged. */
+#define AKIRA_CAP_PRIVILEGED  ( \
+        AKIRA_CAP_RF_TRANSCEIVE | AKIRA_CAP_BLE | AKIRA_CAP_NETWORK | \
+        AKIRA_CAP_WIFI_INJECT | AKIRA_CAP_OTA_TRIGGER | AKIRA_CAP_HID | \
+        AKIRA_CAP_STORAGE_WRITE | AKIRA_CAP_FS_WRITE | AKIRA_CAP_SETTINGS | \
+        AKIRA_CAP_CRYPTO | AKIRA_CAP_POWER_CTRL | AKIRA_CAP_MATTER | \
+        AKIRA_CAP_MQTT | AKIRA_CAP_WDT )
+
+/**
+ * @brief Sanitize a capability mask that came from an app-supplied manifest.
+ *
+ * The manifest is NOT cryptographically bound to a trusted signer on a stock
+ * build, so an app can request any capabilities it likes (including the "*"
+ * wildcard). This clamps the request:
+ *   - always masks to AKIRA_CAP_ALL_KNOWN (drops undefined/high bits);
+ *   - when @p attested is false, additionally ANDs with the operator-configured
+ *     allow-mask for unsigned apps (CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK) so a
+ *     production board can refuse to hand privileged capabilities to code it
+ *     cannot attest.
+ * Privileged grants to unattested apps are audit-logged by the caller.
+ *
+ * @param requested  Capability bits parsed from the manifest.
+ * @param attested   True if the app passed a real signature/allowlist gate.
+ * @return The effective capability mask to grant.
+ */
+uint64_t akira_capability_sanitize_app_mask(uint64_t requested, bool attested);
+
 /*
  * Capability check macro using security subsystem.
  * Delegates to akira_security_check_exec() for centralized permission validation.

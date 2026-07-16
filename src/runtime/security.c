@@ -72,8 +72,27 @@ uint64_t akira_capability_str_to_mask(const char *cap)
     if (strcmp(cap, "network.use") == 0)    return AKIRA_CAP_NETWORK;
     if (strcmp(cap, "network.connect") == 0) return AKIRA_CAP_NETWORK;
     if (strcmp(cap, "hw.*") == 0)           return AKIRA_CAP_TIMER | AKIRA_CAP_UART | AKIRA_CAP_I2C | AKIRA_CAP_PWM;
-    if (strcmp(cap, "*") == 0)              return UINT64_MAX;
+    /* Wildcard-all is bounded to the set of capabilities the runtime actually
+     * defines — never UINT64_MAX, which would also set undefined future bits. */
+    if (strcmp(cap, "*") == 0)              return AKIRA_CAP_ALL_KNOWN;
     return 0;
+}
+
+uint64_t akira_capability_sanitize_app_mask(uint64_t requested, bool attested)
+{
+    /* Never honor bits the runtime does not define. */
+    uint64_t effective = requested & AKIRA_CAP_ALL_KNOWN;
+
+    if (!attested) {
+        /* Unsigned/unattested app: clamp to the operator-configured allow-mask.
+         * Default is permissive (all known caps) to preserve local development
+         * and on-device security tooling; a production board can narrow
+         * CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK to refuse privileged caps to code
+         * it cannot attest. */
+        effective &= (uint64_t)CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK;
+    }
+
+    return effective;
 }
 
 char* akira_capability_mask_to_str(uint64_t cap)
@@ -167,7 +186,12 @@ bool akira_security_check_exec(wasm_exec_env_t exec_env, uint64_t capability)
 
 bool akira_security_check_native(uint64_t capability)
 {
-    /* Native (non-wasm) callers have broader rights for now */
+    /* This is the TRUSTED-NATIVE path: it grants unconditionally because the
+     * only legitimate callers are first-party OS/kernel code that already runs
+     * with full privilege. It must NEVER be reachable from a WASM app — every
+     * WASM-invocable native API MUST go through akira_security_check_exec()
+     * (see the AKIRA_CHECK_CAP_* macros), which enforces the per-app cap mask.
+     * Do not call akira_security_check()/_native() from any exec_env handler. */
     (void)capability;
     return true;
 }

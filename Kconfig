@@ -1607,6 +1607,21 @@ config AKIRA_REQUIRE_SIGNED_APPS
       mask on an unverified build. Leave n for development builds that
       intentionally run unsigned apps.
 
+config AKIRA_UNSIGNED_APP_CAP_MASK
+    hex "Capability allow-mask for unsigned/unattested apps"
+    default 0xFFFFFFFFFFFFFFFF
+    help
+      Bitmask of capabilities an unsigned (unattested) WASM app is permitted to
+      request from its manifest. The runtime ANDs a manifest's requested mask
+      with this value before granting it (see akira_capability_sanitize_app_mask).
+      The default (all bits) preserves local development and on-device security
+      tooling that legitimately needs broad access. A production board that runs
+      untrusted third-party apps should narrow this to exclude privileged bits
+      (RF, network, wifi.inject, ota.trigger, hid, fs.write, settings, crypto,
+      matter, mqtt, power.control) so unsigned code cannot reach them. Attested
+      apps (loaded when AKIRA_REQUIRE_SIGNED_APPS=y with a real verifier) are not
+      affected by this mask.
+
 config AKIRA_SANDBOX
     bool "Enable runtime sandbox"
     default y

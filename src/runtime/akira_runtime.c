@@ -585,7 +585,30 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
     g_apps[slot].status = AKIRA_APP_STATUS_CREATED;
     g_apps[slot].exit_code = 0;
     g_apps[slot].tid = NULL;
-    g_apps[slot].cap_mask = manifest.valid ? manifest.cap_mask : 0;
+    /* The manifest is NOT cryptographically bound to a trusted signer unless a
+     * real platform verifier is linked (CONFIG_AKIRA_REQUIRE_SIGNED_APPS). If we
+     * reach this point with REQUIRE_SIGNED_APPS=y, the app passed the fail-closed
+     * allowlist/signature gate above and is attested; otherwise treat the
+     * requested capabilities as untrusted and clamp them. Never grant an app the
+     * raw manifest mask verbatim — that let an app self-assert "*" → all caps. */
+    bool app_attested = IS_ENABLED(CONFIG_AKIRA_REQUIRE_SIGNED_APPS);
+    uint64_t requested_mask = manifest.valid ? manifest.cap_mask : 0;
+    g_apps[slot].cap_mask =
+        akira_capability_sanitize_app_mask(requested_mask, app_attested);
+
+    if (!app_attested && (g_apps[slot].cap_mask & AKIRA_CAP_PRIVILEGED)) {
+        /* An unsigned app was granted world-affecting capabilities. This is
+         * allowed (default dev posture) but must be visible in the audit log. */
+        LOG_WRN("Unattested app granted privileged caps: 0x%016llx",
+                (unsigned long long)(g_apps[slot].cap_mask & AKIRA_CAP_PRIVILEGED));
+        sandbox_audit_log(AUDIT_EVENT_SIGNATURE_FAIL, "unsigned_privileged",
+                          (uint32_t)(g_apps[slot].cap_mask & 0xFFFFFFFFu));
+    }
+    if (g_apps[slot].cap_mask != requested_mask) {
+        LOG_INF("Capability mask sanitized: requested=0x%016llx granted=0x%016llx (attested=%d)",
+                (unsigned long long)requested_mask,
+                (unsigned long long)g_apps[slot].cap_mask, app_attested);
+    }
     g_apps[slot].memory_quota = manifest.valid ? manifest.memory_quota : 0;
     atomic_set(&g_apps[slot].memory_used, 0);
     memcpy(g_apps[slot].binary_hash, binary_hash, 32);
