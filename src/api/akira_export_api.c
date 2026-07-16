@@ -334,8 +334,8 @@ bool akira_register_native_apis()
 /* crypto.*: sha256, aes256-cbc, hmac-sha256, random, ed25519 */
 #ifdef CONFIG_AKIRA_WASM_CRYPTO
         {"crypto_sha256",            (void *)akira_native_crypto_sha256,            "(*~*)i",    NULL},
-        {"crypto_aes256_encrypt",    (void *)akira_native_crypto_aes256_encrypt,    "(**i*~*)i", NULL},
-        {"crypto_aes256_decrypt",    (void *)akira_native_crypto_aes256_decrypt,    "(**i*~*)i", NULL},
+        {"crypto_aes256_encrypt",    (void *)akira_native_crypto_aes256_encrypt,    "(***~*)i",  NULL},
+        {"crypto_aes256_decrypt",    (void *)akira_native_crypto_aes256_decrypt,    "(***~*)i",  NULL},
         {"crypto_hmac_sha256",       (void *)akira_native_crypto_hmac_sha256,       "(*~*~*)i",  NULL},
         {"crypto_random",            (void *)akira_native_crypto_random,            "(*~)i",     NULL},
         /* Ed25519 — seed_ptr(32B) and pub_ptr(32B) are fixed-size, validated inside */
@@ -343,7 +343,7 @@ bool akira_register_native_apis()
         /* seed_ptr(32B), msg_ptr+msg_len pair (auto-validated), sig_ptr(64B) */
         {"crypto_ed25519_sign",      (void *)akira_native_crypto_ed25519_sign,      "(**~*)i",   NULL},
         /* key(32B), nonce(16B), in+in_len (validated pair), out (same len as in) */
-        {"crypto_aes256_ctr",        (void *)akira_native_crypto_aes256_ctr,        "(**i*~*)i", NULL},
+        {"crypto_aes256_ctr",        (void *)akira_native_crypto_aes256_ctr,        "(***~*)i",  NULL},
 #endif
 
 /* rtc.*: get/set unix time, uptime, alarm */
