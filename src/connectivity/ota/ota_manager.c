@@ -22,6 +22,10 @@
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/dfu/mcuboot.h>
+#if defined(CONFIG_MBEDTLS)
+#include <mbedtls/sha256.h>
+#define OTA_SHA256_AVAILABLE 1
+#endif
 #define OTA_FLASH_AVAILABLE 1
 #else
 #define OTA_FLASH_AVAILABLE 0
@@ -107,6 +111,12 @@ static K_MUTEX_DEFINE(ota_buf_mutex); /* protects write_buffer + buffer_pos */
 static const struct flash_area *secondary_fa = NULL;
 static uint8_t write_buffer[OTA_WRITE_BUFFER_SIZE] __aligned(4);
 static uint16_t buffer_pos = 0;
+
+/* Expected SHA-256 of the incoming image, supplied by the transport/handler
+ * that received the (authenticated) update metadata. Verified in
+ * do_finalize_update() before the image is ever marked bootable. */
+static uint8_t ota_expected_sha256[32];
+static bool    ota_expected_hash_set;
 
 /* Modular OTA transport support */
 #define MAX_OTA_TRANSPORTS 4
@@ -434,6 +444,102 @@ static enum ota_result do_write_chunk(const uint8_t *data, uint16_t length)
     return result;
 }
 
+/**
+ * @brief Verify the written image against the expected SHA-256.
+ *
+ * Streams the just-written image back out of the secondary slot and compares
+ * its SHA-256 with the hash registered via ota_set_expected_sha256(). This is
+ * the authenticity/integrity gate that must pass before an image is ever marked
+ * bootable — the 4-byte MCUboot magic check alone proves nothing about content.
+ *
+ * Policy:
+ *   - expected hash set    -> compute + constant-time compare; mismatch rejects.
+ *   - no expected hash set -> reject when CONFIG_AKIRA_OTA_REQUIRE_HASH=y
+ *                             (fail closed), otherwise warn and allow.
+ */
+static enum ota_result verify_image_sha256(void)
+{
+    bool have_expected;
+    uint8_t expected[32];
+
+    k_mutex_lock(&ota_mutex, K_FOREVER);
+    have_expected = ota_expected_hash_set;
+    memcpy(expected, ota_expected_sha256, sizeof(expected));
+    k_mutex_unlock(&ota_mutex);
+
+    if (!have_expected) {
+#if IS_ENABLED(CONFIG_AKIRA_OTA_REQUIRE_HASH)
+        set_error(OTA_ERROR_INVALID_IMAGE,
+                  "No expected SHA-256 supplied; refusing unverified image");
+        LOG_ERR("OTA: image hash required but none was supplied — rejecting");
+        return OTA_ERROR_INVALID_IMAGE;
+#else
+        LOG_WRN("OTA: no expected SHA-256 supplied; installing without hash check");
+        return OTA_OK;
+#endif
+    }
+
+#if defined(OTA_SHA256_AVAILABLE)
+    mbedtls_sha256_context sha;
+    uint8_t digest[32];
+    uint8_t buf[256];
+    uint32_t remaining = ota_status.bytes_written;
+    uint32_t offset = 0;
+    int mret = 0;
+
+    mbedtls_sha256_init(&sha);
+    if (mbedtls_sha256_starts(&sha, 0 /* SHA-256, not SHA-224 */) != 0) {
+        mbedtls_sha256_free(&sha);
+        set_error(OTA_ERROR_INVALID_IMAGE, "SHA-256 init failed");
+        return OTA_ERROR_INVALID_IMAGE;
+    }
+
+    while (remaining > 0) {
+        uint32_t chunk = remaining < sizeof(buf) ? remaining : sizeof(buf);
+        if (flash_area_read(secondary_fa, offset, buf, chunk) != 0) {
+            mbedtls_sha256_free(&sha);
+            set_error(OTA_ERROR_INVALID_IMAGE, "Flash read-back failed");
+            return OTA_ERROR_INVALID_IMAGE;
+        }
+        mret = mbedtls_sha256_update(&sha, buf, chunk);
+        if (mret != 0) {
+            mbedtls_sha256_free(&sha);
+            set_error(OTA_ERROR_INVALID_IMAGE, "SHA-256 update failed");
+            return OTA_ERROR_INVALID_IMAGE;
+        }
+        offset += chunk;
+        remaining -= chunk;
+    }
+
+    if (mbedtls_sha256_finish(&sha, digest) != 0) {
+        mbedtls_sha256_free(&sha);
+        set_error(OTA_ERROR_INVALID_IMAGE, "SHA-256 finish failed");
+        return OTA_ERROR_INVALID_IMAGE;
+    }
+    mbedtls_sha256_free(&sha);
+
+    /* Constant-time comparison. */
+    uint8_t diff = 0;
+    for (int i = 0; i < 32; i++) {
+        diff |= (uint8_t)(digest[i] ^ expected[i]);
+    }
+    if (diff != 0) {
+        set_error(OTA_ERROR_INVALID_IMAGE, "SHA-256 mismatch — image rejected");
+        LOG_ERR("OTA: image SHA-256 mismatch — rejecting");
+        return OTA_ERROR_INVALID_IMAGE;
+    }
+
+    LOG_INF("OTA: image SHA-256 verified OK (%u bytes)", ota_status.bytes_written);
+    return OTA_OK;
+#else
+    /* No SHA-256 implementation available. A hash was expected but we cannot
+     * check it — fail closed rather than install an unverified image. */
+    set_error(OTA_ERROR_INVALID_IMAGE, "SHA-256 unavailable; cannot verify image");
+    LOG_ERR("OTA: SHA-256 unavailable but a hash was expected — rejecting");
+    return OTA_ERROR_INVALID_IMAGE;
+#endif
+}
+
 static enum ota_result do_finalize_update(void)
 {
     if (!secondary_fa)
@@ -469,6 +575,15 @@ static enum ota_result do_finalize_update(void)
     {
         set_error(OTA_ERROR_INVALID_IMAGE, "Invalid format");
         return OTA_ERROR_INVALID_IMAGE;
+    }
+
+    /* Authenticity/integrity gate: the image content must match the expected
+     * SHA-256 before we ever request a boot upgrade. Without this, the magic
+     * check above would happily install arbitrary bytes. */
+    enum ota_result verify_res = verify_image_sha256();
+    if (verify_res != OTA_OK)
+    {
+        return verify_res;
     }
 
     update_progress(OTA_STATE_INSTALLING, "Installing...");
@@ -784,9 +899,14 @@ enum ota_result ota_start_update(size_t expected_size)
     }
 
     /* Mark as in-progress immediately so ota_write_chunk() accepts data
-     * before the worker thread has set state to RECEIVING after erase. */
+     * before the worker thread has set state to RECEIVING after erase.
+     * Clear any expected hash from a prior session here (synchronously, before
+     * the worker starts) so the caller can set the new one right after this
+     * returns without racing the worker thread. */
     k_mutex_lock(&ota_mutex, K_FOREVER);
     ota_status.state = OTA_STATE_IN_PROGRESS;
+    ota_expected_hash_set = false;
+    memset(ota_expected_sha256, 0, sizeof(ota_expected_sha256));
     k_mutex_unlock(&ota_mutex);
 
     struct ota_cmd cmd = {.type = OTA_CMD_START, .size = (uint32_t)expected_size};
@@ -799,6 +919,19 @@ enum ota_result ota_start_update(size_t expected_size)
         return OTA_ERROR_ALREADY_IN_PROGRESS;
     }
 
+    return OTA_OK;
+}
+
+enum ota_result ota_set_expected_sha256(const uint8_t *hash)
+{
+    if (!hash) {
+        return OTA_ERROR_INVALID_PARAM;
+    }
+    k_mutex_lock(&ota_mutex, K_FOREVER);
+    memcpy(ota_expected_sha256, hash, sizeof(ota_expected_sha256));
+    ota_expected_hash_set = true;
+    k_mutex_unlock(&ota_mutex);
+    LOG_INF("OTA expected SHA-256 registered for image verification");
     return OTA_OK;
 }
 

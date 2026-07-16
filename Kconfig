@@ -1384,6 +1384,19 @@ config AKIRA_OTA
     help
       Enable Over-The-Air firmware update support.
 
+config AKIRA_OTA_REQUIRE_HASH
+    bool "Require a verified SHA-256 for every OTA image"
+    default y
+    depends on AKIRA_OTA
+    help
+      When set, ota_finalize_update() refuses to mark a downloaded image
+      bootable unless an expected SHA-256 was registered (via
+      ota_set_expected_sha256) and the recomputed digest of the written image
+      matches it. This is the integrity gate that makes the "SHA-256 OTA"
+      guarantee real. Leave y for production. Setting n allows installing an
+      image with no hash check (development transports that do not yet carry
+      image metadata) and is strongly discouraged on a fielded device.
+
 config AKIRA_OTA_HTTP
     bool "Enable HTTP OTA transport"
     default y

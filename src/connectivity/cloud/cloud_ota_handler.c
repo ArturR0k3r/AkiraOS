@@ -141,6 +141,9 @@ static int handle_fw_metadata(const cloud_message_t *msg, msg_source_t source)
         k_mutex_unlock(&ota_handler.mutex);
         return ret;
     }
+    /* Bind the image to the SHA-256 from the (authenticated) metadata so the
+     * OTA manager can reject a corrupted or substituted download at finalize. */
+    ota_set_expected_sha256(meta->hash);
 #endif
 
     k_mutex_unlock(&ota_handler.mutex);
