@@ -966,6 +966,18 @@ config AKIRA_EMBEDDED_WEB
       flash (compiled-in HTML/JS assets). Disable to save flash space and
       use only the REST API endpoints (e.g. with akira-cli).
 
+config AKIRA_HTTP_STATIC_FILES
+    bool "Serve static files from the filesystem"
+    default n
+    depends on AKIRA_HTTP_SERVER && FILE_SYSTEM
+    help
+      When enabled, akira_http_set_static_dir() registers a filesystem
+      directory (for example "/lfs/www") whose contents are served for GET
+      requests that do not match a registered API route. Files are streamed
+      from the filesystem with a Content-Type derived from the file extension
+      (html/css/js/json/png/svg/txt). Requests that are not absolute or that
+      contain ".." are rejected with 403; missing files return 404.
+
 config AKIRA_HTTP_WEBSOCKET
     bool "Enable WebSocket support"
     default y

@@ -9,6 +9,10 @@
 #include <zephyr/net/socket.h>
 #include <string.h>
 #include <stdio.h>
+#ifdef CONFIG_AKIRA_HTTP_STATIC_FILES
+#include <zephyr/fs/fs.h>
+#include <strings.h> /* strcasecmp() for case-insensitive extension match */
+#endif
 
 LOG_MODULE_REGISTER(http_server, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -357,6 +361,145 @@ static int res_send_json_wrapper(const char *json)
     return resp_send(current_resp_ctx, json, strlen(json));
 }
 
+#ifdef CONFIG_AKIRA_HTTP_STATIC_FILES
+/*===========================================================================*/
+/* Static File Serving                                                       */
+/*===========================================================================*/
+
+#define STATIC_DIR_MAX 128    /* max length of the configured static root  */
+#define STATIC_PATH_MAX 320   /* root + request path + "/index.html"        */
+#define STATIC_CHUNK_SIZE 512 /* file streaming buffer (stack)              */
+
+/* Configured filesystem directory served for unmatched GET requests.
+ * Empty string means static serving is disabled. */
+static char http_static_dir[STATIC_DIR_MAX];
+
+/* Map a file's extension to an HTTP Content-Type. */
+static const char *static_mime_type(const char *path)
+{
+    const char *dot = strrchr(path, '.');
+    if (!dot || dot[1] == '\0')
+    {
+        return "application/octet-stream";
+    }
+
+    dot++; /* skip the '.' */
+    if (strcasecmp(dot, "html") == 0)
+        return "text/html; charset=utf-8";
+    if (strcasecmp(dot, "css") == 0)
+        return "text/css";
+    if (strcasecmp(dot, "js") == 0)
+        return "application/javascript";
+    if (strcasecmp(dot, "json") == 0)
+        return "application/json";
+    if (strcasecmp(dot, "png") == 0)
+        return "image/png";
+    if (strcasecmp(dot, "svg") == 0)
+        return "image/svg+xml";
+    if (strcasecmp(dot, "txt") == 0)
+        return "text/plain; charset=utf-8";
+
+    return "application/octet-stream";
+}
+
+/* Try to serve @p path as a static file under the configured directory.
+ *
+ * Returns true when a response was fully written to the socket (the file was
+ * streamed, or a 403 was sent for an unsafe path). Returns false when the
+ * request was not handled here so the caller can emit the generic 404.
+ *
+ * Security: request paths must be absolute ("/...") and must not contain a
+ * ".." sequence, blocking directory traversal outside the static root. */
+static bool try_serve_static(response_ctx_t *ctx, const char *path)
+{
+    if (http_static_dir[0] == '\0')
+    {
+        return false;
+    }
+
+    if (path[0] != '/' || strstr(path, "..") != NULL)
+    {
+        ctx->status_code = 403;
+        ctx->content_type = HTTP_CONTENT_TEXT;
+        resp_send(ctx, "Forbidden", 9);
+        return true;
+    }
+
+    /* Compose the on-disk path. Directory-style paths (ending in '/', which
+     * includes the root "/") map to index.html. */
+    char full[STATIC_PATH_MAX];
+    int n;
+    size_t plen = strlen(path);
+    if (path[plen - 1] == '/')
+    {
+        n = snprintf(full, sizeof(full), "%s%sindex.html", http_static_dir, path);
+    }
+    else
+    {
+        n = snprintf(full, sizeof(full), "%s%s", http_static_dir, path);
+    }
+    if (n < 0 || n >= (int)sizeof(full))
+    {
+        return false;
+    }
+
+    struct fs_dirent entry;
+    if (fs_stat(full, &entry) != 0 || entry.type != FS_DIR_ENTRY_FILE)
+    {
+        return false; /* fall through to generic 404 */
+    }
+
+    struct fs_file_t file;
+    fs_file_t_init(&file);
+    if (fs_open(&file, full, FS_O_READ) < 0)
+    {
+        return false;
+    }
+
+    char header[512];
+    int pos = snprintf(header, sizeof(header),
+                       "HTTP/1.1 200 OK\r\n"
+                       "Content-Type: %s\r\n"
+                       "Content-Length: %zu\r\n"
+                       "Connection: close\r\n",
+                       static_mime_type(full), entry.size);
+
+    if (pos > 0 && pos < (int)sizeof(header) && ctx->allowed_origin[0] != '\0')
+    {
+        pos += snprintf(header + pos, sizeof(header) - pos,
+                        "Access-Control-Allow-Origin: %s\r\n"
+                        "Vary: Origin\r\n",
+                        ctx->allowed_origin);
+    }
+    if (pos > 0 && pos < (int)sizeof(header))
+    {
+        pos += snprintf(header + pos, sizeof(header) - pos, "\r\n");
+    }
+    if (pos <= 0 || pos >= (int)sizeof(header))
+    {
+        fs_close(&file);
+        return false;
+    }
+
+    send(ctx->client_fd, header, pos, 0);
+    ctx->headers_sent = true;
+    ctx->status_code = 200;
+    http_srv.stats.bytes_sent += pos;
+
+    char buf[STATIC_CHUNK_SIZE];
+    ssize_t rd;
+    while ((rd = fs_read(&file, buf, sizeof(buf))) > 0)
+    {
+        send(ctx->client_fd, buf, rd, 0);
+        http_srv.stats.bytes_sent += rd;
+    }
+
+    fs_close(&file);
+    LOG_INF("Served static file: %s (%zu bytes)", full, entry.size);
+    return true;
+}
+#endif /* CONFIG_AKIRA_HTTP_STATIC_FILES */
+
 /*===========================================================================*/
 /* Request Handling                                                          */
 /*===========================================================================*/
@@ -513,9 +656,18 @@ static int handle_request(int client_fd, char *buffer, size_t len)
         }
         else
         {
-            /* 404 Not Found */
-            resp_ctx.status_code = 404;
-            resp_send(&resp_ctx, "Not Found", 9);
+#ifdef CONFIG_AKIRA_HTTP_STATIC_FILES
+            if (method == HTTP_GET && try_serve_static(&resp_ctx, path))
+            {
+                /* Response was streamed by the static file server. */
+            }
+            else
+#endif
+            {
+                /* 404 Not Found */
+                resp_ctx.status_code = 404;
+                resp_send(&resp_ctx, "Not Found", 9);
+            }
         }
     }
 
@@ -761,8 +913,35 @@ int akira_http_register_upload_handler(const char *path, upload_chunk_cb_t callb
 
 int akira_http_set_static_dir(const char *path)
 {
-    /* TODO: Implement static file serving */
+#ifdef CONFIG_AKIRA_HTTP_STATIC_FILES
+    if (!path || path[0] == '\0')
+    {
+        return -EINVAL;
+    }
+
+    size_t len = strlen(path);
+    if (len >= sizeof(http_static_dir))
+    {
+        return -ENAMETOOLONG;
+    }
+
+    /* Store the root, dropping a single trailing '/' so paths (which always
+     * begin with '/') can be joined uniformly. Keep a lone "/" as-is. */
+    strncpy(http_static_dir, path, sizeof(http_static_dir) - 1);
+    http_static_dir[sizeof(http_static_dir) - 1] = '\0';
+    if (len > 1 && http_static_dir[len - 1] == '/')
+    {
+        http_static_dir[len - 1] = '\0';
+    }
+
+    LOG_INF("Static file directory set: %s", http_static_dir);
     return 0;
+#else
+    ARG_UNUSED(path);
+    /* Static file serving is not implemented. Return -ENOSYS rather than 0 so
+     * a caller does not believe a static directory is being served. */
+    return -ENOSYS;
+#endif
 }
 
 void akira_http_notify_network(bool connected, const char *ip_address)
@@ -844,25 +1023,15 @@ int akira_http_ws_send(int client_id, const uint8_t *data, size_t len)
         return -ENOTSUP;
     }
 
-    /* TODO: Implement WebSocket frame encoding and sending */
+    ARG_UNUSED(client_id);
+    ARG_UNUSED(data);
+    ARG_UNUSED(len);
 
-    if (client_id < 0)
-    {
-        /* Broadcast to all clients */
-        for (int i = 0; i < MAX_WS_CLIENTS; i++)
-        {
-            if (http_srv.ws_client_fds[i] >= 0)
-            {
-                send(http_srv.ws_client_fds[i], data, len, 0);
-            }
-        }
-    }
-    else if (client_id < MAX_WS_CLIENTS && http_srv.ws_client_fds[client_id] >= 0)
-    {
-        send(http_srv.ws_client_fds[client_id], data, len, 0);
-    }
-
-    return 0;
+    /* RFC 6455 frame encoding is not implemented. The previous code sent the
+     * raw payload with no WebSocket framing, which no compliant client can
+     * decode — worse than sending nothing. Refuse with -ENOSYS until real
+     * frame encoding (and the opening handshake) exist. */
+    return -ENOSYS;
 }
 
 int akira_http_ws_send_text(int client_id, const char *text)
