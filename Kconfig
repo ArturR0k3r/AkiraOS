@@ -367,6 +367,16 @@ config AKIRA_RF_FRAMEWORK
       capability (bit 34). When disabled these entry points are not
       compiled or registered.
 
+config AKIRA_RADIO_802154_PROMISC_RX
+    bool "Enable raw 802.15.4 RX capture via promiscuous mode"
+    default y if NET_PROMISCUOUS_MODE
+    depends on NET_L2_IEEE802154 && NET_PROMISCUOUS_MODE
+    help
+      Implements the radio_802154 RAL recv() by pulling raw frames from the
+      Zephyr net promiscuous-mode queue, and reports real per-frame LQI/RSSI in
+      get_stats(). Requires the 802.15.4 driver/L2 to support promiscuous
+      capture. When disabled, recv() honestly returns -ENOSYS.
+
 endmenu
 
 menu "Peripherals"
