@@ -2529,13 +2529,35 @@ config AKIRA_SETTINGS_ENCRYPTION
 if AKIRA_SETTINGS_ENCRYPTION
 
 config AKIRA_SETTINGS_ENCRYPTION_KEY_HEX
-    string "Encryption key (64 hex characters for AES-256)"
+    string "Base encryption key (64 hex characters for AES-256)"
     default "c3c3a4e60f1991e85d7796890710e99338a4c5ac93bffc5c03dcf662bfcf9dee"
     help
-      AES-256 encryption key in hexadecimal format (64 hex chars = 32 bytes).
-      
-      IMPORTANT: 
-      - All devices must use the SAME key for SD card portability
+      AES-256 base key in hexadecimal format (64 hex chars = 32 bytes).
+
+      WARNING: this value is compiled into the firmware and is identical on
+      every unit built from the same tree, so on its own it provides no
+      confidentiality against anyone who has the image. Keep
+      AKIRA_SETTINGS_PER_DEVICE_KEY=y (the default) so the effective key is
+      derived per device from a hardware-unique ID, or override the
+      akira_settings_get_encryption_key() weak hook to read a key from a secure
+      element / eFuse (as AkiraPlatform does).
+
+config AKIRA_SETTINGS_PER_DEVICE_KEY
+    bool "Derive a per-device settings key from the hardware unique ID"
+    default y
+    depends on HWINFO
+    help
+      When set, the effective AES-256 key is HMAC-SHA256(base_key, device_id)
+      where device_id comes from hwinfo_get_device_id() (eFuse/UICR/serial).
+      This makes each unit's encrypted settings unreadable with only the
+      firmware image or another unit's key. Key derivation fails closed: if the
+      hardware unique ID cannot be read, settings encryption refuses to
+      initialize rather than fall back to the shared compile-time key.
+
+      Note: enabling this makes encrypted settings non-portable between devices
+      (an intentional trade-off — shared-key portability across a fleet is a
+      confidentiality hole). Disable only if you specifically need to move an
+      encrypted settings blob between units and accept the shared-key risk.
 
 config AKIRA_SETTINGS_ENCRYPTION_HW_ACCEL
     bool "Use hardware AES acceleration"

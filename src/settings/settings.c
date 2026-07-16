@@ -16,6 +16,10 @@
 #include <mbedtls/gcm.h>
 #include <mbedtls/platform.h>
 #include <zephyr/random/random.h>
+#ifdef CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY
+#include <mbedtls/sha256.h>
+#include <zephyr/drivers/hwinfo.h>
+#endif
 #endif
 
 LOG_MODULE_REGISTER(akira_settings, CONFIG_LOG_DEFAULT_LEVEL);
@@ -64,6 +68,73 @@ static int parse_hex_key(void)
  * @param key_out  Output buffer — must be exactly 32 bytes.
  * @return 0 on success, negative errno on failure.
  */
+#ifdef CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY
+/**
+ * @brief Derive a per-device AES-256 key = HMAC-SHA256(base_key, device_id).
+ *
+ * Binds the effective key to a hardware-unique identifier so that the shared
+ * compile-time base key alone cannot decrypt any device's settings. Fails
+ * closed: if the device id is unavailable, no key is produced.
+ */
+static int derive_per_device_key(const uint8_t *base_key, uint8_t *key_out)
+{
+    uint8_t device_id[16];
+    ssize_t id_len = hwinfo_get_device_id(device_id, sizeof(device_id));
+    if (id_len <= 0)
+    {
+        LOG_ERR("Per-device key: hwinfo_get_device_id failed (%d) — refusing "
+                "to fall back to the shared compile-time key", (int)id_len);
+        return -ENODEV;
+    }
+
+    /* HMAC-SHA256(key = base_key, msg = device_id), implemented directly on top
+     * of mbedtls_sha256 (already linked) so we do not depend on the optional
+     * generic MD layer. Block size B=64, output L=32; base_key is 32 bytes so it
+     * fits a single block without pre-hashing. */
+    uint8_t k_ipad[64];
+    uint8_t k_opad[64];
+    uint8_t inner[32];
+    mbedtls_sha256_context sha;
+    int ret;
+
+    memset(k_ipad, 0, sizeof(k_ipad));
+    memset(k_opad, 0, sizeof(k_opad));
+    memcpy(k_ipad, base_key, 32);
+    memcpy(k_opad, base_key, 32);
+    for (int i = 0; i < 64; i++) {
+        k_ipad[i] ^= 0x36;
+        k_opad[i] ^= 0x5c;
+    }
+
+    /* inner = SHA256(k_ipad || device_id) */
+    mbedtls_sha256_init(&sha);
+    ret = mbedtls_sha256_starts(&sha, 0);
+    ret |= mbedtls_sha256_update(&sha, k_ipad, sizeof(k_ipad));
+    ret |= mbedtls_sha256_update(&sha, device_id, (size_t)id_len);
+    ret |= mbedtls_sha256_finish(&sha, inner);
+    mbedtls_sha256_free(&sha);
+    if (ret != 0) {
+        LOG_ERR("Per-device key: inner HMAC hash failed");
+        return -EIO;
+    }
+
+    /* key_out = SHA256(k_opad || inner) */
+    mbedtls_sha256_init(&sha);
+    ret = mbedtls_sha256_starts(&sha, 0);
+    ret |= mbedtls_sha256_update(&sha, k_opad, sizeof(k_opad));
+    ret |= mbedtls_sha256_update(&sha, inner, sizeof(inner));
+    ret |= mbedtls_sha256_finish(&sha, key_out);
+    mbedtls_sha256_free(&sha);
+    if (ret != 0) {
+        LOG_ERR("Per-device key: outer HMAC hash failed");
+        return -EIO;
+    }
+
+    LOG_INF("Per-device settings key derived from %d-byte hardware ID", (int)id_len);
+    return 0;
+}
+#endif /* CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY */
+
 __weak int akira_settings_get_encryption_key(uint8_t *key_out)
 {
     int ret = parse_hex_key();
@@ -71,8 +142,14 @@ __weak int akira_settings_get_encryption_key(uint8_t *key_out)
     {
         return ret;
     }
+#ifdef CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY
+    /* Mix the compile-time base key with the hardware-unique device id so the
+     * effective key differs per unit. Fails closed if the id is unavailable. */
+    return derive_per_device_key(ENCRYPTION_KEY, key_out);
+#else
     memcpy(key_out, ENCRYPTION_KEY, 32);
     return 0;
+#endif
 }
 
 static int crypto_init(void)
