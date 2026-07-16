@@ -478,7 +478,11 @@ static int cmd_rf_lora_cr(const struct shell *sh, size_t argc, char **argv)
 }
 
 /* Shared raw capture buffer: capture fills it, replay re-sends it. */
+#if defined(CONFIG_AKIRA_PSRAM)
+static uint8_t  s_rf_cap_buf[4096] __attribute__((section(".ext_ram.bss")));
+#else
 static uint8_t  s_rf_cap_buf[4096];
+#endif
 static size_t   s_rf_cap_len;
 static uint32_t s_rf_cap_rate;
 

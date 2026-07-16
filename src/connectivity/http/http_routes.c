@@ -143,7 +143,11 @@ static bool query_param(const char *query, const char *key,
 
 static char upload_resp_buf[128] = "{\"status\":\"ok\"}";
 /* Single scratch buffer shared by all route handlers (HTTP is single-threaded). */
+#if defined(CONFIG_AKIRA_PSRAM)
+static char s_route_buf[1024] __attribute__((section(".ext_ram.bss")));
+#else
 static char s_route_buf[1024];
+#endif
 
 static void __attribute__((unused)) set_upload_resp(const char *fmt, ...)
 {
