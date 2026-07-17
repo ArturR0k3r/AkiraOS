@@ -69,6 +69,21 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 #include <connectivity/bluetooth/bt_manager.h>
 #endif
 
+/* For akira_power_should_stay_awake() and home_wake_isr() below. */
+#include <zephyr/drivers/gpio.h>
+#include <drivers/power/power_manager.h>
+#include <storage/sd_card.h>
+#if defined(CONFIG_AKIRA_MODULE_RF)
+#include <api/akira_rf_api.h>
+#endif
+#if defined(CONFIG_AKIRA_WIFI_MANAGER)
+#include <connectivity/wifi/wifi_manager.h>
+#endif
+#if defined(CONFIG_AKIRA_OTA) && defined(CONFIG_FLASH_MAP) && \
+    defined(CONFIG_BOOTLOADER_MCUBOOT)
+#include <connectivity/ota/ota_manager.h>
+#endif
+
 /* True while a host management session is active over USB or BLE.  Deep sleep
  * powers down both the USB peripheral and the BT controller, so the device must
  * stay awake while either link is up — otherwise the web app's connection drops
@@ -335,6 +350,67 @@ static struct k_thread g_shell_thread;
 /* HOME button long-press threshold */
 #define HOME_LONG_MS CONFIG_AKIRA_HOME_BUTTON_GPIO_LONG_MS
 
+/* ------------------------------------------------------------------ */
+/* HOME-button wake interrupt                                          */
+/* ------------------------------------------------------------------ */
+/* Lets the blanked-state loop block instead of poll at 50 Hz. gpio-keys
+ * already owns HOME (sw0/GPIO0) with GPIO_INT_EDGE_BOTH; we only add a
+ * second callback — reconfiguring the trigger would drop the release edge
+ * and leave HOME reported as stuck held. ISR just posts the sem; the
+ * existing 800 ms wake-hold still qualifies the press by polling. */
+static K_SEM_DEFINE(home_wake_sem, 0, 1);
+static const struct gpio_dt_spec home_wake_gpio =
+    GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
+static struct gpio_callback home_wake_cb;
+
+static void home_wake_isr(const struct device *port,
+                          struct gpio_callback *cb, uint32_t pins)
+{
+    ARG_UNUSED(port);
+    ARG_UNUSED(cb);
+    ARG_UNUSED(pins);
+    k_sem_give(&home_wake_sem);
+}
+
+static void home_wake_intr_init(void)
+{
+    if (!device_is_ready(home_wake_gpio.port))
+    {
+        LOG_WRN("HOME wake GPIO not ready — blanked loop falls back to polling");
+        return;
+    }
+    /* Register on the already-enabled EDGE_BOTH interrupt; do not reconfigure it. */
+    gpio_init_callback(&home_wake_cb, home_wake_isr, BIT(home_wake_gpio.pin));
+    gpio_add_callback(home_wake_gpio.port, &home_wake_cb);
+}
+
+#if defined(CONFIG_AKIRA_POWER_DEEP_SLEEP)
+/* Deep sleep = sys_poweroff() = reboot. Refuse while anything is mid-job.
+ * Poll if a subsystem already tracks its own busy-state correctly; only add
+ * an akira_pm_insomnia_* lock if nothing else does. */
+static bool akira_power_should_stay_awake(void)
+{
+    return host_session_active()                         /* USB configured or BT connected */
+#if defined(CONFIG_BT)
+           || bt_manager_get_mode() != BT_MODE_NONE      /* BT scan/spam, not just connected */
+#endif
+#if defined(CONFIG_AKIRA_WIFI_MANAGER)
+           || wifi_manager_get_state() != WIFI_MGR_STATE_IDLE
+#endif
+#if defined(CONFIG_AKIRA_OTA) && defined(CONFIG_FLASH_MAP) && \
+    defined(CONFIG_BOOTLOADER_MCUBOOT)
+           || ota_is_update_in_progress()
+#endif
+           || settings_screen_is_active()
+           || g_wasm_active
+#if defined(CONFIG_AKIRA_MODULE_RF)
+           || akira_rf_daemon_is_running()
+#endif
+           || akira_sd_card_is_transfer_active()         /* false fallback when SD absent */
+           || akira_pm_insomnia_count() > 0;
+}
+#endif /* CONFIG_AKIRA_POWER_DEEP_SLEEP */
+
 static void shell_thread_fn(void *p1, void *p2, void *p3)
 {
     ARG_UNUSED(p1);
@@ -381,6 +457,8 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                     lifecycle_thread_fn, NULL, NULL, NULL,
                     14, 0, K_NO_WAIT);
     k_thread_name_set(&g_lifecycle_thread, "shell_lifecycle");
+
+    home_wake_intr_init(); /* arm HOME wake so the blanked loop can block, not poll */
 
     /* Main event + render loop */
     static uint32_t s_prev_btns;
@@ -469,7 +547,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                  * the user releases and re-presses. */
                 s_home_held_since_ms = 0;
                 s_home_fired = true;
-                wait_screen_exit();
+                wait_screen_exit(); /* -> notify_blank(false) */
                 home_screen_refresh();
                 s_prev_btns = akira_input_get_bitmask();
                 k_sleep(K_MSEC(20));
@@ -622,7 +700,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                     if (s_display_blanked)
                     {
                         s_display_blanked = false;
-                        wait_screen_exit();
+                        wait_screen_exit(); /* -> notify_blank(false) */
                         home_screen_refresh();
                         s_prev_btns = akira_input_get_bitmask();
                     }
@@ -635,7 +713,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 {
                     s_display_blanked = true;
                     s_deep_sleep_arm_ms = now_ms;
-                    wait_screen_enter();
+                    wait_screen_enter(); /* -> notify_blank(true) */
                     /* Drain button noise accumulated during wait_screen_enter's
                      * I2C + SPI flush.  Without this, the next loop iteration
                      * computes just_pressed against s_prev_btns=0, sees the
@@ -653,7 +731,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                  * Manual power-off (web app / power button) still sleeps. */
                 if (s_display_blanked && s_deep_sleep_arm_ms &&
                     s_deep_sleep_idle_s > 0 &&
-                    !host_session_active() &&
+                    !akira_power_should_stay_awake() &&
                     (now_ms - s_deep_sleep_arm_ms) >=
                         (int64_t)s_deep_sleep_idle_s * 1000)
                 {
@@ -670,7 +748,16 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
              * settings and shell changes take effect within 1 s automatically.
              * No extra per-frame re-read needed here. */
 
-            k_sleep(K_MSEC(20));
+            /* Blanked + HOME up: block on the sem (50Hz -> ~1Hz). HOME down
+             * falls through to the 20ms poll so the 800ms hold stays accurate. */
+            if (s_display_blanked && !(btns & BIT(AKIRA_BTN_HOME)))
+            {
+                k_sem_take(&home_wake_sem, K_MSEC(1000));
+            }
+            else
+            {
+                k_sleep(K_MSEC(20));
+            }
         }
         else
         {

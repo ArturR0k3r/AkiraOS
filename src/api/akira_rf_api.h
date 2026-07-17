@@ -55,6 +55,13 @@ int akira_rf_set_coding_rate(uint8_t cr);
 int akira_rf_get_rssi(int16_t *rssi);
 radio_handle_t *akira_rf_get_active_handle(void);
 
+/** True while the RF RX daemon is actively listening on the active radio. */
+bool akira_rf_daemon_is_running(void);
+/** Put the active radio into RADIO_MODE_SLEEP if it is idle. No-op if busy or absent. */
+int akira_rf_sleep_if_idle(void);
+/** Restore the active radio to RADIO_MODE_STANDBY after akira_rf_sleep_if_idle(). */
+int akira_rf_wake(void);
+
 /* Continuous-wave (CW) TX for jamming / range testing. */
 int akira_rf_tx_cw_start(void);
 int akira_rf_tx_cw_stop(void);

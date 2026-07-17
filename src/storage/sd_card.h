@@ -54,6 +54,11 @@ bool akira_sd_card_is_present(void);
 void akira_sd_card_deinit(void);
 void akira_sd_card_deinit_force(void);
 
+/** Mark a long-running SD transfer as active, so power management does not deep-sleep mid-write. */
+void akira_sd_card_set_transfer_active(bool active);
+/** True while a long-running SD transfer is in flight. */
+bool akira_sd_card_is_transfer_active(void);
+
 #ifdef CONFIG_AKIRA_SD_HOTPLUG
 typedef void (*akira_sd_hotplug_cb_t)(bool present, void *user_data);
 int  akira_sd_card_register_hotplug_cb(akira_sd_hotplug_cb_t cb, void *user_data);
@@ -68,6 +73,8 @@ void akira_sd_card_register_pre_insert_cb(akira_sd_hotplug_cb_t cb, void *user_d
 static inline int  akira_sd_card_init(void)       { return -ENOTSUP; }
 static inline bool akira_sd_card_is_present(void) { return false; }
 static inline void akira_sd_card_deinit(void)      {}
+static inline void akira_sd_card_set_transfer_active(bool active) { (void)active; }
+static inline bool akira_sd_card_is_transfer_active(void) { return false; }
 
 #endif /* CONFIG_AKIRA_SD_CARD */
 

@@ -29,6 +29,19 @@ LOG_MODULE_REGISTER(akira_power_manager, CONFIG_AKIRA_LOG_LEVEL);
 #include <string.h>
 #include <errno.h>
 
+#ifdef CONFIG_AKIRA_MODULE_RF
+#include <api/akira_rf_api.h>
+#endif
+#if defined(CONFIG_BT)
+#include <connectivity/bluetooth/bt_manager.h>
+#endif
+
+#if defined(CONFIG_SOC_ESP32S3) && !defined(CONFIG_PM)
+/* CONFIG_PM=n: deep sleep goes via sys_poweroff() -> esp_deep_sleep_start(). */
+#include <zephyr/sys/poweroff.h>
+#include <esp_sleep.h>
+#endif
+
 #ifdef CONFIG_FUEL_GAUGE
 #include <zephyr/drivers/fuel_gauge.h>
 #endif
@@ -216,20 +229,22 @@ int akira_pm_set_mode(akira_power_mode_t mode)
         /* Allow Zephyr PM to gate the CPU when idle. */
 #ifdef CONFIG_PM
         pm_state_force(0u, &(struct pm_state_info){PM_STATE_RUNTIME_IDLE, 0, 0});
-#else
-        LOG_WRN("PM not enabled (CONFIG_PM=n) — idle mode is a no-op");
-#endif
         break;
+#else
+        LOG_WRN("PM not enabled (CONFIG_PM=n) — idle mode unsupported");
+        return -ENOTSUP;
+#endif
 
     case POWER_MODE_LIGHT_SLEEP:
         /* Suspend-to-idle: RAM retained, fast wake.
          * On ESP32 this maps to light sleep via the SoC PM backend. */
 #ifdef CONFIG_PM
         pm_state_force(0u, &(struct pm_state_info){PM_STATE_SUSPEND_TO_IDLE, 0, 0});
-#else
-        LOG_WRN("PM not enabled (CONFIG_PM=n) — light sleep is a no-op");
-#endif
         break;
+#else
+        LOG_WRN("PM not enabled (CONFIG_PM=n) — light sleep unsupported");
+        return -ENOTSUP;
+#endif
 
     case POWER_MODE_DEEP_SLEEP:
         /* Standby / deep sleep: only RTC + configured wake sources preserved. */
@@ -239,10 +254,17 @@ int akira_pm_set_mode(akira_power_mode_t mode)
         }
 #ifdef CONFIG_PM
         pm_state_force(0u, &(struct pm_state_info){PM_STATE_STANDBY, 0, 0});
-#else
-        LOG_WRN("PM not enabled (CONFIG_PM=n) — deep sleep is a no-op");
-#endif
         break;
+#elif defined(CONFIG_SOC_ESP32S3)
+        /* sys_poweroff() does not return — reboots on wake. */
+        esp_sleep_enable_ext0_wakeup(0 /* GPIO_NUM_0 */, 0 /* level LOW */);
+        LOG_INF("Deep sleep — wake on GPIO0 LOW (HOME button)");
+        sys_poweroff();
+        break; /* unreachable */
+#else
+        LOG_WRN("PM not enabled (CONFIG_PM=n) — deep sleep unsupported");
+        return -ENOTSUP;
+#endif
 
     case POWER_MODE_HIBERNATE:
         /* Soft-off: only external reset / RTC alarm wakes the device. */
@@ -252,10 +274,17 @@ int akira_pm_set_mode(akira_power_mode_t mode)
         }
 #ifdef CONFIG_PM
         pm_state_force(0u, &(struct pm_state_info){PM_STATE_SOFT_OFF, 0, 0});
-#else
-        LOG_WRN("PM not enabled (CONFIG_PM=n) — hibernate is a no-op");
-#endif
         break;
+#elif defined(CONFIG_SOC_ESP32S3)
+        /* sys_poweroff() does not return — reboots on wake. */
+        esp_sleep_enable_ext0_wakeup(0 /* GPIO_NUM_0 */, 0 /* level LOW */);
+        LOG_INF("Hibernate — wake on GPIO0 LOW (HOME button)");
+        sys_poweroff();
+        break; /* unreachable */
+#else
+        LOG_WRN("PM not enabled (CONFIG_PM=n) — hibernate unsupported");
+        return -ENOTSUP;
+#endif
     }
 
     g_pm.current_mode = mode;
@@ -452,6 +481,30 @@ int akira_pm_enable_low_power_mode(bool enable)
     return 0;
 }
 
+/* ---------- blank-state subsystem idling ---------- */
+
+/* Sole trigger for blank/wake; callers must not call RF/BT idle fns directly. */
+void akira_pm_notify_blank(bool entering)
+{
+    if (entering) {
+        akira_pm_enable_low_power_mode(true);
+#ifdef CONFIG_AKIRA_MODULE_RF
+        (void)akira_rf_sleep_if_idle();
+#endif
+#if defined(CONFIG_BT)
+        (void)bt_manager_conn_params_idle();
+#endif
+    } else {
+        akira_pm_enable_low_power_mode(false);
+#ifdef CONFIG_AKIRA_MODULE_RF
+        (void)akira_rf_wake();
+#endif
+#if defined(CONFIG_BT)
+        (void)bt_manager_conn_params_active();
+#endif
+    }
+}
+
 /* ---------- per-app policy ---------- */
 
 int akira_pm_set_policy(const char *name, akira_power_policy_t policy)
@@ -481,14 +534,176 @@ int akira_pm_set_policy(const char *name, akira_power_policy_t policy)
 
 akira_power_policy_t akira_pm_get_aggregate_policy(void)
 {
-    /* Most performance-demanding active policy wins. */
+    /* Enum order != demand order (DEFAULT=0 < PERFORMANCE=1), rank explicitly. */
+    static const uint8_t demand_rank[] = {
+        [POWER_POLICY_DEFAULT]     = 1,
+        [POWER_POLICY_PERFORMANCE] = 3,
+        [POWER_POLICY_BALANCED]    = 2,
+        [POWER_POLICY_LOW_POWER]   = 0,
+    };
     akira_power_policy_t agg = POWER_POLICY_LOW_POWER;
     for (int i = 0; i < g_pm.policy_count; i++) {
-        if (g_pm.container_policies[i].policy < agg) {
+        if (demand_rank[g_pm.container_policies[i].policy] > demand_rank[agg]) {
             agg = g_pm.container_policies[i].policy;
         }
     }
     return agg;
+}
+
+/* ---------- insomnia (ref-counted keep-awake) ---------- */
+
+#define AKIRA_PM_INSOMNIA_SLOTS 8
+#define AKIRA_PM_INSOMNIA_REASON_LEN 32
+
+/* Handle = (generation << 8) | slot; generation bump on enter() invalidates
+ * stale handles from a freed+reused slot (ABA-safe). */
+#define AKIRA_PM_INSOMNIA_SLOT_BITS 8
+#define AKIRA_PM_INSOMNIA_SLOT_MASK ((1 << AKIRA_PM_INSOMNIA_SLOT_BITS) - 1)
+
+static struct {
+    char        reason[AKIRA_PM_INSOMNIA_REASON_LEN];
+    int64_t     acquired_ms;
+    int64_t     deadline_ms; /* 0 = never expires */
+    uint32_t    hold_ms;     /* for renew() to re-arm deadline_ms */
+    uint32_t    generation;
+    bool        active;
+} g_insomnia[AKIRA_PM_INSOMNIA_SLOTS];
+
+static struct k_spinlock g_insomnia_lock; /* not a mutex: ISR/workqueue-safe */
+
+/* Slot index from handle, or -EINVAL if stale/out of range. */
+static int insomnia_slot_from_handle(int handle)
+{
+    if (handle < 0) {
+        return -EINVAL;
+    }
+    int slot = handle & AKIRA_PM_INSOMNIA_SLOT_MASK;
+    uint32_t gen = (uint32_t)handle >> AKIRA_PM_INSOMNIA_SLOT_BITS;
+    if (slot >= AKIRA_PM_INSOMNIA_SLOTS || !g_insomnia[slot].active ||
+        g_insomnia[slot].generation != gen) {
+        return -EINVAL;
+    }
+    return slot;
+}
+
+int akira_pm_insomnia_enter(const char *reason, uint32_t max_hold_ms)
+{
+    int64_t now = k_uptime_get();
+    int handle = -ENOMEM;
+
+    k_spinlock_key_t key = k_spin_lock(&g_insomnia_lock);
+    for (int i = 0; i < AKIRA_PM_INSOMNIA_SLOTS; i++) {
+        if (!g_insomnia[i].active) {
+            g_insomnia[i].active      = true;
+            g_insomnia[i].generation++; /* invalidates any old handle for this slot */
+            strncpy(g_insomnia[i].reason, reason ? reason : "?",
+                    sizeof(g_insomnia[i].reason) - 1);
+            g_insomnia[i].reason[sizeof(g_insomnia[i].reason) - 1] = '\0';
+            g_insomnia[i].acquired_ms = now;
+            g_insomnia[i].hold_ms     = max_hold_ms;
+            g_insomnia[i].deadline_ms = (max_hold_ms == 0) ? 0 : now + max_hold_ms;
+            handle = (int)((g_insomnia[i].generation << AKIRA_PM_INSOMNIA_SLOT_BITS) | (uint32_t)i);
+            break;
+        }
+    }
+    k_spin_unlock(&g_insomnia_lock, key);
+
+    if (handle < 0) {
+        LOG_WRN("Insomnia table full — '%s' rejected", reason ? reason : "?");
+    }
+    return handle;
+}
+
+int akira_pm_insomnia_exit(int handle)
+{
+    int ret = 0;
+    k_spinlock_key_t key = k_spin_lock(&g_insomnia_lock);
+    int slot = insomnia_slot_from_handle(handle);
+    if (slot >= 0) {
+        g_insomnia[slot].active = false;
+    } else {
+        ret = -EINVAL;
+    }
+    k_spin_unlock(&g_insomnia_lock, key);
+    return ret;
+}
+
+int akira_pm_insomnia_renew(int handle)
+{
+    int ret = 0;
+    k_spinlock_key_t key = k_spin_lock(&g_insomnia_lock);
+    int slot = insomnia_slot_from_handle(handle);
+    if (slot >= 0) {
+        if (g_insomnia[slot].hold_ms != 0) {
+            g_insomnia[slot].deadline_ms = k_uptime_get() + g_insomnia[slot].hold_ms;
+        }
+    } else {
+        ret = -EINVAL;
+    }
+    k_spin_unlock(&g_insomnia_lock, key);
+    return ret;
+}
+
+int akira_pm_insomnia_count(void)
+{
+    /* Collect expired holders under the lock, log them after unlock. */
+    struct {
+        const char *reason;
+        int64_t     elapsed;
+    } expired[AKIRA_PM_INSOMNIA_SLOTS];
+    int n_expired = 0;
+    int live = 0;
+    int64_t now = k_uptime_get();
+
+    k_spinlock_key_t key = k_spin_lock(&g_insomnia_lock);
+    for (int i = 0; i < AKIRA_PM_INSOMNIA_SLOTS; i++) {
+        if (!g_insomnia[i].active) {
+            continue;
+        }
+        if (g_insomnia[i].deadline_ms != 0 && now >= g_insomnia[i].deadline_ms) {
+            expired[n_expired].reason  = g_insomnia[i].reason;
+            expired[n_expired].elapsed = now - g_insomnia[i].acquired_ms;
+            n_expired++;
+            g_insomnia[i].active = false;
+        } else {
+            live++;
+        }
+    }
+    k_spin_unlock(&g_insomnia_lock, key);
+
+    for (int i = 0; i < n_expired; i++) {
+        LOG_WRN("Insomnia lock expired: '%s' held %lld ms — reaped",
+                expired[i].reason ? expired[i].reason : "?",
+                (long long)expired[i].elapsed);
+    }
+    return live;
+}
+
+int akira_pm_insomnia_dump(void)
+{
+    struct {
+        const char *reason;
+        int64_t     age;
+    } live[AKIRA_PM_INSOMNIA_SLOTS];
+    int n = 0;
+    int64_t now = k_uptime_get();
+
+    k_spinlock_key_t key = k_spin_lock(&g_insomnia_lock);
+    for (int i = 0; i < AKIRA_PM_INSOMNIA_SLOTS; i++) {
+        if (g_insomnia[i].active) {
+            live[n].reason = g_insomnia[i].reason;
+            live[n].age    = now - g_insomnia[i].acquired_ms;
+            n++;
+        }
+    }
+    k_spin_unlock(&g_insomnia_lock, key);
+
+    LOG_INF("Insomnia holders: %d", n);
+    for (int i = 0; i < n; i++) {
+        LOG_INF("  '%s' age %lld ms",
+                live[i].reason ? live[i].reason : "?", (long long)live[i].age);
+    }
+    return n;
 }
 
 /* Auto-init at APPLICATION level so the fuel gauge I2C device is ready. */

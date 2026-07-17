@@ -29,13 +29,20 @@ LOG_MODULE_REGISTER(akira_sd_card, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/drivers/disk.h>
 #include <ff.h>
 #include <errno.h>
+#include <drivers/power/power_manager.h>
 
 /* Disk name must match `disk-name` in the DTS mmc{} node */
 #define SD_DISK_NAME   "SD"
 #define SD_MOUNT_POINT "/SD:"
 #define SD_APPS_DIR    "/SD:/apps"
 
+/* Generous bound on a companion BLE transfer; a missed teardown self-heals
+ * instead of pinning the device awake forever. */
+#define SD_TRANSFER_INSOMNIA_MAX_MS (5 * 60 * 1000)
+
 static bool  g_mounted;
+static volatile bool g_transfer_active;
+static int   g_transfer_insomnia_handle = -1; /* -1 = no lock held */
 static FATFS g_fat_fs;
 
 static struct fs_mount_t g_sd_mount = {
@@ -245,6 +252,30 @@ int akira_sd_card_init(void)
 bool akira_sd_card_is_present(void)
 {
     return g_mounted;
+}
+
+void akira_sd_card_set_transfer_active(bool active)
+{
+    /* bool is the source of truth (never gated on insomnia_enter() possibly
+     * failing with -ENOMEM); the lock is just a self-healing backstop. */
+    g_transfer_active = active;
+
+    if (active) {
+        if (g_transfer_insomnia_handle < 0) {
+            g_transfer_insomnia_handle = akira_pm_insomnia_enter(
+                "sd-transfer", SD_TRANSFER_INSOMNIA_MAX_MS);
+        }
+    } else {
+        if (g_transfer_insomnia_handle >= 0) {
+            akira_pm_insomnia_exit(g_transfer_insomnia_handle);
+            g_transfer_insomnia_handle = -1;
+        }
+    }
+}
+
+bool akira_sd_card_is_transfer_active(void)
+{
+    return g_transfer_active;
 }
 
 void akira_sd_card_deinit_force(void)

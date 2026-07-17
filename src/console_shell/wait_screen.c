@@ -239,7 +239,7 @@ void wait_screen_enter(void)
     akira_display_hal_set_brightness(dim_hw);
 
 #ifdef CONFIG_AKIRA_POWER_MANAGER
-    akira_pm_enable_low_power_mode(true);
+    akira_pm_notify_blank(true);
 #endif
 
     s_last_min = -1; /* force a fresh draw */
@@ -262,7 +262,7 @@ void wait_screen_update(void)
 void wait_screen_exit(void)
 {
 #ifdef CONFIG_AKIRA_POWER_MANAGER
-    akira_pm_enable_low_power_mode(false);
+    akira_pm_notify_blank(false);
 #endif
 
     /* Restore brightness — prefer NVS value, fall back to saved hw byte */

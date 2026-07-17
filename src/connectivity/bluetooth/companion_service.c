@@ -40,6 +40,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include "../../lib/mem_helper.h"
+#include "../../storage/sd_card.h"
 
 LOG_MODULE_REGISTER(companion_svc, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -335,6 +336,7 @@ static void handle_apps_install_begin(const char *op, int id, const char *params
         /* Abort previous incomplete transfer */
         akira_free_buffer(s_xfer.buf);
         memset(&s_xfer, 0, sizeof(s_xfer));
+        akira_sd_card_set_transfer_active(false);
     }
 
     s_xfer.buf = akira_malloc_buffer(size);
@@ -349,6 +351,7 @@ static void handle_apps_install_begin(const char *op, int id, const char *params
     s_xfer.received      = 0;
     s_xfer.expected_size = size;
     s_xfer.active        = true;
+    akira_sd_card_set_transfer_active(true);
     strncpy(s_xfer.app_name, name, sizeof(s_xfer.app_name) - 1);
 
     LOG_INF("BLE install begin: app=%s size=%u", name, size);
@@ -402,6 +405,7 @@ static void handle_apps_install_end(const char *op, int id, const char *params)
 cleanup:
     akira_free_buffer(s_xfer.buf);
     memset(&s_xfer, 0, sizeof(s_xfer));
+    akira_sd_card_set_transfer_active(false);
 }
 
 static void handle_settings_get(const char *op, int id, const char *params)
@@ -609,6 +613,7 @@ static void handle_files_write(const char *op, int id, const char *params)
     if (s_xfer.active) {
         akira_free_buffer(s_xfer.buf);
         memset(&s_xfer, 0, sizeof(s_xfer));
+        akira_sd_card_set_transfer_active(false);
     }
 
     s_xfer.buf = akira_malloc_buffer(size);
@@ -622,6 +627,7 @@ static void handle_files_write(const char *op, int id, const char *params)
     s_xfer.received      = 0;
     s_xfer.expected_size = size;
     s_xfer.active        = true;
+    akira_sd_card_set_transfer_active(true);
     strncpy(s_xfer.path, path, sizeof(s_xfer.path) - 1);
 
     send_resp(op, id, true, NULL);
@@ -808,6 +814,7 @@ static ssize_t data_up_write(struct bt_conn *conn,
                 s_xfer.received, plen, s_xfer.capacity);
         akira_free_buffer(s_xfer.buf);
         memset(&s_xfer, 0, sizeof(s_xfer));
+        akira_sd_card_set_transfer_active(false);
         return BT_GATT_ERR(BT_ATT_ERR_WRITE_NOT_PERMITTED);
     }
 
@@ -818,6 +825,7 @@ static ssize_t data_up_write(struct bt_conn *conn,
         LOG_WRN("Transfer aborted by peer");
         akira_free_buffer(s_xfer.buf);
         memset(&s_xfer, 0, sizeof(s_xfer));
+        akira_sd_card_set_transfer_active(false);
         return (ssize_t)len;
     }
 
@@ -840,6 +848,7 @@ static ssize_t data_up_write(struct bt_conn *conn,
         /* For COMP_XFER_APP_DATA the install is triggered by apps.install.end */
         akira_free_buffer(s_xfer.buf);
         memset(&s_xfer, 0, sizeof(s_xfer));
+        akira_sd_card_set_transfer_active(false);
     }
 
     return (ssize_t)len;
@@ -966,6 +975,7 @@ static void conn_cb_disconnected(struct bt_conn *conn, uint8_t reason)
     if (s_xfer.active) {
         akira_free_buffer(s_xfer.buf);
         memset(&s_xfer, 0, sizeof(s_xfer));
+        akira_sd_card_set_transfer_active(false);
     }
 }
 
@@ -1039,6 +1049,7 @@ int companion_svc_deinit(void)
     if (s_xfer.active) {
         akira_free_buffer(s_xfer.buf);
         memset(&s_xfer, 0, sizeof(s_xfer));
+        akira_sd_card_set_transfer_active(false);
     }
 
     bt_manager_set_mode(BT_MODE_NONE);

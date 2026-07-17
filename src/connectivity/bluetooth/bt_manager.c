@@ -552,6 +552,44 @@ bool bt_manager_is_connected(void)
     return bt_mgr.state == BT_STATE_CONNECTED;
 }
 
+int bt_manager_conn_params_idle(void)
+{
+#if BT_AVAILABLE
+    /* ref before use: disconnected_cb() can NULL/unref current_conn concurrently */
+    struct bt_conn *conn = bt_mgr.current_conn;
+    if (!conn) return 0;
+    conn = bt_conn_ref(conn);
+    if (!conn) return 0;
+
+    /* interval 640..800*1.25ms=800..1000ms, latency 4, timeout 1200*10ms=12000ms
+     * (>2*(1+4)*1000=10000, holds) */
+    int err = bt_conn_le_param_update(conn, BT_LE_CONN_PARAM(640, 800, 4, 1200));
+    if (err) LOG_WRN("Idle conn param update rejected (err %d)", err);
+    bt_conn_unref(conn);
+    return 0;
+#else
+    return 0;
+#endif
+}
+
+int bt_manager_conn_params_active(void)
+{
+#if BT_AVAILABLE
+    struct bt_conn *conn = bt_mgr.current_conn;
+    if (!conn) return 0;
+    conn = bt_conn_ref(conn);
+    if (!conn) return 0;
+
+    /* interval 12..24*1.25ms=15..30ms, latency 0, timeout 400*10ms=4000ms (holds) */
+    int err = bt_conn_le_param_update(conn, BT_LE_CONN_PARAM(12, 24, 0, 400));
+    bt_conn_unref(conn);
+    if (err) LOG_WRN("Active conn param update rejected (err %d)", err);
+    return 0;
+#else
+    return 0;
+#endif
+}
+
 int bt_manager_register_callback(bt_event_callback_t callback, void *user_data)
 {
     bt_mgr.event_cb = callback;

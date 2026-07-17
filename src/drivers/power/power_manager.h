@@ -117,6 +117,12 @@ int akira_pm_get_battery_status(akira_battery_status_t *status);
 int akira_pm_enable_low_power_mode(bool enable);
 
 /**
+ * @brief Notify blank/wake. Idles or wakes RF/BT; callers must not touch them directly.
+ * @param entering true = blanking, false = waking.
+ */
+void akira_pm_notify_blank(bool entering);
+
+/**
  * @brief Register a power policy for a named app / container.
  * @return 0 on success, -ENOMEM if the policy table is full.
  */
@@ -124,6 +130,34 @@ int akira_pm_set_policy(const char *name, akira_power_policy_t policy);
 
 /** @brief Return the most performance-demanding policy across all registered apps. */
 akira_power_policy_t akira_pm_get_aggregate_policy(void);
+
+/* ---------- insomnia (ref-counted keep-awake, Flipper-style) ---------- */
+
+/**
+ * @brief Acquire a keep-awake lock. Deep sleep allowed only at holder count 0.
+ * @param reason Copied into a fixed buffer (truncated past 31 chars).
+ * @param max_hold_ms Auto-expiry; 0 = never. Reaped on expiry so a leak can't pin awake forever.
+ * @return Handle >= 0, or -ENOMEM if the table is full.
+ */
+int akira_pm_insomnia_enter(const char *reason, uint32_t max_hold_ms);
+
+/**
+ * @brief Release a keep-awake lock. Handle is generation-tagged (ABA-safe).
+ * @return 0, or -EINVAL if stale/bad/already-free.
+ */
+int akira_pm_insomnia_exit(int handle);
+
+/** @brief Extend a lock's expiry deadline. @return 0, or -EINVAL if stale/bad. */
+int akira_pm_insomnia_renew(int handle);
+
+/**
+ * @brief Count live holders; reaps + logs expired ones. Hot path (shell loop).
+ * @return Live holder count (deep sleep gated when > 0).
+ */
+int akira_pm_insomnia_count(void);
+
+/** @brief Log all live holders (reason + age). @return Live count. */
+int akira_pm_insomnia_dump(void);
 
 #ifdef __cplusplus
 }

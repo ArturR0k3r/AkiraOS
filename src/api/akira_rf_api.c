@@ -359,6 +359,46 @@ radio_handle_t *akira_rf_get_active_handle(void)
     return g_active_handle;
 }
 
+bool akira_rf_daemon_is_running(void)
+{
+#ifdef CONFIG_AKIRA_RF_RX_DAEMON
+    return (g_active_handle != NULL) && !atomic_get(&s_rf_daemon_paused);
+#else
+    return false;
+#endif
+}
+
+/* Handle actually slept — wake() must target this, not g_active_handle at
+ * wake time, which may have changed via a shell `rf select`. */
+static radio_handle_t *s_rf_slept_handle;
+
+int akira_rf_sleep_if_idle(void)
+{
+    if (!g_active_handle) return -ENODEV;
+    if (akira_rf_daemon_is_running()) return -EBUSY; /* re-checked under lock below (TOCTOU) */
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    if (akira_rf_daemon_is_running()) {
+        k_mutex_unlock(&s_chip_lock);
+        return -EBUSY;
+    }
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->set_mode) ? h->ops->set_mode(h, RADIO_MODE_SLEEP) : -ENODEV;
+    if (ret == 0) s_rf_slept_handle = h;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
+int akira_rf_wake(void)
+{
+    if (!s_rf_slept_handle) return 0;
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = s_rf_slept_handle;
+    int ret = (h && h->ops && h->ops->set_mode) ? h->ops->set_mode(h, RADIO_MODE_STANDBY) : -ENODEV;
+    s_rf_slept_handle = NULL;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
 #ifdef CONFIG_AKIRA_RF_RX_DAEMON
 
 #define RF_DAEMON_SLEEP_MS  100

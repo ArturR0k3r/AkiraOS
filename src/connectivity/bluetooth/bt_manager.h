@@ -188,6 +188,12 @@ extern "C"
      */
     bool bt_manager_is_connected(void);
 
+    /** @brief Request low-power (long interval) BLE params. No-op if not connected. */
+    int bt_manager_conn_params_idle(void);
+
+    /** @brief Restore responsive BLE params. No-op if not connected. */
+    int bt_manager_conn_params_active(void);
+
     /**
      * @brief Register event callback
      * @param callback Callback function
