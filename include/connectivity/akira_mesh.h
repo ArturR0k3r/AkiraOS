@@ -54,6 +54,9 @@ typedef enum {
     AKIRA_MESH_MSG_ACK,            /* End-to-end delivery ACK */
     AKIRA_MESH_MSG_APP_CHUNK,      /* WASM app chunk */
     AKIRA_MESH_MSG_STATE_SYNC,     /* State synchronization */
+    AKIRA_MESH_MSG_APP_START,      /* WASM app transfer header (name/size/count) */
+    AKIRA_MESH_MSG_APP_STATUS_REQ, /* Query receiver's reassembly progress for an app_id */
+    AKIRA_MESH_MSG_APP_STATUS_RESP,/* Reply: received-chunk bitmap, for resume */
 } akira_mesh_msg_type_t;
 
 /* Mesh configuration */
@@ -86,6 +89,17 @@ typedef struct {
     uint32_t routes_active;
     uint32_t apps_distributed;
 } akira_mesh_stats_t;
+
+/* Mesh app-distribution RX (reassembly) progress */
+typedef struct {
+    bool     active;
+    uint32_t app_id;
+    char     app_name[AKIRA_MESH_APP_NAME_LEN];
+    uint32_t total_len;
+    uint16_t chunk_count;
+    uint16_t received_count;
+    uint32_t age_ms;          /* time since last accepted START/chunk */
+} akira_mesh_app_rx_status_t;
 
 /* Message reception callback */
 typedef void (*akira_mesh_rx_cb_t)(const uint8_t *src_id, const uint8_t *data,
@@ -155,6 +169,14 @@ int akira_mesh_get_nodes(akira_mesh_node_info_t *nodes, size_t max_nodes);
 int akira_mesh_get_stats(akira_mesh_stats_t *stats);
 
 /**
+ * @brief Get current app-distribution reassembly progress (RX side)
+ *
+ * @param out Pointer to status structure
+ * @return 0 on success, negative errno on failure
+ */
+int akira_mesh_get_app_rx_status(akira_mesh_app_rx_status_t *out);
+
+/**
  * @brief Register receive callback
  *
  * @param callback Callback function
@@ -164,16 +186,21 @@ int akira_mesh_get_stats(akira_mesh_stats_t *stats);
 int akira_mesh_register_rx_callback(akira_mesh_rx_cb_t callback, void *user_data);
 
 /**
- * @brief Distribute WASM app across mesh
+ * @brief Distribute a WASM app to one mesh node
  *
- * Chunks app file and distributes to all nodes in mesh.
+ * Fragments the binary into MTU-sized chunks and sends them to @p dest_id
+ * over the existing reliable unicast transport (per-chunk ACK + AODV route
+ * discovery). Requires a radio that implements get_max_payload(); returns
+ * -ENOSYS otherwise. Call once per destination node.
  *
+ * @param dest_id Destination node ID
  * @param app_name Application name
  * @param app_data Application binary data
  * @param app_len Application length
  * @return 0 on success, negative errno on failure
  */
-int akira_mesh_distribute_app(const char *app_name, const uint8_t *app_data, size_t app_len);
+int akira_mesh_distribute_app(const uint8_t *dest_id, const char *app_name,
+                              const uint8_t *app_data, size_t app_len);
 
 #ifdef __cplusplus
 }

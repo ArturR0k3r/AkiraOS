@@ -73,6 +73,7 @@
 #endif
 #if defined(CONFIG_AKIRA_MESH)
 #include "connectivity/akira_mesh.h"
+#include "lib/mem_helper.h"
 #include "api/akira_rf_api.h"
 #endif
 
@@ -2124,6 +2125,13 @@ static int cmd_mesh_info(const struct shell *sh, size_t argc, char **argv)
                stats.messages_sent, stats.messages_received, stats.messages_forwarded);
     shell_print(sh, "Active routes: %u", stats.routes_active);
     shell_print(sh, "Apps distributed: %u", stats.apps_distributed);
+
+    akira_mesh_app_rx_status_t rx;
+    if (akira_mesh_get_app_rx_status(&rx) == 0 && rx.active) {
+        shell_print(sh, "App RX: '%s' %u/%u chunks (%u bytes), last activity %u ms ago",
+                    rx.app_name, rx.received_count, rx.chunk_count,
+                    rx.total_len, rx.age_ms);
+    }
     return 0;
 }
 
@@ -2218,6 +2226,37 @@ static int cmd_mesh_send(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+static int cmd_mesh_app(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 3) {
+        shell_error(sh, "Usage: mesh app <dest_id_hex> <name>  (name must be installed locally)");
+        return -EINVAL;
+    }
+
+    uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
+    dest[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+    const char *name = argv[2];
+
+    static AKIRA_BULK_BSS uint8_t app_buf[CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024];
+    int len = app_manager_read_binary(name, app_buf, sizeof(app_buf));
+    if (len < 0) {
+        shell_error(sh, "app '%s' not found/installed locally: %d", name, len);
+        return len;
+    }
+
+    int64_t t0 = k_uptime_get();
+    int ret = akira_mesh_distribute_app(dest, name, app_buf, (size_t)len);
+    int64_t ms = k_uptime_get() - t0;
+    if (ret) {
+        shell_error(sh, "mesh app distribute failed: %d (%lld ms)", ret, ms);
+        return ret;
+    }
+
+    shell_print(sh, "distributed '%s' (%d bytes) to %02x in %lld ms",
+                name, len, dest[AKIRA_MESH_NODE_ID_LEN - 1], ms);
+    return 0;
+}
+
 static int cmd_mesh_start(const struct shell *sh, size_t argc, char **argv)
 {
     ARG_UNUSED(argc);
@@ -2251,6 +2290,7 @@ static int cmd_mesh_stop(const struct shell *sh, size_t argc, char **argv)
 SHELL_STATIC_SUBCMD_SET_CREATE(mesh_cmds,
     SHELL_CMD_ARG(init, NULL, "Init mesh: <node_id_hex>", cmd_mesh_init, 2, 0),
     SHELL_CMD_ARG(send, NULL, "Send: <dest_id_hex> <text>", cmd_mesh_send, 3, 0),
+    SHELL_CMD_ARG(app, NULL, "Distribute installed app: <dest_id_hex> <name>", cmd_mesh_app, 3, 0),
     SHELL_CMD(info, NULL, "Show mesh statistics", cmd_mesh_info),
     SHELL_CMD(nodes, NULL, "List discovered nodes", cmd_mesh_nodes),
     SHELL_CMD(start, NULL, "Start mesh networking", cmd_mesh_start),

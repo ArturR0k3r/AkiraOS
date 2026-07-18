@@ -114,6 +114,14 @@ ssize_t fs_manager_read_file(const char *path, void *buffer, size_t max_size);
 ssize_t fs_manager_append_file(const char *path, const void *data, size_t size);
 
 /**
+ * Rename/move a file within the same storage backend
+ * @param old_path - Current file path
+ * @param new_path - New file path
+ * @return 0 on success, negative error code otherwise
+ */
+int fs_manager_rename(const char *old_path, const char *new_path);
+
+/**
  * Delete file
  * @param path - File path
  * @return 0 on success, negative error code otherwise

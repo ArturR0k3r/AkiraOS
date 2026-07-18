@@ -92,6 +92,7 @@ extern "C"
         APP_SOURCE_USB,
         APP_SOURCE_SD,
         APP_SOURCE_FIRMWARE,
+        APP_SOURCE_MESH,
     } app_source_t;
 
     /**
@@ -227,6 +228,25 @@ extern "C"
                             const app_manifest_t *manifest, app_source_t source);
 
     /**
+     * @brief Register an app binary that's already fully written to disk
+     *
+     * For callers that stream a binary straight to its final storage location
+     * (e.g. mesh app reassembly) instead of holding it in a buffer — skips the
+     * write app_manager_install() always does, moving the file into place
+     * instead. `tmp_path` must point at a file already validated as WASM/AOT
+     * (magic bytes present); it is moved to the canonical install path.
+     *
+     * @param name App name
+     * @param tmp_path Path to the already-written binary
+     * @param size Binary size in bytes
+     * @param source Where the app came from
+     * @param use_sd true = final path is on the SD card, false = internal flash
+     * @return App ID (>= 0) on success, negative on error
+     */
+    int app_manager_register_installed(const char *name, const char *tmp_path, size_t size,
+                                       app_source_t source, bool use_sd);
+
+    /**
      * @brief Install app from file path
      *
      * @param path Path to .wasm file (e.g., "/sd/apps/myapp.wasm")
@@ -301,6 +321,16 @@ extern "C"
      * @return Number of apps, negative on error
      */
     int app_manager_list(app_info_t *out_list, int max_count);
+
+    /**
+     * @brief Read an installed app's binary back into memory
+     *
+     * @param name App name
+     * @param buf Output buffer
+     * @param buf_size Buffer capacity
+     * @return Bytes read (>= 0) on success, -ENOENT if not found or unreadable
+     */
+    int app_manager_read_binary(const char *name, void *buf, size_t buf_size);
 
     /**
      * @brief Get app info by name

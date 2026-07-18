@@ -174,7 +174,12 @@ typedef struct {
     
     /* Transmit packet */
     int (*send)(struct radio_handle *handle, const uint8_t *data, size_t len);
-    
+
+    /* Max single-frame TX payload for the radio's current modulation/config
+     * (re-query after set_modulation). NULL => radio has no known MTU for
+     * transports that need one (e.g. mesh app-chunk distribution). */
+    int (*get_max_payload)(struct radio_handle *handle, size_t *max_len);
+
     /* Receive packet (synchronous).
      * For radios that keep RX continuously armed (see rx_wait), this is a
      * NON-blocking read: it arms continuous RX on first call and returns any

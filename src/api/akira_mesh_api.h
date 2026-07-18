@@ -33,7 +33,8 @@ int akira_native_mesh_recv_pop(wasm_exec_env_t exec_env, uint32_t src_id_out_ptr
 int akira_native_mesh_get_nodes(wasm_exec_env_t exec_env, uint32_t buf_ptr,
                                  uint32_t max_nodes);
 int akira_native_mesh_get_stats(wasm_exec_env_t exec_env, uint32_t buf_ptr);
-int akira_native_mesh_distribute_app(wasm_exec_env_t exec_env, const char *app_name,
+int akira_native_mesh_distribute_app(wasm_exec_env_t exec_env, uint32_t dest_id_ptr,
+                                      const char *app_name,
                                       uint32_t data_ptr, uint32_t data_len);
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
 

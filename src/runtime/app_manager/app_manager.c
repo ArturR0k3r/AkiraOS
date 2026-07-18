@@ -415,6 +415,129 @@ int app_manager_install(const char *name, const void *binary, size_t size,
     return existing->id;
 }
 
+int app_manager_register_installed(const char *name, const char *tmp_path, size_t size,
+                                   app_source_t source, bool use_sd)
+{
+    if (!g_initialized)
+    {
+        return -ENODEV;
+    }
+
+    if (!name || !name[0] || !tmp_path || size == 0)
+    {
+        return -EINVAL;
+    }
+
+    if (size > CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024)
+    {
+        LOG_ERR("App too large: %zu > %dKB", size, CONFIG_AKIRA_APP_MAX_SIZE_KB);
+        return -EFBIG;
+    }
+
+    /* Peek the magic bytes already written to tmp_path — validates the
+     * binary and picks the .wasm/.aot extension, same as save_app_binary()
+     * does from an in-memory buffer, just read back from disk instead. */
+    uint8_t magic[MAX_WASM_MAGIC];
+    ssize_t peeked = fs_manager_read_file(tmp_path, magic, sizeof(magic));
+    if (peeked < 4 || !is_valid_wasm_or_aot(magic, (size_t)peeked))
+    {
+        LOG_ERR("Invalid WASM/AOT magic at %s", tmp_path);
+        return -EINVAL;
+    }
+    const char *ext = binary_ext(magic, (size_t)peeked);
+
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
+
+    char app_name[APP_NAME_MAX_LEN];
+    strncpy(app_name, name, APP_NAME_MAX_LEN - 1);
+    app_name[APP_NAME_MAX_LEN - 1] = '\0';
+
+    app_entry_t *existing = find_app_by_name(app_name);
+    bool was_new = false;
+    if (existing)
+    {
+        if (existing->state == APP_STATE_RUNNING && existing->container_id >= 0)
+        {
+            akira_runtime_stop(existing->container_id);
+        }
+        if (existing->container_id >= 0)
+        {
+            akira_runtime_destroy(existing->container_id);
+            existing->container_id = -1;
+        }
+    }
+    else
+    {
+        existing = find_free_slot();
+        if (!existing)
+        {
+            LOG_ERR("No free slots, max %d apps", CONFIG_AKIRA_APP_MAX_INSTALLED);
+            k_mutex_unlock(&g_registry_mutex);
+            return -ENOMEM;
+        }
+        existing->id = (uint8_t)(existing - g_registry) + 1;
+        was_new = true;
+    }
+
+    strncpy(existing->name, app_name, APP_NAME_MAX_LEN);
+
+    char final_path[APP_PATH_MAX_LEN];
+    if (use_sd)
+    {
+        snprintf(final_path, sizeof(final_path), "%s/%s%s", SD_APPS_DIR, app_name, ext);
+    }
+    else
+    {
+        snprintf(final_path, sizeof(final_path), "%s/%03d_%s%s", APPS_DIR, existing->id,
+                 app_name, ext);
+    }
+
+    int ret = fs_manager_rename(tmp_path, final_path);
+    if (ret < 0)
+    {
+        LOG_ERR("Failed to move %s -> %s: %d", tmp_path, final_path, ret);
+        /* g_app_count is only bumped on success below, so nothing to undo
+         * here. Only free the slot if we newly claimed one — a failed
+         * re-registration of an EXISTING app must leave its entry intact
+         * (its old on-disk binary is still there). */
+        if (was_new)
+        {
+            existing->name[0] = '\0';
+        }
+        k_mutex_unlock(&g_registry_mutex);
+        return ret;
+    }
+
+    if (was_new)
+    {
+        g_app_count++;
+    }
+
+    existing->source = source;
+    existing->size = size;
+    existing->container_id = -1;
+    existing->crash_count = 0;
+    existing->install_time = k_uptime_get_32() / 1000;
+    existing->is_preloaded = false;
+    strncpy(existing->version, "0.0.0", APP_VERSION_MAX_LEN);
+    existing->heap_kb = CONFIG_AKIRA_APP_DEFAULT_HEAP_KB;
+    existing->stack_kb = CONFIG_AKIRA_APP_DEFAULT_STACK_KB;
+    existing->permissions = APP_PERM_NONE;
+    existing->restart.enabled = false;
+    existing->restart.max_retries = CONFIG_AKIRA_APP_MAX_RETRIES;
+    existing->restart.delay_ms = CONFIG_AKIRA_APP_RESTART_DELAY_MS;
+
+    set_app_state(existing, APP_STATE_INSTALLED);
+    registry_save();
+
+    k_mutex_unlock(&g_registry_mutex);
+
+    LOG_INF("Registered app: %s (ID: %d, size: %zu, path: %s)", app_name, existing->id, size,
+            final_path);
+    akira_on_app_installed(app_name, existing->id, existing->version);
+    return existing->id;
+}
+
 int app_manager_install_from_path(const char *path)
 {
     if (!path)
@@ -1338,6 +1461,8 @@ const char *app_source_to_str(app_source_t source)
         return "SD";
     case APP_SOURCE_FIRMWARE:
         return "FIRMWARE";
+    case APP_SOURCE_MESH:
+        return "MESH";
     default:
         return "UNKNOWN";
     }
@@ -1509,12 +1634,6 @@ static int validate_wasm(const void *binary, size_t size)
 
 static int save_app_binary(const char *name, const void *binary, size_t size)
 {
-    /* CRITICAL DEBUG LOGS */
-    // LOG_INF("=== SAVE_APP_BINARY DEBUG ===");
-    // LOG_INF("name: %s", name ? name : "NULL");
-    // LOG_INF("binary ptr: %p", binary);
-    // LOG_INF("size: %zu", size);
-    
     if (!name) {
         LOG_ERR("INVALID: name is NULL");
         return -EINVAL;
@@ -1588,6 +1707,32 @@ static int delete_app_binary(const char *name)
     }
 
     return 0;
+}
+
+int app_manager_read_binary(const char *name, void *buf, size_t buf_size)
+{
+    app_entry_t *app = find_app_by_name(name);
+    if (!app) {
+        return -ENOENT;
+    }
+
+    /* Path convention differs by source (see app_manager_start): SD apps are
+     * read straight off the card by bare name, flash apps are id-prefixed
+     * in APPS_DIR. */
+    char path[APP_PATH_MAX_LEN];
+    static const char *exts[] = {".wasm", ".aot"};
+    for (int i = 0; i < 2; i++) {
+        if (app->source == APP_SOURCE_SD) {
+            snprintf(path, sizeof(path), "%s/%s%s", SD_APPS_DIR, name, exts[i]);
+        } else {
+            snprintf(path, sizeof(path), "%s/%03d_%s%s", APPS_DIR, app->id, name, exts[i]);
+        }
+        ssize_t got = fs_manager_read_file(path, buf, buf_size);
+        if (got >= 0) {
+            return (int)got;
+        }
+    }
+    return -ENOENT;
 }
 
 static void set_app_state(app_entry_t *app, app_state_t new_state)

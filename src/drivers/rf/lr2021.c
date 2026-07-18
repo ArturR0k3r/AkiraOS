@@ -134,6 +134,9 @@ LOG_MODULE_REGISTER(akira_lr2021, LOG_LEVEL_INF);
 #define LR2021_BOOT_TIMEOUT_MS          5000
 #define LR2021_TX_TIMEOUT_3S            0x2DC6C0  /* 3 seconds in 32us units */
 
+#define LR2021_MAX_PAYLOAD              255  /* FSK/LoRa: 8-bit length field */
+#define LR2021_BLE_MAX_PAYLOAD          253  /* BLE PDU len(8-bit) = 2B header + payload */
+
 /* =========================================================================
  * Device tree
  * ========================================================================= */
@@ -790,6 +793,15 @@ static int lr2021_deinit(void) {
     }
     g_lr2021.rx_armed = false;
 
+    /* Chip must be in STANDBY before SET_SLEEP — issuing it directly from
+     * continuous RX (the normal state while mesh is running) leaves BUSY
+     * stuck high, wedging the chip until a full reboot. Same class of issue
+     * as the pld_len reset in lr2021_rx_arm_continuous(). */
+    {
+        uint8_t mode = LR2021_STANDBY_XOSC;
+        lr2021_write_command(LR2021_CMD_SET_STANDBY, &mode, 1);
+    }
+
     uint8_t sleep_cfg[5] = { LR2021_SLEEP_RAM_RETENTION, 0, 0, 0, 0 };
     lr2021_write_command(LR2021_CMD_SET_SLEEP, sleep_cfg, 5);
 
@@ -1136,13 +1148,17 @@ static int lr2021_apply_pkt_params(size_t pld_len) {
     return lr2021_write_command(LR2021_CMD_SET_FSK_PKT_PARAMS, args, 7);
 }
 
+/* Max TX payload for the active modulation — shared with get_max_payload(). */
+static size_t lr2021_max_tx_len(void) {
+    return (g_lr2021.modulation == RADIO_MOD_BLE_PHY) ? LR2021_BLE_MAX_PAYLOAD
+                                                       : LR2021_MAX_PAYLOAD;
+}
+
 static int lr2021_tx(const uint8_t *data, size_t len) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
     }
-    /* BLE PDU length (header+payload) is an 8-bit field, so payload caps at
-     * 255-2=253 once the synthesized 16-bit header is accounted for. */
-    size_t max_len = (g_lr2021.modulation == RADIO_MOD_BLE_PHY) ? 253 : 255;
+    size_t max_len = lr2021_max_tx_len();
     if (!data || len == 0 || len > max_len) {
         return -EINVAL;
     }
@@ -1655,6 +1671,14 @@ int lr2021_tx_cw_set_freq_fast(uint32_t freq_hz)
 static int lr2021_ops_init(radio_handle_t *h)        { ARG_UNUSED(h); return lr2021_init(); }
 static int lr2021_ops_deinit(radio_handle_t *h)      { ARG_UNUSED(h); return lr2021_deinit(); }
 static int lr2021_ops_send(radio_handle_t *h, const uint8_t *d, size_t l) { ARG_UNUSED(h); return lr2021_tx(d, l); }
+static int lr2021_ops_get_max_payload(radio_handle_t *h, size_t *max_len) {
+    ARG_UNUSED(h);
+    if (!g_lr2021.initialized) {
+        return -ENODEV;
+    }
+    *max_len = lr2021_max_tx_len();
+    return 0;
+}
 static int lr2021_ops_recv(radio_handle_t *h, uint8_t *b, size_t l, uint32_t t) { ARG_UNUSED(h); return lr2021_rx(b, l, t); }
 static int lr2021_ops_rx_wait(radio_handle_t *h, uint32_t t) { ARG_UNUSED(h); return g_lr2021.use_irq ? lr2021_rx_wait(t) : -ENOTSUP; }
 static int lr2021_ops_set_frequency(radio_handle_t *h, uint32_t hz) { ARG_UNUSED(h); return lr2021_set_frequency(hz); }
@@ -1671,6 +1695,7 @@ static const radio_ops_t lr2021_ops = {
     .init               = lr2021_ops_init,
     .deinit             = lr2021_ops_deinit,
     .send               = lr2021_ops_send,
+    .get_max_payload    = lr2021_ops_get_max_payload,
     .recv               = lr2021_ops_recv,
     .rx_wait            = lr2021_ops_rx_wait,
     .set_event_callback = lr2021_set_event_callback,

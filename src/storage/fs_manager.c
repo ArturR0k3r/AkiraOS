@@ -462,13 +462,6 @@ int fs_manager_mkdir(const char *path)
  */
 ssize_t fs_manager_write_file(const char *path, const void *data, size_t size)
 {
-    // /* DEBUG: Log all parameters */
-    // LOG_DBG("fs_manager_write_file called:");
-    // LOG_DBG("  path: %s", path ? path : "NULL");
-    // LOG_DBG("  data: %p", data);
-    // LOG_DBG("  size: %zu", size);
-    // LOG_DBG("  initialized: %d", fs_state.initialized);
-
     if (!path)
     {
         LOG_ERR("fs_manager_write_file: path is NULL!");
@@ -627,6 +620,51 @@ ssize_t fs_manager_append_file(const char *path, const void *data, size_t size)
     }
 
     return written;
+}
+
+/**
+ * Rename/move a file within the same storage backend.
+ */
+int fs_manager_rename(const char *old_path, const char *new_path)
+{
+    if (!old_path || !new_path || !fs_state.initialized)
+    {
+        return -EINVAL;
+    }
+
+    if (is_ram_path(old_path))
+    {
+        k_mutex_lock(&ram_mutex, K_FOREVER);
+        ram_file_t *file = ram_find_file(old_path);
+        if (!file)
+        {
+            k_mutex_unlock(&ram_mutex);
+            return -ENOENT;
+        }
+        strncpy(file->name, new_path, RAM_FILE_NAME_MAX - 1);
+        file->name[RAM_FILE_NAME_MAX - 1] = '\0';
+        k_mutex_unlock(&ram_mutex);
+        return 0;
+    }
+
+    /* Ensure the destination's parent directory exists (mirrors
+     * fs_manager_write_file's behavior). */
+    char parent[256];
+    strncpy(parent, new_path, sizeof(parent) - 1);
+    parent[sizeof(parent) - 1] = '\0';
+    char *last_slash = strrchr(parent, '/');
+    if (last_slash && last_slash != parent)
+    {
+        *last_slash = '\0';
+        fs_manager_mkdir(parent);
+    }
+
+    int ret = fs_rename(old_path, new_path);
+    if (ret < 0)
+    {
+        LOG_ERR("Failed to rename %s -> %s: %d", old_path, new_path, ret);
+    }
+    return ret;
 }
 
 /**

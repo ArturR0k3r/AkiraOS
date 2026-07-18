@@ -715,14 +715,14 @@ config AKIRA_MESH_TRANSPORT_ESPNOW
 
 config AKIRA_MESH_MAX_RETRIES
     int "End-to-end retransmit attempts (beyond initial send)"
-    default 3
+    default 10
     help
       Number of retransmissions before a reliable-delivery packet is
       declared failed. Total attempts = this value + 1 (initial send).
 
 config AKIRA_MESH_ACK_TIMEOUT_MS
     int "End-to-end ACK timeout (ms)"
-    default 500
+    default 1000
     help
       Time to wait for an end-to-end ACK before retransmitting.
 
@@ -758,7 +758,7 @@ config AKIRA_MESH_SEEN_CACHE
 
 config AKIRA_MESH_RX_STACK_SIZE
     int "Mesh RX thread stack size"
-    default 2048
+    default 3072
     help
       Stack size for the mesh receive/dispatch thread.
 
@@ -776,6 +776,47 @@ config AKIRA_MESH_RX_POLL_MS
       listens continuously for this long each cycle (like a long rf recv),
       with only a brief gap afterward to let TX in. Longer = better packet
       capture but more TX latency on the shared half-duplex radio.
+
+config AKIRA_MESH_RX_IDLE_YIELD_MS
+    int "Mesh RX thread idle yield (ms)"
+    default 200
+    help
+      Sleep this long when a recv cycle finds nothing (IRQ-driven radios
+      return almost instantly either way). Without it the RX thread spins,
+      continuously re-acquiring the shared SPI bus lock and starving other
+      devices on the same bus (e.g. an SD card) of a fair turn.
+
+config AKIRA_MESH_APP_AUTO_INSTALL
+    bool "Auto-install apps received via mesh distribution"
+    default y
+    depends on AKIRA_APP_MANAGER
+    help
+      Once a mesh app transfer completes and passes CRC, install it via
+      app_manager_install() automatically. If disabled, the reassembled
+      binary is only delivered to the registered mesh RX callback.
+
+config AKIRA_MESH_APP_TX_RETRIES
+    int "Mesh app chunk send retries (on window-full)"
+    default 4
+    help
+      How many times to retry a chunk send that returned -EBUSY (the
+      pending-ACK window is full) before giving up on the whole transfer.
+
+config AKIRA_MESH_APP_TX_GAP_MS
+    int "Mesh app chunk pacing gap (ms)"
+    default 20
+    help
+      Delay between chunk sends, so the transfer doesn't overrun
+      AKIRA_MESH_MAX_PENDING_ACKS on the shared half-duplex radio.
+
+config AKIRA_MESH_APP_RX_STALE_MS
+    int "Mesh app RX reassembly stale timeout (ms)"
+    default 30000
+    help
+      If no chunk/START activity is seen for this long, an in-flight
+      reassembly is considered abandoned (sender gave up or was reset).
+      A new APP_START for the same app_id is then allowed to restart it
+      instead of being ignored as a duplicate of a still-live transfer.
 
 endif # AKIRA_MESH
 

@@ -126,7 +126,7 @@ bool akira_register_native_apis()
         {"mesh_recv_pop",          (void *)akira_native_mesh_recv_pop,          "(iiii)i", NULL},
         {"mesh_get_nodes",         (void *)akira_native_mesh_get_nodes,         "(ii)i",   NULL},
         {"mesh_get_stats",         (void *)akira_native_mesh_get_stats,         "(i)i",    NULL},
-        {"mesh_distribute_app",    (void *)akira_native_mesh_distribute_app,    "($ii)i",  NULL},
+        {"mesh_distribute_app",    (void *)akira_native_mesh_distribute_app,    "(i$ii)i", NULL},
 #endif
 #if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_WIFI)
         /* Passive 802.11 spectrum scan -- per-channel max RSSI */

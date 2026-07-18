@@ -197,17 +197,19 @@ int akira_native_mesh_get_stats(wasm_exec_env_t exec_env, uint32_t buf_ptr)
     return 0;
 }
 
-int akira_native_mesh_distribute_app(wasm_exec_env_t exec_env, const char *app_name,
+int akira_native_mesh_distribute_app(wasm_exec_env_t exec_env, uint32_t dest_id_ptr,
+                                      const char *app_name,
                                       uint32_t data_ptr, uint32_t data_len)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MESH, -EPERM);
 
     if (!app_name || data_len == 0) return -EINVAL;
 
+    uint8_t *dest_id = mesh_api_translate(exec_env, dest_id_ptr, AKIRA_MESH_NODE_ID_LEN);
     uint8_t *data = mesh_api_translate(exec_env, data_ptr, data_len);
-    if (!data) return -EFAULT;
+    if (!dest_id || !data) return -EFAULT;
 
-    return akira_mesh_distribute_app(app_name, data, data_len);
+    return akira_mesh_distribute_app(dest_id, app_name, data, data_len);
 }
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
