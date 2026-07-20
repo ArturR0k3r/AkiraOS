@@ -6,12 +6,6 @@
 #include <zephyr/dt-bindings/spi/spi.h>
 #include <zephyr/dt-bindings/pwm/pwm.h>
 
-
-// Enable USB OTG for device mode (CDC ACM console)
-&usb_otg {
-    status = "okay";
-};
-
 // -----------------------------------------------------------------------------
 // LEDC PWM — RGB controller on GPIO4 (R), GPIO5 (G), GPIO6 (B).
 // Channel index maps directly to pwm_set() channel:
@@ -77,6 +71,13 @@
             label = "akira_storage";
             reg = <0x0025E000 DT_SIZE_K(256)>;
         };
+
+        /* Hub credentials NVS — device_id + auth token
+         * 2 x 4 KB sectors; placed after lfs1_partition. */
+        hub_nvs_partition: partition@29E000 {
+            label = "hub_nvs";
+            reg = <0x0029E000 DT_SIZE_K(8)>;
+        };
     };
 };
 
@@ -92,5 +93,16 @@
         status_led: led_0 {
             gpios = <&gpio0 8 GPIO_ACTIVE_HIGH>;
         };
+    };
+};
+
+// Second WiFi instance for AP-role net_if — required by
+// CONFIG_ESP32_WIFI_AP_STA_MODE (WiFi provisioning SoftAP). The SoC dtsi
+// only declares one "wifi" node (STA); the driver's AP+STA coexistence
+// path expects DT_INST(1, espressif_esp32_wifi) for the AP-role net_if.
+/ {
+    wifi_ap: wifi_ap {
+        compatible = "espressif,esp32-wifi";
+        status = "okay";
     };
 };
