@@ -45,7 +45,7 @@ static int cmd_http_status(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "\n=== HTTP Server Status ===");
     shell_print(sh, "State: %s", state_str);
 
-    struct net_if *iface = net_if_get_default();
+    struct net_if *iface = net_if_get_wifi_sta();
     if (iface)
     {
         char addr_str[NET_IPV4_ADDR_LEN];
@@ -74,7 +74,7 @@ static int cmd_http_start(const struct shell *sh, size_t argc, char **argv)
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
-    struct net_if *iface = net_if_get_default();
+    struct net_if *iface = net_if_get_wifi_sta();
     if (!iface)
     {
         shell_error(sh, "No network interface");

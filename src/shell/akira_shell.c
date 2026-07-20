@@ -1566,7 +1566,7 @@ static int cmd_wifi_status(const struct shell *sh, size_t argc, char **argv)
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
-    struct net_if *iface = net_if_get_default();
+    struct net_if *iface = net_if_get_wifi_sta();
     if (!iface)
     {
         shell_print(sh, "No network interface available");
@@ -1654,7 +1654,7 @@ static int cmd_wifi_scan(const struct shell *sh, size_t argc, char **argv)
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
-    struct net_if *iface = net_if_get_default();
+    struct net_if *iface = net_if_get_wifi_sta();
     if (!iface) {
         shell_print(sh, "No network interface available");
         return -ENODEV;

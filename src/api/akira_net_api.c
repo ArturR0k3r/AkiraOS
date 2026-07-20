@@ -255,7 +255,7 @@ int akira_native_net_get_ip(wasm_exec_env_t exec_env,
 		return -EFAULT;
 	}
 
-	struct net_if *iface = net_if_get_default();
+	struct net_if *iface = net_if_get_wifi_sta();
 
 	if (!iface)
 	{

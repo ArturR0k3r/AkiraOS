@@ -2083,49 +2083,41 @@ static int cmd_settings_set_wifi(const struct shell *sh, size_t argc, char **arg
         shell_print(sh, "");
         shell_print(sh, "Description:");
         shell_print(sh, "  Convenience command to set WiFi credentials.");
-        shell_print(sh, "  SSID is stored as plaintext, PSK is encrypted.");
+        shell_print(sh, "  Stored as one encrypted entry, written atomically.");
         shell_print(sh, "");
         shell_print(sh, "Examples:");
         shell_print(sh, "  settings set_wifi \"MyNetwork\" \"MyPassword123\"");
         shell_print(sh, "  settings set_wifi HomeWiFi SecurePass456");
         shell_print(sh, "");
         shell_print(sh, "Note:");
-        shell_print(sh, "  - SSID is stored at: %s", AKIRA_SETTINGS_WIFI_SSID_KEY);
-        shell_print(sh, "  - PSK is stored encrypted at: %s", AKIRA_SETTINGS_WIFI_PSK_KEY);
+        shell_print(sh, "  - Stored at: %s", AKIRA_SETTINGS_WIFI_CREDS_KEY);
         return -EINVAL;
     }
 
     const char *ssid = argv[1];
     const char *psk = argv[2];
 
-    // Set SSID (plaintext)
-    int ret = akira_settings_set(AKIRA_SETTINGS_WIFI_SSID_KEY, ssid, false);
-    if (ret != 0)
+    /* SSID+PSK as one tab-delimited value — a single NVS write is atomic,
+     * unlike two separate writes which leave a window where a power loss
+     * between them strands a new SSID paired with the old PSK. */
+    char combined[MAX_VALUE_LEN * 2 + 2];
+    int n = snprintf(combined, sizeof(combined), "%s\t%s", ssid, psk);
+    if (n < 0 || (size_t)n >= sizeof(combined))
     {
-        shell_error(sh, "Failed to set SSID: %d", ret);
-        return ret;
+        shell_error(sh, "SSID/PSK too long");
+        return -ENAMETOOLONG;
     }
 
-    // Set PSK (encrypted)
-#ifdef CONFIG_AKIRA_SETTINGS_ENCRYPTION
-    ret = akira_settings_set(AKIRA_SETTINGS_WIFI_PSK_KEY, psk, true);
-    if (ret != 0)
-    {
-        shell_error(sh, "Failed to set PSK: %d", ret);
-        // Try to delete the SSID we just set since operation failed
-        akira_settings_delete(AKIRA_SETTINGS_WIFI_SSID_KEY);
-        return ret;
-    }
-#else
-    shell_warn(sh, "⚠️  Encryption not enabled - PSK will be stored in plaintext!");
-    ret = akira_settings_set(AKIRA_SETTINGS_WIFI_PSK_KEY, psk, false);
-    if (ret != 0)
-    {
-        shell_error(sh, "Failed to set PSK: %d", ret);
-        akira_settings_delete(AKIRA_SETTINGS_WIFI_SSID_KEY);
-        return ret;
-    }
+#ifndef CONFIG_AKIRA_SETTINGS_ENCRYPTION
+    shell_warn(sh, "⚠️  Encryption not enabled - credentials will be stored in plaintext!");
 #endif
+
+    int ret = akira_settings_set(AKIRA_SETTINGS_WIFI_CREDS_KEY, combined, true);
+    if (ret != 0)
+    {
+        shell_error(sh, "Failed to set WiFi credentials: %d", ret);
+        return ret;
+    }
 
     shell_print(sh, "✅ WiFi credentials set successfully");
     shell_print(sh, "   SSID: %s", ssid);

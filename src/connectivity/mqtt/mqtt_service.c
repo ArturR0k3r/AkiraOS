@@ -106,7 +106,7 @@ static void load_config(void)
 static void build_ids(void)
 {
     uint8_t mac[6] = {0};
-    struct net_if *iface = net_if_get_default();
+    struct net_if *iface = net_if_get_wifi_sta();
     if (iface) {
         struct net_linkaddr *la = net_if_get_link_addr(iface);
         if (la && la->len >= 6) {

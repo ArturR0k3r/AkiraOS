@@ -102,10 +102,10 @@ static int wifi_radio_init(radio_handle_t *handle)
 {
     struct wifi_radio_data *data = handle->priv_data;
     
-    /* Get default network interface */
-    data->iface = net_if_get_default();
+    /* Get the STA-role interface */
+    data->iface = net_if_get_wifi_sta();
     if (!data->iface) {
-        LOG_ERR("No default network interface found");
+        LOG_ERR("No STA network interface found");
         return -ENODEV;
     }
     

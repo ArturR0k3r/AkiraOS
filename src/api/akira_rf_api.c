@@ -598,9 +598,9 @@ int akira_native_wifi_scan_rssi(wasm_exec_env_t exec_env,
         return -EFAULT;
     }
 
-    struct net_if *iface = net_if_get_default();
+    struct net_if *iface = net_if_get_wifi_sta();
     if (!iface) {
-        LOG_ERR("wifi_scan_rssi: no default interface");
+        LOG_ERR("wifi_scan_rssi: no STA interface");
         return -ENODEV;
     }
 
@@ -740,9 +740,9 @@ int akira_native_wifi_scan_aps(wasm_exec_env_t exec_env,
 
     if (!buf || buf_len < WIFI_AP_ENTRY_SIZE) return -EINVAL;
 
-    struct net_if *iface = net_if_get_default();
+    struct net_if *iface = net_if_get_wifi_sta();
     if (!iface) {
-        LOG_ERR("wifi_scan_aps: no default interface");
+        LOG_ERR("wifi_scan_aps: no STA interface");
         return -ENODEV;
     }
 

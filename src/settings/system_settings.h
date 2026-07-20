@@ -10,9 +10,7 @@
 /* ------------------------------------------------------------------ */
 /* System                                                               */
 /* ------------------------------------------------------------------ */
-#define AKIRA_SETTINGS_WIFI_SSID_KEY    "system/wifi/ssid"
-#define AKIRA_SETTINGS_WIFI_PSK_KEY     "system/wifi/psk"
-/* Combined credential key: "ssid\tpsk" — one NVS write guarantees atomicity */
+/* "ssid\tpsk" — one NVS write guarantees atomicity */
 #define AKIRA_SETTINGS_WIFI_CREDS_KEY   "system/wifi/creds"
 #define AKIRA_SETTINGS_TIME_BASE_KEY    "system/time_base"
 
