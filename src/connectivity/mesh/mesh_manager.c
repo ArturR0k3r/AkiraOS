@@ -100,10 +100,10 @@ struct __packed mesh_app_chunk_hdr {
 #define MESH_APP_MAX_CHUNKS   ((CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024) / MESH_APP_MIN_STRIDE)
 #define MESH_APP_BITMAP_BYTES DIV_ROUND_UP(MESH_APP_MAX_CHUNKS, 8)
 
-/* Mesh apps now stream straight to storage (no RAM reassembly buffer) —
- * this is where an in-flight transfer's chunks are appended to before the
- * final rename to its canonical install path. Only one transfer is ever
- * in flight (single-slot app_rx), so a fixed name is enough. */
+/* Mesh apps stream straight to storage (no RAM reassembly buffer) — this
+ * is where an in-flight transfer's chunks are appended to before the final
+ * rename to its canonical install path. Only one transfer is ever in
+ * flight (single-slot app_rx), so a fixed name is enough. */
 #define MESH_APP_TMP_PATH_SD    "/SD:/apps/.mesh_recv.wasm"
 #define MESH_APP_TMP_PATH_FLASH "/lfs/apps/.mesh_recv.wasm"
 #define MESH_APP_TMP_PATH_MAX   40
@@ -111,8 +111,7 @@ struct __packed mesh_app_chunk_hdr {
 /* Resume support: sender asks what the receiver already has for an app_id
  * before (re-)sending chunks, so a retried transfer only fills gaps instead
  * of resending everything from scratch. Best-effort (not ack-tracked) — a
- * lost/unanswered query just falls back to sending every chunk, same as
- * before this existed. */
+ * lost/unanswered query just falls back to sending every chunk. */
 struct __packed mesh_app_status_req {
     uint32_t app_id;
 };
@@ -266,8 +265,8 @@ static void fill_header(struct mesh_header *h, uint8_t type, uint8_t ttl, const 
     memcpy(h->src_id, mesh_state.config.node_id, AKIRA_MESH_NODE_ID_LEN);
     memcpy(h->dest_id, dest, AKIRA_MESH_NODE_ID_LEN);
     /* tables_lock guards counters too (see state comment); beacon (workqueue
-     * thread) and app-distribute (shell thread) call this concurrently now,
-     * so the increment needs the same lock. Recursive-safe if a caller
+     * thread) and app-distribute (shell thread) call this concurrently, so
+     * the increment needs the same lock. Recursive-safe if a caller
      * already holds it. */
     k_mutex_lock(&mesh_state.tables_lock, K_FOREVER);
     h->seq_num = mesh_state.seq_num++;
@@ -581,8 +580,8 @@ static bool mesh_app_rx_chunk(const struct mesh_app_chunk_hdr *ch,
     /* Chunks are sent strictly in order — the sender blocks on a real
      * end-to-end ack for chunk N before ever sending N+1 — so a receiver
      * only ever sees the next expected index, or a retransmit-duplicate of
-     * the one it just wrote (now correctly re-acked without reprocessing,
-     * see mesh_dispatch). No out-of-order arrival is possible, so straight
+     * the one it just wrote (re-acked without reprocessing, see
+     * mesh_dispatch). No out-of-order arrival is possible, so straight
      * append — no positioned writes, no RAM reassembly buffer — is safe. */
     if (ch->chunk_index != mesh_state.app_rx.received_count) {
         if (mesh_state.app_rx.received_count > 0 &&

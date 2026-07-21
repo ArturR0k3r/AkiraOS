@@ -21,12 +21,8 @@ LOG_MODULE_REGISTER(akira_mesh_api, CONFIG_AKIRA_LOG_LEVEL);
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 
-/* Board wiring: LR2021 is the only chip exposing RADIO_CAP_MOD_LORA, so this
- * mask selects it deterministically and avoids the shared RF_RST conflict
- * with CC1121 (see cmd_mesh_init() in akira_shell.c). Selection only — does
- * not force LoRa modulation. */
 #define AKIRA_MESH_API_TRANSPORT_CAPS \
-    (RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_BAND_SUBGHZ | RADIO_CAP_MOD_LORA)
+    (RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_BAND_SUBGHZ)
 
 #define MESH_API_RX_QUEUE_DEPTH 8
 
