@@ -165,6 +165,15 @@ config AKIRA_WIFI_MANAGER_MAX_CBS
       plus a user_data pointer. 4 covers: shell, OS shell, cloud client,
       WASM bridge.
 
+config AKIRA_WIFI_MANAGER_CONNECT_TIMEOUT_MS
+    int "WiFi connect attempt timeout (ms)"
+    default 15000
+    depends on AKIRA_WIFI_MANAGER
+    help
+      If a connect attempt has not reached CONNECTED (IP assigned) within
+      this time, it is declared failed and the manager resets to IDLE so
+      a new wifi_manager_connect() can be issued.
+
 config AKIRA_TERMINAL_MODE
     bool "Enable hacker terminal mode"  
     default n
