@@ -41,6 +41,7 @@ static struct {
     wifi_mgr_scan_result_t scan_results[WIFI_MGR_MAX_SCAN_RESULTS];
     size_t              scan_count;
     bool                scanning;
+    struct k_work_delayable connect_timeout_work;
 } mgr;
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
@@ -52,6 +53,21 @@ static void fire_event(wifi_mgr_event_t evt)
             mgr.listeners[i].cb(evt, mgr.listeners[i].user_data);
         }
     }
+}
+
+static void connect_timeout_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    k_mutex_lock(&mgr.lock, K_FOREVER);
+    if (mgr.state != WIFI_MGR_STATE_CONNECTING) {
+        k_mutex_unlock(&mgr.lock);
+        return;
+    }
+    LOG_WRN("WiFi connect timed out");
+    mgr.state = WIFI_MGR_STATE_IDLE;
+    k_mutex_unlock(&mgr.lock);
+    fire_event(WIFI_MGR_EVT_CONNECT_FAILED);
 }
 
 /* ── net_mgmt callbacks ──────────────────────────────────────────────────── */
@@ -71,6 +87,7 @@ static void wifi_event_handler(struct net_mgmt_event_callback *cb,
         if (status && status->conn_status != WIFI_STATUS_CONN_SUCCESS) {
             LOG_WRN("WiFi connect failed (status=%d)", status->conn_status);
             mgr.state = WIFI_MGR_STATE_IDLE;
+            k_work_cancel_delayable(&mgr.connect_timeout_work);
             k_mutex_unlock(&mgr.lock);
             fire_event(WIFI_MGR_EVT_CONNECT_FAILED);
             return;
@@ -86,8 +103,17 @@ static void wifi_event_handler(struct net_mgmt_event_callback *cb,
             LOG_INF("WiFi disconnected");
             mgr.state = WIFI_MGR_STATE_IDLE;
             mgr.connect_time_ms = 0;
+            k_work_cancel_delayable(&mgr.connect_timeout_work);
             k_mutex_unlock(&mgr.lock);
             fire_event(WIFI_MGR_EVT_DISCONNECTED);
+            return;
+        }
+        if (mgr.state == WIFI_MGR_STATE_CONNECTING) {
+            LOG_WRN("WiFi connect failed (disconnected while connecting)");
+            mgr.state = WIFI_MGR_STATE_IDLE;
+            k_work_cancel_delayable(&mgr.connect_timeout_work);
+            k_mutex_unlock(&mgr.lock);
+            fire_event(WIFI_MGR_EVT_CONNECT_FAILED);
             return;
         }
         break;
@@ -185,6 +211,7 @@ static void ipv4_event_handler(struct net_mgmt_event_callback *cb,
     if (mgr.state == WIFI_MGR_STATE_CONNECTING) {
         mgr.state = WIFI_MGR_STATE_CONNECTED;
         mgr.connect_time_ms = k_uptime_get();
+        k_work_cancel_delayable(&mgr.connect_timeout_work);
         LOG_INF("WiFi connected with IP");
         k_mutex_unlock(&mgr.lock);
         add_mdns_dns_server();
@@ -260,6 +287,8 @@ int wifi_manager_connect(void)
 
     mgr.state = WIFI_MGR_STATE_CONNECTING;
     LOG_INF("WiFi connecting to '%s'", ssid);
+    k_work_schedule(&mgr.connect_timeout_work,
+                     K_MSEC(CONFIG_AKIRA_WIFI_MANAGER_CONNECT_TIMEOUT_MS));
 
     k_mutex_unlock(&mgr.lock);
     return 0;
@@ -561,6 +590,7 @@ static int wifi_manager_init(void)
     memset(&mgr, 0, sizeof(mgr));
     k_mutex_init(&mgr.lock);
     mgr.state = WIFI_MGR_STATE_IDLE;
+    k_work_init_delayable(&mgr.connect_timeout_work, connect_timeout_handler);
 
     net_mgmt_init_event_callback(&mgr.wifi_cb, wifi_event_handler,
                                  NET_EVENT_WIFI_CONNECT_RESULT |
