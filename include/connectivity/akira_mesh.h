@@ -31,11 +31,14 @@ extern "C" {
 #define AKIRA_MESH_NODE_ID_LEN    8
 #define AKIRA_MESH_APP_NAME_LEN   32
 
-/* Transport selection is purely capability-based — the mesh acquires the first
- * free radio whose capabilities match the configured mask. */
-#define AKIRA_MESH_CAPS_SUBGHZ (RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_BAND_SUBGHZ)
-#define AKIRA_MESH_CAPS_802154 (RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_CSMA_CA)
-#define AKIRA_MESH_CAPS_BLE    (RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_MOD_BLE_PHY)
+/* Explicit transport selection. CC1121 and LR2021 both register as
+ * RADIO_TYPE_SUBGHZ, so capability-mask matching can't tell them apart —
+ * SUBGHZ/LORA are acquired by name ("CC1121"/"LR2021"), BLE by radio type. */
+typedef enum {
+    AKIRA_MESH_TRANSPORT_SUBGHZ = 0, /* CC1121 (FSK/OOK) */
+    AKIRA_MESH_TRANSPORT_LORA,       /* LR2021 (LoRa) */
+    AKIRA_MESH_TRANSPORT_BLE,        /* radio_ble.c */
+} akira_mesh_transport_t;
 
 /* Node role */
 typedef enum {
@@ -64,7 +67,7 @@ typedef struct {
     uint8_t node_id[AKIRA_MESH_NODE_ID_LEN];  /* Unique node ID */
     char node_name[AKIRA_MESH_APP_NAME_LEN];  /* Human-readable name */
     akira_mesh_role_t role;                   /* Node role */
-    uint32_t transport_caps;                  /* Caps mask for radio acquisition */
+    akira_mesh_transport_t transport;         /* Radio backend to use */
     uint8_t max_hops;                         /* Maximum hop count */
     uint32_t beacon_interval_ms;              /* Beacon transmission interval */
 } akira_mesh_config_t;

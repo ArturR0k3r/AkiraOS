@@ -75,6 +75,12 @@ void mesh_route_invalidate(struct route_table *t, const uint8_t *dest)
     if (r) r->valid = false;
 }
 
+void mesh_route_touch(struct route_table *t, const uint8_t *dest, uint32_t new_expiry_ms)
+{
+    struct route_entry *r = route_find(t, dest);
+    if (r && r->valid) r->expiry_ms = new_expiry_ms;
+}
+
 void mesh_route_gc(struct route_table *t, uint32_t now_ms)
 {
     for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_ROUTES; i++)

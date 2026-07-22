@@ -43,6 +43,9 @@ struct route_entry *mesh_route_lookup(struct route_table *t, const uint8_t *dest
 bool mesh_route_install(struct route_table *t, const uint8_t *dest, const uint8_t *next_hop,
                         uint8_t hop_count, uint16_t dest_seq, uint32_t expiry_ms);
 void mesh_route_invalidate(struct route_table *t, const uint8_t *dest);
+/* Extend expiry on a still-valid entry (route actively in use) — no-op if
+ * absent/expired, does not install. */
+void mesh_route_touch(struct route_table *t, const uint8_t *dest, uint32_t new_expiry_ms);
 /* mark expired entries invalid */
 void mesh_route_gc(struct route_table *t, uint32_t now_ms);
 

@@ -513,7 +513,12 @@ int app_manager_register_installed(const char *name, const char *tmp_path, size_
         g_app_count++;
     }
 
-    existing->source = source;
+    /* use_sd overrides the caller's source: path lookup (app_manager_start,
+     * app_manager_read_binary) and registry persistence key off ->source ==
+     * APP_SOURCE_SD to decide bare-name-on-card vs id-prefixed-in-flash. A
+     * mesh/cloud-installed app that landed on SD must read back as SD, not
+     * by its install origin, or every later lookup builds the wrong path. */
+    existing->source = use_sd ? APP_SOURCE_SD : source;
     existing->size = size;
     existing->container_id = -1;
     existing->crash_count = 0;

@@ -19,6 +19,7 @@
 
 #include "connectivity/akira_mesh.h"
 #include "connectivity/radio_interface.h"
+#include "connectivity/bluetooth/bt_manager.h"
 #include "mesh_routing.h"
 #include "mesh_crypto.h"
 #include "mesh_session.h"
@@ -254,6 +255,11 @@ static int mesh_radio_tx(const uint8_t *buf, size_t len)
     }
     int ret = r->ops->send(r, buf, len);
     k_mutex_unlock(&r->lock);
+    if (ret) {
+        LOG_ERR("mesh_radio_tx failed: %d (len=%zu)", ret, len);
+    } else {
+        LOG_DBG("mesh_radio_tx ok (len=%zu)", len);
+    }
     return ret;
 }
 
@@ -1206,9 +1212,25 @@ int akira_mesh_init(const akira_mesh_config_t *config)
     }
 #endif
 
-    mesh_state.radio = radio_manager_acquire_by_caps(config->transport_caps, "mesh");
+    switch (config->transport) {
+        case AKIRA_MESH_TRANSPORT_BLE:
+            bt_manager_stop_advertising();
+            mesh_state.radio = radio_manager_acquire_by_type(RADIO_TYPE_BLE, "mesh");
+            break;
+        case AKIRA_MESH_TRANSPORT_LORA: {
+            radio_handle_t *r = radio_manager_get_by_name("LR2021");
+            mesh_state.radio = (r && radio_manager_acquire(r, "mesh") == 0) ? r : NULL;
+            break;
+        }
+        case AKIRA_MESH_TRANSPORT_SUBGHZ:
+        default: {
+            radio_handle_t *r = radio_manager_get_by_name("CC1121");
+            mesh_state.radio = (r && radio_manager_acquire(r, "mesh") == 0) ? r : NULL;
+            break;
+        }
+    }
     if (!mesh_state.radio) {
-        LOG_ERR("No radio matches mesh transport caps 0x%08x", config->transport_caps);
+        LOG_ERR("No radio available for mesh transport %d", config->transport);
         k_mutex_unlock(&mesh_init_lock);
         return -ENODEV;
     }
@@ -1376,7 +1398,13 @@ static int mesh_send_app_and_wait(const uint8_t *dest_id, uint8_t msg_type,
     k_mutex_lock(&mesh_state.tables_lock, K_FOREVER);
     bool acked = s_app_ack_wait.acked;
     s_app_ack_wait.active = false;
-    if (!acked) {
+    if (acked) {
+        /* A multi-chunk transfer routinely outlives the route's fixed
+         * lifetime — extend it on every real ack so an actively-used route
+         * doesn't expire mid-transfer and force an RREQ/RREP detour. */
+        mesh_route_touch(&mesh_state.routes, dest_id,
+                         k_uptime_get_32() + CONFIG_AKIRA_MESH_ROUTE_LIFETIME_S * 1000);
+    } else {
         /* Stop the generic retransmit machinery from continuing to resend
          * this frame in the background after we've already given up on it —
          * otherwise a zombie retransmit can land long after the caller has

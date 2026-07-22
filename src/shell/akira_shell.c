@@ -2173,18 +2173,35 @@ static void mesh_shell_rx_cb(const uint8_t *src_id, const uint8_t *data,
 static int cmd_mesh_init(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 2) {
-        shell_error(sh, "Usage: mesh init <node_id_hex>  (e.g. mesh init 01)");
+        shell_error(sh, "Usage: mesh init <node_id_hex> [ble|sub|lora]  (e.g. mesh init 01 sub)");
         return -EINVAL;
     }
 
     uint8_t id = (uint8_t)strtoul(argv[1], NULL, 16);
+    akira_mesh_transport_t transport = AKIRA_MESH_TRANSPORT_SUBGHZ;
+    const char *transport_name = "sub";
+
+    if (argc >= 3) {
+        if (strcmp(argv[2], "ble") == 0) {
+            transport = AKIRA_MESH_TRANSPORT_BLE;
+            transport_name = "ble";
+        } else if (strcmp(argv[2], "sub") == 0) {
+            transport = AKIRA_MESH_TRANSPORT_SUBGHZ;
+            transport_name = "sub";
+        } else if (strcmp(argv[2], "lora") == 0) {
+            transport = AKIRA_MESH_TRANSPORT_LORA;
+            transport_name = "lora";
+        } else {
+            shell_error(sh, "Unknown transport '%s' (want ble|sub|lora)", argv[2]);
+            return -EINVAL;
+        }
+    }
 
     akira_mesh_config_t cfg = {0};
     cfg.node_id[AKIRA_MESH_NODE_ID_LEN - 1] = id;
     snprintf(cfg.node_name, sizeof(cfg.node_name), "akira-%02x", id);
     cfg.role = AKIRA_MESH_ROLE_NODE;
-    cfg.transport_caps = RADIO_CAP_TX | RADIO_CAP_RX |
-                         RADIO_CAP_BAND_SUBGHZ;
+    cfg.transport = transport;
     cfg.max_hops = AKIRA_MESH_MAX_HOPS;
     cfg.beacon_interval_ms = 5000;
 
@@ -2197,7 +2214,7 @@ static int cmd_mesh_init(const struct shell *sh, size_t argc, char **argv)
     }
 
     akira_mesh_register_rx_callback(mesh_shell_rx_cb, NULL);
-    shell_print(sh, "mesh init: node %02x (%s), transport=SUBGHZ", id, cfg.node_name);
+    shell_print(sh, "mesh init: node %02x (%s), transport=%s", id, cfg.node_name, transport_name);
     return 0;
 }
 
@@ -2285,7 +2302,7 @@ static int cmd_mesh_stop(const struct shell *sh, size_t argc, char **argv)
 }
 
 SHELL_STATIC_SUBCMD_SET_CREATE(mesh_cmds,
-    SHELL_CMD_ARG(init, NULL, "Init mesh: <node_id_hex>", cmd_mesh_init, 2, 0),
+    SHELL_CMD_ARG(init, NULL, "Init mesh: <node_id_hex> [ble|sub|lora]", cmd_mesh_init, 2, 1),
     SHELL_CMD_ARG(send, NULL, "Send: <dest_id_hex> <text>", cmd_mesh_send, 3, 0),
     SHELL_CMD_ARG(app, NULL, "Distribute installed app: <dest_id_hex> <name>", cmd_mesh_app, 3, 0),
     SHELL_CMD(info, NULL, "Show mesh statistics", cmd_mesh_info),
