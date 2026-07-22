@@ -26,11 +26,10 @@ LOG_MODULE_REGISTER(radio_ble, CONFIG_AKIRA_LOG_LEVEL);
 #define AKIRA_BLE_MAGIC0     0x41 /* 'A' */
 #define AKIRA_BLE_MAGIC1     0x4D /* 'M' */
 #define AKIRA_BLE_MAGIC_LEN  2
-/* 220, not 256: AD structure (2 len/type + 2 magic + payload) must fit in a
- * single unfragmented LE Extended Advertising Report — 229B data ceiling from
- * the controller's 257B HCI event buffer minus report-field overhead. Above
- * that, the ESP32-S3 controller needs to chain PARTIAL/COMPLETE reports and
- * silently fails to, so the packet is dropped with no host-side error. */
+/* AD structure (2 len/type + 2 magic + payload) must stay under the 229B
+ * single-report data ceiling (257B controller HCI event buffer minus
+ * report-field overhead) — above that the ESP32-S3 controller must chain
+ * PARTIAL/COMPLETE reports and doesn't, so the packet drops silently. */
 #define AKIRA_BLE_MAX_PACKET 220
 
 #define AKIRA_BLE_ADV_INT_MS 60
@@ -54,10 +53,9 @@ struct ble_rx_msg {
     uint16_t len;
     uint8_t data[AKIRA_BLE_MAX_PACKET];
 };
-/* 4 was too shallow under mesh app-distribute traffic (retransmit +
- * RREQ/RREP + chunk bursts) — mesh_rx_thread can't always drain between
- * scan callback events, so a full queue silently dropped frames including
- * live chunks. 16 gives slack without meaningfully growing static RAM. */
+/* mesh_rx_thread can't always drain between scan callback events under
+ * app-distribute burst traffic (retransmit + RREQ/RREP + chunks); a
+ * shallow queue silently drops frames, including live chunks. */
 K_MSGQ_DEFINE(ble_rx_msgq, sizeof(struct ble_rx_msg), 16, 4);
 
 static bool ble_adv_ad_cb(struct bt_data *data, void *user_data)

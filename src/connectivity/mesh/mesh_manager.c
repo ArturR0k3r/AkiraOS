@@ -1214,7 +1214,9 @@ int akira_mesh_init(const akira_mesh_config_t *config)
 
     switch (config->transport) {
         case AKIRA_MESH_TRANSPORT_BLE:
+#if defined(CONFIG_BT)
             bt_manager_stop_advertising();
+#endif
             mesh_state.radio = radio_manager_acquire_by_type(RADIO_TYPE_BLE, "mesh");
             break;
         case AKIRA_MESH_TRANSPORT_LORA: {
