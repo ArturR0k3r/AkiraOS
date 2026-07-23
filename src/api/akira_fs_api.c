@@ -25,6 +25,7 @@ LOG_MODULE_REGISTER(akira_fs_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <runtime/security.h>
 #include <runtime/akira_runtime.h>
 #include <storage/fs_manager.h>
+#include <lib/mem_helper.h>
 #include <zephyr/kernel.h>
 #include <zephyr/fs/fs.h>
 #include <string.h>
@@ -44,7 +45,7 @@ typedef struct {
     struct fs_file_t   zfile;
 } fs_fd_t;
 
-static fs_fd_t       s_fds[CONFIG_AKIRA_WASM_FS_MAX_FDS];
+static fs_fd_t AKIRA_BULK_BSS s_fds[CONFIG_AKIRA_WASM_FS_MAX_FDS];
 static K_MUTEX_DEFINE(s_fds_mutex);
 
 static int fd_alloc(wasm_module_inst_t owner)

@@ -894,16 +894,13 @@ int bt_manager_set_mode(bt_manager_mode_t mode)
     k_mutex_lock(&bt_mgr.mutex, K_FOREVER);
 
     if (mode != BT_MODE_NONE && bt_mgr.mode != BT_MODE_NONE && bt_mgr.mode != mode) {
-        /* HID coexists with the observer/advertiser WASM modes on the same
-         * stack: HID uses the BLE HID profile (connectable peripheral),
-         * BLE_APP adds custom GATT services, and BLE_SCAN/BLE_SPAM run the
-         * controller's observer/broadcaster role concurrently. HID keeps
-         * advertising; on release (set_mode NONE) hid_active restores it. */
         if ((bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_BLE_APP) ||
             (bt_mgr.mode == BT_MODE_BLE_APP && mode == BT_MODE_HID) ||
             (bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_BLE_SCAN) ||
-            (bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_BLE_SPAM)) {
-            LOG_INF("BT: HID sharing stack with mode %d", mode);
+            (bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_BLE_SPAM) ||
+            (mode == BT_MODE_MESH && bt_mgr.mode != BT_MODE_BLE_SCAN) ||
+            (bt_mgr.mode == BT_MODE_MESH && mode != BT_MODE_BLE_SCAN)) {
+            LOG_INF("BT: mode %d sharing stack with mode %d", bt_mgr.mode, mode);
         } else if ((bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_COMPANION) ||
                    (bt_mgr.mode == BT_MODE_COMPANION && mode == BT_MODE_HID)) {
             /* HID and Companion are exclusive but may be swapped at boot before
@@ -1037,7 +1034,8 @@ static int cmd_btmode(const struct shell *sh, size_t argc, char **argv)
         shell_print(sh, "active    : %s",
                     m == BT_MODE_COMPANION ? "companion" :
                     m == BT_MODE_HID       ? "hid" :
-                    m == BT_MODE_BLE_APP   ? "ble_app" : "none");
+                    m == BT_MODE_BLE_APP   ? "ble_app" :
+                    m == BT_MODE_MESH      ? "mesh" : "none");
         shell_print(sh, "usage: btmode <hid|companion>  (persists + reboots)");
         return 0;
     }

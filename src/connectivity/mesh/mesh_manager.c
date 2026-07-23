@@ -1215,7 +1215,7 @@ int akira_mesh_init(const akira_mesh_config_t *config)
     switch (config->transport) {
         case AKIRA_MESH_TRANSPORT_BLE:
 #if defined(CONFIG_BT)
-            bt_manager_stop_advertising();
+            bt_manager_set_mode(BT_MODE_MESH);
 #endif
             mesh_state.radio = radio_manager_acquire_by_type(RADIO_TYPE_BLE, "mesh");
             break;
@@ -1233,6 +1233,11 @@ int akira_mesh_init(const akira_mesh_config_t *config)
     }
     if (!mesh_state.radio) {
         LOG_ERR("No radio available for mesh transport %d", config->transport);
+#if defined(CONFIG_BT)
+        if (config->transport == AKIRA_MESH_TRANSPORT_BLE) {
+            bt_manager_set_mode(BT_MODE_NONE);
+        }
+#endif
         k_mutex_unlock(&mesh_init_lock);
         return -ENODEV;
     }
@@ -1244,6 +1249,11 @@ int akira_mesh_init(const akira_mesh_config_t *config)
             LOG_ERR("mesh radio '%s' init failed: %d", mesh_state.radio->name, rret);
             radio_manager_release(mesh_state.radio, "mesh");
             mesh_state.radio = NULL;
+#if defined(CONFIG_BT)
+            if (config->transport == AKIRA_MESH_TRANSPORT_BLE) {
+                bt_manager_set_mode(BT_MODE_NONE);
+            }
+#endif
             k_mutex_unlock(&mesh_init_lock);
             return rret;
         }
@@ -1311,6 +1321,11 @@ int akira_mesh_stop(void)
         radio_manager_release(mesh_state.radio, "mesh");
         mesh_state.radio = NULL;
     }
+#if defined(CONFIG_BT)
+    if (mesh_state.config.transport == AKIRA_MESH_TRANSPORT_BLE) {
+        bt_manager_set_mode(BT_MODE_NONE);
+    }
+#endif
     mesh_state.initialized = false;
     k_mutex_unlock(&mesh_init_lock);
     LOG_INF("AkiraMesh stopped");

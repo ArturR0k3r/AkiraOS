@@ -90,7 +90,7 @@ typedef struct
 
 /* ===== Static State ===== */
 
-static app_entry_t g_registry[CONFIG_AKIRA_APP_MAX_INSTALLED];
+static app_entry_t AKIRA_BULK_BSS g_registry[CONFIG_AKIRA_APP_MAX_INSTALLED];
 static uint8_t g_app_count = 0;
 static bool g_initialized = false;
 static K_MUTEX_DEFINE(g_registry_mutex);
