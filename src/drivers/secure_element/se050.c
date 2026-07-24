@@ -40,20 +40,21 @@ LOG_MODULE_REGISTER(se050, CONFIG_I2C_LOG_LEVEL);
 #define P1_KEY_PAIR         0x60
 #define P1_EC               0x01   /* credential type: EC */
 #define P1_BINARY           0x06   /* credential type: binary file */
+#define P1_SIGNATURE        0x0C   /* credential type: signature (ECDSA sign) */
 
 /* P2 operation */
 #define P2_DEFAULT          0x00
 #define P2_GENERATE         0x03
-#define P2_EXIST            0x26
+#define P2_EXIST            0x27
 #define P2_SIGN             0x09
 #define P2_RANDOM           0x49
 
 /* TLV tags */
-#define TAG_1               0x41   /* object id */
-#define TAG_2               0x42   /* curve id / algo */
-#define TAG_3               0x43   /* offset / input data */
-#define TAG_4               0x44   /* length */
-#define TAG_5               0x45   /* data */
+#define TAG_1               0x41   /* object id / primary operand */
+#define TAG_2               0x42   /* offset / curve id / algo */
+#define TAG_3               0x43   /* length / input data */
+#define TAG_4               0x44   /* data */
+#define TAG_5               0x45
 
 #define ECCURVE_NIST_P256   0x03
 #define ECSIG_SHA256        0x21   /* ECDSA with SHA-256 */
@@ -93,22 +94,43 @@ static int tlv_put(uint8_t *buf, size_t cap, size_t *off,
     return 0;
 }
 
-/* Find TLV @tag in @buf; return pointer to its value and set *vlen. */
+/* Find TLV @tag in @buf; return pointer to its value and set *vlen.
+ * Handles BER-TLV length forms used by the SE05x: short (L < 0x80), and long
+ * form 0x81 (1 length byte) / 0x82 (2 length bytes). The SE050 emits long form
+ * even for small lengths (e.g. GetRandom returns "41 82 00 10 ..."). */
 static const uint8_t *tlv_find(const uint8_t *buf, size_t len,
                                uint8_t tag, size_t *vlen)
 {
     size_t i = 0;
     while (i + 2 <= len) {
         uint8_t t = buf[i];
-        uint8_t l = buf[i + 1];   /* short-form length (our responses) */
-        if (i + 2 + l > len) {
+        uint8_t l0 = buf[i + 1];
+        size_t hdr;               /* tag + length bytes */
+        size_t vl;                /* value length */
+
+        if (l0 < 0x80) {          /* short form */
+            hdr = 2;
+            vl  = l0;
+        } else if (l0 == 0x81) {  /* 1-byte length */
+            if (i + 3 > len) break;
+            hdr = 3;
+            vl  = buf[i + 2];
+        } else if (l0 == 0x82) {  /* 2-byte length */
+            if (i + 4 > len) break;
+            hdr = 4;
+            vl  = ((size_t)buf[i + 2] << 8) | buf[i + 3];
+        } else {
+            break;                /* 0x83+ not used by SE05x here */
+        }
+
+        if (i + hdr + vl > len) {
             break;
         }
         if (t == tag) {
-            *vlen = l;
-            return &buf[i + 2];
+            *vlen = vl;
+            return &buf[i + hdr];
         }
-        i += 2 + l;
+        i += hdr + vl;
     }
     return NULL;
 }
@@ -171,6 +193,61 @@ static int se05x_apdu(struct se050_data *d, uint8_t ins, uint8_t p1, uint8_t p2,
 }
 
 /* =========================================================================
+ * Applet SELECT — the SE050 IoT applet must be selected (ISO7816 SELECT by
+ * AID, CLA 0x00) before any SE05x command; otherwise the card manager answers
+ * every INS with SW=0x6D00 ("instruction not supported"). The SELECT response
+ * carries the applet version info (ignored here).
+ * ========================================================================= */
+static const uint8_t SE050_APPLET_AID[] = {
+    0xA0, 0x00, 0x00, 0x03, 0x96, 0x54, 0x53,
+    0x00, 0x00, 0x00, 0x01, 0x03, 0x00, 0x00, 0x00, 0x00
+};
+
+static int se050_select_applet(struct se050_data *d)
+{
+    uint8_t cmd[5 + sizeof(SE050_APPLET_AID) + 1];
+    size_t n = 0;
+
+    cmd[n++] = 0x00;                       /* CLA (ISO7816, not proprietary) */
+    cmd[n++] = 0xA4;                       /* INS = SELECT */
+    cmd[n++] = 0x04;                       /* P1  = select by DF name (AID) */
+    cmd[n++] = 0x00;                       /* P2  = first/only occurrence */
+    cmd[n++] = (uint8_t)sizeof(SE050_APPLET_AID);   /* Lc */
+    memcpy(&cmd[n], SE050_APPLET_AID, sizeof(SE050_APPLET_AID));
+    n += sizeof(SE050_APPLET_AID);
+    cmd[n++] = 0x00;                       /* Le */
+
+    uint8_t rbuf[SE050_MAX_INF];
+    size_t rlen = 0;
+    int ret = se050_transport_apdu(&d->link, cmd, n, rbuf, sizeof(rbuf), &rlen);
+    if (ret < 0) {
+        return ret;
+    }
+    if (rlen < 2) {
+        return -EPROTO;
+    }
+    uint16_t sw = ((uint16_t)rbuf[rlen - 2] << 8) | rbuf[rlen - 1];
+    if (sw != SW_OK) {
+        LOG_ERR("SE050 SELECT applet SW=0x%04X", sw);
+        return -EIO;
+    }
+    return 0;
+}
+
+/* Reset the link (best-effort) and select the applet. Marks the part ready.
+ * Caller must hold d->lock (or be single-threaded at init). */
+static int se050_bringup(struct se050_data *d)
+{
+    /* Soft reset is best-effort: some SE050 revisions answer APDUs without a
+     * successful T=1' interface reset, so a reset failure is not fatal. */
+    (void)se050_transport_reset(&d->link);
+
+    int ret = se050_select_applet(d);
+    d->ready = (ret == 0);
+    return ret;
+}
+
+/* =========================================================================
  * Public API
  * ========================================================================= */
 const struct device *se050_get_device(void)
@@ -185,7 +262,7 @@ int se050_power_on(const struct device *dev)
     k_mutex_lock(&d->lock, K_FOREVER);
     int ret = se050_transport_power_on(&d->link);
     if (ret == 0) {
-        ret = se050_transport_reset(&d->link);
+        ret = se050_bringup(d);
     }
     k_mutex_unlock(&d->lock);
     return ret;
@@ -253,10 +330,12 @@ int se050_write_binary(const struct device *dev, uint32_t objid,
     uint8_t offset[2] = { 0, 0 };
     uint8_t flen[2]   = { len >> 8, len & 0xFF };
 
+    /* SE05x WriteBinary: TAG_1=objid, TAG_2=offset, TAG_3=file length (on
+     * create), TAG_4=data. */
     int ret = tlv_put(tlv, sizeof(tlv), &off, TAG_1, id, sizeof(id));
-    if (ret == 0) ret = tlv_put(tlv, sizeof(tlv), &off, TAG_3, offset, sizeof(offset));
-    if (ret == 0) ret = tlv_put(tlv, sizeof(tlv), &off, TAG_4, flen, sizeof(flen));
-    if (ret == 0) ret = tlv_put(tlv, sizeof(tlv), &off, TAG_5, data, len);
+    if (ret == 0) ret = tlv_put(tlv, sizeof(tlv), &off, TAG_2, offset, sizeof(offset));
+    if (ret == 0) ret = tlv_put(tlv, sizeof(tlv), &off, TAG_3, flen, sizeof(flen));
+    if (ret == 0) ret = tlv_put(tlv, sizeof(tlv), &off, TAG_4, data, len);
     if (ret < 0) {
         return ret;
     }
@@ -359,8 +438,11 @@ int se050_ecc_gen_key(const struct device *dev, uint32_t objid)
 
     k_mutex_lock(&d->lock, K_FOREVER);
     uint16_t sw = 0;
-    /* WriteECKey with a curve but no key value -> on-die key generation. */
-    ret = se05x_apdu(d, INS_WRITE, (uint8_t)(P1_KEY_PAIR | P1_EC), P2_GENERATE,
+    /* WriteECKey to generate: P1 = KEY_PAIR | EC (key-part = pair), P2 = DEFAULT,
+     * with only TAG_1=objid and TAG_2=curve (no private/public key value) ->
+     * on-die key-pair generation. Verified on hardware: P1=0x61, P2=0x00 -> 0x9000
+     * (P1=0x01 -> 0x6A86, P2=0x03 -> 0x6B00). */
+    ret = se05x_apdu(d, INS_WRITE, (uint8_t)(P1_KEY_PAIR | P1_EC), P2_DEFAULT,
                      tlv, off, NULL, 0, NULL, &sw);
     k_mutex_unlock(&d->lock);
     if (ret < 0) {
@@ -462,7 +544,7 @@ int se050_ecc_sign(const struct device *dev, uint32_t objid,
 
     k_mutex_lock(&d->lock, K_FOREVER);
     uint8_t resp[SE050_MAX_INF]; size_t rlen = 0; uint16_t sw = 0;
-    ret = se05x_apdu(d, INS_CRYPTO, P1_DEFAULT, P2_SIGN, tlv, off,
+    ret = se05x_apdu(d, INS_CRYPTO, P1_SIGNATURE, P2_SIGN, tlv, off,
                      resp, sizeof(resp), &rlen, &sw);
     k_mutex_unlock(&d->lock);
     if (ret < 0) {
@@ -503,17 +585,15 @@ static int se050_init(const struct device *dev)
         return ret;
     }
 
-    ret = se050_transport_reset(&d->link);
+    ret = se050_bringup(d);
     if (ret < 0) {
         /* Leave the part powered so the shell/consumers can retry; the bus
-         * or antenna may just not be present on this unit. */
-        LOG_WRN("SE050 not responding (reset=%d) — driver idle", ret);
+         * or applet may not be present/selectable on this unit. */
+        LOG_WRN("SE050 bring-up failed (%d) — driver idle, retry via `se050`", ret);
         return 0;
     }
 
-    d->ready = true;
-    LOG_INF("SE050 secure element ready (ATR %u B)",
-            (unsigned)d->link.atr_len);
+    LOG_INF("SE050 secure element ready (applet selected)");
     return 0;
 }
 
@@ -562,9 +642,106 @@ static int cmd_se050_rand(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+/* Raw APDU probe: `se050 apdu 80040049024100` → sends the hex APDU and prints
+ * the raw response (payload + SW). Bring-up/debug aid only. */
+static int hexnib(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int cmd_se050_apdu(const struct shell *sh, size_t argc, char **argv)
+{
+    const struct device *dev = se050_get_device();
+    if (!dev) {
+        shell_error(sh, "SE050 not available");
+        return -ENODEV;
+    }
+    const char *hex = argv[1];
+    size_t hlen = strlen(hex);
+    if (hlen == 0 || (hlen & 1)) {
+        shell_error(sh, "usage: se050 apdu <even-length hex>");
+        return -EINVAL;
+    }
+    uint8_t cmd[SE050_MAX_INF];
+    size_t clen = hlen / 2;
+    if (clen > sizeof(cmd)) {
+        shell_error(sh, "APDU too long");
+        return -EINVAL;
+    }
+    for (size_t i = 0; i < clen; i++) {
+        int hi = hexnib(hex[i * 2]), lo = hexnib(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) {
+            shell_error(sh, "bad hex at %u", (unsigned)(i * 2));
+            return -EINVAL;
+        }
+        cmd[i] = (uint8_t)((hi << 4) | lo);
+    }
+
+    struct se050_data *d = dev->data;
+    uint8_t resp[SE050_MAX_INF];
+    size_t rlen = 0;
+    k_mutex_lock(&d->lock, K_FOREVER);
+    int ret = se050_transport_apdu(&d->link, cmd, clen, resp, sizeof(resp), &rlen);
+    k_mutex_unlock(&d->lock);
+    if (ret < 0) {
+        shell_error(sh, "apdu xfer failed: %d", ret);
+        return ret;
+    }
+    shell_fprintf(sh, SHELL_NORMAL, "resp[%u]: ", (unsigned)rlen);
+    for (size_t i = 0; i < rlen; i++) {
+        shell_fprintf(sh, SHELL_NORMAL, "%02X", resp[i]);
+    }
+    shell_print(sh, "");
+    return 0;
+}
+
+/* Exercise the driver ECC path end to end: generate (idempotent) an on-die
+ * P-256 key, read its public key, and ECDSA-sign a fixed digest. */
+static int cmd_se050_ecctest(const struct shell *sh, size_t argc, char **argv)
+{
+    const struct device *dev = se050_get_device();
+    if (!dev) {
+        shell_error(sh, "SE050 not available");
+        return -ENODEV;
+    }
+    uint32_t objid = (argc > 1) ? (uint32_t)strtoul(argv[1], NULL, 0)
+                                : 0x50500011;
+
+    int ret = se050_ecc_gen_key(dev, objid);
+    if (ret < 0) {
+        shell_error(sh, "gen_key(0x%08X) failed: %d", objid, ret);
+        return ret;
+    }
+    uint8_t pub[SE050_P256_PUB_LEN];
+    ret = se050_ecc_get_pub(dev, objid, pub);
+    if (ret < 0) {
+        shell_error(sh, "get_pub failed: %d", ret);
+        return ret;
+    }
+    uint8_t digest[32];
+    memset(digest, 0x5A, sizeof(digest));
+    uint8_t sig[SE050_P256_SIG_LEN];
+    ret = se050_ecc_sign(dev, objid, digest, sig);
+    if (ret < 0) {
+        shell_error(sh, "sign failed: %d", ret);
+        return ret;
+    }
+    shell_fprintf(sh, SHELL_NORMAL, "pub[04..]: ");
+    for (int i = 0; i < 8; i++) shell_fprintf(sh, SHELL_NORMAL, "%02X", pub[i]);
+    shell_fprintf(sh, SHELL_NORMAL, "...  sig r||s: ");
+    for (int i = 0; i < 8; i++) shell_fprintf(sh, SHELL_NORMAL, "%02X", sig[i]);
+    shell_print(sh, "...  OK (key 0x%08X)", objid);
+    return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(se050_sub,
     SHELL_CMD(info, NULL, "Show SE050 status", cmd_se050_info),
     SHELL_CMD_ARG(rand, NULL, "Get N random bytes", cmd_se050_rand, 1, 1),
+    SHELL_CMD_ARG(apdu, NULL, "Send raw hex APDU, print response", cmd_se050_apdu, 2, 0),
+    SHELL_CMD_ARG(ecctest, NULL, "P-256 gen+pub+sign self-test [objid]", cmd_se050_ecctest, 1, 1),
     SHELL_SUBCMD_SET_END);
 SHELL_CMD_REGISTER(se050, &se050_sub, "SE050 secure element", NULL);
 #endif /* CONFIG_SHELL */

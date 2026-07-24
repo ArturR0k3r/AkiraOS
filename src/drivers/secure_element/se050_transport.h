@@ -51,8 +51,7 @@ struct se050_transport {
     uint8_t             seq_tx;     /* host send-sequence bit N(S) */
     uint8_t             seq_rx;     /* expected SE send-sequence bit */
     bool                powered;    /* ENA currently driven high */
-    uint8_t             atr[SE050_ATR_MAX_LEN];
-    size_t              atr_len;
+    uint8_t             atr_len;    /* last ATR length (0 if none); ATR discarded */
 };
 
 /**

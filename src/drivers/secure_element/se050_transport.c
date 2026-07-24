@@ -219,7 +219,8 @@ int se050_transport_reset(struct se050_transport *t)
 
     uint8_t pcb = 0;
     size_t atr_len = 0;
-    ret = frame_recv(t, &pcb, t->atr, sizeof(t->atr), &atr_len);
+    uint8_t atr[SE050_ATR_MAX_LEN];   /* ATR read then discarded — not retained */
+    ret = frame_recv(t, &pcb, atr, sizeof(atr), &atr_len);
     if (ret < 0) {
         return ret;
     }
@@ -228,7 +229,7 @@ int se050_transport_reset(struct se050_transport *t)
         return -EPROTO;
     }
 
-    t->atr_len = atr_len;
+    t->atr_len = (uint8_t)atr_len;
     t->seq_tx = 0;
     t->seq_rx = 0;
     LOG_INF("SE050 ATR: %u bytes", (unsigned)atr_len);
