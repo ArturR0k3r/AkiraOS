@@ -17,6 +17,7 @@ LOG_MODULE_REGISTER(akira_uart, CONFIG_AKIRA_LOG_LEVEL);
 
 #include "akira_uart_api.h"
 #include <runtime/security.h>
+#include <lib/mem_helper.h>
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
 #include <zephyr/device.h>
@@ -46,7 +47,7 @@ struct akira_uart_handle {
     uint8_t             rx_buf[CONFIG_AKIRA_WASM_UART_RX_BUF_SIZE];
 };
 
-static struct akira_uart_handle s_handles[AKIRA_UART_MAX_HANDLES];
+static struct akira_uart_handle AKIRA_BULK_BSS s_handles[AKIRA_UART_MAX_HANDLES];
 
 /*
  * Secondary UARTs available to WASM — extend array as needed.

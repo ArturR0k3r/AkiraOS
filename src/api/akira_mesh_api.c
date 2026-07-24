@@ -21,9 +21,6 @@ LOG_MODULE_REGISTER(akira_mesh_api, CONFIG_AKIRA_LOG_LEVEL);
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 
-#define AKIRA_MESH_API_TRANSPORT_CAPS \
-    (RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_BAND_SUBGHZ)
-
 #define MESH_API_RX_QUEUE_DEPTH 8
 
 struct mesh_api_rx_packet {
@@ -82,7 +79,7 @@ int akira_native_mesh_init(wasm_exec_env_t exec_env, int32_t node_id,
         snprintf(cfg.node_name, sizeof(cfg.node_name), "akira-%02x", (uint8_t)node_id);
     }
     cfg.role = (akira_mesh_role_t)role;
-    cfg.transport_caps = AKIRA_MESH_API_TRANSPORT_CAPS;
+    cfg.transport = AKIRA_MESH_TRANSPORT_SUBGHZ;
     cfg.max_hops = AKIRA_MESH_MAX_HOPS;
     cfg.beacon_interval_ms = beacon_interval_ms ? beacon_interval_ms : 5000;
 

@@ -61,6 +61,7 @@ extern "C"
         BT_MODE_COMPANION = 3, /**< AkiraApp companion service owns the radio */
         BT_MODE_BLE_SCAN  = 4, /**< WASM BLE observer (scan) owns the radio */
         BT_MODE_BLE_SPAM  = 5, /**< WASM BLE rotating-advertiser owns the radio */
+        BT_MODE_MESH      = 6  /**< BLE Mesh service owns the radio */
     } bt_manager_mode_t;
 
     /** Bluetooth configuration */

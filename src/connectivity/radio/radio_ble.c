@@ -10,60 +10,103 @@
 
 #include "connectivity/radio_interface.h"
 #include <zephyr/logging/log.h>
+#include <zephyr/init.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/conn.h>
+#include <zephyr/sys/util.h>
 #include <string.h>
 
 LOG_MODULE_REGISTER(radio_ble, CONFIG_AKIRA_LOG_LEVEL);
 
 #ifdef CONFIG_BT
 
+/* One packet = one extended-adv AD structure (up to BT_GAP_ADV_MAX_EXT_ADV_DATA_LEN,
+ * far above our max packet size), so no chunking/reassembly is needed. */
+#define AKIRA_BLE_MAGIC0     0x41 /* 'A' */
+#define AKIRA_BLE_MAGIC1     0x4D /* 'M' */
+#define AKIRA_BLE_MAGIC_LEN  2
+/* AD structure (2 len/type + 2 magic + payload) must stay under the 229B
+ * single-report data ceiling (257B controller HCI event buffer minus
+ * report-field overhead) — above that the ESP32-S3 controller must chain
+ * PARTIAL/COMPLETE reports and doesn't, so the packet drops silently. */
+#define AKIRA_BLE_MAX_PACKET 220
+
+#define AKIRA_BLE_ADV_INT_MS 60
+#define AKIRA_BLE_ADV_EVENTS 3
+
 /* BLE radio private data */
 struct ble_radio_data {
     struct bt_le_scan_cb scan_cb;
-    struct k_sem scan_sem;
     radio_stats_t stats;
     uint8_t hw_addr[6];
     bool initialized;
+    bool scanning_active; /* continuous passive scan for mesh RX, lazy-started
+                            * by recv() and never stopped. */
 };
 
 static struct ble_radio_data ble_data;
 static radio_handle_t ble_handle;
+static struct bt_le_ext_adv *ble_ext_adv;
 
-/* BLE scan callback */
-static void ble_scan_recv(const struct bt_le_scan_recv_info *info,
-                         struct net_buf_simple *buf)
+struct ble_rx_msg {
+    uint16_t len;
+    uint8_t data[AKIRA_BLE_MAX_PACKET];
+};
+/* mesh_rx_thread can't always drain between scan callback events under
+ * app-distribute burst traffic (retransmit + RREQ/RREP + chunks); a
+ * shallow queue silently drops frames, including live chunks. */
+K_MSGQ_DEFINE(ble_rx_msgq, sizeof(struct ble_rx_msg), 16, 4);
+
+static bool ble_adv_ad_cb(struct bt_data *data, void *user_data)
 {
+    const struct bt_le_scan_recv_info *info = user_data;
+
+    if (data->type != BT_DATA_MANUFACTURER_DATA ||
+        data->data_len < AKIRA_BLE_MAGIC_LEN ||
+        data->data[0] != AKIRA_BLE_MAGIC0 ||
+        data->data[1] != AKIRA_BLE_MAGIC1) {
+        return true; /* not ours — keep looking at other AD structures */
+    }
+
+    if (memcmp(info->addr->a.val, ble_data.hw_addr, sizeof(ble_data.hw_addr)) == 0) {
+        return false; /* our own advertisement looped back through our scanner */
+    }
+
+    const uint8_t *payload = &data->data[AKIRA_BLE_MAGIC_LEN];
+    struct ble_rx_msg msg = {
+        .len = (uint16_t)MIN(data->data_len - AKIRA_BLE_MAGIC_LEN, sizeof(msg.data)),
+    };
+
+    memcpy(msg.data, payload, msg.len);
+    if (k_msgq_put(&ble_rx_msgq, &msg, K_NO_WAIT) != 0) {
+        LOG_WRN("BLE rx_msgq full, dropping len=%u", msg.len);
+        return false;
+    }
+
     ble_data.stats.rx_packets++;
-    ble_data.stats.rx_bytes += buf->len;
+    ble_data.stats.rx_bytes += msg.len;
     ble_data.stats.rssi = info->rssi;
-    
-    /* Notify event callback if registered */
+
     if (ble_handle.event_cb) {
         radio_event_t event = {
             .type = RADIO_EVENT_RX_DONE,
-            .data = buf->data,
-            .len = buf->len,
+            .data = msg.data,
+            .len = msg.len,
             .rssi = info->rssi,
             .user_data = ble_handle.event_user_data,
         };
         ble_handle.event_cb(&event, ble_handle.event_user_data);
     }
+
+    return false; /* one AD structure per report is all we ever send */
 }
 
-static void ble_scan_timeout(void)
+/* Magic-filtered so ambient/unrelated BLE advertisements never reach the msgq. */
+static void ble_scan_recv(const struct bt_le_scan_recv_info *info,
+                         struct net_buf_simple *buf)
 {
-    LOG_DBG("BLE scan timeout");
-    k_sem_give(&ble_data.scan_sem);
-    
-    if (ble_handle.event_cb) {
-        radio_event_t event = {
-            .type = RADIO_EVENT_SCAN_DONE,
-            .user_data = ble_handle.event_user_data,
-        };
-        ble_handle.event_cb(&event, ble_handle.event_user_data);
-    }
+    bt_data_parse(buf, ble_adv_ad_cb, (void *)info);
 }
 
 /* RAL operation implementations */
@@ -90,12 +133,8 @@ static int ble_radio_init(radio_handle_t *handle)
     bt_id_get(&addr, &count);
     memcpy(data->hw_addr, addr.a.val, 6);
     
-    /* Initialize semaphore for scan operations */
-    k_sem_init(&data->scan_sem, 0, 1);
-    
-    /* Register scan callbacks */
+    /* Register scan callback */
     data->scan_cb.recv = ble_scan_recv;
-    data->scan_cb.timeout = ble_scan_timeout;
     bt_le_scan_cb_register(&data->scan_cb);
     
     data->initialized = true;
@@ -114,10 +153,15 @@ static int ble_radio_deinit(radio_handle_t *handle)
     
     /* Unregister scan callbacks */
     bt_le_scan_cb_unregister(&data->scan_cb);
-    
+
     /* Stop scanning if active */
     bt_le_scan_stop();
-    
+
+    if (ble_ext_adv) {
+        bt_le_ext_adv_delete(ble_ext_adv);
+        ble_ext_adv = NULL;
+    }
+
     data->initialized = false;
     handle->state = RADIO_STATE_OFF;
     
@@ -148,73 +192,118 @@ static int ble_radio_get_config(radio_handle_t *handle, radio_config_t *config)
     return 0;
 }
 
+static int ble_ext_adv_ensure(void)
+{
+    int ret;
+
+    if (ble_ext_adv) {
+        return 0;
+    }
+    ret = bt_le_ext_adv_create(BT_LE_ADV_PARAM(BT_LE_ADV_OPT_EXT_ADV,
+                                               BT_GAP_ADV_FAST_INT_MIN_1,
+                                               BT_GAP_ADV_FAST_INT_MAX_1, NULL),
+                               NULL, &ble_ext_adv);
+    if (ret) {
+        LOG_ERR("BLE ext adv create failed: %d", ret);
+    }
+    return ret;
+}
+
 static int ble_radio_send(radio_handle_t *handle, const uint8_t *data, size_t len)
 {
     struct ble_radio_data *radio_data = handle->priv_data;
-    
-    /* BLE TX typically done through advertising or GATT */
-    /* Raw HCI send would require deeper integration */
-    LOG_WRN("BLE raw send not fully implemented - use BLE advertising/GATT");
-    
+    uint8_t buf[AKIRA_BLE_MAGIC_LEN + AKIRA_BLE_MAX_PACKET];
+    struct bt_le_ext_adv_start_param start_param = { .num_events = AKIRA_BLE_ADV_EVENTS };
+    int ret;
+
+    if (len == 0) {
+        return 0;
+    }
+    if (len > AKIRA_BLE_MAX_PACKET) {
+        return -EMSGSIZE;
+    }
+
+    ret = ble_ext_adv_ensure();
+    if (ret) {
+        return ret;
+    }
+
+    buf[0] = AKIRA_BLE_MAGIC0;
+    buf[1] = AKIRA_BLE_MAGIC1;
+    memcpy(&buf[AKIRA_BLE_MAGIC_LEN], data, len);
+
+    struct bt_data ad[1] = {
+        BT_DATA(BT_DATA_MANUFACTURER_DATA, buf, AKIRA_BLE_MAGIC_LEN + len),
+    };
+
+    ret = bt_le_ext_adv_set_data(ble_ext_adv, ad, ARRAY_SIZE(ad), NULL, 0);
+    if (ret) {
+        LOG_ERR("BLE ext adv set_data failed: %d", ret);
+        radio_data->stats.tx_errors++;
+        return ret;
+    }
+
+    ret = bt_le_ext_adv_start(ble_ext_adv, &start_param);
+    if (ret) {
+        LOG_ERR("BLE ext adv start failed: %d", ret);
+        radio_data->stats.tx_errors++;
+        return ret;
+    }
+
+    k_sleep(K_MSEC(AKIRA_BLE_ADV_INT_MS * (AKIRA_BLE_ADV_EVENTS + 1)));
+    bt_le_ext_adv_stop(ble_ext_adv);
+
     radio_data->stats.tx_packets++;
     radio_data->stats.tx_bytes += len;
-    
-    return -ENOTSUP;
+    LOG_INF("BLE sent len=%zu", len);
+
+    return 0;
 }
 
 static int ble_radio_recv(radio_handle_t *handle, uint8_t *buf, size_t buf_len,
                          uint32_t timeout_ms)
 {
-    /* BLE RX handled through scan callbacks */
-    LOG_WRN("BLE raw recv not implemented - use scan callbacks");
-    return -ENOTSUP;
-}
+    struct ble_radio_data *radio_data = handle->priv_data;
+    struct ble_rx_msg msg;
+    size_t copy_len;
 
-static int ble_radio_scan(radio_handle_t *handle, uint32_t timeout_ms)
-{
-    struct ble_radio_data *data = handle->priv_data;
-    
-    LOG_INF("Starting BLE scan (timeout=%u ms)", timeout_ms);
-    
-    /* Configure scan parameters */
-    struct bt_le_scan_param scan_param = {
-        .type = BT_LE_SCAN_TYPE_PASSIVE,
-        .options = BT_LE_SCAN_OPT_FILTER_DUPLICATE,
-        .interval = BT_GAP_SCAN_FAST_INTERVAL,
-        .window = BT_GAP_SCAN_FAST_WINDOW,
-    };
-    
-    int ret = bt_le_scan_start(&scan_param, NULL);
-    if (ret && ret != -EALREADY) {
-        LOG_ERR("BLE scan start failed: %d", ret);
-        return ret;
+    if (!radio_data->scanning_active) {
+        /* window == interval for 100% duty cycle scanning. */
+        struct bt_le_scan_param scan_param = {
+            .type = BT_LE_SCAN_TYPE_PASSIVE,
+            .options = BT_LE_SCAN_OPT_NONE,
+            .interval = BT_GAP_SCAN_FAST_INTERVAL,
+            .window = BT_GAP_SCAN_FAST_INTERVAL,
+        };
+        int ret = bt_le_scan_start(&scan_param, NULL);
+
+        if (ret && ret != -EALREADY) {
+            return ret;
+        }
+        radio_data->scanning_active = true;
+        handle->state = RADIO_STATE_SCAN;
     }
-    
-    handle->state = RADIO_STATE_SCAN;
-    
-    /* Wait for scan timeout or manual stop */
-    if (timeout_ms > 0) {
-        k_sleep(K_MSEC(timeout_ms));
-        bt_le_scan_stop();
-    } else {
-        /* Infinite scan - wait for explicit stop */
-        ret = k_sem_take(&data->scan_sem, K_FOREVER);
+
+    if (k_msgq_get(&ble_rx_msgq, &msg, K_MSEC(timeout_ms)) != 0) {
+        return 0; /* no reassembled packet within timeout */
     }
-    
-    handle->state = RADIO_STATE_IDLE;
-    return 0;
+
+    copy_len = MIN(msg.len, buf_len);
+    memcpy(buf, msg.data, copy_len);
+
+    return (int)copy_len;
 }
 
 static int ble_radio_set_state(radio_handle_t *handle, radio_state_t state)
 {
     LOG_DBG("BLE radio set state: %s", radio_state_to_string(state));
-    
+
     switch (state) {
     case RADIO_STATE_IDLE:
         bt_le_scan_stop();
         break;
     case RADIO_STATE_SCAN:
-        /* Scan started via ble_radio_scan() */
+        /* Continuous scan is started lazily by recv() */
         break;
     case RADIO_STATE_SLEEP:
         /* Low power mode - would require controller-specific API */
@@ -265,6 +354,13 @@ static int ble_radio_set_event_callback(radio_handle_t *handle,
     return 0;
 }
 
+static int ble_radio_get_max_payload(radio_handle_t *handle, size_t *max_len)
+{
+    ARG_UNUSED(handle);
+    *max_len = AKIRA_BLE_MAX_PACKET;
+    return 0;
+}
+
 static int ble_radio_get_hw_addr(radio_handle_t *handle, uint8_t *addr, size_t *addr_len)
 {
     struct ble_radio_data *data = handle->priv_data;
@@ -287,8 +383,8 @@ static const radio_ops_t ble_radio_ops = {
     .configure = ble_radio_configure,
     .get_config = ble_radio_get_config,
     .send = ble_radio_send,
+    .get_max_payload = ble_radio_get_max_payload,
     .recv = ble_radio_recv,
-    .scan = ble_radio_scan,
     .set_state = ble_radio_set_state,
     .get_state = ble_radio_get_state,
     .get_stats = ble_radio_get_stats,
@@ -297,38 +393,44 @@ static const radio_ops_t ble_radio_ops = {
     .get_hw_addr = ble_radio_get_hw_addr,
 };
 
-/* Initialize and register BLE radio */
+/* Registers the handle only; ops->init() (bt_enable etc) is deferred to
+ * whoever acquires the radio, avoiding a race with bt_manager.c's own BT init. */
 int radio_ble_register(void)
 {
     memset(&ble_handle, 0, sizeof(ble_handle));
     memset(&ble_data, 0, sizeof(ble_data));
-    
+
     ble_handle.type = RADIO_TYPE_BLE;
     ble_handle.name = "BLE";
-    ble_handle.capabilities = RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_SCAN |
+    ble_handle.capabilities = RADIO_CAP_TX | RADIO_CAP_RX |
                              RADIO_CAP_MESH | RADIO_CAP_ENCRYPTION |
                              RADIO_CAP_LOW_POWER | RADIO_CAP_MULTICAST |
                              RADIO_CAP_MOD_BLE_PHY;
     ble_handle.ops = &ble_radio_ops;
     ble_handle.priv_data = &ble_data;
     ble_handle.state = RADIO_STATE_OFF;
-    
-    /* Initialize the radio */
-    int ret = ble_radio_init(&ble_handle);
-    if (ret) {
-        LOG_ERR("BLE radio initialization failed: %d", ret);
-        return ret;
-    }
-    
-    /* Register with radio manager */
-    ret = radio_manager_register(&ble_handle);
+
+    int ret = radio_manager_register(&ble_handle);
     if (ret) {
         LOG_ERR("Failed to register BLE radio: %d", ret);
         return ret;
     }
-    
+
     LOG_INF("BLE radio registered successfully");
     return 0;
 }
+
+static int ble_radio_auto_register(void)
+{
+    int ret = radio_ble_register();
+
+    if (ret < 0 && ret != -EALREADY) {
+        LOG_ERR("Failed to auto-register BLE radio: %d", ret);
+        return ret;
+    }
+    return 0;
+}
+
+SYS_INIT(ble_radio_auto_register, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
 
 #endif /* CONFIG_BT */

@@ -820,6 +820,41 @@ config AKIRA_MESH_SEEN_CACHE
     help
       Ring-buffer size for (src_id, seq_num) duplicate suppression.
 
+config AKIRA_MESH_E2E_CRYPTO
+    bool "AkiraMesh 1:1 message end-to-end encryption"
+    default y
+    depends on AKIRA_MESH
+    select MBEDTLS_PSA_CRYPTO_C
+    select PSA_WANT_ALG_ECDH
+    select PSA_WANT_ECC_SECP_R1_256
+    select PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_GENERATE
+    select PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_IMPORT
+    select PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_EXPORT
+    select PSA_WANT_ALG_SHA_256
+    help
+      Mandatory P-256 ECDH + AES-256-CTR/HMAC-SHA256 encryption for 1:1
+      AkiraMesh DATA messages (see mesh_crypto.c). Control/routing frames
+      (RREQ/RREP/RERR, beacons, ACKs) stay plaintext — relays must read
+      routing headers to route. Without this, 1:1 messages cannot be sent
+      at all (mesh_send_reliable refuses to transmit unencrypted DATA).
+
+config AKIRA_MESH_MAX_SESSIONS
+    int "Session-key cache size (peers)"
+    default 8
+    depends on AKIRA_MESH_E2E_CRYPTO
+    help
+      Maximum number of peers with a simultaneously cached E2E session key.
+
+config AKIRA_MESH_SESSION_LIFETIME_S
+    int "Session-key TTL (s)"
+    default 300
+    depends on AKIRA_MESH_E2E_CRYPTO
+    help
+      How long a derived session key stays valid before a fresh RREQ/RREP
+      + ECDH round is required. Deliberately longer than
+      AKIRA_MESH_ROUTE_LIFETIME_S so a session key outlives routine route
+      churn.
+
 config AKIRA_MESH_RX_STACK_SIZE
     int "Mesh RX thread stack size"
     default 3072

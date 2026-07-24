@@ -90,7 +90,7 @@ typedef struct
 
 /* ===== Static State ===== */
 
-static app_entry_t g_registry[CONFIG_AKIRA_APP_MAX_INSTALLED];
+static app_entry_t AKIRA_BULK_BSS g_registry[CONFIG_AKIRA_APP_MAX_INSTALLED];
 static uint8_t g_app_count = 0;
 static bool g_initialized = false;
 static K_MUTEX_DEFINE(g_registry_mutex);
@@ -513,7 +513,9 @@ int app_manager_register_installed(const char *name, const char *tmp_path, size_
         g_app_count++;
     }
 
-    existing->source = source;
+    /* use_sd overrides the caller's source: path lookup and registry
+     * persistence key off ->source == APP_SOURCE_SD, not install origin. */
+    existing->source = use_sd ? APP_SOURCE_SD : source;
     existing->size = size;
     existing->container_id = -1;
     existing->crash_count = 0;
