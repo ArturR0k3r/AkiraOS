@@ -403,6 +403,70 @@ config AKIRA_ST25DV
       RF operations (ISO 15693) happen autonomously when an NFC reader
       is present.
 
+      Retained for boards that populate the ST25DV. AkiraConsole Prod Rev A.3
+      replaced it with the SE050 (see AKIRA_SE050); its DT node is gone so this
+      defaults off there, but the driver stays available.
+
+config AKIRA_SE050
+    bool "Enable NXP SE050 secure element driver"
+    default y if DT_HAS_NXP_SE050_ENABLED
+    depends on I2C
+    help
+      Enable the NXP EdgeLock SE050 Plug & Trust secure element driver.
+      Talks to the SE050 over the ISO7816 T=1' block protocol tunnelled over
+      I2C. Provides on-die true random, ECC P-256 key generation / signing
+      (keys never leave the chip), and secure binary object storage.
+      Owns the ENA GPIO for deep-sleep power gating.
+
+      On AkiraConsole Production (Rev A.3) this is the SE050C1HQ1/Z01SCZ at
+      I2C 0x48, replacing the Rev 1.2 ST25DV64K NFC tag.
+
+if AKIRA_SE050
+
+config AKIRA_SE050_SCP03
+    bool "Use GlobalPlatform SCP03 authenticated/encrypted channel"
+    default n
+    help
+      Wrap all APDU exchanges in a GlobalPlatform SCP03 secure channel
+      (AES-CMAC + AES-CBC session keys). Requires the part's provisioned
+      platform SCP03 static keys. Leave disabled to use a plain APDU session,
+      which the SE050 permits for GetRandom, reading policy-open objects, and
+      signing with objects whose policy allows unauthenticated use.
+
+config AKIRA_SE050_SETTINGS_KEY
+    bool "Back the NVS encryption key with the SE050"
+    default n
+    depends on AKIRA_SETTINGS_ENCRYPTION
+    help
+      Override akira_settings_get_encryption_key() to read the 32-byte
+      AES-256 NVS key from an SE050 binary object instead of a compile-time
+      constant. Provisioned from the SE050 TRNG on first boot if absent.
+
+config AKIRA_SE050_SETTINGS_KEY_OBJID
+    hex "SE050 object ID holding the NVS encryption key"
+    default 0x50500001
+    depends on AKIRA_SE050_SETTINGS_KEY
+    help
+      SE050 secure object identifier that stores the 32-byte NVS AES key.
+
+config AKIRA_SE050_U2F
+    bool "Expose SE050-backed (non-exportable) P-256 for U2F"
+    default n
+    depends on AKIRA_WASM_CRYPTO_ECDSA_P256
+    help
+      Add native P-256 keygen/sign that keep the private key on-die (the
+      SE050 model — keys are non-exportable), for hardware-backed U2F/FIDO.
+      The existing exportable soft-token P-256 API is left intact.
+
+config AKIRA_SE050_U2F_KEY_OBJID
+    hex "SE050 base object ID for U2F P-256 keys"
+    default 0x50500010
+    depends on AKIRA_SE050_U2F
+    help
+      Base SE050 secure object identifier for hardware-backed U2F key pairs.
+
+endif # AKIRA_SE050
+
 endmenu
 
 menu "Connectivity"

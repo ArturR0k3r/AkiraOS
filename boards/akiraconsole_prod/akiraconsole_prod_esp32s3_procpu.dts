@@ -348,27 +348,20 @@
 	};
 
 	// -------------------------------------------------------------------------
-	// ST25DV64K-IER8C3 — Dynamic NFC Tag + EEPROM (U4)
-	// User/FTM memory: 7-bit 0x53 (8-bit WRITE=0xA6, READ=0xA7)
-	// System memory:   7-bit 0x57 (8-bit WRITE=0xAE, READ=0xAF)
-	// GPO interrupt → NFC_INT → GPIO21.
-	// NOTE: NFC loop antenna NOT routed on base board (insufficient PCB space
-	// at original dimensions). Pads J6 (Conn_01x05_MountingPin) available
-	// for external antenna pigtail / coil.
+	// SE050C1HQ1/Z01SCZ — NXP EdgeLock Plug & Trust secure element (U4)
+	// Rev A.3 (schematic Rev 1.3) replaces the Rev 1.2 ST25DV64K NFC tag.
+	// I2C: 7-bit 0x48 (8-bit WRITE=0x90, READ=0x91) on the shared I2C bus.
+	// Interface: I2C only (T=1' over I2C). ISO7816 contact interface unused —
+	// RST_N tied to VSS; CLK/IO1/IO2 left unconnected. SE050 I2C-master unused.
+	// ENA (enable) → GPIO21 (the former NFC_INT line), active high, ON by
+	// default; drive LOW for deep power-down (~40 uA incl. 110k pull-up).
+	// Contactless: external NFC antenna (Ezurio 0600-00061) for U2F / tap.
 	// -------------------------------------------------------------------------
-	// ST25DV64K-IER8C3: user memory I2C address 0x53.
-	// The system configuration register space (0x57) is accessed internally
-	// by the driver via the system-reg property — no second DTS node needed.
-	// To change GPO behaviour for a different board, edit akira,gpo-sources
-	// without touching any C code.
-	st25dv: st25dv@53 {
-		compatible       = "st,st25dv64k";
-		reg              = <0x53>;
-		system-reg       = <0x57>; // system config registers (ST25DV fixed)
-		gpo-gpios        = <&gpio0 21 GPIO_ACTIVE_LOW>; // NFC_INT = GPIO21
-		// GPO_ENABLE(0x80) | GPO_FIELDRISING(0x08) | GPO_RFUSERWRITE(0x01)
-		akira,gpo-sources = <0x89>;
-		status           = "okay";
+	se050: se050@48 {
+		compatible   = "nxp,se050";
+		reg          = <0x48>;
+		enable-gpios = <&gpio0 21 GPIO_ACTIVE_HIGH>; // ENA = GPIO21
+		status       = "okay";
 	};
 };
 

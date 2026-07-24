@@ -348,6 +348,12 @@ bool akira_register_native_apis()
         {"crypto_p256_keygen",       (void *)akira_native_crypto_p256_keygen,       "(**)i",     NULL},
         /* priv_ptr(32B), msg_ptr+msg_len pair (auto-validated), sig_ptr(64B raw r||s) */
         {"crypto_p256_sign",         (void *)akira_native_crypto_p256_sign,         "(**~*)i",   NULL},
+#ifdef CONFIG_AKIRA_SE050_U2F
+        /* SE050 hardware-backed P-256 (non-exportable) — slot(i), pub_ptr(65B) */
+        {"crypto_p256_keygen_se050", (void *)akira_native_crypto_p256_keygen_se050, "(i*)i",     NULL},
+        /* slot(i), hash_ptr(32B), sig_ptr(64B raw r||s) */
+        {"crypto_p256_sign_se050",   (void *)akira_native_crypto_p256_sign_se050,   "(i**)i",    NULL},
+#endif
 #endif
 
 /* rtc.*: get/set unix time, uptime, alarm */

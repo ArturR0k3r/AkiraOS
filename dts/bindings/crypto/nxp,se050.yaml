@@ -1,0 +1,28 @@
+# Copyright (c) 2026 AkiraOS Project
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  NXP EdgeLock SE050 Plug & Trust secure element (I2C interface).
+
+  Communicates over I2C using the ISO7816 T=1' block protocol tunnelled over
+  I2C (a.k.a. "T=1 over I2C" / SCI2C). The ISO7816 contact interface and the
+  SE050 I2C-master feature are not used on AkiraConsole.
+
+  On AkiraConsole Production (Rev A.3) the part is the SE050C1HQ1/Z01SCZ at
+  I2C address 0x48, replacing the Rev 1.2 ST25DV64K NFC tag. An external NFC
+  antenna (Ezurio 0600-00061) provides the contactless / U2F "tap" role.
+
+compatible: "nxp,se050"
+
+include: i2c-device.yaml
+
+properties:
+
+  enable-gpios:
+    type: phandle-array
+    required: false
+    description: |
+      GPIO connected to the SE050 ENA (enable) pin. Active high; when driven
+      low the SE050 enters deep power-down (~40 uA incl. the 110k pull-up).
+      The driver drives it high at init and low when the OS enters deep sleep.
+      On AkiraConsole Production: ENA -> GPIO21 (the former NFC_INT line).

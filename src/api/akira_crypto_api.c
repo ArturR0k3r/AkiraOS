@@ -480,4 +480,76 @@ int akira_native_crypto_p256_sign(wasm_exec_env_t exec_env,
 
 #endif /* CONFIG_AKIRA_WASM_CRYPTO_ECDSA_P256 */
 
+/* ── SE050 hardware-backed P-256 (non-exportable keys) — U2F offload ──────── */
+#ifdef CONFIG_AKIRA_SE050_U2F
+#include "../drivers/secure_element/se050.h"
+
+#define SE050_U2F_MAX_SLOT   255
+
+int akira_native_crypto_p256_keygen_se050(wasm_exec_env_t exec_env,
+                                          uint32_t slot, void *pub_ptr)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EACCES);
+
+	if (slot > SE050_U2F_MAX_SLOT) {
+		return -EINVAL;
+	}
+	wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+	WASM_ADDR_CHECK(inst, pub_ptr, SE050_P256_PUB_LEN);
+
+	const struct device *se = se050_get_device();
+	if (!se) {
+		return -ENODEV;
+	}
+
+	uint32_t objid = (uint32_t)CONFIG_AKIRA_SE050_U2F_KEY_OBJID + slot;
+	int ret = se050_ecc_gen_key(se, objid);
+	if (ret < 0) {
+		return ret;
+	}
+	return se050_ecc_get_pub(se, objid, (uint8_t *)pub_ptr);
+}
+
+int akira_native_crypto_p256_sign_se050(wasm_exec_env_t exec_env,
+                                        uint32_t slot,
+                                        void *hash_ptr, void *sig_ptr)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EACCES);
+
+	if (slot > SE050_U2F_MAX_SLOT) {
+		return -EINVAL;
+	}
+	wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+	WASM_ADDR_CHECK(inst, hash_ptr, 32);
+	WASM_ADDR_CHECK(inst, sig_ptr,  SE050_P256_SIG_LEN);
+
+	const struct device *se = se050_get_device();
+	if (!se) {
+		return -ENODEV;
+	}
+
+	uint32_t objid = (uint32_t)CONFIG_AKIRA_SE050_U2F_KEY_OBJID + slot;
+	return se050_ecc_sign(se, objid, (const uint8_t *)hash_ptr,
+	                      (uint8_t *)sig_ptr);
+}
+
+#else /* !CONFIG_AKIRA_SE050_U2F */
+
+int akira_native_crypto_p256_keygen_se050(wasm_exec_env_t exec_env,
+                                          uint32_t slot, void *pub_ptr)
+{
+	(void)exec_env; (void)slot; (void)pub_ptr;
+	return -ENOTSUP;
+}
+
+int akira_native_crypto_p256_sign_se050(wasm_exec_env_t exec_env,
+                                        uint32_t slot,
+                                        void *hash_ptr, void *sig_ptr)
+{
+	(void)exec_env; (void)slot; (void)hash_ptr; (void)sig_ptr;
+	return -ENOTSUP;
+}
+
+#endif /* CONFIG_AKIRA_SE050_U2F */
+
 #endif /* CONFIG_AKIRA_WASM_CRYPTO */

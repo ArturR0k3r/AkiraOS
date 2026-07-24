@@ -11,6 +11,10 @@ description: |
   All configuration applied at init is taken from device-tree; no
   driver changes required when GPO sources or I2C addresses differ.
 
+  Retained for boards that still populate the ST25DV. AkiraConsole Prod
+  Rev A.3 no longer uses it (replaced by the SE050 secure element), but the
+  driver and binding remain available.
+
 compatible: "st,st25dv64k"
 
 include: i2c-device.yaml
