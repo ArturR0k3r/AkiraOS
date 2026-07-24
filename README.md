@@ -247,7 +247,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) · Code style: Zephyr C · Commits: conve
 | 🏷️ OSHWA | [certification.oshwa.org/md000003.html](https://certification.oshwa.org/md000003.html) |
 | 💬 Discussions | [GitHub Discussions](https://github.com/ArturR0k3r/AkiraOS/discussions) |
 | 📢 Telegram | [@theguywithpen](https://t.me/thguywithpen) |
-| 🛒 CrowdSupply | Coming soon — [akiraos.dev/akiraconsole](https://akiraos.dev/akiraconsole) |
+| 🛒 [CrowdSupply](https://www.crowdsupply.com/pen-engineering/akiraconsole) | Coming soon — [akiraos.dev/akiraconsole](https://akiraos.dev/akiraconsole) |
 
 ---
 
