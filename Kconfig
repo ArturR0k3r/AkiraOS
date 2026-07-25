@@ -933,7 +933,7 @@ config BT_RECONNECT_DELAY_MS
 config AKIRA_USB_HID
     bool "Enable USB HID"
     default y
-    depends on AKIRA_HID && AKIRA_USB && AKIRA_HID_MODE_KB_MOUSE
+    depends on AKIRA_HID && AKIRA_USB
     help
       Enable HID over USB.
 
