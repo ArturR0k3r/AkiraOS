@@ -249,6 +249,93 @@ static const uint8_t hid_report_desc[] = {
     0xC0, /* End Collection */
 };
 
+#if defined(CONFIG_AKIRA_HID_GAMEPAD)
+/*===========================================================================*/
+/* HID Report Descriptor - Gamepad                                           */
+/*===========================================================================*/
+
+/**
+ * @brief USB HID Gamepad Report Descriptor
+ *
+ * Kept in its own descriptor (not merged into hid_report_desc) because
+ * combining a gamepad collection with the keyboard/mouse collections
+ * breaks iOS HID enumeration. AKIRA_HID_MODE selects exactly one of the
+ * two descriptors at build time.
+ */
+static const uint8_t hid_gamepad_report_desc[] = {
+    /* Gamepad — Report ID 1 */
+    0x05,
+    0x01, /* Usage Page (Generic Desktop) */
+    0x09,
+    0x05, /* Usage (Gamepad) */
+    0xA1,
+    0x01, /* Collection (Application) */
+    0x85,
+    0x01, /* Report ID (1) */
+    0x09,
+    0x30, /* Usage (X) */
+    0x09,
+    0x31, /* Usage (Y) */
+    0x09,
+    0x32, /* Usage (Z) */
+    0x09,
+    0x33, /* Usage (Rx) */
+    0x09,
+    0x34, /* Usage (Ry) */
+    0x09,
+    0x35, /* Usage (Rz) */
+    0x16,
+    0x00,
+    0x80, /* Logical Minimum (-32768) */
+    0x26,
+    0xFF,
+    0x7F, /* Logical Maximum (32767) */
+    0x75,
+    0x10, /* Report Size (16) */
+    0x95,
+    0x06, /* Report Count (6 axes) */
+    0x81,
+    0x02, /* Input (Data, Var, Abs) */
+    0x05,
+    0x09, /* Usage Page (Button) */
+    0x19,
+    0x01, /* Usage Minimum (1) */
+    0x29,
+    0x10, /* Usage Maximum (16) */
+    0x15,
+    0x00, /* Logical Minimum (0) */
+    0x25,
+    0x01, /* Logical Maximum (1) */
+    0x75,
+    0x01, /* Report Size (1) */
+    0x95,
+    0x10, /* Report Count (16 buttons) */
+    0x81,
+    0x02, /* Input (Data, Var, Abs) */
+    0x05,
+    0x01, /* Usage Page (Generic Desktop) */
+    0x09,
+    0x39, /* Usage (Hat Switch) */
+    0x15,
+    0x00, /* Logical Minimum (0) */
+    0x25,
+    0x08, /* Logical Maximum (8) */
+    0x75,
+    0x08, /* Report Size (8) */
+    0x95,
+    0x01, /* Report Count (1) */
+    0x81,
+    0x02, /* Input (Data, Var, Abs) */
+    0x75,
+    0x08, /* Report Size (8) */
+    0x95,
+    0x01, /* Report Count (1) */
+    0x81,
+    0x01, /* Input (Const) — reserved byte */
+    0xC0, /* End Collection */
+};
+#endif /* CONFIG_AKIRA_HID_GAMEPAD */
+
 /*===========================================================================*/
 /* Constants                                                                  */
 /*===========================================================================*/
@@ -261,6 +348,8 @@ static const uint8_t hid_report_desc[] = {
 #define USB_HID_FIDO_REPORT_SIZE 65 /* Report ID (1) + 64-byte payload */
 #define USB_HID_FIDO_PAYLOAD_SIZE 64
 #define USB_HID_FIDO_REPORT_ID 4
+#define USB_HID_GAMEPAD_REPORT_SIZE 17 /* Report ID (1) + 16-byte hid_gamepad_report_t */
+#define USB_HID_GAMEPAD_REPORT_ID 1 /* sole report in hid_gamepad_report_desc */
 #define USB_HID_PROTOCOL_BOOT 0
 #define USB_HID_PROTOCOL_REPORT 1
 
@@ -607,12 +696,19 @@ static int usb_hid_transport_init_fn(hid_device_type_t device_types)
 
     LOG_INF("Initializing USB HID transport (%s)", type_to_str(device_types));
 
-    /* Validate device type - only keyboard supported by Zephyr USBD stack*/
+#if defined(CONFIG_AKIRA_HID_GAMEPAD)
+    if (!(device_types & HID_DEVICE_GAMEPAD))
+    {
+        LOG_ERR("Only gamepad device type is currently supported (AKIRA_HID_MODE_GAMEPAD)");
+        return -ENOTSUP;
+    }
+#else
     if (!(device_types & HID_DEVICE_KEYBOARD))
     {
         LOG_ERR("Only keyboard device type is currently supported");
         return -ENOTSUP;
     }
+#endif
 
     /* Initialize synchronization primitives */
     ret = k_mutex_init(&usb_hid_ctx.mutex);
@@ -653,10 +749,17 @@ static int usb_hid_transport_init_fn(hid_device_type_t device_types)
     }
 
     /* Register HID device with report descriptor and callbacks */
+#if defined(CONFIG_AKIRA_HID_GAMEPAD)
+    ret = hid_device_register(usb_hid_ctx.hid_dev,
+                              hid_gamepad_report_desc,
+                              sizeof(hid_gamepad_report_desc),
+                              &usb_hid_ops);
+#else
     ret = hid_device_register(usb_hid_ctx.hid_dev,
                               hid_report_desc,
                               sizeof(hid_report_desc),
                               &usb_hid_ops);
+#endif
     if (ret)
     {
         LOG_ERR("Failed to register HID device: %d", ret);
@@ -900,14 +1003,63 @@ static int usb_hid_transport_send_mouse(const hid_mouse_report_t *report)
 /**
  * @brief Send gamepad report via USB HID
  *
- * @note Currently not implemented - keyboard and mouse supported only
+ * @param report Pointer to gamepad report structure
+ * @return 0 on success, negative error code on failure
  */
 static int usb_hid_transport_send_gamepad(const hid_gamepad_report_t *report)
 {
-    ARG_UNUSED(report);
+    int ret;
+    static uint8_t __aligned(4) report_buf[USB_HID_GAMEPAD_REPORT_SIZE];
 
-    LOG_WRN("Gamepad not supported in Zephyr USB HID stack");
-    return -ENOTSUP;
+    if (!usb_hid_ctx.initialized || !report)
+    {
+        return -EINVAL;
+    }
+
+    k_mutex_lock(&usb_hid_ctx.mutex, K_FOREVER);
+
+    if (!usb_hid_ctx.enabled)
+    {
+        k_mutex_unlock(&usb_hid_ctx.mutex);
+        return -EAGAIN;
+    }
+
+    if (!usb_hid_ctx.interface_ready)
+    {
+        k_mutex_unlock(&usb_hid_ctx.mutex);
+        return -EAGAIN;
+    }
+
+    /* hid_gamepad_report_t is packed to match descriptor byte layout exactly */
+    report_buf[0] = USB_HID_GAMEPAD_REPORT_ID;
+    memcpy(&report_buf[1], report, sizeof(*report));
+
+    k_mutex_unlock(&usb_hid_ctx.mutex);
+
+    ret = k_sem_take(&usb_hid_ctx.report_sem, K_MSEC(100));
+    if (ret)
+    {
+        LOG_WRN("Timeout waiting for previous report to complete");
+        return -EBUSY;
+    }
+
+    ret = hid_device_submit_report(usb_hid_ctx.hid_dev,
+                                   USB_HID_GAMEPAD_REPORT_SIZE,
+                                   report_buf);
+
+    if (ret)
+    {
+        k_sem_give(&usb_hid_ctx.report_sem);
+        LOG_ERR("Failed to send gamepad report: %d", ret);
+        return ret;
+    }
+
+    LOG_INF("Sent gamepad report: buttons=0x%04x hat=%u",
+            report->buttons, report->hat);
+
+    /* Semaphore will be released in input_report_done callback */
+
+    return 0;
 }
 
 /**
