@@ -15,6 +15,7 @@
 /* Include app management */
 #include <runtime/app_loader/app_loader.h>
 #include <runtime/app_manager/app_manager.h>
+#include <runtime/app_manager/app_cmd_bridge.h>
 #include <runtime/akira_runtime.h>
 
 LOG_MODULE_REGISTER(cloud_app, CONFIG_AKIRA_LOG_LEVEL);
@@ -69,6 +70,19 @@ static struct
     struct catalog_request catalog_req;
     struct k_mutex mutex;
 } handler;
+
+static struct k_work_delayable s_update_check_work;
+
+static void update_check_work_fn(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+#if CONFIG_AKIRA_CLOUD_APP_UPDATE_CHECK_INTERVAL_MS > 0
+    cloud_app_check_updates();
+    k_work_schedule(&s_update_check_work,
+                    K_MSEC(CONFIG_AKIRA_CLOUD_APP_UPDATE_CHECK_INTERVAL_MS));
+#endif
+}
 
 /*===========================================================================*/
 /* Private Functions                                                         */
@@ -401,6 +415,12 @@ int cloud_app_handler_init(void)
     /* Register with cloud client */
     cloud_client_register_handler(MSG_CAT_APP, cloud_app_handle_message);
 
+#if CONFIG_AKIRA_CLOUD_APP_UPDATE_CHECK_INTERVAL_MS > 0
+    k_work_init_delayable(&s_update_check_work, update_check_work_fn);
+    k_work_schedule(&s_update_check_work,
+                    K_MSEC(CONFIG_AKIRA_CLOUD_APP_UPDATE_CHECK_INTERVAL_MS));
+#endif
+
     handler.initialized = true;
     LOG_INF("Cloud app handler initialized");
 
@@ -409,6 +429,8 @@ int cloud_app_handler_init(void)
 
 int cloud_app_handler_deinit(void)
 {
+    k_work_cancel_delayable(&s_update_check_work);
+
     if (!handler.initialized)
     {
         return 0;
@@ -564,6 +586,31 @@ int cloud_app_request_catalog(app_catalog_cb_t callback, void *user_data)
     return cloud_client_request_app_list();
 }
 
+static void send_app_cmd_reply(const char *app_id, const void *reply, size_t reply_len,
+                               app_cmd_reply_status_t status, void *user_data)
+{
+    msg_source_t source = *(msg_source_t *)user_data;
+
+    if (status != APP_CMD_REPLY_OK) {
+        LOG_WRN("app.cmd to %s: %s", app_id,
+                status == APP_CMD_REPLY_NOT_LISTENING ? "not listening" : "timeout");
+        return; /* no reply sent to Hub on failure — Hub sees no MSG_TYPE_APP_CMD echo, times out itself */
+    }
+
+    uint8_t buf[sizeof(payload_app_cmd_t) + CONFIG_AKIRA_IPC_MSG_MAX_SIZE];
+    payload_app_cmd_t *out = (payload_app_cmd_t *)buf;
+    strncpy(out->app_id, app_id, CLOUD_APP_ID_LEN - 1);
+    out->app_id[CLOUD_APP_ID_LEN - 1] = '\0';
+    memcpy(out->data, reply, reply_len);
+
+    cloud_message_t reply_msg;
+    cloud_msg_init(&reply_msg.header, MSG_TYPE_APP_CMD, MSG_SOURCE_INTERNAL);
+    reply_msg.header.flags |= MSG_FLAG_RESPONSE;
+    reply_msg.header.payload_len = (uint32_t)(offsetof(payload_app_cmd_t, data) + reply_len);
+    reply_msg.payload = buf;
+    cloud_client_send(&reply_msg, source);
+}
+
 int cloud_app_handle_message(const cloud_message_t *msg, msg_source_t source)
 {
     if (!handler.initialized)
@@ -586,8 +633,69 @@ int cloud_app_handle_message(const cloud_message_t *msg, msg_source_t source)
         return handle_app_list_response(msg, source);
 
     case MSG_TYPE_APP_AVAILABLE:
+    {
+        if (msg->payload && msg->header.payload_len >= sizeof(payload_app_metadata_t)) {
+            payload_app_metadata_t *meta = (payload_app_metadata_t *)msg->payload;
+            char version[APP_VERSION_MAX_LEN];
+            snprintf(version, sizeof(version), "%u.%u.%u",
+                    meta->version[0], meta->version[1], meta->version[2]);
+            app_manager_set_update_available(meta->app_id, version);
+        }
         LOG_INF("App available notification from %s", cloud_msg_source_str(source));
         return 0;
+    }
+
+    case MSG_TYPE_APP_CHECK:
+        return cloud_app_check_updates();
+
+    case MSG_TYPE_APP_START:
+        if (msg->payload && msg->header.payload_len >= CLOUD_APP_ID_LEN) {
+            return app_manager_start((const char *)msg->payload);
+        }
+        return -EINVAL;
+
+    case MSG_TYPE_APP_STOP:
+        if (msg->payload && msg->header.payload_len >= CLOUD_APP_ID_LEN) {
+            return app_manager_stop((const char *)msg->payload);
+        }
+        return -EINVAL;
+
+    case MSG_TYPE_APP_INSTALL:
+    {
+        /* Same app_id-triggers-download path apps.install.begin/end already use over BLE —
+         * reuse cloud_app_download() (this file) rather than duplicating install logic. */
+        if (!(msg->payload && msg->header.payload_len >= CLOUD_APP_ID_LEN)) {
+            return -EINVAL;
+        }
+        app_download_request_t req = {
+            .progress_cb = NULL, .complete_cb = NULL, .user_data = NULL,
+            .auto_install = true, .auto_start = false,
+        };
+        strncpy(req.app_id, (const char *)msg->payload, sizeof(req.app_id) - 1);
+        return cloud_app_download(&req);
+    }
+
+    case MSG_TYPE_APP_UNINSTALL:
+        if (msg->payload && msg->header.payload_len >= CLOUD_APP_ID_LEN) {
+            return app_manager_uninstall((const char *)msg->payload);
+        }
+        return -EINVAL;
+
+    case MSG_TYPE_APP_CMD:
+    {
+        if (msg->header.flags & MSG_FLAG_RESPONSE) {
+            return 0; /* our own reply looped back — ignore, not a request */
+        }
+        if (!msg->payload || msg->header.payload_len < offsetof(payload_app_cmd_t, data)) {
+            return -EINVAL;
+        }
+        payload_app_cmd_t *cmd = (payload_app_cmd_t *)msg->payload;
+        size_t data_len = msg->header.payload_len - offsetof(payload_app_cmd_t, data);
+        static msg_source_t s_cmd_source; /* single AkiraHub connection — one in flight */
+        s_cmd_source = source;
+        return app_cmd_bridge_send(cmd->app_id, cmd->data, data_len,
+                                   send_app_cmd_reply, &s_cmd_source, K_SECONDS(3));
+    }
 
     default:
         return 0; /* Not handled */

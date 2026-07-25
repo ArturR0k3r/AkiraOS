@@ -322,6 +322,17 @@ uint32_t akira_runtime_get_memory_quota(int instance_id)
     return g_apps[instance_id].memory_quota;
 }
 
+int akira_runtime_get_commands_json(int instance_id, char *buf, size_t buf_len)
+{
+    if (!slot_valid(instance_id) || !buf || buf_len == 0)
+    {
+        return -EINVAL;
+    }
+    strncpy(buf, g_apps[instance_id].commands_json, buf_len - 1);
+    buf[buf_len - 1] = '\0';
+    return 0;
+}
+
 /* Initialize WAMR runtime with PSRAM-backed heap when available */
 int akira_runtime_init(void)
 {
@@ -610,6 +621,9 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
                 (unsigned long long)g_apps[slot].cap_mask, app_attested);
     }
     g_apps[slot].memory_quota = manifest.valid ? manifest.memory_quota : 0;
+    strncpy(g_apps[slot].commands_json, manifest.commands_json,
+            sizeof(g_apps[slot].commands_json) - 1);
+    g_apps[slot].commands_json[sizeof(g_apps[slot].commands_json) - 1] = '\0';
     atomic_set(&g_apps[slot].memory_used, 0);
     memcpy(g_apps[slot].binary_hash, binary_hash, 32);
     g_apps[slot].hash_valid = true;
@@ -1040,6 +1054,13 @@ int akira_runtime_install_with_manifest(const char *name, const void *binary, si
         }
         LOG_INF("App %s: merged manifest cap_mask=0x%016llx, memory_quota=%u",
                 name, (unsigned long long)g_apps[id].cap_mask, g_apps[id].memory_quota);
+    }
+
+    if (manifest.valid)
+    {
+        strncpy(g_apps[id].commands_json, manifest.commands_json,
+                sizeof(g_apps[id].commands_json) - 1);
+        g_apps[id].commands_json[sizeof(g_apps[id].commands_json) - 1] = '\0';
     }
 
     /* Store friendly name */

@@ -1226,6 +1226,17 @@ config AKIRA_CLOUD_APP_HANDLER
       Handle WASM app download and update messages.
       Integrates with app_loader and wasm_app_manager.
 
+config AKIRA_CLOUD_APP_UPDATE_CHECK_INTERVAL_MS
+    int "App update check interval (ms)"
+    default 3600000
+    range 0 86400000
+    depends on AKIRA_CLOUD_APP_HANDLER
+    help
+      How often cloud_app_handler polls cloud_app_check_updates() in the
+      background. Set to 0 to disable periodic checking (apps can still
+      call app_check_update() themselves, which reads the last-known
+      cached result rather than triggering a new network round-trip).
+
 config AKIRA_CLOUD_OTA_HANDLER
     bool "Enable OTA handler"
     default y
@@ -2223,13 +2234,15 @@ config AKIRA_WASM_IPC
 
 config AKIRA_IPC_MAX_TOPICS
     int "Maximum number of IPC topics"
-    default 8
+    default 24
     range 1 32
     depends on AKIRA_WASM_IPC
     help
       Maximum number of simultaneously active named IPC topics.
-      Default raised to 8 to accommodate the built-in akira.lifecycle topic
-      plus additional user topics.
+      Needs to cover: the built-in akira.lifecycle topic, plus up to two
+      topics (<name>.cmd, <name>.evt) per app using the remote command
+      bridge (app_cmd_bridge.c), sized for CONFIG_AKIRA_APP_MAX_INSTALLED
+      concurrently-running apps.
 
 config AKIRA_IPC_MAX_SUBS_PER_TOPIC
     int "Maximum subscribers per IPC topic"

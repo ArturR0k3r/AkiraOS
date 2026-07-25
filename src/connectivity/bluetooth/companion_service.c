@@ -33,6 +33,8 @@
 #include <zephyr/fs/fs.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
+#include <zephyr/sys/reboot.h>
+#include <zephyr/sys/base64.h>
 
 #include <string.h>
 #include <stdio.h>
@@ -44,8 +46,10 @@ LOG_MODULE_REGISTER(companion_svc, CONFIG_AKIRA_LOG_LEVEL);
 
 /* Forward-declared internal headers (pulled in via include paths) */
 #include "../../runtime/app_manager/app_manager.h"
+#include "../../runtime/app_manager/app_cmd_bridge.h"
 #include "../../connectivity/ota/ota_manager.h"
 #include "../../settings/akira_settings.h"
+#include "../../connectivity/cloud/cloud_app_handler.h"
 
 /* --------------------------------------------------------------------------
  * UUID definitions
@@ -210,29 +214,67 @@ static void handle_device_reboot(const char *op, int id, const char *params)
     sys_reboot(SYS_REBOOT_COLD);
 }
 
+static char AKIRA_BULK_BSS s_list_json[2048];
+
+/* Fragments a buffer across DATA_DOWN notifications (COMP_XFER_FILE_DATA
+ * framing) — used when a response exceeds one 244-byte RESP_CHAR notify. */
+static void stream_bytes_down(const uint8_t *data, int len)
+{
+    extern const struct bt_gatt_attr companion_attrs[];
+    uint8_t frame[4 + COMP_DATA_PAYLOAD_MAX];
+    int off = 0;
+    do {
+        int chunk = len - off;
+        if (chunk > COMP_DATA_PAYLOAD_MAX) {
+            chunk = COMP_DATA_PAYLOAD_MAX;
+        }
+        bool last = (off + chunk >= len);
+        frame[0] = COMP_XFER_FILE_DATA;
+        frame[1] = last ? COMP_FLAG_LAST : 0;
+        frame[2] = (uint8_t)(chunk & 0xFF);
+        frame[3] = (uint8_t)((chunk >> 8) & 0xFF);
+        if (chunk > 0) {
+            memcpy(frame + 4, data + off, chunk);
+        }
+        if (bt_gatt_notify(s_conn, &companion_attrs[9], frame, (uint16_t)(4 + chunk))) {
+            break;
+        }
+        off += chunk;
+        if (!last) {
+            k_sleep(K_MSEC(10)); /* let the peer's BLE stack drain */
+        }
+    } while (off < len);
+}
+
 static void handle_apps_list(const char *op, int id, const char *params)
 {
     ARG_UNUSED(params);
-    /* Build JSON array of installed apps */
-    char buf[CHAR_BUF_SIZE];
-    int pos = 0;
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "[");
-
-    int count = app_manager_get_count();
-    for (int i = 0; i < count && (size_t)pos < sizeof(buf) - 40; i++) {
-        app_info_t info;
-        if (app_manager_get_info(i, &info) == 0) {
-            pos += snprintf(buf + pos, sizeof(buf) - pos,
-                            "%s{\"name\":\"%s\",\"state\":\"%s\","
-                            "\"version\":\"%s\"}",
-                            i > 0 ? "," : "",
-                            info.name,
-                            app_state_string(info.state),
-                            info.version);
-        }
+    /* The list can exceed one 244-byte notify (many SD-card apps), so ACK on
+     * RESP and stream the JSON array over DATA_DOWN. */
+    static app_info_t list[32] AKIRA_BULK_BSS;
+    int count = app_manager_list(list, (int)(sizeof(list) / sizeof(list[0])));
+    if (count < 0) {
+        count = 0;
     }
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "]");
-    send_resp(op, id, true, buf);
+
+    int pos = 0;
+    pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos, "[");
+    for (int i = 0; i < count && (size_t)pos < sizeof(s_list_json) - 96; i++) {
+        pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos,
+                        "%s{\"name\":\"%s\",\"state\":\"%s\","
+                        "\"version\":\"%s\",\"has_update\":%s,"
+                        "\"available_version\":\"%s\"}",
+                        i > 0 ? "," : "",
+                        list[i].name,
+                        app_state_to_str(list[i].state),
+                        list[i].version,
+                        list[i].has_update ? "true" : "false",
+                        list[i].available_version);
+    }
+    pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos, "]");
+
+    send_resp(op, id, true, NULL);   /* ACK; array follows on DATA_DOWN */
+    stream_bytes_down((const uint8_t *)s_list_json, pos);
 }
 
 static void handle_apps_start(const char *op, int id, const char *params)
@@ -275,6 +317,98 @@ static void handle_apps_uninstall(const char *op, int id, const char *params)
     }
     int rc = app_manager_uninstall(name);
     send_resp(op, id, rc == 0, rc == 0 ? NULL : "uninstall failed");
+}
+
+/* CONFIG_AKIRA_IPC_MSG_MAX_SIZE-bounded: the bridge forwards these bytes
+ * straight onto the app's IPC topic, which caps a single message at that
+ * Kconfig value. */
+#define APPS_CMD_TIMEOUT_MS 3000
+
+struct apps_cmd_ctx {
+    char op[16];
+    int id;
+};
+
+static void apps_cmd_reply_cb(const char *app_name, const void *reply, size_t reply_len,
+                              app_cmd_reply_status_t status, void *user_data)
+{
+    ARG_UNUSED(app_name);
+    struct apps_cmd_ctx *ctx = user_data;
+
+    if (status == APP_CMD_REPLY_NOT_LISTENING) {
+        send_resp(ctx->op, ctx->id, false, "app not listening");
+        return;
+    }
+    if (status == APP_CMD_REPLY_TIMEOUT) {
+        send_resp(ctx->op, ctx->id, false, "timeout");
+        return;
+    }
+
+    char b64_out[4 * ((CONFIG_AKIRA_IPC_MSG_MAX_SIZE + 2) / 3) + 1];
+    size_t b64_len = 0;
+    base64_encode((uint8_t *)b64_out, sizeof(b64_out), &b64_len, reply, reply_len);
+    b64_out[b64_len] = '\0';
+
+    char data[sizeof(b64_out) + 32];
+    snprintf(data, sizeof(data), "{\"payload\":\"%s\"}", b64_out);
+    send_resp(ctx->op, ctx->id, true, data);
+}
+
+static void handle_apps_cmd(const char *op, int id, const char *params)
+{
+    char name[32] = "";
+    char payload_b64[4 * ((CONFIG_AKIRA_IPC_MSG_MAX_SIZE + 2) / 3) + 1] = "";
+    json_get_str(params, "name", name, sizeof(name));
+    json_get_str(params, "payload", payload_b64, sizeof(payload_b64));
+
+    if (!name[0] || !payload_b64[0]) {
+        send_resp(op, id, false, "missing name or payload");
+        return;
+    }
+
+    uint8_t decoded[CONFIG_AKIRA_IPC_MSG_MAX_SIZE];
+    size_t decoded_len = 0;
+    if (base64_decode(decoded, sizeof(decoded), &decoded_len,
+                      (const uint8_t *)payload_b64, strlen(payload_b64)) != 0) {
+        send_resp(op, id, false, "invalid base64 payload");
+        return;
+    }
+
+    static struct apps_cmd_ctx ctx; /* single connection (CONFIG_BT_MAX_CONN=1) — one in flight */
+    strncpy(ctx.op, op, sizeof(ctx.op) - 1);
+    ctx.op[sizeof(ctx.op) - 1] = '\0';
+    ctx.id = id;
+
+    int rc = app_cmd_bridge_send(name, decoded, decoded_len, apps_cmd_reply_cb, &ctx,
+                                 K_MSEC(APPS_CMD_TIMEOUT_MS));
+    if (rc < 0 && rc != -ENOENT) {
+        /* -ENOENT already answered by the callback (not-listening case) */
+        send_resp(op, id, false, "internal error");
+    }
+}
+
+static void handle_apps_update(const char *op, int id, const char *params)
+{
+    char name[32] = "";
+    json_get_str(params, "name", name, sizeof(name));
+    if (!name[0]) {
+        send_resp(op, id, false, "missing name");
+        return;
+    }
+    int rc = cloud_app_update(name, NULL, NULL);
+    send_resp(op, id, rc == 0, rc == 0 ? NULL : "update failed");
+}
+
+static void handle_apps_restart(const char *op, int id, const char *params)
+{
+    char name[32] = "";
+    json_get_str(params, "name", name, sizeof(name));
+    if (!name[0]) {
+        send_resp(op, id, false, "missing name");
+        return;
+    }
+    int rc = app_manager_restart(name);
+    send_resp(op, id, rc == 0, rc == 0 ? NULL : "restart failed");
 }
 
 static void handle_apps_install_begin(const char *op, int id, const char *params)
@@ -702,6 +836,9 @@ static void cmd_work_handler(struct k_work *work)
     else if (strcmp(op, COMP_OP_APPS_UNINSTALL)      == 0) { handle_apps_uninstall(op, id, params); }
     else if (strcmp(op, COMP_OP_APPS_INSTALL_BEGIN)  == 0) { handle_apps_install_begin(op, id, params); }
     else if (strcmp(op, COMP_OP_APPS_INSTALL_END)    == 0) { handle_apps_install_end(op, id, params); }
+    else if (strcmp(op, COMP_OP_APPS_CMD)            == 0) { handle_apps_cmd(op, id, params); }
+    else if (strcmp(op, COMP_OP_APPS_UPDATE)         == 0) { handle_apps_update(op, id, params); }
+    else if (strcmp(op, COMP_OP_APPS_RESTART)        == 0) { handle_apps_restart(op, id, params); }
     else if (strcmp(op, COMP_OP_SETTINGS_GET)        == 0) { handle_settings_get(op, id, params); }
     else if (strcmp(op, COMP_OP_SETTINGS_SET)        == 0) { handle_settings_set(op, id, params); }
     else if (strcmp(op, COMP_OP_SETTINGS_LIST)       == 0) { handle_settings_list(op, id, params); }

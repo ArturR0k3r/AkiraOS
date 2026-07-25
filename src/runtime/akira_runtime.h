@@ -28,6 +28,7 @@ typedef void *wasm_module_inst_t;
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "manifest_parser.h"
 #include <runtime/security/sandbox.h>
 #include <runtime/runtime_cache.h>
 #include <runtime/security/trust_levels.h>
@@ -81,6 +82,7 @@ typedef struct {
     uint64_t cap_mask;        /**< capability bitmask from manifest */
     uint32_t memory_quota;    /**< memory quota from manifest (0 = unlimited) */
     atomic_t memory_used;     /**< current memory usage (bytes) — updated atomically */
+    char commands_json[MANIFEST_COMMANDS_JSON_MAX_LEN]; /**< raw "commands" array from manifest */
 
     /* Security: sandbox context for syscall filtering + rate limiting */
     sandbox_ctx_t sandbox;
@@ -188,6 +190,16 @@ uint32_t akira_runtime_get_memory_used(int instance_id);
  * @return Memory quota in bytes (0 = unlimited)
  */
 uint32_t akira_runtime_get_memory_quota(int instance_id);
+
+/**
+ * @brief Get the raw "commands" JSON array from an app's manifest
+ *
+ * @param instance_id  App instance ID
+ * @param buf          Output buffer
+ * @param buf_len      Output buffer capacity
+ * @return 0 on success, -EINVAL if instance_id is invalid
+ */
+int akira_runtime_get_commands_json(int instance_id, char *buf, size_t buf_len);
 
 /**
  * @brief Get sandbox context for an app (for API-level syscall checks)

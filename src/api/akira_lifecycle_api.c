@@ -30,6 +30,10 @@ LOG_MODULE_REGISTER(akira_lifecycle_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <runtime/app_manager/app_manager.h>
 #endif
 
+#ifdef CONFIG_AKIRA_CLOUD_APP_HANDLER
+#include <connectivity/cloud/cloud_app_handler.h>
+#endif
+
 /* APP_NAME_MAX_LEN defined in app_manager.h; provide fallback for non-manager builds */
 #ifndef APP_NAME_MAX_LEN
 #define APP_NAME_MAX_LEN 32
@@ -286,6 +290,64 @@ int akira_native_app_switch(wasm_exec_env_t exec_env, const char *name)
 
     k_work_reschedule_for_queue(&g_switch_wq, &g_switch_work, K_MSEC(200));
     return 0;
+#else
+    return -ENOTSUP;
+#endif
+}
+
+int akira_native_app_check_update(wasm_exec_env_t exec_env, uint8_t *ver_buf, uint32_t buf_len)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_CONTROL, -EPERM);
+
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    char self[APP_NAME_MAX_LEN] = {0};
+    if (!inst || akira_runtime_get_name_for_module_inst(inst, self, sizeof(self)) < 0 || !self[0]) {
+        return -EINVAL;
+    }
+
+#ifdef CONFIG_AKIRA_APP_MANAGER
+    app_info_t info;
+    int ret = app_manager_get_info(self, &info);
+    if (ret < 0) {
+        return ret;
+    }
+    if (!info.has_update) {
+        return 0;
+    }
+    size_t vlen = strnlen(info.available_version, APP_VERSION_MAX_LEN);
+    size_t copy = (vlen < buf_len - 1) ? vlen : buf_len - 1;
+    memcpy(ver_buf, info.available_version, copy);
+    ver_buf[copy] = '\0';
+    return 1;
+#else
+    return -ENOTSUP;
+#endif
+}
+
+int akira_native_app_request_update(wasm_exec_env_t exec_env)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_CONTROL, -EPERM);
+
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    char self[APP_NAME_MAX_LEN] = {0};
+    if (!inst || akira_runtime_get_name_for_module_inst(inst, self, sizeof(self)) < 0 || !self[0]) {
+        return -EINVAL;
+    }
+
+#if defined(CONFIG_AKIRA_APP_MANAGER) && defined(CONFIG_AKIRA_CLOUD_APP_HANDLER)
+    app_info_t info;
+    int ret = app_manager_get_info(self, &info);
+    if (ret < 0) {
+        return ret;
+    }
+    if (!info.has_update) {
+        return -ENOENT;
+    }
+    /* cloud_app_update() returns quickly (queues async download on the cloud
+     * client's own thread) — safe to call synchronously from WASM native
+     * context, unlike app_manager_start()'s flash/PSRAM path (see the
+     * deferred-workqueue comment above for why that one differs). */
+    return cloud_app_update(self, NULL, NULL);
 #else
     return -ENOTSUP;
 #endif

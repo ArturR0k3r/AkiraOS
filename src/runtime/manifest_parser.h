@@ -32,6 +32,9 @@ extern "C"
 /** Maximum length of a single allowed hostname */
 #define MANIFEST_NET_HOST_LEN 64
 
+/** Maximum size of the raw "commands" JSON array captured verbatim from the manifest */
+#define MANIFEST_COMMANDS_JSON_MAX_LEN 512
+
     /**
      * @brief Per-app network egress policy, parsed from manifest "network_policy".
      *
@@ -60,6 +63,9 @@ extern "C"
         char version[16];                       /**< Version string (e.g., "1.0.0") */
         bool valid;                             /**< True if manifest was successfully parsed */
         akira_manifest_net_policy_t net_policy; /**< Optional per-app network policy */
+        /** Raw "commands" JSON array, verbatim (opaque to firmware, consumed by hub
+         *  dashboard). Defaults to "[]" if absent. */
+        char commands_json[MANIFEST_COMMANDS_JSON_MAX_LEN];
     } akira_manifest_t;
 
     /**

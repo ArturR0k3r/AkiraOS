@@ -22,6 +22,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "runtime/manifest_parser.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -156,6 +157,8 @@ extern "C"
         uint32_t install_time; /* Unix timestamp */
         uint32_t last_start_time;
         bool is_preloaded; /* Firmware-embedded, cannot uninstall */
+        bool has_update;
+        char available_version[APP_VERSION_MAX_LEN];
     } app_entry_t;
 
     /**
@@ -172,6 +175,9 @@ extern "C"
         uint16_t stack_kb;
         uint8_t crash_count;
         bool auto_restart;
+        bool has_update;
+        char available_version[APP_VERSION_MAX_LEN];
+        char commands_json[MANIFEST_COMMANDS_JSON_MAX_LEN]; /**< raw "commands" array from manifest */
     } app_info_t;
 
     /**
@@ -318,6 +324,12 @@ extern "C"
      * @return App state, or APP_STATE_NEW if not found
      */
     app_state_t app_manager_get_state(const char *name);
+
+    /**
+     * @brief Record that a newer version of an installed app is available.
+     * No-op (returns -ENOENT) if @p name isn't installed.
+     */
+    int app_manager_set_update_available(const char *name, const char *version);
 
     /**
      * @brief Get count of installed apps

@@ -160,6 +160,9 @@ void manifest_init_defaults(akira_manifest_t *manifest)
     manifest->version[0] = '\0';
     manifest->valid = false;
     /* net_policy zeroed by memset — present=false, deny_all=false, counts=0 */
+    manifest->commands_json[0] = '[';
+    manifest->commands_json[1] = ']';
+    manifest->commands_json[2] = '\0';
 }
 
 int manifest_parse_json(const char *json, size_t json_len, akira_manifest_t *manifest)
@@ -447,6 +450,59 @@ int manifest_parse_json(const char *json, size_t json_len, akira_manifest_t *man
                     manifest->net_policy.deny_all,
                     manifest->net_policy.host_count,
                     manifest->net_policy.port_count);
+        }
+        else if (strcmp(key, "commands") == 0)
+        {
+            /* Capture the array verbatim — firmware doesn't interpret command
+             * schemas, it just carries them to the hub dashboard. */
+            p = json_skip_ws(p, end);
+            if (p >= end || *p != '[')
+            {
+                LOG_ERR("Invalid JSON: commands must be array");
+                return -EINVAL;
+            }
+
+            const char *arr_start = p;
+            int depth = 0;
+            bool in_str = false;
+            while (p < end)
+            {
+                if (!in_str)
+                {
+                    if (*p == '"')
+                        in_str = true;
+                    else if (*p == '[')
+                        depth++;
+                    else if (*p == ']')
+                    {
+                        depth--;
+                        if (depth == 0)
+                        {
+                            p++;
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    if (*p == '\\' && p + 1 < end)
+                        p++;
+                    else if (*p == '"')
+                        in_str = false;
+                }
+                p++;
+            }
+
+            size_t arr_len = (size_t)(p - arr_start);
+            if (arr_len < sizeof(manifest->commands_json))
+            {
+                memcpy(manifest->commands_json, arr_start, arr_len);
+                manifest->commands_json[arr_len] = '\0';
+            }
+            else
+            {
+                LOG_WRN("commands array too large (%zu bytes), dropping", arr_len);
+            }
         }
         else
         {

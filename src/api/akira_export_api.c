@@ -179,14 +179,16 @@ bool akira_register_native_apis()
         {"app_stop", (void *)akira_native_app_stop, "($)i", NULL},
         /* Lightweight handoff — requires AKIRA_CAP_APP_SWITCH or APP_CONTROL */
         {"app_switch", (void *)akira_native_app_switch, "($)i", NULL},
+        {"app_check_update", (void *)akira_native_app_check_update, "(ii)i", NULL},
+        {"app_request_update", (void *)akira_native_app_request_update, "()i", NULL},
 #endif
 
 #ifdef CONFIG_AKIRA_WASM_IPC
         {"msg_subscribe", (void *)akira_native_msg_subscribe, "($)i", NULL},
         {"msg_unsubscribe", (void *)akira_native_msg_unsubscribe, "($)i", NULL},
-        {"msg_publish", (void *)akira_native_msg_publish, "($*~)i", NULL},
-        {"msg_recv", (void *)akira_native_msg_recv, "($*~i)i", NULL},
-        {"msg_try_recv", (void *)akira_native_msg_try_recv, "($*~)i", NULL},
+        {"msg_publish", (void *)akira_native_msg_publish, "($ii)i", NULL},
+        {"msg_recv", (void *)akira_native_msg_recv, "($iii)i", NULL},
+        {"msg_try_recv", (void *)akira_native_msg_try_recv, "($ii)i", NULL},
         {"msg_pending", (void *)akira_native_msg_pending, "($)i", NULL},
 #endif
 

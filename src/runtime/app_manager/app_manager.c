@@ -935,6 +935,15 @@ int app_manager_list(app_info_t *out_list, int max_count)
             out_list[count].stack_kb = g_registry[i].stack_kb;
             out_list[count].crash_count = g_registry[i].crash_count;
             out_list[count].auto_restart = g_registry[i].restart.enabled;
+            out_list[count].has_update = g_registry[i].has_update;
+            strncpy(out_list[count].available_version, g_registry[i].available_version,
+                   APP_VERSION_MAX_LEN);
+            if (g_registry[i].container_id >= 0) {
+                akira_runtime_get_commands_json(g_registry[i].container_id,
+                        out_list[count].commands_json, sizeof(out_list[count].commands_json));
+            } else {
+                strncpy(out_list[count].commands_json, "[]", sizeof(out_list[count].commands_json));
+            }
             count++;
         }
     }
@@ -952,6 +961,14 @@ int app_manager_list(app_info_t *out_list, int max_count)
             out_list[count].stack_kb = 0;
             out_list[count].crash_count = 0;
             out_list[count].auto_restart = false;
+            out_list[count].has_update = false;
+            out_list[count].available_version[0] = '\0';
+            if (g_transient_apps[i].container_id >= 0) {
+                akira_runtime_get_commands_json(g_transient_apps[i].container_id,
+                        out_list[count].commands_json, sizeof(out_list[count].commands_json));
+            } else {
+                strncpy(out_list[count].commands_json, "[]", sizeof(out_list[count].commands_json));
+            }
             count++;
         }
     }
@@ -986,6 +1003,14 @@ int app_manager_get_info(const char *name, app_info_t *out_info)
     out_info->stack_kb = app->stack_kb;
     out_info->crash_count = app->crash_count;
     out_info->auto_restart = app->restart.enabled;
+    out_info->has_update = app->has_update;
+    strncpy(out_info->available_version, app->available_version, APP_VERSION_MAX_LEN);
+    if (app->container_id >= 0) {
+        akira_runtime_get_commands_json(app->container_id, out_info->commands_json,
+                sizeof(out_info->commands_json));
+    } else {
+        strncpy(out_info->commands_json, "[]", sizeof(out_info->commands_json));
+    }
 
     k_mutex_unlock(&g_registry_mutex);
     return 0;
@@ -1010,6 +1035,30 @@ app_state_t app_manager_get_state(const char *name)
     k_mutex_unlock(&g_registry_mutex);
 
     return state;
+}
+
+int app_manager_set_update_available(const char *name, const char *version)
+{
+    if (!g_initialized || !name || !version)
+    {
+        return -EINVAL;
+    }
+
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
+    app_entry_t *app = find_app_by_name(name);
+    if (!app)
+    {
+        k_mutex_unlock(&g_registry_mutex);
+        return -ENOENT;
+    }
+
+    app->has_update = true;
+    strncpy(app->available_version, version, APP_VERSION_MAX_LEN - 1);
+    app->available_version[APP_VERSION_MAX_LEN - 1] = '\0';
+
+    k_mutex_unlock(&g_registry_mutex);
+    LOG_INF("Update available for %s: %s", name, version);
+    return 0;
 }
 
 int app_manager_get_count(void)

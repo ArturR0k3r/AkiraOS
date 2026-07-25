@@ -104,6 +104,8 @@ extern "C"
         MSG_TYPE_APP_UNINSTALL = 0x2A,     /**< Uninstall app */
         MSG_TYPE_APP_START = 0x2B,         /**< Start app */
         MSG_TYPE_APP_STOP = 0x2C,          /**< Stop app */
+        MSG_TYPE_APP_CMD = 0x2D,           /**< Custom app command (request or, with
+                                                 MSG_FLAG_RESPONSE set, reply) */
 
         /* Data Messages (0x30-0x3F) */
         MSG_TYPE_DATA_SYNC = 0x30,     /**< Sync data to cloud */
@@ -205,6 +207,19 @@ extern "C"
         uint16_t chunk_size;  /**< Chunk size for transfer */
         uint16_t chunk_count; /**< Total chunks */
     } payload_app_metadata_t;
+
+/* Wire-format field length is fixed — NOT app_manager.h's Kconfig-tunable
+ * APP_NAME_MAX_LEN, whose value can differ per build and would break wire
+ * compatibility with Hub. Matches the existing bare-32 app_id fields in
+ * payload_app_metadata_t/payload_app_entry_t above. */
+#define CLOUD_APP_ID_LEN 32
+
+    /** Custom app command payload — opaque bytes, app-defined schema */
+    typedef struct __attribute__((packed))
+    {
+        char    app_id[CLOUD_APP_ID_LEN];
+        uint8_t data[];   /* opaque, app-defined */
+    } payload_app_cmd_t;
 
     /** App list entry */
     typedef struct __attribute__((packed))

@@ -291,6 +291,7 @@ target_sources(app PRIVATE
     src/runtime/app_loader/app_loader.c
     src/runtime/app_manager/app_manager.c
     src/runtime/app_manager/app_events.c
+    src/runtime/app_manager/app_cmd_bridge.c
 )
 
 # Core API wrappers (must be stateless, call akira_security_check first)

@@ -101,6 +101,9 @@ extern "C" {
 #define COMP_OP_APPS_UNINSTALL    "apps.uninstall"     /* params: {"name":"..."} */
 #define COMP_OP_APPS_INSTALL_BEGIN "apps.install.begin" /* params: {"name":"...","size":<bytes>,"crc32":<uint>} */
 #define COMP_OP_APPS_INSTALL_END  "apps.install.end"   /* no params — commit install */
+#define COMP_OP_APPS_CMD          "apps.cmd"           /* params: {"name":"...","payload":"<base64>"} */
+#define COMP_OP_APPS_UPDATE       "apps.update"         /* params: {"name":"..."} */
+#define COMP_OP_APPS_RESTART      "apps.restart"        /* params: {"name":"..."} */
 
 #define COMP_OP_SETTINGS_GET      "settings.get"       /* params: {"key":"..."} */
 #define COMP_OP_SETTINGS_SET      "settings.set"       /* params: {"key":"...","value":"..."} */
