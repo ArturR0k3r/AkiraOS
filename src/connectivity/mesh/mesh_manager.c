@@ -19,9 +19,13 @@
 
 #include "connectivity/akira_mesh.h"
 #include "connectivity/radio_interface.h"
+#include "connectivity/bluetooth/bt_manager.h"
 #include "mesh_routing.h"
+#include "mesh_crypto.h"
+#include "mesh_session.h"
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
+#include <zephyr/random/random.h>
 #include <string.h>
 #include <lib/mem_helper.h>
 
@@ -43,16 +47,25 @@ struct __packed mesh_header {
 };
 
 /* AODV control payloads (follow a mesh_header) */
+/* orig_identity_pub / target_prekey_pub piggyback an async X3DH-lite E2E
+ * handshake on route discovery: RREQ carries the originator's long-term
+ * identity pubkey, RREP carries the target's current ephemeral prekey
+ * pubkey. Both sides derive the same session key via
+ * ECDH(identity_priv, peer_prekey_pub) === ECDH(prekey_priv, peer_identity_pub)
+ * without needing to be online simultaneously — see mesh_dispatch's
+ * ROUTE_REQ/ROUTE_REPLY handling. Zero-filled when E2E crypto isn't built. */
 struct __packed aodv_rreq {
     uint8_t  target[AKIRA_MESH_NODE_ID_LEN];
     uint16_t rreq_id;
     uint16_t orig_seq;
     uint16_t dest_seq;
+    uint8_t  orig_identity_pub[MESH_CRYPTO_PUB_LEN];
 };
 struct __packed aodv_rrep {
     uint8_t  target[AKIRA_MESH_NODE_ID_LEN];
     uint16_t dest_seq;
     uint8_t  hop_count;
+    uint8_t  target_prekey_pub[MESH_CRYPTO_PUB_LEN];
 };
 struct __packed aodv_rerr {
     uint8_t  unreachable[AKIRA_MESH_NODE_ID_LEN];
@@ -74,6 +87,14 @@ static struct {
     struct route_table     routes;
     struct ack_table       acks;
     struct pending_route_q proutes;
+#if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+    struct session_table   sessions;    /* E2E session keys, guarded by tables_lock */
+    uint8_t                identity_priv[MESH_CRYPTO_PRIV_LEN]; /* long-term P-256 id */
+    uint8_t                identity_pub[MESH_CRYPTO_PUB_LEN];
+    uint8_t                prekey_priv[MESH_CRYPTO_PRIV_LEN];   /* ephemeral, RREP-carried */
+    uint8_t                prekey_pub[MESH_CRYPTO_PUB_LEN];
+#endif
+    size_t                  mtu;         /* radio's current max payload, header included */
     struct k_mutex         tables_lock; /* guards tables + node table + counters */
     bool initialized;
     bool started;
@@ -161,6 +182,11 @@ static void send_rrep(const uint8_t *to_immediate, const uint8_t *target,
     memcpy(rp->target, target, AKIRA_MESH_NODE_ID_LEN);
     rp->dest_seq = dest_seq;
     rp->hop_count = hop_count;
+#if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+    memcpy(rp->target_prekey_pub, mesh_state.prekey_pub, MESH_CRYPTO_PUB_LEN);
+#else
+    memset(rp->target_prekey_pub, 0, MESH_CRYPTO_PUB_LEN);
+#endif
     mesh_radio_tx(pkt, sizeof(pkt));
 }
 
@@ -186,6 +212,11 @@ static void send_rreq(const uint8_t *target)
     rq->rreq_id = h->seq_num;
     rq->orig_seq = ++mesh_state.aodv_seq;
     rq->dest_seq = 0;
+#if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+    memcpy(rq->orig_identity_pub, mesh_state.identity_pub, MESH_CRYPTO_PUB_LEN);
+#else
+    memset(rq->orig_identity_pub, 0, MESH_CRYPTO_PUB_LEN);
+#endif
     mesh_radio_tx(pkt, sizeof(pkt));
 }
 
@@ -351,6 +382,21 @@ static void mesh_dispatch(const uint8_t *buf, size_t len)
                            rq->orig_seq, now + MESH_ROUTE_LIFETIME_MS);
         k_mutex_unlock(&mesh_state.tables_lock);
         if (is_self(rq->target)) {
+#if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+            uint8_t shared[MESH_CRYPTO_SHARED_LEN];
+            if (mesh_crypto_p256_ecdh(mesh_state.prekey_priv, rq->orig_identity_pub,
+                                      shared) == 0) {
+                k_mutex_lock(&mesh_state.tables_lock, K_FOREVER);
+                mesh_session_install(&mesh_state.sessions, mesh_state.config.node_id,
+                                     h->src_id, shared, sizeof(shared), now,
+                                     CONFIG_AKIRA_MESH_SESSION_LIFETIME_S * 1000U);
+                k_mutex_unlock(&mesh_state.tables_lock);
+            } else {
+                LOG_WRN("AkiraMesh: ECDH failed deriving session for RREQ from %02x%02x",
+                        h->src_id[0], h->src_id[1]);
+            }
+            memset(shared, 0, sizeof(shared));
+#endif
             send_rrep(h->src_id, mesh_state.config.node_id, mesh_state.aodv_seq, 0);
         } else if (h->ttl > 1) {
             uint8_t pkt[MESH_PACKET_BUF_SIZE];
@@ -373,6 +419,23 @@ static void mesh_dispatch(const uint8_t *buf, size_t len)
                            rp->hop_count + 1, rp->dest_seq,
                            now + MESH_ROUTE_LIFETIME_MS);
         k_mutex_unlock(&mesh_state.tables_lock);
+#if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+        if (is_self(h->dest_id)) {
+            uint8_t shared[MESH_CRYPTO_SHARED_LEN];
+            if (mesh_crypto_p256_ecdh(mesh_state.identity_priv, rp->target_prekey_pub,
+                                      shared) == 0) {
+                k_mutex_lock(&mesh_state.tables_lock, K_FOREVER);
+                mesh_session_install(&mesh_state.sessions, mesh_state.config.node_id,
+                                     rp->target, shared, sizeof(shared), now,
+                                     CONFIG_AKIRA_MESH_SESSION_LIFETIME_S * 1000U);
+                k_mutex_unlock(&mesh_state.tables_lock);
+            } else {
+                LOG_WRN("AkiraMesh: ECDH failed deriving session for RREP from %02x%02x",
+                        rp->target[0], rp->target[1]);
+            }
+            memset(shared, 0, sizeof(shared));
+        }
+#endif
         flush_pending_for(rp->target);
         if (!is_self(h->dest_id) && h->ttl > 1) {
             /* Forward RREP toward the originator via the reverse route. */
@@ -394,11 +457,63 @@ static void mesh_dispatch(const uint8_t *buf, size_t len)
 
     case AKIRA_MESH_MSG_DATA:
         if (is_self(h->dest_id)) {
+#if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+            if (plen < MESH_CRYPTO_NONCE_LEN + MESH_CRYPTO_MAC_LEN) {
+                break; /* too short to be a valid encrypted DATA frame */
+            }
+            const uint8_t *nonce = payload;
+            const uint8_t *ct = payload + MESH_CRYPTO_NONCE_LEN;
+            size_t ct_len = plen - MESH_CRYPTO_NONCE_LEN - MESH_CRYPTO_MAC_LEN;
+            const uint8_t *tag = ct + ct_len;
+
+            k_mutex_lock(&mesh_state.tables_lock, K_FOREVER);
+            struct session_entry *sess =
+                mesh_session_lookup(&mesh_state.sessions, h->src_id, now);
+            uint8_t enc_key[MESH_CRYPTO_SESSION_KEY_LEN];
+            uint8_t mac_key[MESH_CRYPTO_MAC_KEY_LEN];
+            bool have_sess = (sess != NULL);
+            if (have_sess) {
+                memcpy(enc_key, sess->enc_key, sizeof(enc_key));
+                memcpy(mac_key, sess->mac_key, sizeof(mac_key));
+            }
+            k_mutex_unlock(&mesh_state.tables_lock);
+
+            if (!have_sess) {
+                LOG_WRN("AkiraMesh: DATA from %02x%02x with no cached session, dropped",
+                        h->src_id[0], h->src_id[1]);
+                break;
+            }
+
+            uint8_t expect_tag[32];
+            mesh_crypto_hmac_sha256(mac_key, sizeof(mac_key), payload,
+                                    MESH_CRYPTO_NONCE_LEN + ct_len, expect_tag);
+            bool tag_ok = mesh_crypto_const_time_eq(expect_tag, tag, MESH_CRYPTO_MAC_LEN);
+            if (!tag_ok) {
+                memset(enc_key, 0, sizeof(enc_key));
+                memset(mac_key, 0, sizeof(mac_key));
+                memset(expect_tag, 0, sizeof(expect_tag));
+                LOG_WRN("AkiraMesh: DATA MAC mismatch from %02x%02x, dropped",
+                        h->src_id[0], h->src_id[1]);
+                break;
+            }
+
+            uint8_t plaintext[MESH_PACKET_BUF_SIZE];
+            mesh_crypto_aes256_ctr(enc_key, nonce, ct, ct_len, plaintext);
+            memset(enc_key, 0, sizeof(enc_key));
+            memset(mac_key, 0, sizeof(mac_key));
+            memset(expect_tag, 0, sizeof(expect_tag));
+
             send_ack(h->src_id, h->seq_num);
             if (mesh_state.rx_callback) {
-                mesh_state.rx_callback(h->src_id, payload, plen,
-                                       mesh_state.rx_user_data);
+                mesh_state.rx_callback(h->src_id, plaintext, ct_len, mesh_state.rx_user_data);
             }
+            memset(plaintext, 0, sizeof(plaintext));
+#else
+            /* No crypto module in this build — 1:1 DATA can't be verified
+             * or decrypted. Drop rather than deliver as if it were
+             * plaintext (mandatory E2E, no fallback — see akira_mesh_send). */
+            LOG_WRN("AkiraMesh: DATA received but E2E crypto not compiled in, dropped");
+#endif
         } else if (is_broadcast(h->dest_id)) {
             if (mesh_state.rx_callback) {
                 mesh_state.rx_callback(h->src_id, payload, plen,
@@ -469,6 +584,16 @@ K_THREAD_DEFINE(mesh_rx_thread, CONFIG_AKIRA_MESH_RX_STACK_SIZE,
 /* Work items — beacon / retransmit / route GC                         */
 /* ------------------------------------------------------------------ */
 
+/* ±20% jitter so two nodes started together don't stay beacon-phase-locked:
+ * with a fixed period, nodes whose beacon windows align on a half-duplex
+ * radio never break the tie and never hear each other. */
+static uint32_t beacon_next_delay_ms(void)
+{
+    int32_t range = (int32_t)mesh_state.config.beacon_interval_ms / 5;
+    int32_t jitter = (int32_t)(sys_rand32_get() % (2 * range + 1)) - range;
+    return mesh_state.config.beacon_interval_ms + jitter;
+}
+
 static void beacon_work_handler(struct k_work *w)
 {
     ARG_UNUSED(w);
@@ -488,7 +613,7 @@ static void beacon_work_handler(struct k_work *w)
     LOG_INF("beacon TX: name='%s' nlen=%zu seq=%u", mesh_state.config.node_name, nlen, h->seq_num);
     mesh_radio_tx(pkt, sizeof(*h) + nlen);
     mesh_state.stats.messages_sent++;
-    k_work_schedule(&beacon_work, K_MSEC(mesh_state.config.beacon_interval_ms));
+    k_work_schedule(&beacon_work, K_MSEC(beacon_next_delay_ms()));
 }
 
 static void retransmit_work_handler(struct k_work *w)
@@ -571,6 +696,14 @@ int akira_mesh_init(const akira_mesh_config_t *config)
     mesh_route_reset(&mesh_state.routes);
     mesh_ack_reset(&mesh_state.acks);
     mesh_pr_reset(&mesh_state.proutes);
+#if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+    mesh_session_reset(&mesh_state.sessions);
+    if (mesh_crypto_identity_init(mesh_state.identity_priv, mesh_state.identity_pub) != 0) {
+        LOG_ERR("AkiraMesh: failed to load/generate node identity keypair");
+        k_mutex_unlock(&mesh_init_lock);
+        return -EIO;
+    }
+#endif
 
     mesh_state.radio = radio_manager_acquire_by_caps(config->transport_caps, "mesh");
     if (!mesh_state.radio) {
@@ -579,17 +712,41 @@ int akira_mesh_init(const akira_mesh_config_t *config)
         return -ENODEV;
     }
 
+    /* BLE transport needs the shared BT stack switched into mesh mode before
+     * the radio driver touches it — driven by the acquired radio's generic
+     * type, not a hardcoded chip name, so any RADIO_TYPE_BLE driver works. */
+#if defined(CONFIG_AKIRA_MESH_TRANSPORT_BLE)
+    if (mesh_state.radio->type == RADIO_TYPE_BLE) {
+        if (bt_manager_set_mode(BT_MODE_MESH) != 0) {
+            LOG_ERR("AkiraMesh: BLE radio busy with another BT mode");
+            radio_manager_release(mesh_state.radio, "mesh");
+            mesh_state.radio = NULL;
+            k_mutex_unlock(&mesh_init_lock);
+            return -EBUSY;
+        }
+    }
+#endif
+
     /* Bring the acquired radio's hardware up — mesh owns it exclusively. */
     if (mesh_state.radio->ops && mesh_state.radio->ops->init) {
         int rret = mesh_state.radio->ops->init(mesh_state.radio);
         if (rret < 0) {
             LOG_ERR("mesh radio '%s' init failed: %d", mesh_state.radio->name, rret);
+#if defined(CONFIG_AKIRA_MESH_TRANSPORT_BLE)
+            if (mesh_state.radio->type == RADIO_TYPE_BLE) {
+                bt_manager_set_mode(BT_MODE_NONE);
+            }
+#endif
             radio_manager_release(mesh_state.radio, "mesh");
             mesh_state.radio = NULL;
             k_mutex_unlock(&mesh_init_lock);
             return rret;
         }
     }
+
+    /* TODO(rf): query the radio's actual max payload once radio_ops_t grows
+     * a get_max_payload() capability; fixed bound matches prior behavior. */
+    mesh_state.mtu = MESH_PACKET_BUF_SIZE;
 
     mesh_state.initialized = true;
     k_mutex_unlock(&mesh_init_lock);
@@ -605,8 +762,17 @@ int akira_mesh_start(void)
     if (mesh_state.started) {
         return 0;
     }
+#if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+    /* Fresh ephemeral prekey each start — rotates naturally on every mesh
+     * restart. Continuous-uptime rotation is a separate, unspecified knob,
+     * intentionally not added here. */
+    if (mesh_crypto_p256_keygen(mesh_state.prekey_priv, mesh_state.prekey_pub) != 0) {
+        LOG_ERR("AkiraMesh: failed to generate prekey");
+        return -EIO;
+    }
+#endif
     mesh_state.started = true;
-    k_work_schedule(&beacon_work, K_MSEC(mesh_state.config.beacon_interval_ms));
+    k_work_schedule(&beacon_work, K_MSEC(beacon_next_delay_ms()));
     k_work_schedule(&retransmit_work, K_MSEC(CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS));
     k_work_schedule(&route_gc_work, K_SECONDS(CONFIG_AKIRA_MESH_ROUTE_LIFETIME_S));
     LOG_INF("AkiraMesh started");
@@ -625,17 +791,102 @@ int akira_mesh_stop(void)
     k_work_cancel_delayable(&retransmit_work);
     k_work_cancel_delayable(&route_gc_work);
     if (mesh_state.radio) {
+        bool was_ble = (mesh_state.radio->type == RADIO_TYPE_BLE);
         if (mesh_state.radio->ops && mesh_state.radio->ops->deinit) {
             mesh_state.radio->ops->deinit(mesh_state.radio);
         }
         radio_manager_release(mesh_state.radio, "mesh");
         mesh_state.radio = NULL;
+#if defined(CONFIG_AKIRA_MESH_TRANSPORT_BLE)
+        if (was_ble) {
+            bt_manager_set_mode(BT_MODE_NONE);
+        }
+#endif
     }
     mesh_state.initialized = false;
     k_mutex_unlock(&mesh_init_lock);
     LOG_INF("AkiraMesh stopped");
     return 0;
 }
+
+/* Shared reliable-unicast path: build a DATA packet, encrypt it under the
+ * cached E2E session for dest_id if one exists, send it if a route exists
+ * (tracked for end-to-end ACK/retry), else queue it and originate an RREQ.
+ * A missing route and/or session key both resolve off the same RREQ/RREP
+ * round trip (see mesh_dispatch's ROUTE_REQ/ROUTE_REPLY handling), so
+ * plaintext is never sent as a fallback — hold and retry instead. */
+#if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+static int mesh_send_reliable(const uint8_t *dest_id, const uint8_t *data, size_t len)
+{
+    uint32_t now = k_uptime_get_32();
+
+    k_mutex_lock(&mesh_state.tables_lock, K_FOREVER);
+    struct route_entry *r = mesh_route_lookup(&mesh_state.routes, dest_id, now);
+    bool have_route = (r != NULL);
+    struct session_entry *sess = mesh_session_lookup(&mesh_state.sessions, dest_id, now);
+    uint8_t enc_key[MESH_CRYPTO_SESSION_KEY_LEN];
+    uint8_t mac_key[MESH_CRYPTO_MAC_KEY_LEN];
+    bool have_key = (sess != NULL);
+    if (have_key) {
+        memcpy(enc_key, sess->enc_key, sizeof(enc_key));
+        memcpy(mac_key, sess->mac_key, sizeof(mac_key));
+    }
+    k_mutex_unlock(&mesh_state.tables_lock);
+
+    if (!have_route || !have_key) {
+        uint8_t pkt[MESH_PACKET_BUF_SIZE];
+        struct mesh_header *h = (struct mesh_header *)pkt;
+        fill_header(h, AKIRA_MESH_MSG_DATA, mesh_state.config.max_hops, dest_id);
+        memcpy(pkt + sizeof(*h), data, len);
+        size_t total = sizeof(*h) + len;
+
+        k_mutex_lock(&mesh_state.tables_lock, K_FOREVER);
+        int pr = mesh_pr_add(&mesh_state.proutes, dest_id, pkt, total,
+                             now + CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS *
+                                   (CONFIG_AKIRA_MESH_MAX_RETRIES + 1));
+        k_mutex_unlock(&mesh_state.tables_lock);
+        if (pr < 0) {
+            return -EBUSY;
+        }
+        send_rreq(dest_id);
+        return 0;
+    }
+
+    uint8_t pkt[MESH_PACKET_BUF_SIZE];
+    struct mesh_header *h = (struct mesh_header *)pkt;
+    fill_header(h, AKIRA_MESH_MSG_DATA, mesh_state.config.max_hops, dest_id);
+    uint8_t *body = pkt + sizeof(*h);
+
+    uint8_t nonce[MESH_CRYPTO_NONCE_LEN];
+    sys_csrand_get(nonce, sizeof(nonce));
+    memcpy(body, nonce, MESH_CRYPTO_NONCE_LEN);
+    uint8_t *ct = body + MESH_CRYPTO_NONCE_LEN;
+    if (mesh_crypto_aes256_ctr(enc_key, nonce, data, len, ct) != 0) {
+        memset(enc_key, 0, sizeof(enc_key));
+        memset(mac_key, 0, sizeof(mac_key));
+        return -EIO;
+    }
+    uint8_t tag[32];
+    mesh_crypto_hmac_sha256(mac_key, sizeof(mac_key), body,
+                            MESH_CRYPTO_NONCE_LEN + len, tag);
+    memcpy(ct + len, tag, MESH_CRYPTO_MAC_LEN);
+    size_t total = sizeof(*h) + MESH_CRYPTO_NONCE_LEN + len + MESH_CRYPTO_MAC_LEN;
+    memset(enc_key, 0, sizeof(enc_key));
+    memset(mac_key, 0, sizeof(mac_key));
+    memset(tag, 0, sizeof(tag));
+    uint16_t seq = h->seq_num;
+
+    k_mutex_lock(&mesh_state.tables_lock, K_FOREVER);
+    int slot = mesh_ack_add(&mesh_state.acks, seq, dest_id, pkt, total,
+                            now + CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS);
+    k_mutex_unlock(&mesh_state.tables_lock);
+    if (slot < 0) {
+        return -EBUSY;
+    }
+    mesh_state.stats.messages_sent++;
+    return mesh_radio_tx(pkt, total);
+}
+#endif /* CONFIG_AKIRA_MESH_E2E_CRYPTO */
 
 int akira_mesh_send(const uint8_t *dest_id, const uint8_t *data, size_t len)
 {
@@ -645,52 +896,29 @@ int akira_mesh_send(const uint8_t *dest_id, const uint8_t *data, size_t len)
     if (!mesh_state.started) {
         return -ENODEV;
     }
-    if (len > MESH_PACKET_BUF_SIZE - sizeof(struct mesh_header)) {
-        return -EMSGSIZE;
-    }
 
     if (is_broadcast(dest_id)) {
+        if (len > mesh_state.mtu - sizeof(struct mesh_header)) {
+            return -EMSGSIZE;
+        }
         return akira_mesh_broadcast(data, len, mesh_state.config.max_hops);
     }
 
-    uint32_t now = k_uptime_get_32();
-    bool have_route;
-    k_mutex_lock(&mesh_state.tables_lock, K_FOREVER);
-    struct route_entry *r = mesh_route_lookup(&mesh_state.routes, dest_id, now);
-    have_route = (r != NULL);
-    k_mutex_unlock(&mesh_state.tables_lock);
-
-    /* Build DATA packet. */
-    uint8_t pkt[MESH_PACKET_BUF_SIZE];
-    struct mesh_header *h = (struct mesh_header *)pkt;
-    fill_header(h, AKIRA_MESH_MSG_DATA, mesh_state.config.max_hops, dest_id);
-    memcpy(pkt + sizeof(*h), data, len);
-    size_t total = sizeof(*h) + len;
-    uint16_t seq = h->seq_num;
-
-    if (have_route) {
-        k_mutex_lock(&mesh_state.tables_lock, K_FOREVER);
-        int slot = mesh_ack_add(&mesh_state.acks, seq, dest_id, pkt, total,
-                                now + CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS);
-        k_mutex_unlock(&mesh_state.tables_lock);
-        if (slot < 0) {
-            return -EBUSY;
-        }
-        mesh_state.stats.messages_sent++;
-        return mesh_radio_tx(pkt, total);
+#if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+    /* Unicast DATA is always encrypted (nonce + tag overhead), unlike
+     * broadcast. */
+    if (mesh_state.mtu < sizeof(struct mesh_header) + MESH_CRYPTO_OVERHEAD ||
+        len > mesh_state.mtu - sizeof(struct mesh_header) - MESH_CRYPTO_OVERHEAD) {
+        return -EMSGSIZE;
     }
-
-    /* No route: queue payload + originate RREQ. */
-    k_mutex_lock(&mesh_state.tables_lock, K_FOREVER);
-    int pr = mesh_pr_add(&mesh_state.proutes, dest_id, pkt, total,
-                         now + CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS *
-                               (CONFIG_AKIRA_MESH_MAX_RETRIES + 1));
-    k_mutex_unlock(&mesh_state.tables_lock);
-    if (pr < 0) {
-        return -EBUSY;
-    }
-    send_rreq(dest_id);
-    return 0;
+    return mesh_send_reliable(dest_id, data, len);
+#else
+    /* 1:1 messages are always encrypted (mandatory, not optional — see
+     * mesh_dispatch's DATA case) and this build has no crypto module.
+     * Never fall back to plaintext DATA; refuse instead. Broadcast above
+     * is unaffected. */
+    return -ENOTSUP;
+#endif
 }
 
 int akira_mesh_broadcast(const uint8_t *data, size_t len, uint8_t max_hops)

@@ -59,6 +59,7 @@ extern "C"
         BT_MODE_HID       = 1, /**< BLE HID profile owns the radio */
         BT_MODE_BLE_APP   = 2, /**< WASM BLE app service owns the radio */
         BT_MODE_COMPANION = 3, /**< AkiraApp companion service owns the radio */
+        BT_MODE_MESH      = 4, /**< AkiraMesh BLE transport owns the radio */
     } bt_manager_mode_t;
 
     /** Bluetooth configuration */
