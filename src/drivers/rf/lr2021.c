@@ -132,6 +132,8 @@ LOG_MODULE_REGISTER(akira_lr2021, LOG_LEVEL_INF);
 #define LR2021_DT_LORA_BW_HZ  DT_PROP_OR(LR2021_NODE, akira_default_lora_bw_hz, 125000)
 #define LR2021_DT_LORA_CR     DT_PROP_OR(LR2021_NODE, akira_default_lora_cr,    5)
 
+#define LR2021_MAX_PAYLOAD    255  /* FSK/LoRa: 8-bit length field */
+
 /* =========================================================================
  * Driver state
  * ========================================================================= */
@@ -734,6 +736,14 @@ static int lr2021_deinit(void)
     }
     g_lr2021.rx_armed = false;
 
+    /* Chip must be in STANDBY before SET_SLEEP — issuing it directly from
+     * continuous RX (the normal state while mesh is running) leaves BUSY
+     * stuck high, wedging the chip until a full reboot. */
+    {
+        uint8_t mode = LR2021_STANDBY_XOSC;
+        lr2021_write_command(LR2021_CMD_SET_STANDBY, &mode, 1);
+    }
+
     uint8_t sleep_cfg[5] = { LR2021_SLEEP_RAM_RETENTION, 0, 0, 0, 0 };
     lr2021_write_command(LR2021_CMD_SET_SLEEP, sleep_cfg, 5);
 
@@ -1024,7 +1034,7 @@ static int lr2021_tx(const uint8_t *data, size_t len)
     if (!g_lr2021.initialized) {
         return -ENODEV;
     }
-    if (!data || len == 0 || len > 255) {
+    if (!data || len == 0 || len > LR2021_MAX_PAYLOAD) {
         return -EINVAL;
     }
 
@@ -1370,6 +1380,15 @@ static int lr2021_set_event_callback(radio_handle_t *handle, radio_event_cb_t cb
 static int lr2021_ops_init(radio_handle_t *h)        { ARG_UNUSED(h); return lr2021_init(); }
 static int lr2021_ops_deinit(radio_handle_t *h)      { ARG_UNUSED(h); return lr2021_deinit(); }
 static int lr2021_ops_send(radio_handle_t *h, const uint8_t *d, size_t l) { ARG_UNUSED(h); return lr2021_tx(d, l); }
+static int lr2021_ops_get_max_payload(radio_handle_t *h, size_t *max_len)
+{
+    ARG_UNUSED(h);
+    if (!g_lr2021.initialized) {
+        return -ENODEV;
+    }
+    *max_len = LR2021_MAX_PAYLOAD;
+    return 0;
+}
 static int lr2021_ops_recv(radio_handle_t *h, uint8_t *b, size_t l, uint32_t t) { ARG_UNUSED(h); return lr2021_rx(b, l, t); }
 static int lr2021_ops_rx_wait(radio_handle_t *h, uint32_t t) { ARG_UNUSED(h); return g_lr2021.use_irq ? lr2021_rx_wait(t) : -ENOTSUP; }
 static int lr2021_ops_set_frequency(radio_handle_t *h, uint32_t hz) { ARG_UNUSED(h); return lr2021_set_frequency(hz); }
@@ -1398,6 +1417,7 @@ static const radio_ops_t lr2021_ops = {
     .set_spreading_factor = lr2021_ops_set_sf,
     .set_bandwidth        = lr2021_ops_set_bw,
     .set_coding_rate      = lr2021_ops_set_cr,
+    .get_max_payload      = lr2021_ops_get_max_payload,
 };
 
 static radio_handle_t lr2021_handle = {

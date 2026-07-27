@@ -197,6 +197,13 @@ static const struct spi_dt_spec g_spi = SPI_DT_SPEC_GET(
     SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB | SPI_WORD_SET(8),
     0);
 
+/* 128B FIFO minus 1 length byte minus 2 RX APPEND_STATUS bytes. Applied on
+ * TX too (not just RX) so a sender never emits a frame the receiving side's
+ * FIFO can't hold — a 127B TX chunk starves 2 bytes of RX APPEND_STATUS
+ * headroom and drives the receiver into RXFIFO_ERROR on every max-size
+ * packet. */
+#define CC1121_MAX_PAYLOAD  125
+
 static struct {
     bool initialized;
     struct gpio_dt_spec reset;
@@ -921,7 +928,7 @@ static int cc1121_tx(const uint8_t *data, size_t len)
     if (!g_cc1121.initialized) {
         return -ENODEV;
     }
-    if (!data || len == 0 || len > 127) {
+    if (!data || len == 0 || len > CC1121_MAX_PAYLOAD) {
         return -EINVAL;
     }
 
@@ -1414,6 +1421,15 @@ static int cc1121_raw_replay(const uint8_t *buf, size_t len,
 static int cc1121_ops_init(radio_handle_t *h)        { ARG_UNUSED(h); return cc1121_init(); }
 static int cc1121_ops_deinit(radio_handle_t *h)      { ARG_UNUSED(h); return cc1121_deinit(); }
 static int cc1121_ops_send(radio_handle_t *h, const uint8_t *d, size_t l) { ARG_UNUSED(h); return cc1121_tx(d, l); }
+static int cc1121_ops_get_max_payload(radio_handle_t *h, size_t *max_len)
+{
+    ARG_UNUSED(h);
+    if (!g_cc1121.initialized) {
+        return -ENODEV;
+    }
+    *max_len = CC1121_MAX_PAYLOAD;
+    return 0;
+}
 static int cc1121_ops_recv(radio_handle_t *h, uint8_t *b, size_t l, uint32_t t) { ARG_UNUSED(h); return cc1121_rx(b, l, t); }
 static int cc1121_ops_set_frequency(radio_handle_t *h, uint32_t hz) { ARG_UNUSED(h); return cc1121_set_frequency(hz); }
 static int cc1121_ops_set_power(radio_handle_t *h, int8_t dbm)      { ARG_UNUSED(h); return cc1121_set_power(dbm); }
@@ -1443,6 +1459,7 @@ static const radio_ops_t cc1121_ops = {
     .set_bitrate        = cc1121_ops_set_bitrate,
     .raw_capture        = cc1121_ops_raw_capture,
     .raw_replay         = cc1121_ops_raw_replay,
+    .get_max_payload    = cc1121_ops_get_max_payload,
 };
 
 static radio_handle_t cc1121_handle = {

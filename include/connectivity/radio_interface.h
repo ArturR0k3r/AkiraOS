@@ -231,6 +231,11 @@ typedef struct {
                        uint32_t timeout_ms);
     int (*raw_replay)(struct radio_handle *handle, const uint8_t *buf,
                       size_t len, uint32_t sample_rate_hz, uint32_t repeat);
+
+    /* Max single-frame payload for the radio's *current* config (varies with
+     * modulation/spreading factor/etc). NULL => caller keeps whatever fixed
+     * bound it already assumed. */
+    int (*get_max_payload)(struct radio_handle *handle, size_t *max_payload);
 } radio_ops_t;
 
 /* Radio handle structure */

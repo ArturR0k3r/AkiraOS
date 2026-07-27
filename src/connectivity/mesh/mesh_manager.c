@@ -744,9 +744,16 @@ int akira_mesh_init(const akira_mesh_config_t *config)
         }
     }
 
-    /* TODO(rf): query the radio's actual max payload once radio_ops_t grows
-     * a get_max_payload() capability; fixed bound matches prior behavior. */
+    /* MTU for this radio's current config. Radios without get_max_payload()
+     * keep the historical MESH_PACKET_BUF_SIZE bound (unchanged behavior). */
     mesh_state.mtu = MESH_PACKET_BUF_SIZE;
+    if (mesh_state.radio->ops && mesh_state.radio->ops->get_max_payload) {
+        size_t max_payload;
+        if (mesh_state.radio->ops->get_max_payload(mesh_state.radio, &max_payload) == 0 &&
+            max_payload > sizeof(struct mesh_header)) {
+            mesh_state.mtu = MIN(max_payload, MESH_PACKET_BUF_SIZE);
+        }
+    }
 
     mesh_state.initialized = true;
     k_mutex_unlock(&mesh_init_lock);
