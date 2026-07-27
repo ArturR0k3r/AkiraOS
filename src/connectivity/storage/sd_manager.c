@@ -46,8 +46,33 @@ static void notify_state_change(sd_state_t new_state)
     }
 }
 
+#if defined(CONFIG_AKIRA_SD_CARD) && defined(CONFIG_AKIRA_SD_HOTPLUG)
+static void sd_manager_hotplug_cb(bool present, void *user_data)
+{
+    ARG_UNUSED(user_data);
+    if (present)
+    {
+        fs_manager_reinit_sd();
+        notify_state_change(SD_STATE_MOUNTED);
+    }
+    else
+    {
+        notify_state_change(SD_STATE_UNMOUNTED);
+    }
+}
+#endif
+
 int sd_manager_init(void)
 {
+#if defined(CONFIG_AKIRA_SD_CARD) && defined(CONFIG_AKIRA_SD_HOTPLUG)
+    akira_sd_card_register_hotplug_cb(sd_manager_hotplug_cb, NULL);
+
+    if (akira_sd_card_is_present())
+    {
+        notify_state_change(SD_STATE_MOUNTED);
+    }
+#endif
+
     LOG_INF("SD Manager initialized");
     return 0;
 }

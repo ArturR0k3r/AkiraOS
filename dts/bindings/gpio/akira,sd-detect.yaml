@@ -1,0 +1,21 @@
+# Copyright (c) 2026 AkiraOS Project
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Generic SD card-detect GPIO.
+
+  Board-agnostic hook for CONFIG_AKIRA_SD_HOTPLUG: points at whatever pin
+  carries card-detect on a given board, whether a native SoC GPIO or a pin
+  on an I2C/SPI GPIO expander. src/storage/sd_card.c binds to this node via
+  DT_COMPAT_GET_ANY_STATUS_OKAY and never hardcodes a controller or pin.
+
+compatible: "akira,sd-detect"
+
+properties:
+  detect-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      GPIO that reads card presence. Active level (GPIO_ACTIVE_LOW/HIGH)
+      is set per-board in the phandle-array flags to match the holder's
+      detect switch polarity.

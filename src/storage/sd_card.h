@@ -28,6 +28,31 @@ extern "C" {
 
 #ifdef CONFIG_AKIRA_SD_CARD
 
+#ifdef CONFIG_AKIRA_SD_HOTPLUG
+
+/**
+ * @brief Callback fired when SD card presence changes.
+ * @param present true on insertion (card is mounted by the time this fires),
+ *                false on removal (card is already force-unmounted).
+ */
+typedef void (*akira_sd_hotplug_cb_t)(bool present, void *user_data);
+
+/** @brief Register a callback for insertion/removal events. */
+int akira_sd_card_register_hotplug_cb(akira_sd_hotplug_cb_t cb, void *user_data);
+
+/** @brief Unregister a previously registered hotplug callback. */
+void akira_sd_card_unregister_hotplug_cb(akira_sd_hotplug_cb_t cb);
+
+/**
+ * @brief Register a callback fired on insertion, before the mount attempt.
+ *
+ * Runs before akira_sd_card_init(), so a UI layer can show a loading
+ * indicator immediately when the card is detected.
+ */
+void akira_sd_card_register_pre_insert_cb(akira_sd_hotplug_cb_t cb, void *user_data);
+
+#endif /* CONFIG_AKIRA_SD_HOTPLUG */
+
 /**
  * @brief Probe disk and mount FATFS at "/SD:".
  *
@@ -52,12 +77,21 @@ bool akira_sd_card_is_present(void);
  */
 void akira_sd_card_deinit(void);
 
+/**
+ * @brief Force-unmount without touching the bus (card physically absent).
+ *
+ * Zeroes the FATFS object and skips fs_unmount()'s disk I/O, so removal
+ * detection never blocks waiting on a card that is already gone.
+ */
+void akira_sd_card_deinit_force(void);
+
 #else /* !CONFIG_AKIRA_SD_CARD */
 
 /* Stubs for boards where SD is not enabled */
 static inline int  akira_sd_card_init(void)       { return -ENOTSUP; }
 static inline bool akira_sd_card_is_present(void) { return false; }
 static inline void akira_sd_card_deinit(void)      {}
+static inline void akira_sd_card_deinit_force(void) {}
 
 #endif /* CONFIG_AKIRA_SD_CARD */
 

@@ -1295,6 +1295,27 @@ config AKIRA_SD_INIT_PRIORITY
       AKIRA_FS_INIT_PRIORITY (default 40) so the SD mount is complete before
       fs_manager queries disk availability.
 
+config AKIRA_SD_HOTPLUG
+    bool "Enable SD card hotplug detection"
+    default n
+    depends on AKIRA_SD_CARD && GPIO && DT_HAS_AKIRA_SD_DETECT_ENABLED
+    help
+      Polls the board's "akira,sd-detect" devicetree node (any GPIO or
+      GPIO-expander pin the board wires to card-detect) and fires
+      akira_sd_hotplug_cb_t callbacks on insertion/removal.  Requires the
+      board devicetree to declare a node with compatible "akira,sd-detect"
+      and a detect-gpios property — see dts/bindings/gpio/akira,sd-detect.yaml.
+
+config AKIRA_SD_HOTPLUG_POLL_MS
+    int "SD hotplug poll interval (ms)"
+    default 500
+    depends on AKIRA_SD_HOTPLUG
+
+config AKIRA_SD_HOTPLUG_MAX_CBS
+    int "Maximum SD hotplug callbacks"
+    default 4
+    depends on AKIRA_SD_HOTPLUG
+
 endmenu # SD Card
 
 menu "App Manager"

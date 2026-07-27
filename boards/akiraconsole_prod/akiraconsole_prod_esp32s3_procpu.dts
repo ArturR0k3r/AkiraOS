@@ -429,7 +429,7 @@
 	// -------------------------------------------------------------------------
 	// microSD card — SPI-SDHC (Molex 503398-1892, J1)
 	// CS     → GPIO14 (SD_CS)             [cs-gpios index 2]
-	// SD_DET → TCA6408 P5 (active low = card present)
+	// SD_DET → TCA6408 P7 (active low = card present)
 	// -------------------------------------------------------------------------
 	spi_sdhc0: sdhc@2 {
 		compatible        = "zephyr,sdhc-spi-slot";
@@ -441,6 +441,15 @@
 			disk-name  = "SD";
 			status     = "okay";
 		};
+	};
+
+	// Generic card-detect hook consumed by src/storage/sd_card.c
+	// (CONFIG_AKIRA_SD_HOTPLUG). This board happens to wire SD_DET to the
+	// TCA6408 expander; another board could point detect-gpios at a plain
+	// SoC GPIO instead, the driver doesn't care.
+	sd_detect: sd-detect {
+		compatible   = "akira,sd-detect";
+		detect-gpios = <&tca6408 7 GPIO_ACTIVE_LOW>;
 	};
 
 	// -------------------------------------------------------------------------
