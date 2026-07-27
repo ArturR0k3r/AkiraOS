@@ -252,6 +252,36 @@ int akira_native_hid_gamepad_set_dpad(wasm_exec_env_t exec_env, int32_t directio
 #endif
 }
 
+/*
+ * Send all six axes + buttons + hat in a single BLE notify, instead of the
+ * 5 separate notifies that pressing press/release/set_axis/set_dpad individually
+ * would trigger — avoids BLE notification-queue congestion when several inputs
+ * (IMU + D-pad) change in the same frame.
+ */
+int akira_native_hid_gamepad_send_report(wasm_exec_env_t exec_env,
+                                         int32_t buttons, int32_t hat,
+                                         int32_t a0, int32_t a1, int32_t a2,
+                                         int32_t a3, int32_t a4, int32_t a5)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+
+    if (hat < 0 || hat > 8) {
+        return -EINVAL;
+    }
+
+#ifdef CONFIG_AKIRA_HID
+    hid_gamepad_report_t rpt = {
+        .axes = { (int16_t)a0, (int16_t)a1, (int16_t)a2,
+                  (int16_t)a3, (int16_t)a4, (int16_t)a5 },
+        .buttons = (uint16_t)buttons,
+        .hat = (uint8_t)hat,
+    };
+    return hid_gamepad_send_report(&rpt);
+#else
+    return -ENOTSUP;
+#endif
+}
+
 int akira_native_hid_gamepad_reset(wasm_exec_env_t exec_env)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);

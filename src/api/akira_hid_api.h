@@ -42,6 +42,10 @@ int akira_native_hid_gamepad_press(wasm_exec_env_t exec_env, int32_t btn_mask);
 int akira_native_hid_gamepad_release(wasm_exec_env_t exec_env, int32_t btn_mask);
 int akira_native_hid_gamepad_set_axis(wasm_exec_env_t exec_env, int32_t axis, int32_t value);
 int akira_native_hid_gamepad_set_dpad(wasm_exec_env_t exec_env, int32_t direction);
+int akira_native_hid_gamepad_send_report(wasm_exec_env_t exec_env,
+                                         int32_t buttons, int32_t hat,
+                                         int32_t a0, int32_t a1, int32_t a2,
+                                         int32_t a3, int32_t a4, int32_t a5);
 int akira_native_hid_gamepad_reset(wasm_exec_env_t exec_env);
 
 /* ── Mouse ────────────────────────────────────────────────────────────────── */

@@ -300,7 +300,7 @@ static const struct bt_data ad[] = {
                 BT_BYTES_LIST_LE16(0x03C1)), /* Keyboard */
 #elif CONFIG_AKIRA_HID_MODE_GAMEPAD
     BT_DATA_BYTES(BT_DATA_GAP_APPEARANCE,
-                BT_BYTES_LIST_LE16(0x03C4)), /* Gamepad */
+                BT_BYTES_LIST_LE16(0x03C3)), /* Joystick */
 #endif
 #ifdef CONFIG_AKIRA_BT_HID
     BT_DATA_BYTES(BT_DATA_UUID16_ALL,
@@ -363,7 +363,7 @@ int bt_manager_init(const bt_config_t *config)
     }
     else
     {
-        bt_mgr.config.device_name = "AkiraConsole";
+        bt_mgr.config.device_name = CONFIG_BT_DEVICE_NAME;
         bt_mgr.config.vendor_id = 0x303A; /* Espressif VID */
         bt_mgr.config.product_id = 0x8363; /* PenEngineering S.R.L - AkiraConsole */
         bt_mgr.config.services = BT_SERVICE_ALL;
@@ -926,7 +926,7 @@ int bt_manager_set_mode(bt_manager_mode_t mode)
     /* Lazy init when transitioning out of NONE and not yet initialized */
     if (mode != BT_MODE_NONE && !bt_mgr.initialized) {
         bt_config_t lazy_cfg = {
-            .device_name    = "AkiraOS",
+            .device_name    = CONFIG_BT_DEVICE_NAME,
             .auto_advertise = false,
             .pairable       = true,
         };

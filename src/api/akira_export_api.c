@@ -184,6 +184,7 @@ bool akira_register_native_apis()
         {"hid_gamepad_release", (void *)akira_native_hid_gamepad_release, "(i)i", NULL},
         {"hid_gamepad_set_axis", (void *)akira_native_hid_gamepad_set_axis, "(ii)i", NULL},
         {"hid_gamepad_set_dpad", (void *)akira_native_hid_gamepad_set_dpad, "(i)i", NULL},
+        {"hid_gamepad_send_report", (void *)akira_native_hid_gamepad_send_report, "(iiiiiiii)i", NULL},
         {"hid_gamepad_reset", (void *)akira_native_hid_gamepad_reset, "()i", NULL},
         {"hid_mouse_move", (void *)akira_native_hid_mouse_move, "(ii)i", NULL},
         {"hid_mouse_btn_press", (void *)akira_native_hid_mouse_btn_press, "(i)i", NULL},

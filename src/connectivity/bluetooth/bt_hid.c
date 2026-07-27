@@ -22,6 +22,37 @@
 
 LOG_MODULE_REGISTER(bt_hid, CONFIG_AKIRA_LOG_LEVEL);
 
+#define DIS_SVC_UUID    BT_UUID_DECLARE_16(0x180A)
+#define PNP_ID_UUID     BT_UUID_DECLARE_16(0x2A50)
+
+#if CONFIG_AKIRA_HID_GAMEPAD
+
+static const uint8_t gamepad_pnp_id[] = {
+    0x02,             /* VID Source: USB */
+    0x5E, 0x04,       /* VID: 0x045E (Microsoft) LE */
+    0xE0, 0x02,       /* PID: 0x02E0 (model 1708 BLE) LE */
+    0x11, 0x01        /* Version: 0x0111 LE */
+};
+
+static ssize_t read_pnp_id(struct bt_conn *conn,
+                           const struct bt_gatt_attr *attr,
+                           void *buf, uint16_t len, uint16_t offset)
+{
+    return bt_gatt_attr_read(conn, attr, buf, len, offset,
+                             gamepad_pnp_id, sizeof(gamepad_pnp_id));
+}
+
+/* Device Information Service  */
+BT_GATT_SERVICE_DEFINE(dis_svc,
+    BT_GATT_PRIMARY_SERVICE(DIS_SVC_UUID),
+    BT_GATT_CHARACTERISTIC(PNP_ID_UUID,
+        BT_GATT_CHRC_READ,
+        BT_GATT_PERM_READ,
+        read_pnp_id, NULL, NULL),
+);
+
+#endif /* CONFIG_AKIRA_HID_GAMEPAD */
+
 /*===========================================================================*/
 /* HID Report Descriptors                                                    */
 /*===========================================================================*/
@@ -72,59 +103,73 @@ static const uint8_t keyboard_report_desc[] = {
     0xC0 /* End Collection */
 };
 
-/* Gamepad Report Descriptor */
 static const uint8_t gamepad_report_desc[] = {
-    0x05, 0x01, /* Usage Page (Generic Desktop) */
-    0x09, 0x05, /* Usage (Game Pad) */
-    0xA1, 0x01, /* Collection (Application) */
-    0x85, 0x02, /*   Report ID (2) */
+    0x05, 0x01,       /* Usage Page (Generic Desktop) */
+    0x09, 0x05,       /* Usage (Game Pad) */
+    0xA1, 0x01,       /* Collection (Application) */
+    0x85, 0x01,       /*   Report ID (1) */
 
-    /* Axes */
-    0x09, 0x30,       /*   Usage (X) */
-    0x09, 0x31,       /*   Usage (Y) */
-    0x09, 0x32,       /*   Usage (Z) - Right X */
-    0x09, 0x35,       /*   Usage (Rz) - Right Y */
-    0x16, 0x00, 0x80, /*   Logical Min (-32768) */
-    0x26, 0xFF, 0x7F, /*   Logical Max (32767) */
-    0x75, 0x10,       /*   Report Size (16) */
-    0x95, 0x04,       /*   Report Count (4) */
-    0x81, 0x02,       /*   Input (Data, Variable, Absolute) */
+    /* ── Pointer physical collection (axes + hat + buttons) ── */
+    0x09, 0x01,       /*   Usage (Pointer) */
+    0xA1, 0x00,       /*   Collection (Physical) */
 
-    /* Triggers */
-    0x09, 0x33,       /*   Usage (Rx) - Left Trigger */
-    0x09, 0x34,       /*   Usage (Ry) - Right Trigger */
-    0x16, 0x00, 0x80, /*   Logical Min (-32768) */
-    0x26, 0xFF, 0x7F, /*   Logical Max (32767) */
-    0x75, 0x10,       /*   Report Size (16) */
-    0x95, 0x02,       /*   Report Count (2) */
-    0x81, 0x02,       /*   Input (Data, Variable, Absolute) */
+    /* 10 buttons */
+    0x05, 0x09,       /*     Usage Page (Buttons) */
+    0x19, 0x01,       /*     Usage Min (1) */
+    0x29, 0x0A,       /*     Usage Max (10) */
+    0x15, 0x00,       /*     Logical Min (0) */
+    0x25, 0x01,       /*     Logical Max (1) */
+    0x75, 0x01,       /*     Report Size (1) */
+    0x95, 0x0A,       /*     Report Count (10) */
+    0x81, 0x02,       /*     Input (Data,Var,Abs) */
 
-    /* Buttons */
-    0x05, 0x09, /*   Usage Page (Buttons) */
-    0x19, 0x01, /*   Usage Min (1) */
-    0x29, 0x10, /*   Usage Max (16) */
-    0x15, 0x00, /*   Logical Min (0) */
-    0x25, 0x01, /*   Logical Max (1) */
-    0x75, 0x01, /*   Report Size (1) */
-    0x95, 0x10, /*   Report Count (16) */
-    0x81, 0x02, /*   Input (Data, Variable, Absolute) */
+    /* 4 axes — unsigned 16-bit, centre=32768 */
+    0x05, 0x01,       /*     Usage Page (Generic Desktop) */
+    0x09, 0x30,       /*     Usage (X) */
+    0x09, 0x31,       /*     Usage (Y) */
+    0x09, 0x32,       /*     Usage (Z)  — right X */
+    0x09, 0x35,       /*     Usage (Rz) — right Y */
+    0x15, 0x00,       /*     Logical Min (0) */
+    0x27, 0xFF, 0xFF, 0x00, 0x00, /* Logical Max (65535) */
+    0x75, 0x10,       /*     Report Size (16) */
+    0x95, 0x04,       /*     Report Count (4) */
+    0x81, 0x02,       /*     Input (Data,Var,Abs) */
 
-    /* Hat switch (D-pad) */
-    0x05, 0x01,       /*   Usage Page (Generic Desktop) */
-    0x09, 0x39,       /*   Usage (Hat Switch) */
+    /* Hat switch */
+    0x09, 0x39,       /*     Usage (Hat switch) */
+    0x15, 0x00,       /*     Logical Min (0) */
+    0x25, 0x07,       /*     Logical Max (7) */
+    0x35, 0x00,       /*     Physical Min (0) */
+    0x46, 0x3B, 0x01, /*     Physical Max (315) */
+    0x65, 0x14,       /*     Unit (deg) */
+    0x75, 0x04,       /*     Report Size (4) */
+    0x95, 0x01,       /*     Report Count (1) */
+    0x81, 0x42,       /*     Input (Data,Var,Abs,Null) */
+    0x75, 0x04,       /*     Report Size (4) */
+    0x95, 0x01,       /*     Report Count (1) */
+    0x81, 0x01,       /*     Input (Const) — 4-bit pad */
+
+    0xC0,             /*   End Collection (Physical) */
+
+    /* ── Triggers (Simulation Controls page, 10-bit) ── */
+    0x05, 0x02,       /*   Usage Page (Simulation Controls) */
+    0x09, 0xC5,       /*   Usage (Brake) — Left Trigger */
     0x15, 0x00,       /*   Logical Min (0) */
-    0x25, 0x07,       /*   Logical Max (7) */
-    0x35, 0x00,       /*   Physical Min (0) */
-    0x46, 0x3B, 0x01, /*   Physical Max (315) */
-    0x65, 0x14,       /*   Unit (Degrees) */
-    0x75, 0x04,       /*   Report Size (4) */
+    0x26, 0xFF, 0x03, /*   Logical Max (1023) */
+    0x75, 0x0A,       /*   Report Size (10) */
     0x95, 0x01,       /*   Report Count (1) */
-    0x81, 0x42,       /*   Input (Data, Variable, Null State) */
-    0x75, 0x04,       /*   Report Size (4) */
+    0x81, 0x02,       /*   Input (Data,Var,Abs) */
+    0x09, 0xC4,       /*   Usage (Accelerator) — Right Trigger */
+    0x15, 0x00,       /*   Logical Min (0) */
+    0x26, 0xFF, 0x03, /*   Logical Max (1023) */
+    0x75, 0x0A,       /*   Report Size (10) */
     0x95, 0x01,       /*   Report Count (1) */
-    0x81, 0x01,       /*   Input (Constant) - padding */
+    0x81, 0x02,       /*   Input (Data,Var,Abs) */
+    0x75, 0x06,       /*   Report Size (6) */
+    0x95, 0x01,       /*   Report Count (1) */
+    0x81, 0x01,       /*   Input (Const) — 6-bit pad */
 
-    0xC0 /* End Collection */
+    0xC0              /* End Collection (Application) */
 };
 
 /* Mouse Report Descriptor (Report ID 3)
@@ -206,19 +251,30 @@ static const uint8_t combined_report_map[] = {
 #endif /* CONFIG_AKIRA_HID_KEYBOARD */
 
 #if CONFIG_AKIRA_HID_GAMEPAD
-    /* Gamepad (ID 2) */
-    0x05, 0x01, 0x09, 0x05, 0xA1, 0x01, 0x85, 0x02,
-    0x09, 0x30, 0x09, 0x31, 0x09, 0x32, 0x09, 0x35,
-    0x16, 0x00, 0x80, 0x26, 0xFF, 0x7F, 0x75, 0x10,
-    0x95, 0x04, 0x81, 0x02,
-    0x09, 0x33, 0x09, 0x34,
-    0x16, 0x00, 0x80, 0x26, 0xFF, 0x7F, 0x75, 0x10,
-    0x95, 0x02, 0x81, 0x02,
-    0x05, 0x09, 0x19, 0x01, 0x29, 0x10, 0x15, 0x00,
-    0x25, 0x01, 0x75, 0x01, 0x95, 0x10, 0x81, 0x02,
-    0x05, 0x01, 0x09, 0x39, 0x15, 0x00, 0x25, 0x07,
-    0x35, 0x00, 0x46, 0x3B, 0x01, 0x65, 0x14, 0x75, 0x04,
-    0x95, 0x01, 0x81, 0x42, 0x75, 0x04, 0x95, 0x01, 0x81, 0x01,
+    0x05, 0x01, 0x09, 0x05, 0xA1, 0x01, 0x85, 0x01,
+    0x09, 0x01, 0xA1, 0x00, 0x09, 0x30, 0x09, 0x31,
+    0x15, 0x00, 0x27, 0xFF, 0xFF, 0x00, 0x00, 0x95,
+    0x02, 0x75, 0x10, 0x81, 0x02, 0xC0,
+    0x09, 0x01, 0xA1, 0x00, 0x09, 0x32, 0x09, 0x35,
+    0x15, 0x00, 0x27, 0xFF, 0xFF, 0x00, 0x00, 0x95,
+    0x02, 0x75, 0x10, 0x81, 0x02, 0xC0,
+    0x05, 0x02, 0x09, 0xC5, 0x15, 0x00, 0x26, 0xFF,
+    0x03, 0x95, 0x01, 0x75, 0x0A, 0x81, 0x02,
+    0x15, 0x00, 0x25, 0x00, 0x75, 0x06, 0x95, 0x01, 0x81, 0x03,
+    0x05, 0x02, 0x09, 0xC4, 0x15, 0x00, 0x26, 0xFF,
+    0x03, 0x95, 0x01, 0x75, 0x0A, 0x81, 0x02,
+    0x15, 0x00, 0x25, 0x00, 0x75, 0x06, 0x95, 0x01, 0x81, 0x03,
+    0x05, 0x01, 0x09, 0x39, 0x15, 0x01, 0x25, 0x08,
+    0x35, 0x00, 0x46, 0x3B, 0x01, 0x66, 0x14, 0x00,
+    0x75, 0x04, 0x95, 0x01, 0x81, 0x42,
+    0x75, 0x04, 0x95, 0x01, 0x15, 0x00, 0x25, 0x00,
+    0x35, 0x00, 0x45, 0x00, 0x65, 0x00, 0x81, 0x03,
+    0x05, 0x09, 0x19, 0x01, 0x29, 0x0F,
+    0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x0F, 0x81, 0x02,
+    0x15, 0x00, 0x25, 0x00, 0x75, 0x01, 0x95, 0x01, 0x81, 0x03,
+    0x05, 0x0C, 0x0A, 0xB2, 0x00,
+    0x15, 0x00, 0x25, 0x01, 0x95, 0x01, 0x75, 0x01, 0x81, 0x02,
+    0x15, 0x00, 0x25, 0x00, 0x75, 0x07, 0x95, 0x01, 0x81, 0x03,
     0xC0,
 #endif /* CONFIG_AKIRA_HID_GAMEPAD */
 
@@ -289,14 +345,16 @@ static uint8_t protocol_mode = 0x01;
 
 /* Current report state buffers */
 static hid_keyboard_report_t current_keyboard = {0};
-static hid_gamepad_report_t current_gamepad = {0};
+static uint8_t ble_gamepad_report[16] = {0};  /* no Report ID — conveyed via Report Reference descriptor */
 static hid_mouse_report_t current_mouse = {0};
 static hid_consumer_report_t current_consumer = {0};
+
+#define BLE_HID_GAMEPAD_REPORT_SIZE 16
 
 /* Report reference descriptors — {report_id, report_type(1=input)} */
 static const uint8_t kb_report_ref[] = {0x01, 0x01}; /* ID=1, Type=input */
 static const uint8_t kb_out_report_ref[] = {0x01, 0x02}; /* ID=1, Type=output */
-static const uint8_t gp_report_ref[] = {0x02, 0x01}; /* ID=2, Type=input */
+static const uint8_t gp_report_ref[] = {0x01, 0x01}; /* ID=1, Type=input */
 static const uint8_t ms_report_ref[] = {0x03, 0x01}; /* ID=3, Type=input */
 static const uint8_t cs_report_ref[] = {0x04, 0x01}; /* ID=4, Type=input */
 
@@ -349,8 +407,8 @@ static ssize_t read_gp_report(struct bt_conn *conn,
                               const struct bt_gatt_attr *attr,
                               void *buf, uint16_t len, uint16_t offset)
 {
-    return bt_gatt_attr_read(conn, attr, buf, len, offset, &current_gamepad,
-                             sizeof(current_gamepad));
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, ble_gamepad_report,
+                             sizeof(ble_gamepad_report));
 }
 
 static ssize_t read_ms_report(struct bt_conn *conn,
@@ -561,15 +619,16 @@ BT_GATT_SERVICE_DEFINE(hids_svc,
 #endif /* CONFIG_AKIRA_HID_KEYBOARD */
 
 #if CONFIG_AKIRA_HID_GAMEPAD
-                       /* Gamepad report (ID = 2) */
+                       /* Gamepad report (ID=1) */
                         BT_GATT_CHARACTERISTIC(BT_UUID_HIDS_REPORT,
                                             BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
                                             BT_GATT_PERM_READ_ENCRYPT, read_gp_report, NULL,
-                                            &current_gamepad),
+                                            ble_gamepad_report),
                         BT_GATT_DESCRIPTOR(BT_UUID_HIDS_REPORT_REF,
                                         BT_GATT_PERM_READ_ENCRYPT, read_report_ref, NULL,
                                           (void *)gp_report_ref),
-                        BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+                        BT_GATT_CCC(gp_ccc_changed, BT_GATT_PERM_READ_ENCRYPT |
+                                                    BT_GATT_PERM_WRITE_ENCRYPT),
 #endif /* CONFIG_AKIRA_HID_GAMEPAD */
 
 #if CONFIG_AKIRA_HID_MOUSE
@@ -712,6 +771,66 @@ static int ble_hid_send_keyboard(const hid_keyboard_report_t *report)
     return 0;
 }
 
+/*
+ * Convert internal hid_gamepad_report_t to model 1708 BLE wire format — verified
+ * byte-for-byte against a real model 1708 capture (fw 5.11.3116.0), not
+ * hand-derived.
+ *
+ * 16-byte payload (Report ID conveyed via Report Reference descriptor, not
+ * included in the notified value — matches the keyboard report's convention):
+ *   X,Y,Z,Rz:  signed 16-bit → unsigned 16-bit (centre=32768)
+ *   LT,RT:     signed 16-bit → unsigned 10-bit (0–1023), each byte-aligned
+ *              to its own 16-bit field (10 bits + 6-bit pad), not packed
+ *              together
+ *   Buttons:   16-bit mask → 15-bit (A=bit0 .. R3=bit10, bits11-14 unused)
+ *   Hat:       1-8=N..NW, out-of-range (incl. our 0=centre) = centre — same
+ *              convention as our own hid_gamepad_report_t.hat, no conversion
+ */
+static void gamepad_to_wire(const hid_gamepad_report_t *src, uint8_t dst[16])
+{
+    /* Convert signed 16-bit axes (-32768..32767) to unsigned (0..65535) */
+    uint16_t ax[4];
+    for (int i = 0; i < 4; i++) {
+        ax[i] = (uint16_t)((int32_t)src->axes[i] + 32768);
+    }
+
+    /* Convert triggers: signed 16-bit → unsigned 10-bit (0..1023) */
+    uint16_t lt = (uint16_t)(((int32_t)src->axes[4] + 32768) * 1023 / 65535);
+    uint16_t rt = (uint16_t)(((int32_t)src->axes[5] + 32768) * 1023 / 65535);
+
+    /* Map buttons: our 16-bit mask → 15-bit wire layout */
+    uint32_t btn = 0;
+    if (src->buttons & 0x0001) btn |= (1 << 0);  /* A */
+    if (src->buttons & 0x0002) btn |= (1 << 1);  /* B */
+    if (src->buttons & 0x0004) btn |= (1 << 2);  /* X */
+    if (src->buttons & 0x0008) btn |= (1 << 3);  /* Y */
+    if (src->buttons & 0x0010) btn |= (1 << 4);  /* LB */
+    if (src->buttons & 0x0020) btn |= (1 << 5);  /* RB */
+    if (src->buttons & 0x0040) btn |= (1 << 6);  /* Back/View */
+    if (src->buttons & 0x0080) btn |= (1 << 7);  /* Start/Menu */
+    if (src->buttons & 0x0100) btn |= (1 << 8);  /* Guide/Home */
+    if (src->buttons & 0x0200) btn |= (1 << 9);  /* L3 (LS) */
+    if (src->buttons & 0x0400) btn |= (1 << 10); /* R3 (RS) */
+
+    /* Pack into wire format */
+    dst[0]  = (uint8_t)(ax[0] & 0xFF);
+    dst[1]  = (uint8_t)((ax[0] >> 8) & 0xFF);
+    dst[2]  = (uint8_t)(ax[1] & 0xFF);
+    dst[3]  = (uint8_t)((ax[1] >> 8) & 0xFF);
+    dst[4]  = (uint8_t)(ax[2] & 0xFF);
+    dst[5]  = (uint8_t)((ax[2] >> 8) & 0xFF);
+    dst[6]  = (uint8_t)(ax[3] & 0xFF);
+    dst[7]  = (uint8_t)((ax[3] >> 8) & 0xFF);
+    dst[8]  = (uint8_t)(lt & 0xFF);
+    dst[9]  = (uint8_t)((lt >> 8) & 0x03);
+    dst[10] = (uint8_t)(rt & 0xFF);
+    dst[11] = (uint8_t)((rt >> 8) & 0x03);
+    dst[12] = (uint8_t)(src->hat & 0x0F);
+    dst[13] = (uint8_t)(btn & 0xFF);
+    dst[14] = (uint8_t)((btn >> 8) & 0x7F);
+    dst[15] = 0; /* Share/Record button — no physical mapping */
+}
+
 static int ble_hid_send_gamepad(const hid_gamepad_report_t *report)
 {
     if (!bt_hid_state.enabled) {
@@ -723,22 +842,24 @@ static int ble_hid_send_gamepad(const hid_gamepad_report_t *report)
     }
 
 #if BT_AVAILABLE
-    memcpy(&current_gamepad, report, sizeof(current_gamepad));
+    gamepad_to_wire(report, ble_gamepad_report);
 
-    const struct bt_gatt_attr *attr = find_attr_by_user_data(&current_gamepad);
+    const struct bt_gatt_attr *attr = find_attr_by_user_data(ble_gamepad_report);
     if (!attr) {
         LOG_WRN("BLE HID: Gamepad attribute not found for notify");
         return -ENODEV;
     }
 
-    int rc = bt_gatt_notify(NULL, attr, &current_gamepad, sizeof(current_gamepad));
+    int rc = bt_gatt_notify(NULL, attr, ble_gamepad_report,
+                            sizeof(ble_gamepad_report));
     if (rc < 0) {
         LOG_ERR("BLE GP notify failed: %d", rc);
         return rc;
     }
 
-    LOG_DBG("BLE GP notify sent: btns=%04x hat=%d", current_gamepad.buttons,
-            current_gamepad.hat);
+    LOG_INF("BLE GP notify sent: btns=%04x hat=%d axes=[%d %d %d %d]",
+            report->buttons, report->hat,
+            report->axes[0], report->axes[1], report->axes[2], report->axes[3]);
 #endif
     return 0;
 }
