@@ -557,6 +557,11 @@ if(CONFIG_AKIRA_ST25DV)
     target_sources(app PRIVATE src/drivers/nfc/st25dv.c)
 endif()
 
+if(CONFIG_AKIRA_SE050)
+    target_sources(app PRIVATE src/drivers/secure_element/se050.c
+                                src/drivers/secure_element/se050_transport.c)
+endif()
+
 if(CONFIG_AKIRA_PWM_DIAL)
     target_sources(app PRIVATE src/drivers/input/akira_pwm_dial.c)
 endif()

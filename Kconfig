@@ -431,6 +431,28 @@ config AKIRA_ST25DV
       RF operations (ISO 15693) happen autonomously when an NFC reader
       is present.
 
+config AKIRA_SE050
+    bool "Enable NXP SE050 secure element driver"
+    default y if DT_HAS_NXP_SE050_ENABLED
+    depends on I2C
+    help
+      Enable the NXP EdgeLock SE050 Plug & Trust secure element driver.
+      Talks to the SE050 over the ISO7816 T=1' block protocol tunnelled over
+      I2C. Provides on-die true random, ECC P-256 key generation / signing
+      (keys never leave the chip), and secure binary object storage.
+      Owns the ENA GPIO for deep-sleep power gating.
+
+config AKIRA_SE050_SCP03
+    bool "Use GlobalPlatform SCP03 authenticated/encrypted channel"
+    default n
+    depends on AKIRA_SE050
+    help
+      Wrap all APDU exchanges in a GlobalPlatform SCP03 secure channel
+      (AES-CMAC + AES-CBC session keys). Requires the part's provisioned
+      platform SCP03 static keys. Leave disabled to use a plain APDU session,
+      which the SE050 permits for GetRandom, reading policy-open objects, and
+      signing with objects whose policy allows unauthenticated use.
+
 endmenu
 
 menu "Connectivity"
