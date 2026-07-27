@@ -193,6 +193,8 @@ void sandbox_ctx_init(sandbox_ctx_t *ctx, akira_trust_level_t trust,
         ctx->allowed_syscalls |= SYSCALL_CAT_RF;
     if (cap_mask & AKIRA_CAP_BLE) /* BLE app API */
         ctx->allowed_syscalls |= SYSCALL_CAT_BLUETOOTH;
+    if (cap_mask & (AKIRA_CAP_BLE_SCAN | AKIRA_CAP_BLE_SPAM))
+        ctx->allowed_syscalls |= SYSCALL_CAT_BLUETOOTH;
 
     /* Initialize rate limit buckets */
     static const uint16_t bucket_rates[] = {

@@ -60,12 +60,15 @@ uint64_t akira_capability_str_to_mask(const char *cap)
     if (strcmp(cap, "wifi.inject") == 0)    return AKIRA_CAP_WIFI_INJECT;
     if (strcmp(cap, "ota.trigger") == 0)    return AKIRA_CAP_OTA_TRIGGER;
     if (strcmp(cap, "crypto") == 0)         return AKIRA_CAP_CRYPTO;
+    if (strcmp(cap, "ble.scan") == 0)       return AKIRA_CAP_BLE_SCAN;
+    if (strcmp(cap, "ble.spam") == 0)       return AKIRA_CAP_BLE_SPAM;
     /* Wildcard patterns */
     if (strcmp(cap, "display.*") == 0)      return AKIRA_CAP_DISPLAY_WRITE;
     if (strcmp(cap, "input.*") == 0)        return AKIRA_CAP_INPUT_READ | AKIRA_CAP_INPUT_WRITE;
     if (strcmp(cap, "sensor.*") == 0)       return AKIRA_CAP_SENSOR_READ;
     if (strcmp(cap, "rf.*") == 0)           return AKIRA_CAP_RF_TRANSCEIVE;
-    if (strcmp(cap, "bt.*") == 0)           return AKIRA_CAP_BLE | AKIRA_CAP_HID;
+    if (strcmp(cap, "bt.*") == 0)           return AKIRA_CAP_BLE | AKIRA_CAP_HID |
+                                                    AKIRA_CAP_BLE_SCAN | AKIRA_CAP_BLE_SPAM;
     if (strcmp(cap, "storage.*") == 0)      return AKIRA_CAP_STORAGE_READ | AKIRA_CAP_STORAGE_WRITE;
     if (strcmp(cap, "gpio.*") == 0)         return AKIRA_CAP_GPIO_READ | AKIRA_CAP_GPIO_WRITE;
     if (strcmp(cap, "network.*") == 0)      return AKIRA_CAP_NETWORK;
@@ -126,6 +129,8 @@ char* akira_capability_mask_to_str(uint64_t cap)
     if (cap & AKIRA_CAP_AIINFER)       return "ai.infer";
     if (cap & AKIRA_CAP_MATTER)        return "matter";
     if (cap & AKIRA_CAP_MQTT)          return "mqtt";
+    if (cap & AKIRA_CAP_BLE_SCAN)      return "ble.scan";
+    if (cap & AKIRA_CAP_BLE_SPAM)      return "ble.spam";
     if (cap & AKIRA_CAP_FS_READ)       return "fs.read";
     if (cap & AKIRA_CAP_FS_WRITE)      return "fs.write";
     if (cap & AKIRA_CAP_RTC_READ)      return "rtc.read";

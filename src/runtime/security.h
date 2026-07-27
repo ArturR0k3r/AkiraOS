@@ -104,9 +104,17 @@ extern "C" {
  * Manifest string: "mqtt" */
 #define AKIRA_CAP_MQTT          (1ULL << 35)
 
-/* Highest capability bit currently defined (MQTT = bit 35). Keep in sync when
- * adding new AKIRA_CAP_* bits above. */
-#define AKIRA_CAP_MAX_BIT       35
+/* BLE observer role: scan for nearby advertisers (no GATT connect).
+ * Manifest string: "ble.scan" */
+#define AKIRA_CAP_BLE_SCAN      (1ULL << 36)
+/* BLE rotating raw-advertiser (pairing-popup spam/spoof presets).
+ * Elevated privilege — broadcasts affect nearby devices, do not grant
+ * to untrusted apps by default. Manifest string: "ble.spam" */
+#define AKIRA_CAP_BLE_SPAM      (1ULL << 37)
+
+/* Highest capability bit currently defined (AKIRA_CAP_BLE_SPAM = bit 37).
+ * Keep in sync when adding new AKIRA_CAP_* bits above. */
+#define AKIRA_CAP_MAX_BIT       37
 
 /* Union of every capability bit the runtime actually understands. A manifest
  * wildcard ("*") is bounded to this — it can never grant undefined future bits

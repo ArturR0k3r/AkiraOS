@@ -59,7 +59,9 @@ extern "C"
         BT_MODE_HID       = 1, /**< BLE HID profile owns the radio */
         BT_MODE_BLE_APP   = 2, /**< WASM BLE app service owns the radio */
         BT_MODE_COMPANION = 3, /**< AkiraApp companion service owns the radio */
-        BT_MODE_MESH      = 4, /**< AkiraMesh BLE transport owns the radio */
+        BT_MODE_BLE_SCAN  = 4, /**< WASM BLE observer (scan) owns the radio */
+        BT_MODE_BLE_SPAM  = 5, /**< WASM BLE rotating-advertiser owns the radio */
+        BT_MODE_MESH      = 6, /**< AkiraMesh BLE transport owns the radio */
     } bt_manager_mode_t;
 
     /** Bluetooth configuration */
@@ -84,6 +86,37 @@ extern "C"
         int8_t rssi;
         bool bonded;
     } bt_stats_t;
+
+    /* Sizing for struct ble_scan_report. Declared as named constants so the
+     * WASM-side wire struct (akira_ble_scan_report_t in AkiraSDK/include/akira_api.h)
+     * can be kept in sync deliberately rather than via magic-number duplication. */
+    #define BLE_SCAN_ADDR_LEN    6   /**< BLE MAC length */
+    #define BLE_SCAN_NAME_LEN    20  /**< local name buffer, NUL-terminated */
+    #define BLE_SCAN_ADV_MAX_LEN 31  /**< legacy advertising max payload */
+
+    /**
+     * @brief One BLE advertisement report, as delivered by bt_manager_scan_pop().
+     *
+     * All members are 1-byte aligned (no padding), so this struct can be
+     * memcpy'd directly into a WASM buffer with a matching layout.
+     */
+    struct ble_scan_report
+    {
+        uint8_t  addr[BLE_SCAN_ADDR_LEN];     /**< Advertiser MAC, as reported by the stack */
+        int8_t   rssi;                        /**< Signal strength in dBm */
+        char     name[BLE_SCAN_NAME_LEN];     /**< NUL-terminated local name, empty if not advertised */
+        uint8_t  adv_len;                     /**< Bytes valid in adv_data */
+        uint8_t  adv_data[BLE_SCAN_ADV_MAX_LEN]; /**< Raw AD payload */
+    };
+
+    /** BLE spam/spoof presets — publicly-documented advertisement formats
+     *  used to trigger nearby-device pairing UI, same technique as
+     *  open-source BLE-spam tools. */
+    #define BLE_SPAM_PRESET_APPLE     0 /**< Apple Continuity proximity-pair popup */
+    #define BLE_SPAM_PRESET_FASTPAIR  1 /**< Google Fast Pair */
+    #define BLE_SPAM_PRESET_SWIFTPAIR 2 /**< Microsoft Swift Pair */
+    #define BLE_SPAM_PRESET_RANDOM    3 /**< Randomized manufacturer-data flood */
+    #define BLE_SPAM_PRESET_COUNT     (BLE_SPAM_PRESET_RANDOM + 1)
 
     /*===========================================================================*/
     /* Event Callbacks                                                           */
@@ -156,6 +189,12 @@ extern "C"
      */
     bool bt_manager_is_connected(void);
 
+    /** @brief Request low-power (long interval) BLE params. No-op if not connected. */
+    int bt_manager_conn_params_idle(void);
+
+    /** @brief Restore responsive BLE params. No-op if not connected. */
+    int bt_manager_conn_params_active(void);
+
     /**
      * @brief Register event callback
      * @param callback Callback function
@@ -206,6 +245,46 @@ extern "C"
      * @return 0 on success, negative errno on failure
      */
     int bt_manager_start_advertising_custom(const uint8_t svc_uuid128[16]);
+
+    /**
+     * @brief Start BLE observer scanning. Mutually exclusive with other modes.
+     * @param active  true = active scan (sends scan requests, gets names), false = passive.
+     * @return 0 on success, -EBUSY if another mode owns the radio.
+     */
+    int bt_manager_scan_start(bool active);
+
+    /**
+     * @brief Stop BLE observer scanning and release the mode lock.
+     * @return 0 on success.
+     */
+    int bt_manager_scan_stop(void);
+
+    /**
+     * @brief Pop the next queued advertisement report (non-blocking).
+     * @param out  Output report (caller allocates).
+     * @return 1 if a report was popped, 0 if the queue is empty, negative errno on error.
+     */
+    int bt_manager_scan_pop(struct ble_scan_report *out);
+
+    /**
+     * @brief Start rotating-advertiser spam/spoof mode.
+     * @param preset  One of BLE_SPAM_PRESET_*.
+     * @return 0 on success, -EINVAL for unknown preset, -EBUSY if another mode owns the radio.
+     */
+    int bt_manager_spam_start(int preset);
+
+    /**
+     * @brief Stop spam/spoof mode and release the mode lock.
+     * @return 0 on success.
+     * @note Must not be called from the Zephyr system workqueue thread (blocks synchronously on work cancellation).
+     */
+    int bt_manager_spam_stop(void);
+
+    /**
+     * @brief Number of advertisement payloads sent since the last spam_start().
+     * @return Packet count (resets to 0 on each bt_manager_spam_start()).
+     */
+    uint32_t bt_manager_spam_packet_count(void);
 
 #ifdef __cplusplus
 }
