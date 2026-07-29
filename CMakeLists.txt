@@ -645,6 +645,10 @@ if(CONFIG_AKIRA_WASM_BLE)
     target_sources(app PRIVATE src/connectivity/bluetooth/ble_app_service.c)
 endif()
 
+if(CONFIG_AKIRA_BT_COMPANION)
+    target_sources(app PRIVATE src/connectivity/bluetooth/companion_service.c)
+endif()
+
 if(CONFIG_AKIRA_USB)
     target_sources(app PRIVATE
         src/connectivity/usb/usb_manager.c

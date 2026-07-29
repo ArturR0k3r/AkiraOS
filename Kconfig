@@ -596,7 +596,7 @@ config AKIRA_BT_COMPANION
 
 config AKIRA_BT_COMPANION_STATUS_INTERVAL_MS
     int "Companion status notification interval (ms)"
-    default 60000
+    default 5000
     range 5000 300000
     depends on AKIRA_BT_COMPANION
     help
