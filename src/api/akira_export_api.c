@@ -136,7 +136,9 @@ bool akira_register_native_apis()
 #endif
 #if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_WIFI) && (defined(CONFIG_SOC_SERIES_ESP32S3) || defined(CONFIG_SOC_SERIES_ESP32))
         /* 802.11 deauth frame injector -- requires wifi.inject capability */
-        {"wifi_deauth",    (void *)akira_native_wifi_deauth,    "(**iii)i",   NULL},
+        {"wifi_deauth",         (void *)akira_native_wifi_deauth,         "(**iii)i",   NULL},
+        /* PMKID capture: deauth + sniff EAPOL-Key M1 -- requires wifi.inject capability */
+        {"wifi_capture_pmkid",  (void *)akira_native_wifi_capture_pmkid,  "(**i$*i)i",  NULL},
 #endif
 
 #if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_SENSOR)

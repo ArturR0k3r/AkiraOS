@@ -98,6 +98,11 @@ int akira_native_wifi_scan_aps(wasm_exec_env_t exec_env,
 int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
                               void *bssid_ptr, void *client_ptr,
                               int32_t channel, int32_t count, int32_t interval_ms);
+/* 4-way handshake capture: deauth + sniff EAPOL-Key M1+M2, returns 1 if complete */
+int akira_native_wifi_capture_pmkid(wasm_exec_env_t exec_env,
+                                     void *bssid_ptr, void *client_ptr,
+                                     int32_t channel, const char *ssid_str,
+                                     void *result_ptr, int32_t timeout_ms);
 #endif
 
 /*
