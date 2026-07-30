@@ -292,7 +292,11 @@ int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
     const uint8_t *bssid  = (const uint8_t *)bssid_ptr;
     const uint8_t *client = (const uint8_t *)client_ptr;
 
-    /* Set channel for deauth frames */
+    /* Promiscuous mode decouples the radio from the managed stack so we
+     * can set an arbitrary channel and inject raw 802.11 mgmt frames.
+     * Sends via WIFI_IF_STA — always available when WiFi is initialised,
+     * unlike WIFI_IF_AP which requires a softAP. */
+    esp_wifi_set_promiscuous(true);
     esp_wifi_set_channel((uint8_t)channel, WIFI_SECOND_CHAN_NONE);
 
     /* Build deauth frame */
@@ -319,7 +323,7 @@ int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
         frame.seq[0] = (uint8_t)(seq & 0xFF);
         frame.seq[1] = (uint8_t)(seq >> 8);
 
-        esp_err_t err = esp_wifi_80211_tx(WIFI_IF_AP, &frame, sizeof(frame), true);
+        esp_err_t err = esp_wifi_80211_tx(WIFI_IF_STA, &frame, sizeof(frame), true);
         if (err == ESP_OK) {
             sent++;
         } else {
@@ -328,6 +332,9 @@ int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
 
         if (i < count - 1) k_msleep(interval_ms);
     }
+
+    /* Restore normal WiFi operation */
+    esp_wifi_set_promiscuous(false);
 
     LOG_INF("wifi_deauth: channel=%d count=%d sent=%d", channel, count, sent);
     return sent;
