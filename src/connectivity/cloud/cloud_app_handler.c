@@ -650,13 +650,19 @@ int cloud_app_handle_message(const cloud_message_t *msg, msg_source_t source)
 
     case MSG_TYPE_APP_START:
         if (msg->payload && msg->header.payload_len >= CLOUD_APP_ID_LEN) {
-            return app_manager_start((const char *)msg->payload);
+            char app_id[CLOUD_APP_ID_LEN + 1];
+            strncpy(app_id, (const char *)msg->payload, CLOUD_APP_ID_LEN);
+            app_id[CLOUD_APP_ID_LEN] = '\0';
+            return app_manager_start(app_id);
         }
         return -EINVAL;
 
     case MSG_TYPE_APP_STOP:
         if (msg->payload && msg->header.payload_len >= CLOUD_APP_ID_LEN) {
-            return app_manager_stop((const char *)msg->payload);
+            char app_id[CLOUD_APP_ID_LEN + 1];
+            strncpy(app_id, (const char *)msg->payload, CLOUD_APP_ID_LEN);
+            app_id[CLOUD_APP_ID_LEN] = '\0';
+            return app_manager_stop(app_id);
         }
         return -EINVAL;
 
@@ -672,12 +678,16 @@ int cloud_app_handle_message(const cloud_message_t *msg, msg_source_t source)
             .auto_install = true, .auto_start = false,
         };
         strncpy(req.app_id, (const char *)msg->payload, sizeof(req.app_id) - 1);
+        req.app_id[sizeof(req.app_id) - 1] = '\0';
         return cloud_app_download(&req);
     }
 
     case MSG_TYPE_APP_UNINSTALL:
         if (msg->payload && msg->header.payload_len >= CLOUD_APP_ID_LEN) {
-            return app_manager_uninstall((const char *)msg->payload);
+            char app_id[CLOUD_APP_ID_LEN + 1];
+            strncpy(app_id, (const char *)msg->payload, CLOUD_APP_ID_LEN);
+            app_id[CLOUD_APP_ID_LEN] = '\0';
+            return app_manager_uninstall(app_id);
         }
         return -EINVAL;
 
@@ -691,9 +701,12 @@ int cloud_app_handle_message(const cloud_message_t *msg, msg_source_t source)
         }
         payload_app_cmd_t *cmd = (payload_app_cmd_t *)msg->payload;
         size_t data_len = msg->header.payload_len - offsetof(payload_app_cmd_t, data);
+        char app_id[CLOUD_APP_ID_LEN];
+        strncpy(app_id, cmd->app_id, sizeof(app_id) - 1);
+        app_id[sizeof(app_id) - 1] = '\0';
         static msg_source_t s_cmd_source; /* single AkiraHub connection — one in flight */
         s_cmd_source = source;
-        return app_cmd_bridge_send(cmd->app_id, cmd->data, data_len,
+        return app_cmd_bridge_send(app_id, cmd->data, data_len,
                                    send_app_cmd_reply, &s_cmd_source, K_SECONDS(3));
     }
 

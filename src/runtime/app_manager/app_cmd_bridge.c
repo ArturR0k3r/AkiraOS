@@ -14,11 +14,15 @@
 
 LOG_MODULE_REGISTER(app_cmd_bridge, CONFIG_AKIRA_LOG_LEVEL);
 
-#define BRIDGE_SUBSCRIBER_NAME "__bridge__"
 #define EVT_TOPIC_SUFFIX ".evt"
 #define CMD_TOPIC_SUFFIX ".cmd"
 /* AKIRA_IPC_TOPIC_NAME_MAX (akira_ipc.h) bounds "<name>" + ".cmd"/".evt" */
 #define TOPIC_NAME_BUF_LEN AKIRA_IPC_TOPIC_NAME_MAX
+/* Per-call subscriber identity, keyed on calling thread — concurrent bridge
+ * calls (Hub RX thread, BLE cmd workqueue, ...) must not share a subscriber
+ * slot, or one call's unsubscribe frees the msgq out from under the other's
+ * still-blocked akira_ipc_recv(). Fits AKIRA_IPC_APP_NAME_MAX (32). */
+#define SUB_NAME_BUF_LEN AKIRA_IPC_APP_NAME_MAX
 
 int app_cmd_bridge_send(const char *app_name, const void *payload, size_t len,
                         app_cmd_reply_cb_t cb, void *user_data, k_timeout_t timeout)
@@ -34,13 +38,23 @@ int app_cmd_bridge_send(const char *app_name, const void *payload, size_t len,
 
     char cmd_topic[TOPIC_NAME_BUF_LEN];
     char evt_topic[TOPIC_NAME_BUF_LEN];
-    snprintf(cmd_topic, sizeof(cmd_topic), "%s" CMD_TOPIC_SUFFIX, app_name);
-    snprintf(evt_topic, sizeof(evt_topic), "%s" EVT_TOPIC_SUFFIX, app_name);
+    char sub_name[SUB_NAME_BUF_LEN];
+    int cmd_n = snprintf(cmd_topic, sizeof(cmd_topic), "%s" CMD_TOPIC_SUFFIX, app_name);
+    int evt_n = snprintf(evt_topic, sizeof(evt_topic), "%s" EVT_TOPIC_SUFFIX, app_name);
+    if (cmd_n < 0 || cmd_n >= (int)sizeof(cmd_topic) ||
+        evt_n < 0 || evt_n >= (int)sizeof(evt_topic)) {
+        /* Truncated suffix would make cmd_topic == evt_topic == app_name,
+         * letting a caller's own command echo back as the app's "reply". */
+        LOG_ERR("app_cmd_bridge: app_name too long for topic: %s", app_name);
+        cb(app_name, NULL, 0, APP_CMD_REPLY_NOT_LISTENING, user_data);
+        return -ENAMETOOLONG;
+    }
+    snprintf(sub_name, sizeof(sub_name), "__cmd%p", (void *)k_current_get());
 
     /* Subscribe to the reply topic BEFORE publishing the command — otherwise
      * a fast-replying app can publish to evt_topic while nobody is subscribed
      * yet, dropping the reply and stalling this call until timeout. */
-    int rc = akira_ipc_subscribe(evt_topic, BRIDGE_SUBSCRIBER_NAME);
+    int rc = akira_ipc_subscribe(evt_topic, sub_name);
     if (rc < 0 && rc != -EALREADY) {
         LOG_ERR("app_cmd_bridge: subscribe to %s failed: %d", evt_topic, rc);
         cb(app_name, NULL, 0, APP_CMD_REPLY_TIMEOUT, user_data);
@@ -52,16 +66,16 @@ int app_cmd_bridge_send(const char *app_name, const void *payload, size_t len,
      * own .cmd topic yet, i.e. "not listening". No separate query needed. */
     int delivered = akira_ipc_publish(cmd_topic, payload, len);
     if (delivered <= 0) {
-        akira_ipc_unsubscribe(evt_topic, BRIDGE_SUBSCRIBER_NAME);
+        akira_ipc_unsubscribe(evt_topic, sub_name);
         cb(app_name, NULL, 0, APP_CMD_REPLY_NOT_LISTENING, user_data);
         return -ENOENT;
     }
 
     uint8_t reply_buf[CONFIG_AKIRA_IPC_MSG_MAX_SIZE];
-    int reply_len = akira_ipc_recv(evt_topic, BRIDGE_SUBSCRIBER_NAME,
+    int reply_len = akira_ipc_recv(evt_topic, sub_name,
                                    reply_buf, sizeof(reply_buf), timeout);
 
-    akira_ipc_unsubscribe(evt_topic, BRIDGE_SUBSCRIBER_NAME);
+    akira_ipc_unsubscribe(evt_topic, sub_name);
 
     if (reply_len < 0) {
         cb(app_name, NULL, 0, APP_CMD_REPLY_TIMEOUT, user_data);

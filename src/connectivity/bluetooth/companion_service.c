@@ -89,6 +89,13 @@ static uint16_t s_pending_cmd_len;
 static struct k_spinlock s_cmd_lock;
 static struct k_work s_cmd_work;
 
+/* apps.cmd blocks this queue up to APPS_CMD_TIMEOUT_MS waiting on the app's
+ * IPC reply — must not run on the system workqueue, or a non-replying app
+ * stalls every other subsystem's k_work_submit() for the same duration. */
+#define CMD_WORKQ_STACK_SIZE 2048
+static K_THREAD_STACK_DEFINE(s_cmd_workq_stack, CMD_WORKQ_STACK_SIZE);
+static struct k_work_q s_cmd_workq;
+
 /* Active bulk transfer state */
 static struct {
     bool    active;
@@ -344,7 +351,10 @@ static void apps_cmd_reply_cb(const char *app_name, const void *reply, size_t re
 
     char b64_out[4 * ((CONFIG_AKIRA_IPC_MSG_MAX_SIZE + 2) / 3) + 1];
     size_t b64_len = 0;
-    base64_encode((uint8_t *)b64_out, sizeof(b64_out), &b64_len, reply, reply_len);
+    if (base64_encode((uint8_t *)b64_out, sizeof(b64_out), &b64_len, reply, reply_len) != 0) {
+        send_resp(ctx->op, ctx->id, false, "reply too large");
+        return;
+    }
     b64_out[b64_len] = '\0';
 
     char data[sizeof(b64_out) + 32];
@@ -887,7 +897,7 @@ static ssize_t cmd_write(struct bt_conn *conn,
     s_pending_cmd_len = len;
     k_spin_unlock(&s_cmd_lock, irq_key);
 
-    k_work_submit(&s_cmd_work);
+    k_work_submit_to_queue(&s_cmd_workq, &s_cmd_work);
     return (ssize_t)len;
 }
 
@@ -1118,6 +1128,11 @@ int companion_svc_init(void)
         LOG_ERR("Cannot acquire BT_MODE_COMPANION: %d", rc);
         return rc;
     }
+
+    k_work_queue_init(&s_cmd_workq);
+    k_work_queue_start(&s_cmd_workq, s_cmd_workq_stack,
+                       K_THREAD_STACK_SIZEOF(s_cmd_workq_stack),
+                       K_PRIO_PREEMPT(7), NULL);
 
     k_work_init(&s_cmd_work, cmd_work_handler);
     k_work_init_delayable(&s_status_timer, status_timer_handler);
