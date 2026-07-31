@@ -63,7 +63,11 @@ int akira_native_net_open(wasm_exec_env_t exec_env, int32_t type)
 {
 	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_NETWORK, -EACCES);
 
+#ifdef CONFIG_AKIRA_WASM_NET_TLS
+	if (type != NET_TYPE_TCP && type != NET_TYPE_UDP && type != NET_TYPE_TLS)
+#else
 	if (type != NET_TYPE_TCP && type != NET_TYPE_UDP)
+#endif
 	{
 		LOG_ERR("net_open: invalid type %d", type);
 		return -EINVAL;

@@ -38,6 +38,15 @@ LOG_MODULE_REGISTER(akira_net_stream, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/sys/atomic.h>
 #include "mem_helper.h"
 
+#ifdef CONFIG_AKIRA_WASM_NET_TLS
+#include <zephyr/net/tls_credentials.h>
+#include "ca_certificate.h"
+
+#define NET_TLS_CA_SEC_TAG_GTS_R4   1
+#define NET_TLS_CA_SEC_TAG_ISRG_X2  2
+#define NET_TLS_CA_SEC_TAG_GTS_R1   3
+#endif
+
 /* =========================================================================
  * Configuration defaults (overridden by Kconfig)
  * ======================================================================= */
@@ -294,6 +303,47 @@ static void connect_work_fn(struct k_work *work)
 	struct sockaddr_in *addr4 = (struct sockaddr_in *)res->ai_addr;
 	addr4->sin_port = htons(ctx->port);
 
+#ifdef CONFIG_AKIRA_WASM_NET_TLS
+	if (ctx->type == NET_TYPE_TLS) {
+		sec_tag_t sec_tag_list[] = { NET_TLS_CA_SEC_TAG_GTS_R4, NET_TLS_CA_SEC_TAG_ISRG_X2,
+					     NET_TLS_CA_SEC_TAG_GTS_R1 };
+		int peer_verify = TLS_PEER_VERIFY_REQUIRED;
+		int r1 = zsock_setsockopt(ctx->fd, SOL_TLS, TLS_SEC_TAG_LIST,
+					   sec_tag_list, sizeof(sec_tag_list));
+		int e1 = errno;
+		int r2 = zsock_setsockopt(ctx->fd, SOL_TLS, TLS_HOSTNAME,
+					   ctx->host, strlen(ctx->host));
+		int e2 = errno;
+		int r3 = zsock_setsockopt(ctx->fd, SOL_TLS, TLS_PEER_VERIFY,
+					   &peer_verify, sizeof(peer_verify));
+		int e3 = errno;
+
+		LOG_INF("stream %d: TLS opts: sec_tag=%d(errno %d) hostname=%d(errno %d) peer_verify=%d(errno %d)",
+			h, r1, e1, r2, e2, r3, e3);
+
+		if (r1 < 0 || r2 < 0 || r3 < 0) {
+			int err = errno;
+
+			LOG_ERR("stream %d: TLS setsockopt failed: %d", h, err);
+			zsock_freeaddrinfo(res);
+
+			k_mutex_lock(&g_mutex, K_FOREVER);
+			zsock_close(ctx->fd);
+			ctx->fd    = -1;
+			ctx->state = NET_STATE_ERROR;
+			k_mutex_unlock(&g_mutex);
+
+			struct net_event evt = {
+				.type   = NET_EVT_ERROR,
+				.handle = (uint8_t)h,
+				.extra  = (uint16_t)err,
+			};
+			k_msgq_put(&g_net_evt_q, &evt, K_NO_WAIT);
+			return;
+		}
+	}
+#endif
+
 	ret = zsock_connect(ctx->fd,
 			    (struct sockaddr *)addr4,
 			    sizeof(*addr4));
@@ -541,6 +591,38 @@ int net_stream_init(void)
 	memset(g_streams, 0, sizeof(g_streams));
 	k_msgq_purge(&g_net_evt_q);
 
+#ifdef CONFIG_AKIRA_WASM_NET_TLS
+	int cred_ret = tls_credential_add(NET_TLS_CA_SEC_TAG_GTS_R4,
+					   TLS_CREDENTIAL_CA_CERTIFICATE,
+					   net_tls_ca_cert_gts_root_r4,
+					   sizeof(net_tls_ca_cert_gts_root_r4));
+
+	if (cred_ret < 0 && cred_ret != -EEXIST) {
+		LOG_ERR("Failed to register TLS CA credential (GTS R4): %d", cred_ret);
+		return cred_ret;
+	}
+
+	cred_ret = tls_credential_add(NET_TLS_CA_SEC_TAG_ISRG_X2,
+				       TLS_CREDENTIAL_CA_CERTIFICATE,
+				       net_tls_ca_cert_isrg_root_x2,
+				       sizeof(net_tls_ca_cert_isrg_root_x2));
+
+	if (cred_ret < 0 && cred_ret != -EEXIST) {
+		LOG_ERR("Failed to register TLS CA credential (ISRG X2): %d", cred_ret);
+		return cred_ret;
+	}
+
+	cred_ret = tls_credential_add(NET_TLS_CA_SEC_TAG_GTS_R1,
+				       TLS_CREDENTIAL_CA_CERTIFICATE,
+				       net_tls_ca_cert_gts_root_r1,
+				       sizeof(net_tls_ca_cert_gts_root_r1));
+
+	if (cred_ret < 0 && cred_ret != -EEXIST) {
+		LOG_ERR("Failed to register TLS CA credential (GTS R1): %d", cred_ret);
+		return cred_ret;
+	}
+#endif
+
 	for (int i = 0; i < CONFIG_AKIRA_NET_MAX_STREAMS; i++) {
 		g_streams[i].fd = -1;
 		k_work_init(&g_streams[i].connect_work, connect_work_fn);
@@ -560,9 +642,15 @@ int net_stream_init(void)
 
 int net_stream_open(int type)
 {
+#ifdef CONFIG_AKIRA_WASM_NET_TLS
+	if (type != NET_TYPE_TCP && type != NET_TYPE_UDP && type != NET_TYPE_TLS) {
+		return -EINVAL;
+	}
+#else
 	if (type != NET_TYPE_TCP && type != NET_TYPE_UDP) {
 		return -EINVAL;
 	}
+#endif
 
 	/*
 	 * Lazy cleanup: reclaim any ERROR or CLOSED streams left over from a
@@ -589,14 +677,16 @@ int net_stream_open(int type)
 	}
 	k_mutex_unlock(&g_mutex);
 
-	int sock_type = (type == NET_TYPE_TCP) ? SOCK_STREAM : SOCK_DGRAM;
-	int proto     = (type == NET_TYPE_TCP) ? IPPROTO_TCP : IPPROTO_UDP;
+	int sock_type = (type == NET_TYPE_UDP) ? SOCK_DGRAM : SOCK_STREAM;
+	int proto     = (type == NET_TYPE_TCP) ? IPPROTO_TCP :
+			 (type == NET_TYPE_UDP) ? IPPROTO_UDP : IPPROTO_TLS_1_2;
+	const char *type_name = (type == NET_TYPE_TCP) ? "TCP" :
+				  (type == NET_TYPE_UDP) ? "UDP" : "TLS";
 
 	int fd = zsock_socket(AF_INET, sock_type, proto);
 
 	if (fd < 0) {
-		LOG_ERR("zsock_socket(%s) failed: %d",
-			(type == NET_TYPE_TCP) ? "TCP" : "UDP", errno);
+		LOG_ERR("zsock_socket(%s) failed: %d", type_name, errno);
 		return -errno;
 	}
 
@@ -610,8 +700,7 @@ int net_stream_open(int type)
 			g_streams[i].state = NET_STATE_OPEN;
 			k_work_init(&g_streams[i].connect_work, connect_work_fn);
 			k_mutex_unlock(&g_mutex);
-			LOG_INF("stream %d opened (%s fd=%d)", i,
-				(type == NET_TYPE_TCP) ? "TCP" : "UDP", fd);
+			LOG_INF("stream %d opened (%s fd=%d)", i, type_name, fd);
 			return i;
 		}
 	}

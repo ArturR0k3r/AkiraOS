@@ -49,6 +49,8 @@ extern "C" {
 #define NET_TYPE_TCP  0
 /** @brief Socket type: UDP datagram */
 #define NET_TYPE_UDP  1
+/** @brief Socket type: TLS stream over TCP (requires CONFIG_AKIRA_WASM_NET_TLS) */
+#define NET_TYPE_TLS  2
 
 /** @brief Size of the ring buffer header in bytes (must be kept in sync with WASM SDK) */
 #define NET_RING_HDR_SIZE  16
@@ -109,7 +111,7 @@ int net_stream_init(void);
 /**
  * @brief Open a new socket and allocate a stream slot.
  *
- * @param type  NET_TYPE_TCP or NET_TYPE_UDP.
+ * @param type  NET_TYPE_TCP, NET_TYPE_UDP, or NET_TYPE_TLS.
  * @return Stream handle (>=0) on success; negative errno on failure.
  */
 int net_stream_open(int type);

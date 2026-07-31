@@ -1828,6 +1828,76 @@ static int cmd_hwtest(const struct shell *sh, size_t argc, char **argv)
 }
 #endif
 
+#ifdef CONFIG_AKIRA_WASM_NET_TLS
+#include "connectivity/net/net_stream.h"
+
+/**
+ * @brief Manual test for the NET_TYPE_TLS plumbing: open, connect, wait for
+ * NET_EVT_CONNECTED/NET_EVT_ERROR, report result.
+ */
+static int cmd_net_tls_test(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "usage: net_tls_test <host> [port] [tcp]");
+        return -EINVAL;
+    }
+
+    uint16_t port = (argc > 2) ? (uint16_t)atoi(argv[2]) : 443;
+    bool plain_tcp = (argc > 3) && (strcmp(argv[3], "tcp") == 0);
+
+    int ret = net_stream_init();
+    if (ret < 0)
+    {
+        shell_error(sh, "net_stream_init failed: %d", ret);
+        return ret;
+    }
+
+    int h = net_stream_open(plain_tcp ? NET_TYPE_TCP : NET_TYPE_TLS);
+    if (h < 0)
+    {
+        shell_error(sh, "net_stream_open(%s) failed: %d", plain_tcp ? "TCP" : "TLS", h);
+        return h;
+    }
+    shell_print(sh, "stream %d opened, connecting to %s:%u ...", h, argv[1], port);
+
+    ret = net_stream_connect(h, argv[1], port);
+    if (ret < 0)
+    {
+        shell_error(sh, "net_stream_connect failed: %d", ret);
+        return ret;
+    }
+
+    struct net_event evt;
+    int64_t deadline = k_uptime_get() + 10000;
+
+    while (k_uptime_get() < deadline)
+    {
+        int evtype = net_stream_event_pop(&evt);
+
+        if (evtype == NET_EVT_CONNECTED)
+        {
+            shell_print(sh, "TLS handshake OK (stream %d)", h);
+            net_stream_close(h);
+            return 0;
+        }
+        else if (evtype == NET_EVT_ERROR)
+        {
+            shell_error(sh, "connect failed, errno=%d", evt.extra);
+            net_stream_close(h);
+            return -evt.extra;
+        }
+        k_sleep(K_MSEC(50));
+    }
+
+    shell_error(sh, "timeout waiting for TLS connect");
+    net_stream_close(h);
+    return -ETIMEDOUT;
+}
+
+SHELL_CMD_REGISTER(net_tls_test, NULL, "Test TLS connect <host> [port]", cmd_net_tls_test);
+#endif
+
 SHELL_STATIC_SUBCMD_SET_CREATE(ram_cmds,
                                SHELL_CMD(ls, NULL, "List files in RAM storage", cmd_ram_ls),
                                SHELL_CMD(cat, NULL, "Show file contents <path>", cmd_ram_cat),
