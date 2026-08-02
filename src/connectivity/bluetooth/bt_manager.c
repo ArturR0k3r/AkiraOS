@@ -29,6 +29,10 @@
 #include <zephyr/bluetooth/services/bas.h>
 #endif
 
+#if defined(CONFIG_AKIRA_POWER_MANAGER)
+#include <drivers/power/power_manager.h>
+#endif
+
 #if defined(CONFIG_AKIRA_WASM_BLE)
 #include "ble_app_service.h"
 #endif
@@ -73,6 +77,9 @@ static struct
     struct bt_conn *current_conn;
     struct k_work_delayable reconnect_work;
     struct k_work_delayable adv_slow_work; /**< switches advertising to slow interval after 30 s */
+#if defined(CONFIG_BT_BAS) && defined(CONFIG_AKIRA_POWER_MANAGER)
+    struct k_work_delayable bas_update_work; /**< refreshes the GATT Battery Service */
+#endif
 #endif
 
     bt_event_callback_t event_cb;
@@ -338,6 +345,32 @@ static void adv_slow_work_handler(struct k_work *work)
     }
 }
 
+#if defined(CONFIG_BT_BAS) && defined(CONFIG_AKIRA_POWER_MANAGER)
+#define BAS_UPDATE_INTERVAL_S 60
+
+/* Keeps the GATT Battery Service in step with the real gauge.  Runs at a lazy
+ * 60 s and only writes on change: bt_bas_set_battery_level() notifies every
+ * subscribed peer, so a per-second update would spend radio energy to tell the
+ * host something it already knows.  On -ENODEV (no gauge fitted, or the gauge
+ * is not responding) the seeded value is left alone — better a stale 100 %,
+ * which HOGP requires to be valid, than a fabricated reading. */
+static void bas_update_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    uint8_t pct = 0;
+    if (akira_pm_get_battery_level(&pct) == 0)
+    {
+        if (pct != bt_bas_get_battery_level())
+        {
+            bt_bas_set_battery_level(pct);
+        }
+    }
+
+    k_work_schedule(&bt_mgr.bas_update_work, K_SECONDS(BAS_UPDATE_INTERVAL_S));
+}
+#endif /* CONFIG_BT_BAS && CONFIG_AKIRA_POWER_MANAGER */
+
 #endif /* BT_AVAILABLE */
 
 /*===========================================================================*/
@@ -376,6 +409,9 @@ int bt_manager_init(const bt_config_t *config)
 #if BT_AVAILABLE
     k_work_init_delayable(&bt_mgr.reconnect_work, reconnect_work_handler);
     k_work_init_delayable(&bt_mgr.adv_slow_work, adv_slow_work_handler);
+#if defined(CONFIG_BT_BAS) && defined(CONFIG_AKIRA_POWER_MANAGER)
+    k_work_init_delayable(&bt_mgr.bas_update_work, bas_update_work_handler);
+#endif
 
 #if defined(CONFIG_AKIRA_BT_ECHO)
     bt_echo_init();
@@ -397,8 +433,14 @@ int bt_manager_init(const bt_config_t *config)
     }
 
 #ifdef CONFIG_BT_BAS
-    /* HOGP mandates Battery Service; report 100% so iOS completes HID enumeration */
+    /* HOGP mandates Battery Service and the value must be valid before HID
+     * enumeration completes, so seed 100 % here — but do not leave it there.
+     * bas_update_work replaces it with the real reading as soon as one is
+     * available, and keeps it current from then on. */
     bt_bas_set_battery_level(100);
+#if defined(CONFIG_AKIRA_POWER_MANAGER)
+    k_work_schedule(&bt_mgr.bas_update_work, K_SECONDS(BAS_UPDATE_INTERVAL_S));
+#endif
 #endif
 
     bt_conn_cb_register(&conn_callbacks);

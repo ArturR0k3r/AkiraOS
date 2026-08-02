@@ -259,6 +259,25 @@ void wait_screen_update(void)
     }
 }
 
+uint32_t wait_screen_ms_to_next_update(void)
+{
+    if (!akira_time_is_set())
+    {
+        /* No wall clock — draw_frame() shows a placeholder that never changes,
+         * so there is nothing to refresh on a schedule. */
+        return WAIT_SCREEN_UPDATE_MAX_MS;
+    }
+
+    int64_t epoch = akira_time_get_epoch() + akira_time_get_tz_offset_s();
+    int64_t sec_into_min = ((epoch % 60) + 60) % 60;
+
+    /* +50 ms so we land just past the rollover rather than just before it and
+     * burn a second wake.  Epoch resolution is 1 s, so a slightly early wake is
+     * harmless anyway: update() sees the same minute, skips the repaint, and
+     * the caller recomputes a short timeout. */
+    return (uint32_t)((60 - sec_into_min) * 1000) + 50u;
+}
+
 void wait_screen_exit(void)
 {
 #ifdef CONFIG_AKIRA_POWER_MANAGER

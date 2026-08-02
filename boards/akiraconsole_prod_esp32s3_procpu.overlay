@@ -14,6 +14,35 @@
 };
 
 // =============================================================================
+// CPU clock — battery-life A/B knob
+// =============================================================================
+// Uncomment to run the CPU at 160 MHz instead of the SoC default 240 MHz.
+// Dynamic CPU power scales roughly with clock, and much of this firmware's busy
+// time is PSRAM-bound rather than clock-bound, so the wall-clock cost is
+// expected to be well under the 1.5x the ratio suggests — measure it with
+// `power stats` before and after.
+//
+// Safe because CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC and CONFIG_XTENSA_CCOUNT_HZ
+// are derived from this property (soc/espressif/common/Kconfig.defconfig), MSPI
+// timing is tuned at boot for the actual clock, and APB stays at 80 MHz on a
+// 160 MHz PLL source — so 40 MHz DIO flash and the octal PSRAM are unaffected.
+//
+// Left disabled by default because it shifts timing for everything the console
+// talks to.  Before enabling, re-test: WASM AOT app performance, the SPI display
+// and SD card, USB HID enumeration, and the BT controller.
+//
+// Do NOT try 80 MHz: that changes the CPU clock *source* and takes APB with it,
+// which re-divides SPI2, I2C and the UART baud generator.
+//
+// Runtime scaling (DFS) is not an option here — CCOUNT_HZ is a compile-time
+// constant, so changing the clock at runtime would corrupt every k_sleep(),
+// k_busy_wait() and tick accounting in the system.
+//
+// Verified to build and to correctly derive CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC
+// and CONFIG_XTENSA_CCOUNT_HZ = 160000000; not yet validated on hardware.
+// &cpu0 { clock-frequency = <DT_FREQ_M(160)>; };
+
+// =============================================================================
 // Watchdog
 // =============================================================================
 &wdt0 { status = "okay"; };

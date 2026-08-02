@@ -358,6 +358,19 @@ config AKIRA_RF_DAEMON_PRIORITY
     default 14
     depends on AKIRA_RF_RX_DAEMON
 
+config AKIRA_RF_INSOMNIA_MAX_HOLD_S
+    int "Maximum time a selected radio inhibits deep sleep (seconds)"
+    default 3600
+    range 60 86400
+    depends on AKIRA_MODULE_RF
+    help
+      Selecting a radio takes a keep-awake lock, because deep sleep on this
+      hardware is a power-off and would drop whatever the caller is listening
+      for.  This bounds how long that lock survives if the caller never calls
+      akira_rf_deinit()/akira_rf_release_all() — after it expires the device is
+      free to auto-sleep again.  Set high enough to cover a legitimate long
+      receive session.
+
 endmenu
 
 menu "Peripherals"
@@ -1228,8 +1241,13 @@ config AKIRA_SD_HOTPLUG
 
 config AKIRA_SD_HOTPLUG_POLL_MS
     int "SD hotplug poll interval (ms)"
-    default 500
+    default 2000
     depends on AKIRA_SD_HOTPLUG
+    help
+      Each poll is a real I2C read of the TCA6408 expander, so this rate is a
+      standing power cost for the life of the device.  2 s is imperceptible for
+      card insertion while keeping the wake rate low.  The poll is suspended
+      entirely while the display is blanked (see akira_sd_card_hotplug_pause()).
 
 config AKIRA_SD_HOTPLUG_MAX_CBS
     int "Maximum SD hotplug callbacks"
@@ -1539,15 +1557,41 @@ config AKIRA_WAIT_WAKE_HOLD_MS
       How long the HOME button must be held to exit the Phase 1 idle
       wait screen.  Prevents accidental wakes from brief button contact.
 
+config AKIRA_XMB_IDLE_FREEZE_S
+    int "Freeze the home-screen ribbon animation after N seconds idle"
+    default 8
+    range 0 300
+    depends on AKIRA_OS_SHELL
+    help
+      The XMB ribbon on the home screen advances its phase 10x/s, and each
+      step forces a full framebuffer redraw plus a full-width SPI flush to the
+      panel.  Left running it is the largest power consumer while the screen is
+      on, for an animation nobody is looking at.  After this many seconds with
+      no button press the ribbon freezes; the next keypress resumes it.
+
+      Set to 0 to animate forever (the old behaviour).
+
 config AKIRA_DEEP_SLEEP_IDLE_S
     int "Seconds on wait screen before entering deep sleep"
-    default 60
-    range 10 600
+    default 1800
+    range 10 86400
     depends on AKIRA_POWER_DEEP_SLEEP && AKIRA_OS_SHELL
     help
       After this many seconds on the dim wait screen with no button
       activity, the device blanks the display and enters hardware deep
       sleep.  Wake via HOME button press (GPIO0 level trigger).
+
+      Used as the default when the NVS key akira/power/sleep_s is unset;
+      the user can override it in Settings > Power.
+
+      Deep sleep here is sys_poweroff(), so waking is a full reboot — budget
+      several seconds to get back to the home screen.  30 minutes is the
+      default because it is long enough that you rarely pay that reboot
+      unexpectedly, while still saving hours of drain from a device left in a
+      bag.  Much shorter values make the console feel like it died.
+
+      Auto-sleep never triggers while the charger reports an active charge
+      cycle, regardless of this value.
 
 config AKIRA_BATTERY_LOW_THRESHOLD
     int "Low battery threshold (%)"

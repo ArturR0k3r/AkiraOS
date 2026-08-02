@@ -27,8 +27,48 @@
 #include <string.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/sys/atomic.h>
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+#include <drivers/power/power_manager.h>
+#endif
 
 LOG_MODULE_REGISTER(akira_rf_api, CONFIG_AKIRA_LOG_LEVEL);
+
+/* Keep-awake while a radio is selected.
+ *
+ * A selected radio means the RX daemon owns the chip and is (or is about to be)
+ * in continuous receive; deep sleep here is sys_poweroff(), which would drop
+ * whatever the caller was listening for.  We express that with the standard
+ * ref-counted insomnia lock rather than a bespoke predicate, so there is one
+ * mechanism to reason about — and, crucially, so the max_hold_ms deadline
+ * bounds the damage if a caller selects a radio and never releases it.
+ *
+ * The old akira_rf_daemon_is_running() test in akira_power_should_stay_awake()
+ * had no such bound: it reported "running" for as long as the thread existed
+ * with a handle set, so a single `rf select` disabled auto deep-sleep for the
+ * rest of the device's uptime. */
+static int s_rf_insomnia = -1;
+
+static void rf_insomnia_acquire(void)
+{
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+    if (s_rf_insomnia >= 0) {
+        akira_pm_insomnia_renew(s_rf_insomnia);
+        return;
+    }
+    s_rf_insomnia = akira_pm_insomnia_enter(
+        "rf-rx", (uint32_t)CONFIG_AKIRA_RF_INSOMNIA_MAX_HOLD_S * 1000U);
+#endif
+}
+
+static void rf_insomnia_release(void)
+{
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+    if (s_rf_insomnia >= 0) {
+        akira_pm_insomnia_exit(s_rf_insomnia);
+        s_rf_insomnia = -1;
+    }
+#endif
+}
 
 /* Serializes init/select/deinit AND data-path bus ops (single operator). */
 static K_MUTEX_DEFINE(s_chip_lock);
@@ -39,8 +79,22 @@ static K_MUTEX_DEFINE(s_chip_lock);
  * daemon, which could freeze it mid-recv while holding s_chip_lock (deadlock). */
 static atomic_t s_rf_daemon_paused = ATOMIC_INIT(0);
 
+#ifdef CONFIG_AKIRA_RF_RX_DAEMON
+/* Idle gate for the RX daemon.  With no radio selected (the default — nothing
+ * calls akira_rf_init()/akira_rf_select() at boot) the daemon used to spin at
+ * 10 Hz forever doing nothing.  It now blocks here instead and is woken by
+ * rf_daemon_kick() from every path that can make it useful again.
+ *
+ * IMPORTANT: any future code path that assigns g_active_handle or clears
+ * s_rf_daemon_paused MUST call rf_daemon_kick(), or RX stops silently. */
+static K_SEM_DEFINE(s_rf_daemon_wake, 0, 1);
+static inline void rf_daemon_kick(void) { k_sem_give(&s_rf_daemon_wake); }
+#else
+static inline void rf_daemon_kick(void) { }
+#endif
+
 static inline void akira_rf_daemon_pause(void)  { atomic_set(&s_rf_daemon_paused, 1); }
-static inline void akira_rf_daemon_resume(void) { atomic_set(&s_rf_daemon_paused, 0); }
+static inline void akira_rf_daemon_resume(void) { atomic_set(&s_rf_daemon_paused, 0); rf_daemon_kick(); }
 
 #define CHIP_LOCK_TIMEOUT_MS 2000
 
@@ -135,6 +189,8 @@ int akira_rf_init(akira_rf_chip_t chip)
     g_active_handle = handle;
 
     k_mutex_unlock(&s_chip_lock);
+    rf_daemon_kick();      /* g_active_handle became non-NULL — release the daemon */
+    rf_insomnia_acquire(); /* a live radio inhibits deep sleep (with a deadline) */
     LOG_INF("RF radio '%s' initialized", handle->name);
     return 0;
 }
@@ -161,6 +217,7 @@ int akira_rf_deinit(void)
     g_active_chip = AKIRA_RF_CHIP_NONE;
 
     k_mutex_unlock(&s_chip_lock);
+    rf_insomnia_release();
     return 0;
 }
 
@@ -183,6 +240,7 @@ int akira_rf_release_all(void)
     g_active_chip = AKIRA_RF_CHIP_NONE;
 
     k_mutex_unlock(&s_chip_lock);
+    rf_insomnia_release();
     return 0;
 }
 
@@ -237,6 +295,8 @@ int akira_rf_select(akira_rf_chip_t chip)
     g_active_chip = chip;
 
     k_mutex_unlock(&s_chip_lock);
+    rf_daemon_kick();      /* g_active_handle became non-NULL — release the daemon */
+    rf_insomnia_acquire(); /* a live radio inhibits deep sleep (with a deadline) */
     LOG_INF("RF active radio set to chip=%d (%s)", chip, handle->name);
     return 0;
 }
@@ -413,10 +473,16 @@ static void rf_rx_daemon_fn(void *p1, void *p2, void *p3)
 {
     ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
     while (1) {
-        if (!g_active_handle) { k_msleep(RF_DAEMON_SLEEP_MS); continue; }
+        /* Idle states below are all edge-triggered: nothing changes until some
+         * other thread selects a radio or resumes the daemon, and every such
+         * path calls rf_daemon_kick().  Block instead of polling — this thread
+         * would otherwise wake 10x/s for the entire life of the device. */
         radio_handle_t *h = g_active_handle;
-        if (!h || !h->ops || !h->ops->recv) { k_msleep(RF_DAEMON_SLEEP_MS); continue; }
-        if (atomic_get(&s_rf_daemon_paused)) { k_msleep(20); continue; }
+        if (!h || !h->ops || !h->ops->recv ||
+            atomic_get(&s_rf_daemon_paused)) {
+            k_sem_take(&s_rf_daemon_wake, K_FOREVER);
+            continue;  /* re-read g_active_handle; conditions may still hold */
+        }
 
         int n;
         if (h->ops->rx_wait) {

@@ -234,6 +234,13 @@ static int crypto_decrypt(const uint8_t *input, size_t input_len, char *output, 
 
 static K_MUTEX_DEFINE(akira_settings_mutex);
 
+/* Bumped by the settings workqueue on every successful mutation (set, delete,
+ * clear), from any caller — shell, settings UI, HTTP, BLE companion.  Lets hot
+ * loops cache values they would otherwise re-read from NVS on every tick; an
+ * NVS read walks flash, which costs both time and energy and contends for the
+ * SPI0 bus that PSRAM shares.  See akira_settings_get_generation(). */
+atomic_t akira_settings_generation = ATOMIC_INIT(0);
+
 K_THREAD_STACK_DEFINE(work_stack, 2048);
 
 struct akira_setting_work
@@ -1229,6 +1236,10 @@ static void setting_work_handler(struct k_work *work)
         if (sw->key && sw->value)
         {
             result = settings_set(sw->key, sw->value, sw->encrypted);
+            if (result == 0)
+            {
+                atomic_inc(&akira_settings_generation);
+            }
         }
         break;
     }
@@ -1245,12 +1256,20 @@ static void setting_work_handler(struct k_work *work)
         if (sw->key)
         {
             result = settings_delete(sw->key);
+            if (result == 0)
+            {
+                atomic_inc(&akira_settings_generation);
+            }
         }
         break;
     }
     case AKIRA_SETTINGS_OP_CLEAR:
     {
         result = settings_clear();
+        if (result == 0)
+        {
+            atomic_inc(&akira_settings_generation);
+        }
         break;
     }
     default:
@@ -1429,6 +1448,11 @@ int akira_settings_set(const char *key, const char *value, uint8_t is_encrypted)
         LOG_DBG("Set: %s = %s", key, value);
     }
     return result;
+}
+
+unsigned int akira_settings_get_generation(void)
+{
+    return (unsigned int)atomic_get(&akira_settings_generation);
 }
 
 int akira_settings_get(const char *key, char *value, size_t max_len)

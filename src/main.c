@@ -329,9 +329,9 @@ int main(void)
     LOG_INF("AkiraOS init complete");
     k_sleep(K_MSEC(1000));  // Brief pause before entering main loop
 
-    /* Idle loop */
+#if defined(CONFIG_DISPLAY) && !defined(CONFIG_AKIRA_OS_SHELL)
+    /* Idle loop — main() owns the display and animates a status screen. */
     while (1) {
-        #if defined(CONFIG_DISPLAY) && !defined(CONFIG_AKIRA_OS_SHELL)
         extern akira_managed_app_t g_apps[AKIRA_MAX_WASM_INSTANCES];
         static uint32_t frame = 0;
         static bool idle_screen_shown = false;
@@ -414,11 +414,19 @@ int main(void)
             idle_screen_shown = false;
             frame = 0;
         }
-#endif
+
         k_sleep(K_MSEC(100));
         // may be add show to display all installed apps and add posibility to run them from there? or just show some system info and status?
         // and if display available show some nice animation or something?
     }
+#else
+    /* Nothing for main() to do — the OS shell thread (or a headless build) owns
+     * the device from here.  Block forever rather than spinning at 10 Hz: a
+     * timed k_sleep() wakes the CPU and reprograms the tick 10x/s for the life
+     * of the device, which is pure battery drain.  K_FOREVER keeps main's stack
+     * reserved (other code holds pointers into its frame) while never running. */
+    k_sleep(K_FOREVER);
+#endif
 
     return 0;
 }

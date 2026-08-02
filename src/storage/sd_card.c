@@ -30,6 +30,9 @@ LOG_MODULE_REGISTER(akira_sd_card, CONFIG_AKIRA_LOG_LEVEL);
 #include <ff.h>
 #include <errno.h>
 #include <drivers/power/power_manager.h>
+#if defined(CONFIG_AKIRA_SD_XIP) && defined(CONFIG_AKIRA_APP_MANAGER)
+#include <runtime/app_manager/app_manager.h>
+#endif
 
 /* Disk name must match `disk-name` in the DTS mmc{} node */
 #define SD_DISK_NAME   "SD"
@@ -121,8 +124,18 @@ static void sd_event_work_fn(struct k_work *work)
 static void poll_work_fn(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(g_poll_work, poll_work_fn);
 
+/* Set while the display is blanked.  A card cannot be inserted into a device
+ * sitting in a pocket, so the 2 Hz I2C transaction to the TCA6408 is pure drain
+ * in that state.  Paused polls do not reschedule; resume does one immediate
+ * poll so any change that happened while asleep is caught at wake. */
+static bool g_poll_paused;
+
 static void poll_work_fn(struct k_work *work)
 {
+    if (g_poll_paused) {
+        return;  /* do not reschedule — akira_sd_card_hotplug_resume() restarts us */
+    }
+
     int val = gpio_pin_get(g_tca_dev, SD_DET_PIN);
     if (val < 0) {
         LOG_ERR("SD_DET read failed: %d", val);
@@ -139,6 +152,63 @@ static void poll_work_fn(struct k_work *work)
 reschedule:
     k_work_reschedule(k_work_delayable_from_work(work),
                       K_MSEC(CONFIG_AKIRA_SD_HOTPLUG_POLL_MS));
+}
+
+void akira_sd_card_hotplug_pause(void)
+{
+    g_poll_paused = true;
+    k_work_cancel_delayable(&g_poll_work);
+}
+
+void akira_sd_card_hotplug_resume(void)
+{
+    if (!g_poll_paused) {
+        return;
+    }
+    g_poll_paused = false;
+    /* Immediate poll: the card may have been swapped while we were blanked. */
+    k_work_reschedule(&g_poll_work, K_NO_WAIT);
+}
+
+/* True while we unmounted the card purely to save power, so wake knows to put
+ * it back.  Distinct from a user eject, which clears g_mounted via the hotplug
+ * path and leaves this false. */
+static bool g_idle_unmounted;
+
+bool akira_sd_card_idle_unmount(void)
+{
+    if (!g_mounted || g_idle_unmounted) {
+        return false;
+    }
+
+    if (akira_sd_card_is_transfer_active()) {
+        return false;
+    }
+
+#if defined(CONFIG_AKIRA_SD_XIP) && defined(CONFIG_AKIRA_APP_MANAGER)
+    /* With XIP, a running app's module may still be backed by the card.
+     * Unmounting under it would fault the app, so never unmount while anything
+     * is running — the power saved is not worth killing the user's app. */
+    if (app_manager_get_running_count() > 0) {
+        return false;
+    }
+#endif
+
+    akira_sd_card_deinit();
+    g_idle_unmounted = true;
+    return true;
+}
+
+void akira_sd_card_idle_remount(void)
+{
+    if (!g_idle_unmounted) {
+        return;
+    }
+    g_idle_unmounted = false;
+
+    /* Best effort: if the card was pulled while we were blanked the mount
+     * fails, and the hotplug poll resuming alongside us reports the removal. */
+    (void)akira_sd_card_init();
 }
 
 int akira_sd_card_register_hotplug_cb(akira_sd_hotplug_cb_t cb, void *user_data)

@@ -13,6 +13,9 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+#include <drivers/power/power_manager.h>
+#endif
 
 LOG_MODULE_REGISTER(cloud_client, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -450,8 +453,21 @@ int cloud_client_send_status(msg_source_t dest)
     status.fw_version[1] = 0; /* Minor */
     status.fw_version[2] = 0; /* Patch */
     status.uptime_sec = (uint32_t)(k_uptime_get() / 1000);
-    status.battery_mv = 3700; /* TODO: Real battery reading */
-    status.battery_pct = 85;
+    /* Report 0/0 when there is no working battery gauge rather than inventing a
+     * plausible number — the backend can distinguish "unknown" from a real
+     * reading, which a hardcoded 85 % made impossible. */
+    status.battery_mv = 0;
+    status.battery_pct = 0;
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+    {
+        akira_battery_status_t bat;
+        if (akira_pm_get_battery_status(&bat) == 0)
+        {
+            status.battery_mv = (uint16_t)bat.voltage_mv;
+            status.battery_pct = bat.level_percent;
+        }
+    }
+#endif
     status.cpu_usage = 0;   /* TODO: Real CPU usage */
     status.free_memory = 0; /* TODO: Get actual free memory */
 

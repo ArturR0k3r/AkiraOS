@@ -111,6 +111,18 @@ int akira_pm_get_battery_level(uint8_t *percent);
 int akira_pm_get_battery_status(akira_battery_status_t *status);
 
 /**
+ * @brief True while the charger IC reports an active charge cycle.
+ *
+ * Read straight from the charger (BQ25601 on AkiraConsole Production), so it
+ * works even on builds with no fuel gauge, or when the gauge is not
+ * responding.  Used to inhibit auto deep-sleep: powering the device off while
+ * it sits on a charger is never what the user wants.
+ *
+ * @return true if charging; false if not charging, or if no charger is bound.
+ */
+bool akira_pm_is_charging(void);
+
+/**
  * @brief Enable or disable automatic low-power idle management.
  * @return 0 always.
  */

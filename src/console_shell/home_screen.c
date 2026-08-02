@@ -376,6 +376,35 @@ static uint8_t g_xmb_phase; /* 0..63, slowly advances each tick */
 static uint8_t g_xmb_tick;  /* sub-tick counter for phase rate */
 #define XMB_TICK_DIV 2      /* advance phase every N ticks (~100 ms/step, ~6.4 s/cycle) */
 
+/* Ambient-animation idle gate.
+ *
+ * The ribbon is decorative, but advancing its phase sets g_dirty, and every
+ * dirty tick costs a full_redraw(): ~192 KB of writes into the PSRAM
+ * framebuffer, then a full re-read + bit-pack + 12 KB memcmp + a full-width SPI
+ * flush in akira_display_hal_flush().  At 10 Hz, forever, that is the single
+ * largest power draw while the screen is on — and nobody is watching it.
+ *
+ * So we freeze the ribbon after CONFIG_AKIRA_XMB_IDLE_FREEZE_S with no input
+ * and resume on the next keypress.  Transition animations (car_h, panel_y,
+ * focus_pop) are untouched: they are user-triggered and last a few hundred ms.
+ */
+static int64_t g_last_activity_ms;
+
+static inline void home_note_activity(void)
+{
+    g_last_activity_ms = k_uptime_get();
+}
+
+static inline bool home_ambient_anim_enabled(void)
+{
+#if CONFIG_AKIRA_XMB_IDLE_FREEZE_S > 0
+    return (k_uptime_get() - g_last_activity_ms) <
+           ((int64_t)CONFIG_AKIRA_XMB_IDLE_FREEZE_S * 1000);
+#else
+    return true;
+#endif
+}
+
 #define POP_PX 8 /* max drop distance for the focus pop */
 /* Start mid-curve so the pop only runs the ease-out tail (~6 frames, 120 ms) */
 static void anim_start_pop(anim_t *a)
@@ -1144,6 +1173,7 @@ void home_screen_refresh(void)
     g_sntp_retries = 0;
 #endif
     g_visible = true;
+    home_note_activity(); /* returning to HOME counts as activity — animate */
     /* Read battery, clock, and connectivity now so first frame is accurate. */
     home_screen_update_status();
     g_dirty = true;
@@ -1153,6 +1183,7 @@ void home_screen_refresh(void)
 void home_screen_load(void)
 {
     g_visible = true;
+    home_note_activity();
     g_dirty = true;
     full_redraw();
 }
@@ -1259,8 +1290,11 @@ void home_screen_tick(void)
     anim_step(&g_anim_focus_pop);
     bool now = anim_running(&g_anim_car_h) || anim_running(&g_anim_panel_y) || anim_running(&g_anim_focus_pop);
 
-    /* Advance XMB ribbon phase — one step every XMB_TICK_DIV ticks */
-    if (++g_xmb_tick >= XMB_TICK_DIV)
+    /* Advance XMB ribbon phase — one step every XMB_TICK_DIV ticks, but only
+     * while the user is actually present.  Once frozen this stops setting
+     * g_dirty, so full_redraw() below stops running and the home screen costs
+     * nothing until the next keypress. */
+    if (home_ambient_anim_enabled() && ++g_xmb_tick >= XMB_TICK_DIV)
     {
         g_xmb_tick = 0;
         g_xmb_phase = (g_xmb_phase + 1) & 63;
@@ -1277,6 +1311,9 @@ void home_screen_handle_key(uint32_t just_pressed)
 {
     if (!g_visible)
         return;
+
+    /* User is present — un-freeze the ambient ribbon. */
+    home_note_activity();
 
     if (g_ui_state == UI_OPTIONS)
     {

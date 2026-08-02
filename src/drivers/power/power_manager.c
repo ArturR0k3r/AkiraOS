@@ -35,6 +35,16 @@ LOG_MODULE_REGISTER(akira_power_manager, CONFIG_AKIRA_LOG_LEVEL);
 #if defined(CONFIG_BT)
 #include <connectivity/bluetooth/bt_manager.h>
 #endif
+#ifdef CONFIG_AKIRA_SD_CARD
+#include <storage/sd_card.h>
+#endif
+#ifdef CONFIG_PM_DEVICE
+#include <zephyr/pm/device.h>
+#endif
+#if defined(CONFIG_AKIRA_WIFI_MANAGER) && defined(CONFIG_WIFI_ESP32)
+#include <connectivity/wifi/wifi_manager.h>
+#include <esp_wifi.h>
+#endif
 
 #if defined(CONFIG_SOC_ESP32S3) && !defined(CONFIG_PM)
 /* CONFIG_PM=n: deep sleep goes via sys_poweroff() -> esp_deep_sleep_start(). */
@@ -44,6 +54,14 @@ LOG_MODULE_REGISTER(akira_power_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 #ifdef CONFIG_FUEL_GAUGE
 #include <zephyr/drivers/fuel_gauge.h>
+#endif
+
+#ifdef CONFIG_CHARGER
+/* Charger IC (BQ25601 on AkiraConsole Production).  Independent of the battery
+ * gauge tier below: it answers "are we on external power / charging" directly
+ * and authoritatively, which the deep-sleep policy needs even when no gauge is
+ * fitted or the gauge is not responding. */
+#include <zephyr/drivers/charger.h>
 #endif
 
 #ifdef CONFIG_INA219
@@ -87,6 +105,9 @@ static struct {
     int             policy_count;
 #ifdef CONFIG_FUEL_GAUGE
     const struct device *fuel_gauge;
+#endif
+#ifdef CONFIG_CHARGER
+    const struct device *charger;
 #endif
 #ifdef CONFIG_INA219
     const struct device *ina219;    /* Zephyr sensor API handle */
@@ -156,6 +177,20 @@ int power_manager_init(void)
                     g_pm.fuel_gauge->name, probe_ret);
             /* Keep g_pm.fuel_gauge set so periodic retries can recover. */
         }
+    }
+#endif
+
+#ifdef CONFIG_CHARGER
+#if DT_HAS_COMPAT_STATUS_OKAY(ti_bq25601)
+    g_pm.charger = DEVICE_DT_GET_ANY(ti_bq25601);
+#else
+    g_pm.charger = NULL;
+#endif
+    if (g_pm.charger && !device_is_ready(g_pm.charger)) {
+        LOG_WRN("Charger present in DT but not ready — charge state unavailable");
+        g_pm.charger = NULL;
+    } else if (g_pm.charger) {
+        LOG_INF("Charger: %s", g_pm.charger->name);
     }
 #endif
 
@@ -385,12 +420,35 @@ int akira_pm_get_battery_level(uint8_t *percent)
     return -ENODEV;
 }
 
-int akira_pm_get_battery_status(akira_battery_status_t *status)
+/**
+ * Charge state straight from the charger IC.
+ *
+ * Authoritative, and — unlike everything below — independent of whether a fuel
+ * gauge is fitted or responding.  The deep-sleep policy depends on this: we
+ * must never power the device off while it sits on a charger.
+ *
+ * @return 1 charging, 0 not charging, -ENODEV if no charger is bound.
+ */
+static int pm_charger_charging(void)
 {
-    if (!status) {
-        return -EINVAL;
+#ifdef CONFIG_CHARGER
+    if (g_pm.charger) {
+        union charger_propval val;
+        if (charger_get_prop(g_pm.charger, CHARGER_PROP_STATUS, &val) == 0) {
+            return (val.status == CHARGER_STATUS_CHARGING) ? 1 : 0;
+        }
     }
+#endif
+    return -ENODEV;
+}
 
+bool akira_pm_is_charging(void)
+{
+    return pm_charger_charging() == 1;
+}
+
+static int battery_status_read(akira_battery_status_t *status)
+{
     memset(status, 0, sizeof(*status));
 
 #ifdef CONFIG_FUEL_GAUGE
@@ -470,6 +528,27 @@ int akira_pm_get_battery_status(akira_battery_status_t *status)
     return -ENODEV;
 }
 
+int akira_pm_get_battery_status(akira_battery_status_t *status)
+{
+    if (!status) {
+        return -EINVAL;
+    }
+
+    int ret = battery_status_read(status);
+
+    /* The charger IC knows the answer directly; the per-tier code above only
+     * infers it from the sign of the pack current, which depends on a shunt
+     * orientation nobody has verified.  Prefer the IC whenever it is bound —
+     * this also gives a valid charging flag on builds with no fuel gauge at
+     * all, where battery_status_read() returns -ENODEV. */
+    int charging = pm_charger_charging();
+    if (charging >= 0) {
+        status->charging = (charging == 1);
+    }
+
+    return ret;
+}
+
 /* ---------- low-power auto-management ---------- */
 
 int akira_pm_enable_low_power_mode(bool enable)
@@ -483,9 +562,74 @@ int akira_pm_enable_low_power_mode(bool enable)
 
 /* ---------- blank-state subsystem idling ---------- */
 
+/**
+ * Suspend or resume the peripherals that are pointless while the screen is off.
+ *
+ * Deliberately table-free and explicit: each device needs a different mechanism
+ * because almost nothing on this SoC implements Zephyr's PM_DEVICE.  Anything
+ * added here must be safe to call repeatedly and must never fail the blank
+ * transition — a peripheral that refuses to suspend is a warning, not an error.
+ */
+static void akira_pm_gate_peripherals(bool suspending)
+{
+#ifdef CONFIG_PM_DEVICE
+    const enum pm_device_action action =
+        suspending ? PM_DEVICE_ACTION_SUSPEND : PM_DEVICE_ACTION_RESUME;
+#endif
+    ARG_UNUSED(suspending);
+
+#if defined(CONFIG_PM_DEVICE) && DT_HAS_COMPAT_STATUS_OKAY(akira_lsm6ds3)
+    {
+        const struct device *imu = DEVICE_DT_GET_ANY(akira_lsm6ds3);
+        if (imu && device_is_ready(imu)) {
+            int ret = pm_device_action_run(imu, action);
+            /* -EALREADY simply means it is already in the target state. */
+            if (ret < 0 && ret != -EALREADY) {
+                LOG_WRN("IMU %s failed: %d", suspending ? "suspend" : "resume", ret);
+            }
+        }
+    }
+#endif
+
+#if defined(CONFIG_PM_DEVICE) && DT_HAS_COMPAT_STATUS_OKAY(bosch_bme280)
+    {
+        const struct device *env = DEVICE_DT_GET_ANY(bosch_bme280);
+        if (env && device_is_ready(env)) {
+            int ret = pm_device_action_run(env, action);
+            if (ret < 0 && ret != -EALREADY) {
+                LOG_WRN("BME280 %s failed: %d", suspending ? "suspend" : "resume", ret);
+            }
+        }
+    }
+#endif
+
+#if defined(CONFIG_AKIRA_WIFI_MANAGER) && defined(CONFIG_WIFI_ESP32)
+    /* Only meaningful while associated — the ESP32 WiFi PHY is not even started
+     * until a connection is made, so there is nothing to save otherwise.
+     *
+     * Called through esp_wifi_set_ps() rather than NET_REQUEST_WIFI_PS because
+     * Zephyr's esp32 wifi driver does not implement .set_power_save in its
+     * wifi_mgmt_ops — that request returns -ENOTSUP.
+     *
+     * MAX_MODEM lets the radio sleep between DTIM beacons, so the link stays up
+     * (push/cloud keep working) at a fraction of the idle current.  We do not
+     * take the interface down: that would drop the user's connection for a
+     * screen blank, which is not a trade the user asked for. */
+    if (wifi_manager_get_state() == WIFI_MGR_STATE_CONNECTED) {
+        esp_err_t err = esp_wifi_set_ps(suspending ? WIFI_PS_MAX_MODEM
+                                                   : WIFI_PS_MIN_MODEM);
+        if (err != ESP_OK) {
+            LOG_WRN("WiFi power-save set failed: %d", (int)err);
+        }
+    }
+#endif
+}
+
 /* Sole trigger for blank/wake; callers must not call RF/BT idle fns directly. */
 void akira_pm_notify_blank(bool entering)
 {
+    akira_pm_gate_peripherals(entering);
+
     if (entering) {
         akira_pm_enable_low_power_mode(true);
 #ifdef CONFIG_AKIRA_MODULE_RF
@@ -494,6 +638,11 @@ void akira_pm_notify_blank(bool entering)
 #if defined(CONFIG_BT)
         (void)bt_manager_conn_params_idle();
 #endif
+#ifdef CONFIG_AKIRA_SD_CARD
+        akira_sd_card_hotplug_pause();
+        /* Refuses on its own if a transfer or an SD-backed app is live. */
+        (void)akira_sd_card_idle_unmount();
+#endif
     } else {
         akira_pm_enable_low_power_mode(false);
 #ifdef CONFIG_AKIRA_MODULE_RF
@@ -501,6 +650,10 @@ void akira_pm_notify_blank(bool entering)
 #endif
 #if defined(CONFIG_BT)
         (void)bt_manager_conn_params_active();
+#endif
+#ifdef CONFIG_AKIRA_SD_CARD
+        akira_sd_card_idle_remount();  /* before the poll, so it sees the truth */
+        akira_sd_card_hotplug_resume();
 #endif
     }
 }

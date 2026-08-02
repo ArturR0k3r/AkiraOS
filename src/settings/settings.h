@@ -95,11 +95,24 @@ int akira_settings_set(const char *key, const char *value, uint8_t is_encrypted)
 
 /**
  * Remove the key and the value associated
- * 
+ *
  * @param key - Key to remove
  * @return 0 on success, negative on error
  */
 int akira_settings_delete(const char *key);
+
+/**
+ * Monotonic counter incremented on every successful settings mutation, from
+ * any writer (shell, settings UI, HTTP API, BLE companion).
+ *
+ * Intended for hot loops that would otherwise re-read NVS every tick just to
+ * notice a rare change: cache the values, remember the generation, and re-read
+ * only when it moves.  An NVS read walks flash — real energy, and it contends
+ * for the SPI0 bus shared with PSRAM.
+ *
+ * @return current generation
+ */
+unsigned int akira_settings_get_generation(void);
 
 /**
  * List all settings

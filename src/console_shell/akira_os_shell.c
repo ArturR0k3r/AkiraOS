@@ -391,6 +391,12 @@ static void home_wake_intr_init(void)
 static bool akira_power_should_stay_awake(void)
 {
     return host_session_active()                         /* USB configured or BT connected */
+#if defined(CONFIG_AKIRA_POWER_MANAGER)
+           /* Never power off a device sitting on a charger — the user plugged
+            * it in expecting it to be there when they come back, and the
+            * energy argument for sleeping does not apply on mains. */
+           || akira_pm_is_charging()
+#endif
 #if defined(CONFIG_BT)
            || bt_manager_get_mode() != BT_MODE_NONE      /* BT scan/spam, not just connected */
 #endif
@@ -403,10 +409,14 @@ static bool akira_power_should_stay_awake(void)
 #endif
            || settings_screen_is_active()
            || g_wasm_active
-#if defined(CONFIG_AKIRA_MODULE_RF)
-           || akira_rf_daemon_is_running()
-#endif
            || akira_sd_card_is_transfer_active()         /* false fallback when SD absent */
+           /* RF used to be tested here via akira_rf_daemon_is_running(), which
+            * means "the daemon thread exists with a radio selected" — true
+            * forever after the first `rf select`, permanently disabling auto
+            * deep-sleep.  The RF layer now takes a normal insomnia lock (with a
+            * deadline, so a leak self-heals), so it is covered by the count
+            * below.  Prefer adding new keep-awake reasons the same way rather
+            * than extending this predicate. */
            || akira_pm_insomnia_count() > 0;
 }
 #endif /* CONFIG_AKIRA_POWER_DEEP_SLEEP */
@@ -495,9 +505,15 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 #endif
     int64_t s_last_input_ms = k_uptime_get();
     bool s_display_blanked = false;
-    /* Seconds on the wait screen before auto deep-sleep. 0 = never (the wait
-     * screen stays a live clock); set via NVS akira/power/sleep_s. */
+    /* Seconds on the wait screen before auto deep-sleep.  0 = never (the wait
+     * screen stays a live clock forever); set via NVS akira/power/sleep_s,
+     * defaulting to CONFIG_AKIRA_DEEP_SLEEP_IDLE_S when that key is unset.
+     * Previously defaulted to 0, so a device left on a desk never slept. */
+#if defined(CONFIG_AKIRA_POWER_DEEP_SLEEP)
+    int s_deep_sleep_idle_s = CONFIG_AKIRA_DEEP_SLEEP_IDLE_S;
+#else
     int s_deep_sleep_idle_s = 0;
+#endif
 
     while (true)
     {
@@ -645,11 +661,21 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                     home_screen_update_status();
                 }
 
-                /* Re-read idle timeout every second so shell 'power timeout'
-                 * and settings changes take effect without a reboot. */
+                /* Re-read the idle/sleep timeouts only when something actually
+                 * wrote a setting, rather than on every 1 s tick.  Each
+                 * akira_settings_get() is an NVS walk over flash — three of
+                 * them per second, forever, for values that change maybe twice
+                 * in the device's life.  The generation counter is bumped by
+                 * the settings workqueue for every writer (shell, settings UI,
+                 * HTTP, BLE companion), so nothing can change behind our back.
+                 * Seeded to a value the counter cannot hold so the first tick
+                 * always performs the initial read. */
 #ifdef CONFIG_AKIRA_SETTINGS
-                if (!s_display_blanked)
+                static unsigned int s_settings_gen_seen = (unsigned int)-1;
+                unsigned int _gen_now = akira_settings_get_generation();
+                if (!s_display_blanked && _gen_now != s_settings_gen_seen)
                 {
+                    s_settings_gen_seen = _gen_now;
                     bool _en = true;
                     char _sv[16] = "";
                     if (!akira_settings_get("akira/display/timeout_en",
@@ -675,7 +701,9 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                         }
                     }
 
-                    /* Auto deep-sleep timeout (0/unset = never → live clock). */
+                    /* Auto deep-sleep timeout.  An explicit 0 from the user
+                     * still means "never"; an *unset* key falls back to the
+                     * build default rather than to never. */
                     memset(_sv, 0, sizeof(_sv));
                     if (!akira_settings_get("akira/power/sleep_s",
                                             _sv, sizeof(_sv)))
@@ -685,7 +713,11 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                     }
                     else
                     {
+#if defined(CONFIG_AKIRA_POWER_DEEP_SLEEP)
+                        s_deep_sleep_idle_s = CONFIG_AKIRA_DEEP_SLEEP_IDLE_S;
+#else
                         s_deep_sleep_idle_s = 0;
+#endif
                     }
                 }
 #endif
@@ -748,15 +780,31 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
              * settings and shell changes take effect within 1 s automatically.
              * No extra per-frame re-read needed here. */
 
-            /* Blanked + HOME up: block on the sem (50Hz -> ~1Hz). HOME down
-             * falls through to the 20ms poll so the 800ms hold stays accurate. */
+            /* Blanked + HOME up: block on the sem until either the HOME ISR
+             * fires or the wait screen actually needs a repaint (minute
+             * rollover), capped so the host-session and deep-sleep checks above
+             * still run.  This is the state the device spends most of its life
+             * in, so the wake rate here dominates standby battery life —
+             * previously a fixed 1 Hz for a frame that changes once a minute.
+             * HOME down falls through to the 20ms poll so the
+             * CONFIG_AKIRA_WAIT_WAKE_HOLD_MS hold detector stays accurate. */
             if (s_display_blanked && !(btns & BIT(AKIRA_BTN_HOME)))
             {
-                k_sem_take(&home_wake_sem, K_MSEC(1000));
+                uint32_t idle_ms = wait_screen_ms_to_next_update();
+                if (idle_ms > WAIT_SCREEN_UPDATE_MAX_MS)
+                {
+                    idle_ms = WAIT_SCREEN_UPDATE_MAX_MS;
+                }
+                k_sem_take(&home_wake_sem, K_MSEC(idle_ms));
             }
             else
             {
-                k_sleep(K_MSEC(20));
+                /* Awake tick.  Button input is interrupt-driven (see
+                 * akira_input_api.c), so this rate only sets animation
+                 * smoothness and the granularity of the HOME hold detector —
+                 * 30 Hz is imperceptible for both and is a third fewer wakes
+                 * than the old 50 Hz. */
+                k_sleep(K_MSEC(33));
             }
         }
         else

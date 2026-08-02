@@ -27,6 +27,7 @@ LOG_MODULE_REGISTER(akira_lsm6ds3, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/device.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/sensor.h>
+#include <zephyr/pm/device.h>
 
 /* ── Register map ─────────────────────────────────────────────────────────── */
 #define LSM6DS3_REG_WHO_AM_I    0x0F
@@ -265,6 +266,53 @@ static int lsm6ds3_init(const struct device *dev)
 	return 0;
 }
 
+/* ── Power management ─────────────────────────────────────────────────────── */
+
+#ifdef CONFIG_PM_DEVICE
+/*
+ * Writing ODR=0 to CTRL1_XL/CTRL2_G is the part's power-down state — worth a
+ * few hundred µA while the console is blanked, which on a battery-powered
+ * handheld is the state it spends most of its life in.  Full-scale and BDU
+ * settings are held in registers that survive power-down, so RESUME only needs
+ * to restore the ODR fields.
+ *
+ * Note the driver's lazy-init contract: hardware is not touched until the first
+ * sample_fetch().  If we are suspended before that has happened there is
+ * nothing configured to power down, and no I2C traffic should be attempted
+ * (the bus may still be unusable this early on ESP32) — so both actions become
+ * no-ops until data->initialized is set.
+ */
+static int lsm6ds3_pm_action(const struct device *dev,
+			     enum pm_device_action action)
+{
+	struct lsm6ds3_data *data = dev->data;
+	int ret;
+
+	if (!data->initialized) {
+		return 0;
+	}
+
+	switch (action) {
+	case PM_DEVICE_ACTION_SUSPEND:
+		ret = write_reg(dev, LSM6DS3_REG_CTRL1_XL, 0x00);
+		if (ret < 0) {
+			return ret;
+		}
+		return write_reg(dev, LSM6DS3_REG_CTRL2_G, 0x00);
+
+	case PM_DEVICE_ACTION_RESUME:
+		ret = write_reg(dev, LSM6DS3_REG_CTRL1_XL, CTRL1_XL_104HZ_2G);
+		if (ret < 0) {
+			return ret;
+		}
+		return write_reg(dev, LSM6DS3_REG_CTRL2_G, CTRL2_G_104HZ_245DPS);
+
+	default:
+		return -ENOTSUP;
+	}
+}
+#endif /* CONFIG_PM_DEVICE */
+
 /* ── Device instantiation ─────────────────────────────────────────────────── */
 
 #define LSM6DS3_DEFINE(inst)						\
@@ -272,8 +320,10 @@ static int lsm6ds3_init(const struct device *dev)
 	static const struct lsm6ds3_config lsm6ds3_cfg_##inst = {	\
 		.i2c = I2C_DT_SPEC_INST_GET(inst),			\
 	};								\
+	PM_DEVICE_DT_INST_DEFINE(inst, lsm6ds3_pm_action);		\
 	SENSOR_DEVICE_DT_INST_DEFINE(inst,				\
-				     lsm6ds3_init, NULL,		\
+				     lsm6ds3_init,			\
+				     PM_DEVICE_DT_INST_GET(inst),	\
 				     &lsm6ds3_data_##inst,		\
 				     &lsm6ds3_cfg_##inst,		\
 				     POST_KERNEL,			\

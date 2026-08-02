@@ -65,6 +65,32 @@ int  akira_sd_card_register_hotplug_cb(akira_sd_hotplug_cb_t cb, void *user_data
 void akira_sd_card_unregister_hotplug_cb(akira_sd_hotplug_cb_t cb);
 /* Fires before akira_sd_card_init() — use for UI loading indicators. */
 void akira_sd_card_register_pre_insert_cb(akira_sd_hotplug_cb_t cb, void *user_data);
+/** Stop the card-detect poll (called when the display blanks — a card cannot
+ *  be inserted while the device is pocketed, so the periodic I2C read is drain).
+ *  Idempotent. */
+void akira_sd_card_hotplug_pause(void);
+/** Restart the card-detect poll and do one immediate check. Idempotent. */
+void akira_sd_card_hotplug_resume(void);
+
+/**
+ * Unmount the card to save power while the display is blanked.
+ *
+ * An idle but enumerated SD card draws roughly 200 µA–1 mA depending on the
+ * card.  Refuses (returning false, leaving the card mounted) while a transfer
+ * is in flight, or — under CONFIG_AKIRA_SD_XIP — while any app is running,
+ * since a running app's module may still be backed by the card.
+ *
+ * @return true if the card was unmounted, false if it was left alone.
+ */
+bool akira_sd_card_idle_unmount(void);
+
+/** Re-mount a card unmounted by akira_sd_card_idle_unmount(). No-op otherwise. */
+void akira_sd_card_idle_remount(void);
+#else
+static inline void akira_sd_card_hotplug_pause(void)  {}
+static inline void akira_sd_card_hotplug_resume(void) {}
+static inline bool akira_sd_card_idle_unmount(void)   { return false; }
+static inline void akira_sd_card_idle_remount(void)   {}
 #endif
 
 #else /* !CONFIG_AKIRA_SD_CARD */
@@ -75,6 +101,10 @@ static inline bool akira_sd_card_is_present(void) { return false; }
 static inline void akira_sd_card_deinit(void)      {}
 static inline void akira_sd_card_set_transfer_active(bool active) { (void)active; }
 static inline bool akira_sd_card_is_transfer_active(void) { return false; }
+static inline void akira_sd_card_hotplug_pause(void)  {}
+static inline void akira_sd_card_hotplug_resume(void) {}
+static inline bool akira_sd_card_idle_unmount(void)   { return false; }
+static inline void akira_sd_card_idle_remount(void)   {}
 
 #endif /* CONFIG_AKIRA_SD_CARD */
 
