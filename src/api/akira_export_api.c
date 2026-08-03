@@ -18,6 +18,9 @@
 #ifdef CONFIG_AKIRA_WASM_ADC
 #include "akira_adc_api.h"
 #endif
+#ifdef CONFIG_AKIRA_WASM_NFC
+#include "akira_nfc_api.h"
+#endif
 #ifdef CONFIG_AKIRA_WASM_WDT
 #include "akira_wdt_api.h"
 #endif
@@ -255,6 +258,17 @@ bool akira_register_native_apis()
 #ifdef CONFIG_AKIRA_WASM_ADC
         {"adc_read", (void *)akira_native_adc_read, "(i)i", NULL},
         {"adc_read_mv", (void *)akira_native_adc_read_mv, "(i)i", NULL},
+#endif
+
+#ifdef CONFIG_AKIRA_WASM_NFC
+        {"nfc_uid", (void *)akira_native_nfc_uid, "(*)i", NULL},
+        {"nfc_read", (void *)akira_native_nfc_read, "(i*~)i", NULL},
+        {"nfc_write", (void *)akira_native_nfc_write, "(i*~)i", NULL},
+        {"nfc_field_present", (void *)akira_native_nfc_field_present, "()i", NULL},
+        {"nfc_mb_enable", (void *)akira_native_nfc_mb_enable, "(ii)i", NULL},
+        {"nfc_mb_put", (void *)akira_native_nfc_mb_put, "(*~)i", NULL},
+        {"nfc_mb_get", (void *)akira_native_nfc_mb_get, "(*~)i", NULL},
+        {"nfc_mb_status", (void *)akira_native_nfc_mb_status, "(**)i", NULL},
 #endif
 
 #ifdef CONFIG_AKIRA_WASM_WDT
