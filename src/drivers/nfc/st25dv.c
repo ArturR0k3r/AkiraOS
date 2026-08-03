@@ -22,7 +22,7 @@
 #include <string.h>
 #include <errno.h>
 
-LOG_MODULE_REGISTER(st25dv, CONFIG_I2C_LOG_LEVEL);
+LOG_MODULE_REGISTER(st25dv, CONFIG_AKIRA_LOG_LEVEL);
 
 /* =========================================================================
  * Register addresses (used with system I2C addr 0x57)
@@ -71,16 +71,16 @@ LOG_MODULE_REGISTER(st25dv, CONFIG_I2C_LOG_LEVEL);
 /* DYN_I2C_SSO: session open flag */
 #define ST25DV_I2C_SSO_OPEN    BIT(0)
 
-/* DYN_RF_MNGT: RF field detect bit */
-#define ST25DV_RF_FIELD_ON     BIT(0)
+/* DYN_EH_CTRL: RF field detect bit (datasheet Table 42, EH_CTRL_Dyn b2) */
+#define ST25DV_RF_FIELD_ON     BIT(2)
 
 /* Timing */
 #define ST25DV_WRITE_CYCLE_MS  5   /* Max EEPROM write cycle time */
 #define ST25DV_WRITE_PAGE_SZ   4   /* Write page size in bytes */
 #define ST25DV_ACK_RETRIES     10  /* Poll attempts for ACK after write */
 
-/* Expected IC reference value */
-#define ST25DV_IC_REF_EXPECTED 0x24
+/* IC_REF (0x0017): ST25DV64KC-IE/JF = 0x51 (ST25DV04KC datasheet Table 84) */
+#define ST25DV_IC_REF_EXPECTED 0x51
 
 /* =========================================================================
  * Driver config / data
@@ -193,14 +193,21 @@ int st25dv_write_sys_reg(const struct device *dev, uint16_t addr, uint8_t val)
 
 int st25dv_set_gpo(const struct device *dev, uint8_t sources)
 {
-    return st25dv_write_sys_reg(dev, ST25DV_DYN_GPO_CTRL, sources);
+    const struct st25dv_config *cfg = dev->config;
+    /* Dynamic registers use device select E2=0,E1=1 — the user memory
+     * address, not system (datasheet Table 14 / Table 89). */
+    int ret = st25dv_reg_write(&cfg->i2c_user, ST25DV_DYN_GPO_CTRL, &sources, 1);
+    if (ret < 0) {
+        return ret;
+    }
+    return st25dv_wait_write_done(&cfg->i2c_user);
 }
 
 int st25dv_rf_field_present(const struct device *dev, bool *present)
 {
     const struct st25dv_config *cfg = dev->config;
     uint8_t val = 0;
-    int ret = st25dv_reg_read(&cfg->i2c_sys, ST25DV_DYN_RF_MNGT, &val, 1);
+    int ret = st25dv_reg_read(&cfg->i2c_user, ST25DV_DYN_EH_CTRL, &val, 1);
     if (ret < 0) {
         return ret;
     }
@@ -242,9 +249,10 @@ int st25dv_open_i2c_session(const struct device *dev, const uint8_t password[8])
     }
     k_msleep(1);
 
-    /* Verify session opened */
+    /* Verify session opened. I2C_SSO_Dyn is a dynamic register — user
+     * memory address, not system (datasheet Table 14 / Table 89). */
     uint8_t sso = 0;
-    ret = st25dv_reg_read(&cfg->i2c_sys, ST25DV_DYN_I2C_SSO, &sso, 1);
+    ret = st25dv_reg_read(&cfg->i2c_user, ST25DV_DYN_I2C_SSO, &sso, 1);
     if (ret < 0) {
         return ret;
     }
@@ -333,7 +341,7 @@ static int st25dv_init(const struct device *dev)
     static struct st25dv_data st25dv_data_##n;                                  \
     DEVICE_DT_INST_DEFINE(n, st25dv_init, NULL,                                 \
                           &st25dv_data_##n, &st25dv_cfg_##n,                    \
-                          POST_KERNEL, 60,                                       \
+                          POST_KERNEL, 90,                                       \
                           NULL);  /* No standard Zephyr API for NFC EEPROM */
 
 DT_INST_FOREACH_STATUS_OKAY(ST25DV_INIT)
