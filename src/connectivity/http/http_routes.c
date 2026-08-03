@@ -29,7 +29,7 @@
 #include "runtime/app_manager/app_manager.h"
 #endif
 
-#if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
+#if defined(CONFIG_AKIRA_OTA) && defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
 #include "ota/ota_manager.h"
 #define AKIRA_HTTP_OTA 1
 #endif
@@ -548,7 +548,7 @@ static int route_app_install(const http_request_t *req, http_response_t *res,
 static int route_firmware_upload(const http_request_t *req,
                                  http_response_t *res, void *user_data)
 {
-#if !defined(CONFIG_FLASH_MAP) || !defined(CONFIG_BOOTLOADER_MCUBOOT)
+#if !defined(CONFIG_AKIRA_OTA) || !defined(CONFIG_FLASH_MAP) || !defined(CONFIG_BOOTLOADER_MCUBOOT)
     res->status_code = 501;
     res->content_type = HTTP_CONTENT_JSON;
     res->body = "{\"error\":\"OTA not supported on this build\"}";
@@ -797,7 +797,7 @@ static int route_firmware_upload(const http_request_t *req,
     /* Schedule reboot after 3 s to let the response flush */
     ota_reboot_to_apply_update(3000);
     return 0;
-#endif /* CONFIG_FLASH_MAP && CONFIG_BOOTLOADER_MCUBOOT */
+#endif /* CONFIG_AKIRA_OTA && CONFIG_FLASH_MAP && CONFIG_BOOTLOADER_MCUBOOT */
 }
 
 /*===========================================================================*/

@@ -217,7 +217,7 @@ int main(void)
 #endif
 #endif
 
-#ifdef CONFIG_AKIRA_HTTP_SERVER
+#if defined(CONFIG_AKIRA_HTTP_SERVER) && defined(CONFIG_AKIRA_OTA)
     /* Initialize OTA manager (required by /upload endpoint) */
     if (ota_manager_init() < 0)
     {
