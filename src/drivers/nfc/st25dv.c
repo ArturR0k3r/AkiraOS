@@ -471,11 +471,35 @@ static int st25dv_nfc_field_present(nfc_handle_t *handle, bool *present)
     return st25dv_rf_field_present((const struct device *)handle->priv_data, present);
 }
 
+static int st25dv_nfc_mb_enable(nfc_handle_t *handle, bool enable, uint8_t wdg)
+{
+    return st25dv_mailbox_enable((const struct device *)handle->priv_data, enable, wdg);
+}
+
+static int st25dv_nfc_mb_put_msg(nfc_handle_t *handle, const uint8_t *buf, size_t len)
+{
+    return st25dv_mailbox_put_msg((const struct device *)handle->priv_data, buf, len);
+}
+
+static int st25dv_nfc_mb_get_msg(nfc_handle_t *handle, uint8_t *buf, size_t cap, size_t *len_out)
+{
+    return st25dv_mailbox_get_msg((const struct device *)handle->priv_data, buf, cap, len_out);
+}
+
+static int st25dv_nfc_mb_status(nfc_handle_t *handle, uint8_t *ctrl, size_t *msg_len)
+{
+    return st25dv_mailbox_status((const struct device *)handle->priv_data, ctrl, msg_len);
+}
+
 static const nfc_ops_t st25dv_nfc_ops = {
     .read_uid      = st25dv_nfc_read_uid,
     .read_mem      = st25dv_nfc_read_mem,
     .write_mem     = st25dv_nfc_write_mem,
     .field_present = st25dv_nfc_field_present,
+    .mb_enable     = st25dv_nfc_mb_enable,
+    .mb_put_msg    = st25dv_nfc_mb_put_msg,
+    .mb_get_msg    = st25dv_nfc_mb_get_msg,
+    .mb_status     = st25dv_nfc_mb_status,
 };
 
 static nfc_handle_t st25dv_nfc_handle = {
