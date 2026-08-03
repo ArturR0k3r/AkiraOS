@@ -44,6 +44,16 @@
 
 LOG_MODULE_REGISTER(akira_runtime, CONFIG_AKIRA_LOG_LEVEL);
 
+/* An app that drew to the screen owns it until teardown, so releasing on the
+ * way out is part of instance cleanup.  akira_api.h only pulls in
+ * akira_display_api.h when CONFIG_DISPLAY=y (and CMakeLists only compiles the
+ * display API then), so headless boards need this to compile away entirely. */
+#ifdef CONFIG_DISPLAY
+#define AKIRA_DISPLAY_RELEASE_OWNER(inst) akira_display_release_owner(inst)
+#else
+#define AKIRA_DISPLAY_RELEASE_OWNER(inst) ((void)0)
+#endif
+
 #define FILE_DIR_MAX_LEN 128
 
 /* Chunked loading configuration */
@@ -757,7 +767,7 @@ static void wasm_app_thread_fn(void *p1, void *p2, void *p3)
      * never call wasm_runtime_destroy_exec_env on it. */
     app->exec_env = NULL;
 
-    akira_display_release_owner(inst);
+    AKIRA_DISPLAY_RELEASE_OWNER(inst);
     instance_map_remove(inst);
     wasm_runtime_deinstantiate(inst);
     app->instance = NULL;
@@ -966,7 +976,7 @@ int akira_runtime_stop(int instance_id)
             app->exec_env = NULL;
             if (app->instance)
             {
-                akira_display_release_owner(app->instance);
+                AKIRA_DISPLAY_RELEASE_OWNER(app->instance);
                 instance_map_remove(app->instance);
                 wasm_runtime_deinstantiate(app->instance);
                 app->instance = NULL;
@@ -1102,7 +1112,7 @@ int akira_runtime_destroy(int instance_id)
     app->exec_env = NULL;
     if (app->instance)
     {
-        akira_display_release_owner(app->instance);
+        AKIRA_DISPLAY_RELEASE_OWNER(app->instance);
         instance_map_remove(app->instance);
         wasm_runtime_deinstantiate(app->instance);
         app->instance = NULL;

@@ -37,6 +37,10 @@ void akira_display_get_size(int *width, int *height);
  * or the display stays locked to an app that no longer exists.
  *
  * Safe to call with an instance that never drew, or with NULL.
+ *
+ * Only declared when CONFIG_DISPLAY=y — akira_api.h gates the include of this
+ * header on it, and CMakeLists only compiles akira_display_api.c then.
+ * Headless callers use the AKIRA_DISPLAY_RELEASE_OWNER() no-op instead.
  */
 void akira_display_release_owner(wasm_module_inst_t inst);
 
