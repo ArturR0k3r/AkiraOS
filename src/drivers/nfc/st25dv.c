@@ -21,6 +21,10 @@
 #include <zephyr/logging/log.h>
 #include <string.h>
 #include <errno.h>
+#ifdef CONFIG_AKIRA_NFC_MANAGER
+#include <zephyr/init.h>
+#include "connectivity/nfc_interface.h"
+#endif
 
 LOG_MODULE_REGISTER(st25dv, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -51,8 +55,7 @@ LOG_MODULE_REGISTER(st25dv, CONFIG_AKIRA_LOG_LEVEL);
 #define ST25DV_SYS_RFA4SS      0x000A
 #define ST25DV_SYS_I2CSS       0x000B  /* I2C security session */
 #define ST25DV_SYS_LOCK_CCFILE 0x000C  /* Lock CC file */
-#define ST25DV_SYS_MB_MODE     0x000D  /* Mailbox mode */
-#define ST25DV_SYS_MB_WDG      0x000E  /* Mailbox watchdog */
+#define ST25DV_SYS_MB_MODE     0x000D  /* FTM auth + watchdog (Table 17) */
 #define ST25DV_SYS_LOCK_CFG    0x000F  /* Lock configuration */
 #define ST25DV_SYS_LOCK_DSFID  0x0010
 #define ST25DV_SYS_LOCK_AFI    0x0011
@@ -78,6 +81,22 @@ LOG_MODULE_REGISTER(st25dv, CONFIG_AKIRA_LOG_LEVEL);
 #define ST25DV_WRITE_CYCLE_MS  5   /* Max EEPROM write cycle time */
 #define ST25DV_WRITE_PAGE_SZ   4   /* Write page size in bytes */
 #define ST25DV_ACK_RETRIES     10  /* Poll attempts for ACK after write */
+
+/* FTM register (0x000D) bitfield — Table 17 */
+#define ST25DV_FTM_MB_MODE       BIT(0)  /* 1: enabling FTM authorized */
+#define ST25DV_FTM_MB_WDG_SHIFT  1        /* watchdog = 2^(wdg-1) x 30ms, 0=infinite */
+
+/* MB_CTRL_Dyn register (0x2006) bitfield — Table 19 */
+#define ST25DV_MB_CTRL_EN               BIT(0)
+#define ST25DV_MB_CTRL_HOST_PUT_MSG     BIT(1)
+#define ST25DV_MB_CTRL_RF_PUT_MSG       BIT(2)
+#define ST25DV_MB_CTRL_HOST_MISS_MSG    BIT(4)
+#define ST25DV_MB_CTRL_RF_MISS_MSG      BIT(5)
+#define ST25DV_MB_CTRL_HOST_CURRENT_MSG BIT(6)
+#define ST25DV_MB_CTRL_RF_CURRENT_MSG   BIT(7)
+
+/* FTM mailbox buffer base address (0x2008-0x2107), user I2C addr */
+#define ST25DV_MB_BUF_BASE  0x2008
 
 /* IC_REF (0x0017): ST25DV64KC-IE/JF = 0x51 (ST25DV04KC datasheet Table 84) */
 #define ST25DV_IC_REF_EXPECTED 0x51
@@ -266,6 +285,87 @@ int st25dv_open_i2c_session(const struct device *dev, const uint8_t password[8])
     return 0;
 }
 
+int st25dv_mailbox_enable(const struct device *dev, bool enable, uint8_t wdg)
+{
+    const struct st25dv_config *cfg = dev->config;
+
+    /* FTM (0x000D) is a static register — system address, requires an
+     * open I2C security session (Table 16), same as other static regs. */
+    uint8_t ftm = enable ? (ST25DV_FTM_MB_MODE | ((wdg & 0x7) << ST25DV_FTM_MB_WDG_SHIFT)) : 0;
+    int ret = st25dv_write_sys_reg(dev, ST25DV_SYS_MB_MODE, ftm);
+    if (ret < 0) {
+        return ret;
+    }
+
+    /* MB_CTRL_Dyn is a dynamic register — user memory address, not system
+     * (datasheet Table 14 / Table 89). */
+    uint8_t mb_en = enable ? ST25DV_MB_CTRL_EN : 0;
+    ret = st25dv_reg_write(&cfg->i2c_user, ST25DV_DYN_MB_CTRL, &mb_en, 1);
+    if (ret < 0) {
+        return ret;
+    }
+    return st25dv_wait_write_done(&cfg->i2c_user);
+}
+
+int st25dv_mailbox_put_msg(const struct device *dev, const uint8_t *buf, size_t len)
+{
+    const struct st25dv_config *cfg = dev->config;
+
+    if (len == 0 || len > ST25DV_MAILBOX_MAX_LEN) {
+        return -EINVAL;
+    }
+    /* Mailbox is a RAM buffer, not EEPROM — one-shot write, no page
+     * splitting or write-cycle wait (datasheet: "write operation is done
+     * immediately"). Must start at ST25DV_MB_BUF_BASE (no rollover). */
+    return st25dv_reg_write(&cfg->i2c_user, ST25DV_MB_BUF_BASE, buf, len);
+}
+
+int st25dv_mailbox_get_msg(const struct device *dev, uint8_t *buf, size_t cap, size_t *len_out)
+{
+    const struct st25dv_config *cfg = dev->config;
+
+    if (cap == 0) {
+        return -EINVAL;
+    }
+
+    uint8_t len_reg = 0;
+    int ret = st25dv_reg_read(&cfg->i2c_user, ST25DV_DYN_MB_LEN, &len_reg, 1);
+    if (ret < 0) {
+        return ret;
+    }
+
+    size_t len = (size_t)len_reg + 1;  /* MB_LEN_Dyn stores size minus 1 */
+    if (len > cap) {
+        len = cap;
+    }
+
+    ret = st25dv_reg_read(&cfg->i2c_user, ST25DV_MB_BUF_BASE, buf, len);
+    if (ret < 0) {
+        return ret;
+    }
+
+    *len_out = len;
+    return 0;
+}
+
+int st25dv_mailbox_status(const struct device *dev, uint8_t *ctrl, size_t *msg_len)
+{
+    const struct st25dv_config *cfg = dev->config;
+
+    int ret = st25dv_reg_read(&cfg->i2c_user, ST25DV_DYN_MB_CTRL, ctrl, 1);
+    if (ret < 0) {
+        return ret;
+    }
+
+    uint8_t len_reg = 0;
+    ret = st25dv_reg_read(&cfg->i2c_user, ST25DV_DYN_MB_LEN, &len_reg, 1);
+    if (ret < 0) {
+        return ret;
+    }
+    *msg_len = (size_t)len_reg + 1;
+    return 0;
+}
+
 /* =========================================================================
  * Init
  * ========================================================================= */
@@ -345,3 +445,64 @@ static int st25dv_init(const struct device *dev)
                           NULL);  /* No standard Zephyr API for NFC EEPROM */
 
 DT_INST_FOREACH_STATUS_OKAY(ST25DV_INIT)
+
+/* =========================================================================
+ * nfc_manager registration
+ * ========================================================================= */
+#ifdef CONFIG_AKIRA_NFC_MANAGER
+
+static int st25dv_nfc_read_uid(nfc_handle_t *handle, uint8_t uid[8])
+{
+    return st25dv_read_uid((const struct device *)handle->priv_data, uid);
+}
+
+static int st25dv_nfc_read_mem(nfc_handle_t *handle, uint16_t addr, uint8_t *buf, size_t len)
+{
+    return st25dv_read_user_mem((const struct device *)handle->priv_data, addr, buf, len);
+}
+
+static int st25dv_nfc_write_mem(nfc_handle_t *handle, uint16_t addr, const uint8_t *buf, size_t len)
+{
+    return st25dv_write_user_mem((const struct device *)handle->priv_data, addr, buf, len);
+}
+
+static int st25dv_nfc_field_present(nfc_handle_t *handle, bool *present)
+{
+    return st25dv_rf_field_present((const struct device *)handle->priv_data, present);
+}
+
+static const nfc_ops_t st25dv_nfc_ops = {
+    .read_uid      = st25dv_nfc_read_uid,
+    .read_mem      = st25dv_nfc_read_mem,
+    .write_mem     = st25dv_nfc_write_mem,
+    .field_present = st25dv_nfc_field_present,
+};
+
+static nfc_handle_t st25dv_nfc_handle = {
+    .type = NFC_TYPE_ST25DV,
+    .name = "ST25DV",
+    .ops  = &st25dv_nfc_ops,
+};
+
+static int st25dv_nfc_auto_register(void)
+{
+    const struct device *dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(st25dv));
+
+    if (!dev || !device_is_ready(dev)) {
+        LOG_WRN("st25dv not present or not ready — skipping nfc_manager registration");
+        return 0;
+    }
+
+    st25dv_nfc_handle.priv_data = (void *)dev;
+    int ret = nfc_manager_register(&st25dv_nfc_handle);
+    if (ret < 0 && ret != -EALREADY) {
+        LOG_ERR("Failed to register ST25DV: %d", ret);
+        return ret;
+    }
+    LOG_INF("ST25DV registered with nfc_manager");
+    return 0;
+}
+
+SYS_INIT(st25dv_nfc_auto_register, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
+
+#endif /* CONFIG_AKIRA_NFC_MANAGER */
