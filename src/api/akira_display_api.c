@@ -17,6 +17,7 @@ LOG_MODULE_REGISTER(akira_display_api, CONFIG_AKIRA_LOG_LEVEL);
  * forget to call flush() still get their output shown.
  */
 #include "akira_api.h"
+#include "display_clip.h"
 #include <runtime/security.h>
 #include <drivers/platform_hal.h>
 #include "../drivers/display/fonts.h"
@@ -102,14 +103,13 @@ void akira_display_rect(int x, int y, int w, int h, uint16_t color)
         return;
 
     /* Clip to screen bounds */
-    int x1 = MAX(x, 0);
-    int y1 = MAX(y, 0);
-    int x2 = MIN(x + w, (int)caps.x_resolution);
-    int y2 = MIN(y + h, (int)caps.y_resolution);
-    int span = x2 - x1;
-
-    if (span <= 0)
+    int x1, y1, x2, y2;
+    if (!akira_display_clip_rect(x, y, w, h,
+                                 (int)caps.x_resolution, (int)caps.y_resolution,
+                                 &x1, &y1, &x2, &y2))
         return;
+
+    int span = x2 - x1;
 
     /* Fill first row with 32-bit writes, then memcpy to remaining rows.
      * This leverages the optimised memcpy (often DMA-backed on Xtensa/ARM)
@@ -491,13 +491,22 @@ void akira_display_bitmap(int x, int y, int w, int h, const uint16_t *data)
     if (!fb)
         return;
 
-    int x1 = MAX(x, 0), y1 = MAX(y, 0);
-    int x2 = MIN(x + w, (int)caps.x_resolution);
-    int y2 = MIN(y + h, (int)caps.y_resolution);
+    int x1, y1, x2, y2;
+    if (!akira_display_clip_rect(x, y, w, h,
+                                 (int)caps.x_resolution, (int)caps.y_resolution,
+                                 &x1, &y1, &x2, &y2))
+        return;
+
+    /* Loop-invariant — hoisted out of the row loop.  It used to be recomputed
+     * per row, which is what made the missing "fully clipped" guard easy to
+     * miss: a negative span became a ~4 GB memcpy into the framebuffer.
+     * akira_display_clip_rect() now guarantees x2 > x1, so span >= 1. */
+    const int span = x2 - x1;
 
     for (int py = y1; py < y2; py++)
     {
-        int span = x2 - x1;
+        /* In bounds: py < y2 <= y + h gives (py - y) < h, and x1 - x < w
+         * because x2 > x1 implies x + w > x1. */
         const uint16_t *src = data + (py - y) * w + (x1 - x);
         uint16_t *dst = fb + py * caps.x_resolution + x1;
         memcpy(dst, src, (size_t)span * sizeof(uint16_t));
@@ -527,9 +536,11 @@ void akira_display_bitmap_transparent(int x, int y, int w, int h,
     if (!fb)
         return;
 
-    int x1 = MAX(x, 0), y1 = MAX(y, 0);
-    int x2 = MIN(x + w, (int)caps.x_resolution);
-    int y2 = MIN(y + h, (int)caps.y_resolution);
+    int x1, y1, x2, y2;
+    if (!akira_display_clip_rect(x, y, w, h,
+                                 (int)caps.x_resolution, (int)caps.y_resolution,
+                                 &x1, &y1, &x2, &y2))
+        return;
 
     for (int py = y1; py < y2; py++)
     {

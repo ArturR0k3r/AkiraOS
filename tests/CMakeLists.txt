@@ -53,6 +53,7 @@ target_sources(app PRIVATE
     src/test_ota_state.c
     src/test_matter_accessory.c
     src/test_mqtt_ha.c
+    src/test_display_clip.c
 )
 
 # The Matter accessory sources are normally gated by Kconfig symbols whose
