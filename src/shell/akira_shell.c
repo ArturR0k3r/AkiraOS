@@ -1829,25 +1829,27 @@ static int cmd_hwtest(const struct shell *sh, size_t argc, char **argv)
 }
 #endif
 
-#ifdef CONFIG_AKIRA_ST25DV
-static const struct device *nfc_get_dev(const struct shell *sh)
+#ifdef CONFIG_AKIRA_NFC_MANAGER
+#include "connectivity/nfc_interface.h"
+
+static nfc_handle_t *nfc_get_handle(const struct shell *sh)
 {
-    const struct device *dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(st25dv));
-    if (!dev || !device_is_ready(dev))
+    nfc_handle_t *h = nfc_manager_get(NFC_TYPE_NONE);
+    if (!h)
     {
-        shell_error(sh, "st25dv not present or not ready");
+        shell_error(sh, "no NFC device registered");
         return NULL;
     }
-    return dev;
+    return h;
 }
 
 static int cmd_nfc_uid(const struct shell *sh, size_t argc, char **argv)
 {
-    const struct device *dev = nfc_get_dev(sh);
-    if (!dev) return -ENODEV;
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
 
     uint8_t uid[8];
-    int ret = st25dv_read_uid(dev, uid);
+    int ret = nfc_read_uid(h, uid);
     if (ret < 0)
     {
         shell_error(sh, "read_uid failed: %d", ret);
@@ -1858,38 +1860,16 @@ static int cmd_nfc_uid(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
-static int cmd_nfc_reg(const struct shell *sh, size_t argc, char **argv)
-{
-    if (argc < 2)
-    {
-        shell_error(sh, "Usage: nfc reg <addr>");
-        return -EINVAL;
-    }
-    const struct device *dev = nfc_get_dev(sh);
-    if (!dev) return -ENODEV;
-
-    uint16_t addr = (uint16_t)strtoul(argv[1], NULL, 0);
-    uint8_t val = 0;
-    int ret = st25dv_read_sys_reg(dev, addr, &val);
-    if (ret < 0)
-    {
-        shell_error(sh, "read_sys_reg failed: %d", ret);
-        return ret;
-    }
-    shell_print(sh, "reg 0x%04X = 0x%02X", addr, val);
-    return 0;
-}
-
 static int cmd_nfc_field(const struct shell *sh, size_t argc, char **argv)
 {
-    const struct device *dev = nfc_get_dev(sh);
-    if (!dev) return -ENODEV;
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
 
     bool present = false;
-    int ret = st25dv_rf_field_present(dev, &present);
+    int ret = nfc_field_present(h, &present);
     if (ret < 0)
     {
-        shell_error(sh, "rf_field_present failed: %d", ret);
+        shell_error(sh, "field_present failed: %d", ret);
         return ret;
     }
     shell_print(sh, "RF field: %s", present ? "present" : "absent");
@@ -1903,8 +1883,8 @@ static int cmd_nfc_read(const struct shell *sh, size_t argc, char **argv)
         shell_error(sh, "Usage: nfc read <addr> <len>");
         return -EINVAL;
     }
-    const struct device *dev = nfc_get_dev(sh);
-    if (!dev) return -ENODEV;
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
 
     uint16_t addr = (uint16_t)strtoul(argv[1], NULL, 0);
     size_t len = (size_t)strtoul(argv[2], NULL, 0);
@@ -1915,10 +1895,10 @@ static int cmd_nfc_read(const struct shell *sh, size_t argc, char **argv)
     }
 
     uint8_t buf[ST25DV_MAX_XFER_LEN];
-    int ret = st25dv_read_user_mem(dev, addr, buf, len);
+    int ret = nfc_read_mem(h, addr, buf, len);
     if (ret < 0)
     {
-        shell_error(sh, "read_user_mem failed: %d", ret);
+        shell_error(sh, "read_mem failed: %d", ret);
         return ret;
     }
     for (size_t i = 0; i < len; i += 16)
@@ -1940,8 +1920,8 @@ static int cmd_nfc_write(const struct shell *sh, size_t argc, char **argv)
         shell_error(sh, "Usage: nfc write <addr> <hex_byte> [hex_byte...]");
         return -EINVAL;
     }
-    const struct device *dev = nfc_get_dev(sh);
-    if (!dev) return -ENODEV;
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
 
     uint16_t addr = (uint16_t)strtoul(argv[1], NULL, 0);
     size_t len = argc - 2;
@@ -1957,26 +1937,205 @@ static int cmd_nfc_write(const struct shell *sh, size_t argc, char **argv)
         buf[i] = (uint8_t)strtoul(argv[2 + i], NULL, 16);
     }
 
-    int ret = st25dv_write_user_mem(dev, addr, buf, len);
+    int ret = nfc_write_mem(h, addr, buf, len);
     if (ret < 0)
     {
-        shell_error(sh, "write_user_mem failed: %d", ret);
+        shell_error(sh, "write_mem failed: %d", ret);
         return ret;
     }
     shell_print(sh, "Wrote %u bytes at 0x%04X", (unsigned)len, addr);
     return 0;
 }
 
+static int cmd_nfc_mb_enable(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "Usage: nfc mb_enable <0|1> [wdg]");
+        return -EINVAL;
+    }
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
+
+    bool enable = strtoul(argv[1], NULL, 0) != 0;
+    uint8_t wdg = (argc >= 3) ? (uint8_t)strtoul(argv[2], NULL, 0) : 0;
+
+    int ret = nfc_mailbox_enable(h, enable, wdg);
+    if (ret < 0)
+    {
+        shell_error(sh, "mb_enable failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "FTM mailbox %s", enable ? "enabled" : "disabled");
+    return 0;
+}
+
+static int cmd_nfc_mb_put(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "Usage: nfc mb_put <hex_byte> [hex_byte...]");
+        return -EINVAL;
+    }
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
+
+    size_t len = argc - 1;
+    if (len > ST25DV_MAILBOX_MAX_LEN)
+    {
+        shell_error(sh, "len must be 1-%d", ST25DV_MAILBOX_MAX_LEN);
+        return -EINVAL;
+    }
+
+    uint8_t buf[ST25DV_MAILBOX_MAX_LEN];
+    for (size_t i = 0; i < len; i++)
+    {
+        buf[i] = (uint8_t)strtoul(argv[1 + i], NULL, 16);
+    }
+
+    int ret = nfc_mailbox_put_msg(h, buf, len);
+    if (ret < 0)
+    {
+        shell_error(sh, "mb_put failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "Put %u bytes in mailbox", (unsigned)len);
+    return 0;
+}
+
+static int cmd_nfc_mb_get(const struct shell *sh, size_t argc, char **argv)
+{
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
+
+    uint8_t buf[ST25DV_MAILBOX_MAX_LEN];
+    size_t len = 0;
+    int ret = nfc_mailbox_get_msg(h, buf, sizeof(buf), &len);
+    if (ret < 0)
+    {
+        shell_error(sh, "mb_get failed: %d", ret);
+        return ret;
+    }
+    for (size_t i = 0; i < len; i += 16)
+    {
+        char line[16 * 3 + 1] = {0};
+        for (size_t j = i; j < len && j < i + 16; j++)
+        {
+            snprintf(line + (j - i) * 3, 4, "%02X ", buf[j]);
+        }
+        shell_print(sh, "%04X: %s", (unsigned)i, line);
+    }
+    return 0;
+}
+
+static int cmd_nfc_mb_status(const struct shell *sh, size_t argc, char **argv)
+{
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
+
+    uint8_t ctrl = 0;
+    size_t msg_len = 0;
+    int ret = nfc_mailbox_status(h, &ctrl, &msg_len);
+    if (ret < 0)
+    {
+        shell_error(sh, "mb_status failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh,
+                "MB_CTRL=0x%02X EN=%d HOST_PUT=%d RF_PUT=%d HOST_MISS=%d RF_MISS=%d HOST_CUR=%d RF_CUR=%d len=%u",
+                ctrl,
+                !!(ctrl & BIT(0)), !!(ctrl & BIT(1)), !!(ctrl & BIT(2)),
+                !!(ctrl & BIT(4)), !!(ctrl & BIT(5)),
+                !!(ctrl & BIT(6)), !!(ctrl & BIT(7)),
+                (unsigned)msg_len);
+    return 0;
+}
+
+#ifdef CONFIG_AKIRA_ST25DV
+/* ST25DV-specific raw register debug read — not part of the generic
+ * nfc_manager vtable since dynamic vs. static register addressing is
+ * chip-specific. */
+static int cmd_nfc_reg(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "Usage: nfc reg <addr>");
+        return -EINVAL;
+    }
+    const struct device *dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(st25dv));
+    if (!dev || !device_is_ready(dev))
+    {
+        shell_error(sh, "st25dv not present or not ready");
+        return -ENODEV;
+    }
+
+    uint16_t addr = (uint16_t)strtoul(argv[1], NULL, 0);
+    uint8_t val = 0;
+    int ret = st25dv_read_sys_reg(dev, addr, &val);
+    if (ret < 0)
+    {
+        shell_error(sh, "read_sys_reg failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "reg 0x%04X = 0x%02X", addr, val);
+    return 0;
+}
+
+/* Opens the I2C security session required to write password-protected
+ * static registers (e.g. FTM). Not part of the generic nfc_manager vtable
+ * since the session/password concept is chip-specific. */
+static int cmd_nfc_session_open(const struct shell *sh, size_t argc, char **argv)
+{
+    const struct device *dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(st25dv));
+    if (!dev || !device_is_ready(dev))
+    {
+        shell_error(sh, "st25dv not present or not ready");
+        return -ENODEV;
+    }
+
+    uint8_t password[8] = {0};
+    if (argc >= 2)
+    {
+        if (strlen(argv[1]) != 16)
+        {
+            shell_error(sh, "Usage: nfc session_open [16_hex_chars]  (default: all-zero)");
+            return -EINVAL;
+        }
+        for (int i = 0; i < 8; i++)
+        {
+            char byte_str[3] = {argv[1][i * 2], argv[1][i * 2 + 1], 0};
+            password[i] = (uint8_t)strtoul(byte_str, NULL, 16);
+        }
+    }
+
+    int ret = st25dv_open_i2c_session(dev, password);
+    if (ret < 0)
+    {
+        shell_error(sh, "session_open failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "I2C security session opened");
+    return 0;
+}
+#endif /* CONFIG_AKIRA_ST25DV */
+
 SHELL_STATIC_SUBCMD_SET_CREATE(nfc_cmds,
-                               SHELL_CMD(uid, NULL, "Read ST25DV UID", cmd_nfc_uid),
+                               SHELL_CMD(uid, NULL, "Read tag UID", cmd_nfc_uid),
                                SHELL_CMD(field, NULL, "Show RF field presence", cmd_nfc_field),
+#ifdef CONFIG_AKIRA_ST25DV
                                SHELL_CMD(reg, NULL, "Read sys register: reg <addr>", cmd_nfc_reg),
+                               SHELL_CMD(session_open, NULL, "Open I2C security session: session_open [16_hex_chars]", cmd_nfc_session_open),
+#endif
                                SHELL_CMD(read, NULL, "Read user memory: read <addr> <len>", cmd_nfc_read),
                                SHELL_CMD(write, NULL, "Write user memory: write <addr> <hex...>", cmd_nfc_write),
+                               SHELL_CMD(mb_enable, NULL, "Enable/disable FTM mailbox: mb_enable <0|1> [wdg]", cmd_nfc_mb_enable),
+                               SHELL_CMD(mb_put, NULL, "Put FTM mailbox message: mb_put <hex...>", cmd_nfc_mb_put),
+                               SHELL_CMD(mb_get, NULL, "Get FTM mailbox message", cmd_nfc_mb_get),
+                               SHELL_CMD(mb_status, NULL, "Show FTM mailbox status", cmd_nfc_mb_status),
                                SHELL_SUBCMD_SET_END);
 
-SHELL_CMD_REGISTER(nfc, &nfc_cmds, "ST25DV NFC tag commands", NULL);
-#endif /* CONFIG_AKIRA_ST25DV */
+SHELL_CMD_REGISTER(nfc, &nfc_cmds, "NFC tag commands", NULL);
+#endif /* CONFIG_AKIRA_NFC_MANAGER */
 
 #ifdef CONFIG_AKIRA_WASM_NET_TLS
 #include "connectivity/net/net_stream.h"
