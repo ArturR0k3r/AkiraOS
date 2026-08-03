@@ -26,10 +26,100 @@ LOG_MODULE_REGISTER(akira_display_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <stdlib.h> /* abs() */
 #include <string.h> /* memcpy() */
 
-#define AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(ret_val) \
-    do                                               \
-    {                                                \
+/* ------------------------------------------------------------------ */
+/* Display ownership                                                     */
+/*                                                                       */
+/* The framebuffer is a single shared surface with no compositor, so two  */
+/* apps drawing at once produce interleaved garbage and let a hostile app */
+/* paint over another app's UI (spoofing a PIN prompt, say).  This used   */
+/* to be a `do {} while (0)` stub, i.e. no arbitration at all: every app  */
+/* holding display.write could draw at any time.                          */
+/*                                                                       */
+/* Policy: first WASM app to draw claims the display; others get -EBUSY   */
+/* until it exits.  Ownership is released explicitly when the instance is */
+/* torn down (see akira_display_release_owner callers in akira_runtime.c) */
+/* and, as a safety net, stolen from an owner the runtime no longer knows */
+/* about — otherwise an app that died on a path we failed to hook would   */
+/* lock the display until reboot.                                         */
+/*                                                                       */
+/* exec_env == NULL means a trusted first-party/native caller (the OS     */
+/* shell, boot animation, wait screen).  Those bypass the check, matching */
+/* akira_security_check_native().                                         */
+/* ------------------------------------------------------------------ */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME)
+
+/* Defined in runtime/akira_runtime.c; declared extern here rather than in
+ * akira_runtime.h to match how akira_memory_api.c already reaches it. */
+extern int get_slot_for_module_inst(wasm_module_inst_t inst);
+
+static wasm_module_inst_t g_display_owner; /* NULL = unowned */
+static struct k_spinlock g_display_owner_lock;
+
+static bool display_owner_acquire(wasm_exec_env_t exec_env)
+{
+    if (!exec_env)
+        return true; /* trusted native caller */
+
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    if (!inst)
+        return false;
+
+    k_spinlock_key_t key = k_spin_lock(&g_display_owner_lock);
+    bool ok;
+
+    if (g_display_owner == inst || g_display_owner == NULL)
+    {
+        g_display_owner = inst;
+        ok = true;
+    }
+    else if (get_slot_for_module_inst(g_display_owner) < 0)
+    {
+        /* Recorded owner is not a live instance any more — reclaim.  Pointer
+         * comparison only (hash-map lookup), never a dereference, so a stale
+         * pointer here is safe to test. */
+        g_display_owner = inst;
+        ok = true;
+    }
+    else
+    {
+        ok = false;
+    }
+
+    k_spin_unlock(&g_display_owner_lock, key);
+    return ok;
+}
+
+void akira_display_release_owner(wasm_module_inst_t inst)
+{
+    if (!inst)
+        return;
+
+    k_spinlock_key_t key = k_spin_lock(&g_display_owner_lock);
+    if (g_display_owner == inst)
+        g_display_owner = NULL;
+    k_spin_unlock(&g_display_owner_lock, key);
+}
+
+#define AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, ret_val) \
+    do                                                        \
+    {                                                         \
+        if (!display_owner_acquire(exec_env))                 \
+        {                                                     \
+            return (ret_val);                                 \
+        }                                                     \
     } while (0)
+
+#else /* no WASM runtime — nothing can contend for the display */
+
+void akira_display_release_owner(wasm_module_inst_t inst) { (void)inst; }
+
+#define AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, ret_val) \
+    do                                                         \
+    {                                                          \
+        (void)(exec_env);                                      \
+    } while (0)
+
+#endif /* CONFIG_AKIRA_WASM_RUNTIME */
 
 void akira_display_clear(uint16_t color)
 {
@@ -580,7 +670,7 @@ static inline void schedule_auto_flush(void)
 int akira_native_display_rect(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_rect(x, y, w, h, (uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -589,7 +679,7 @@ int akira_native_display_rect(wasm_exec_env_t exec_env, int32_t x, int32_t y, in
 int akira_native_display_text(wasm_exec_env_t exec_env, int32_t x, int32_t y, const char *text, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_text(x, y, text, (uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -598,7 +688,7 @@ int akira_native_display_text(wasm_exec_env_t exec_env, int32_t x, int32_t y, co
 int akira_native_display_text_large(wasm_exec_env_t exec_env, int x, int y, const char *text, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_text_large(x, y, text, (uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -607,7 +697,7 @@ int akira_native_display_text_large(wasm_exec_env_t exec_env, int x, int y, cons
 int akira_native_display_clear(wasm_exec_env_t exec_env, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_clear((uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -616,7 +706,7 @@ int akira_native_display_clear(wasm_exec_env_t exec_env, uint32_t color)
 int akira_native_display_pixel(wasm_exec_env_t exec_env, int32_t x, int32_t y, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_pixel(x, y, (uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -625,7 +715,7 @@ int akira_native_display_pixel(wasm_exec_env_t exec_env, int32_t x, int32_t y, u
 int akira_native_display_flush(wasm_exec_env_t exec_env)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     /* Cancel pending auto-flush — we're flushing explicitly right now */
     k_work_cancel_delayable(&g_auto_flush_work);
     akira_display_flush();
@@ -653,7 +743,7 @@ int akira_native_display_line(wasm_exec_env_t exec_env,
                               int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_line(x0, y0, x1, y1, (uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -663,7 +753,7 @@ int akira_native_display_circle(wasm_exec_env_t exec_env,
                                 int32_t cx, int32_t cy, int32_t r, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_circle(cx, cy, r, (uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -673,7 +763,7 @@ int akira_native_display_circle_fill(wasm_exec_env_t exec_env,
                                      int32_t cx, int32_t cy, int32_t r, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_circle_fill(cx, cy, r, (uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -684,7 +774,7 @@ int akira_native_display_triangle(wasm_exec_env_t exec_env,
                                   int32_t x2, int32_t y2, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_triangle(x0, y0, x1, y1, x2, y2, (uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -695,7 +785,7 @@ int akira_native_display_triangle_fill(wasm_exec_env_t exec_env,
                                        int32_t x2, int32_t y2, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_triangle_fill(x0, y0, x1, y1, x2, y2, (uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -705,7 +795,7 @@ int akira_native_display_rect_outline(wasm_exec_env_t exec_env,
                                       int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_rect_outline(x, y, w, h, (uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -716,7 +806,7 @@ int akira_native_display_bitmap(wasm_exec_env_t exec_env,
                                 const uint8_t *data, uint32_t data_size)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     if (!data)
         return -EINVAL;
     if ((int64_t)data_size < (int64_t)w * h * 2)
@@ -734,7 +824,7 @@ int akira_native_display_raw_write(wasm_exec_env_t exec_env,
                                    const uint8_t *data, uint32_t data_size)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     if (!data)
         return -EINVAL;
     if ((int64_t)data_size < (int64_t)w * h * 2)
@@ -753,7 +843,7 @@ int akira_native_display_bitmap_transparent(wasm_exec_env_t exec_env,
                                             const uint8_t *data, uint32_t data_size, uint32_t key)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     if (!data)
         return -EINVAL;
     if ((int64_t)data_size < (int64_t)w * h * 2)
@@ -772,7 +862,7 @@ int akira_native_display_hline(wasm_exec_env_t exec_env,
                                int32_t x, int32_t y, int32_t len, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_hline(x, y, len, (uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -782,7 +872,7 @@ int akira_native_display_vline(wasm_exec_env_t exec_env,
                                int32_t x, int32_t y, int32_t len, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_vline(x, y, len, (uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -792,7 +882,7 @@ int akira_native_display_number(wasm_exec_env_t exec_env,
                                 int32_t x, int32_t y, int32_t value, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_number(x, y, value, (uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -803,7 +893,7 @@ int akira_native_display_progress_bar(wasm_exec_env_t exec_env,
                                       int32_t value, int32_t max_val, uint32_t fg, uint32_t bg)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_progress_bar(x, y, w, h, value, max_val,
                                (uint16_t)fg, (uint16_t)bg);
     schedule_auto_flush();
@@ -814,7 +904,7 @@ int akira_native_display_rounded_rect(wasm_exec_env_t exec_env,
                                       int32_t x, int32_t y, int32_t w, int32_t h, int32_t radius, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_rounded_rect(x, y, w, h, radius, (uint16_t)color);
     schedule_auto_flush();
     return 0;
@@ -824,7 +914,7 @@ int akira_native_display_rounded_rect_fill(wasm_exec_env_t exec_env,
                                            int32_t x, int32_t y, int32_t w, int32_t h, int32_t radius, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
-    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_rounded_rect_fill(x, y, w, h, radius, (uint16_t)color);
     schedule_auto_flush();
     return 0;

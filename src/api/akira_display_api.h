@@ -29,6 +29,17 @@ void akira_display_text_large(int x, int y, const char *text, uint16_t color);
 void akira_display_flush(void);
 void akira_display_get_size(int *width, int *height);
 
+/**
+ * @brief Drop display ownership if @p inst currently holds it.
+ *
+ * The first WASM app to draw claims the shared framebuffer; others get -EBUSY
+ * until it lets go.  The runtime must call this when tearing an instance down,
+ * or the display stays locked to an app that no longer exists.
+ *
+ * Safe to call with an instance that never drew, or with NULL.
+ */
+void akira_display_release_owner(wasm_module_inst_t inst);
+
 /* Phase 3.5 — Additional primitives */
 void akira_display_line(int x0, int y0, int x1, int y1, uint16_t color);
 void akira_display_circle(int cx, int cy, int r, uint16_t color);
