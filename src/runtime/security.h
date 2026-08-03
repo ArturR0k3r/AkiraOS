@@ -110,6 +110,9 @@ extern "C" {
  * Elevated privilege — broadcasts affect nearby devices, do not grant
  * to untrusted apps by default. Manifest string: "ble.spam" */
 #define AKIRA_CAP_BLE_SPAM      (1ULL << 37)
+/* NFC tag read/write/field-presence (ST25DV and future chips via nfc_manager).
+ * Manifest string: "nfc" */
+#define AKIRA_CAP_NFC           (1ULL << 38)
 
 /*
  * Capability check macro using security subsystem.

@@ -405,10 +405,28 @@ config AKIRA_PWM_DIAL
       INPUT_ABS_WHEEL (0-255) into the Zephyr input subsystem.
       On AkiraConsole Production: RK10J12R0A0B (RV1) on GPIO48.
 
+config AKIRA_NFC_MANAGER
+    bool "Enable NFC tag abstraction layer"
+    default y if AKIRA_ST25DV
+    help
+      Hardware-agnostic registry for NFC tag chip drivers (mirrors
+      AKIRA_RADIO_MANAGER for radios). Drivers register a read/write/UID/
+      field-presence vtable at boot; callers go through the manager instead
+      of a chip-specific API.
+
+config AKIRA_NFC_MAX_DEVICES
+    int "Maximum number of registered NFC devices"
+    default 2
+    depends on AKIRA_NFC_MANAGER
+    help
+      Size of the NFC device registry. Must be >= total number of NFC tag
+      drivers enabled in this build.
+
 config AKIRA_ST25DV
     bool "Enable ST25DV64K NFC tag driver"
     default y if DT_HAS_ST_ST25DV64K_ENABLED
     depends on I2C
+    select AKIRA_NFC_MANAGER
     help
       Enable STMicroelectronics ST25DV64K Dynamic NFC/RFID tag driver.
       Provides I2C access to the 64 Kbit EEPROM user memory and system
@@ -2293,6 +2311,19 @@ config AKIRA_WASM_PWM
       Export PWM channel control to WASM applications.
       Provides pwm_set(channel, freq_hz, duty_pct) and pwm_disable(channel).
       Requires AKIRA_CAP_PWM capability in the app manifest.
+
+config AKIRA_WASM_NFC
+    bool "Export NFC API to WASM"
+    default y if AKIRA_NFC_MANAGER
+    depends on AKIRA_WASM_API && AKIRA_NFC_MANAGER
+    help
+      Export NFC tag read/write/UID/field-presence/mailbox functions to WASM
+      applications via nfc_manager. Chip-agnostic: works with any
+      registered NFC tag driver (currently ST25DV).
+      Provides nfc_uid(), nfc_read(addr, buf, len), nfc_write(addr, buf, len),
+      nfc_field_present(), and FTM mailbox nfc_mb_enable()/nfc_mb_put()/
+      nfc_mb_get()/nfc_mb_status().
+      Requires AKIRA_CAP_NFC capability ("nfc") in the app manifest.
 
 config AKIRA_WASM_ADC
     bool "Export ADC API to WASM"
