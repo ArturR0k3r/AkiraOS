@@ -77,22 +77,9 @@
 	cs-gpios = <&tca6408 3 GPIO_ACTIVE_LOW>;  // CC_CS → TCA6408 P3
 };
 
-// Rev A.2 unit: SE050 not populated (Rev A.3 addition) — disable so GPIO21
-// (shared ENA/NFC_INT line) is free for the ST25DV GPO below.
-&se050 { status = "disabled"; };
-
-// ST25DV64K NFC tag (Rev 1.2 schematic, still populated on this Rev A.2 unit).
-// I2C: 0x53 user memory (this node), 0x57 system config (system-reg).
-// GPO on GPIO21, open-drain active-low — same physical line SE050 uses for ENA.
-&i2c0 {
-	st25dv: st25dv@53 {
-		compatible     = "st,st25dv64k";
-		reg            = <0x53>;
-		system-reg     = <0x57>;
-		gpo-gpios      = <&gpio0 21 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
-		status         = "okay";
-	};
-};
+// Rev A.3: SE050 populated, replacing the Rev 1.2 ST25DV64K NFC tag (no
+// st25dv node on this revision). se050 node status="okay" in the base DTS —
+// no override needed here.
 
 // TS3USB221 (U21) USB data mux select. Per the KiCad-netlist-verified TCA6408
 // pin map (board DTS): P0 = USB_SEL. Drive it at boot to route the USB-C J2

@@ -26,6 +26,7 @@ extern "C" {
 typedef enum {
     NFC_TYPE_NONE = 0,
     NFC_TYPE_ST25DV,
+    NFC_TYPE_SE050,
     NFC_TYPE_MAX
 } nfc_type_t;
 

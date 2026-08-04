@@ -442,6 +442,7 @@ config AKIRA_SE050
     bool "Enable NXP SE050 secure element driver"
     default y if DT_HAS_NXP_SE050_ENABLED
     depends on I2C
+    select AKIRA_NFC_MANAGER
     help
       Enable the NXP EdgeLock SE050 Plug & Trust secure element driver.
       Talks to the SE050 over the ISO7816 T=1' block protocol tunnelled over

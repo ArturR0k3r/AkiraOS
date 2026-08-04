@@ -760,3 +760,62 @@ SHELL_CMD_REGISTER(se050, &se050_sub, "SE050 secure element", NULL);
                           POST_KERNEL, 60, NULL);
 
 DT_INST_FOREACH_STATUS_OKAY(SE050_INIT)
+
+/* =========================================================================
+ * nfc_manager registration — read_mem/write_mem only. The SE050 has no I2C-
+ * visible tag UID or RF-field signal (its ISO14443 role is autonomous
+ * hardware, mutually exclusive with the I2C interface per the datasheet), so
+ * uid/field_present/mailbox stay NULL; nfc_interface.h's wrappers already
+ * return -ENOSYS for those. addr maps onto a secure object per
+ * SE050_NFC_OBJID_BASE + addr.
+ * ========================================================================= */
+#ifdef CONFIG_AKIRA_NFC_MANAGER
+#include <connectivity/nfc_interface.h>
+
+#define SE050_NFC_OBJID_BASE 0x50510000
+
+static int se050_nfc_read_mem(nfc_handle_t *handle, uint16_t addr, uint8_t *buf, size_t len)
+{
+    size_t out_len = 0;
+    return se050_read_binary((const struct device *)handle->priv_data,
+                             SE050_NFC_OBJID_BASE + addr, buf, len, &out_len);
+}
+
+static int se050_nfc_write_mem(nfc_handle_t *handle, uint16_t addr, const uint8_t *buf, size_t len)
+{
+    return se050_write_binary((const struct device *)handle->priv_data,
+                              SE050_NFC_OBJID_BASE + addr, buf, len);
+}
+
+static const nfc_ops_t se050_nfc_ops = {
+    .read_mem  = se050_nfc_read_mem,
+    .write_mem = se050_nfc_write_mem,
+};
+
+static nfc_handle_t se050_nfc_handle = {
+    .type = NFC_TYPE_SE050,
+    .name = "SE050",
+    .ops  = &se050_nfc_ops,
+};
+
+static int se050_nfc_auto_register(void)
+{
+    const struct device *dev = se050_get_device();
+
+    if (!dev) {
+        LOG_WRN("SE050 not present or not ready — skipping nfc_manager registration");
+        return 0;
+    }
+
+    se050_nfc_handle.priv_data = (void *)dev;
+    int ret = nfc_manager_register(&se050_nfc_handle);
+    if (ret < 0 && ret != -EALREADY) {
+        LOG_ERR("Failed to register SE050: %d", ret);
+        return ret;
+    }
+    LOG_INF("SE050 registered with nfc_manager");
+    return 0;
+}
+
+SYS_INIT(se050_nfc_auto_register, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
+#endif /* CONFIG_AKIRA_NFC_MANAGER */
