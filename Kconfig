@@ -814,6 +814,89 @@ config AKIRA_WASM_MQTT
 
 endif # AKIRA_MQTT
 
+menuconfig AKIRA_SYNC
+    bool "AkiraSync distributed ordering and fair timestamps"
+    default n
+    select TINYCRYPT
+    select TINYCRYPT_SHA256
+    help
+      Leaderless agreement on a single event order and a single clock across
+      a small group of devices, with no server and no vote messages. Events
+      form a gossiped DAG (each names its creator's previous event and the
+      peer event that triggered it), so causality comes from the graph's
+      shape; an event's timestamp is the median of when peers first saw it,
+      which gives a shared timeline with no SNTP or GPS.
+
+      Transport-agnostic: works over any binding that can flood a frame and
+      report arrivals. A loopback binding is always built, so the ordering
+      core runs and can be tested on targets with no networking at all.
+
+if AKIRA_SYNC
+
+config AKIRA_SYNC_MAX_PEERS
+    int "Maximum peers per session (including self)"
+    default 8
+    range 2 16
+    help
+      Upper bound on session size. Round bookkeeping is O(peers) per event,
+      so this directly sets the per-event memory and CPU cost.
+
+config AKIRA_SYNC_DAG_EVENTS
+    int "DAG event ring capacity"
+    default 128
+    range 32 512
+    help
+      Number of events retained before the oldest are discarded at an epoch
+      boundary. Each slot costs roughly 232 bytes and the ring is allocated
+      from PSRAM where available, not from the DRAM system heap.
+
+config AKIRA_SYNC_HEARTBEAT_MS
+    int "Heartbeat interval (ms)"
+    default 500
+    range 50 10000
+    help
+      When the application has nothing to submit, an empty event is created
+      at this interval so the DAG keeps advancing and pending events can
+      finalize. Lower values cut finalization latency and raise idle traffic.
+
+config AKIRA_SYNC_FALLEN_BEHIND_S
+    int "Evict a peer after this many seconds of silence (0 = never)"
+    default 30
+    range 0 600
+    help
+      A peer that stops gossiping stalls finalization for everyone, because
+      rounds wait on it. Evicting it lets the remaining peers make progress.
+
+config AKIRA_SYNC_TRANSPORT_MESH
+    bool "Build the AkiraMesh transport binding"
+    default y if AKIRA_MESH
+    depends on AKIRA_MESH
+    help
+      Lets a session gossip over AkiraMesh. Sync frames ride as ordinary mesh
+      broadcast payloads behind a magic prefix, so no new mesh message type
+      is needed.
+
+config AKIRA_SYNC_BFT
+    bool "Tier B: Byzantine fault tolerance (signed events)"
+    default n
+    help
+      Sign and verify every event, and decide rounds by famous-witness
+      election, tolerating up to f = (n-1)/3 actively malicious peers rather
+      than merely crashed ones. Costs a signature verification per received
+      event. Without this, AkiraSync assumes peers may crash or lag but do
+      not lie.
+
+config AKIRA_WASM_SYNC
+    bool "Register sync_* as WASM native symbols"
+    default y
+    depends on AKIRA_WASM_RUNTIME
+    help
+      Registers sync_session_open/submit/event_pop/time_now_us/peers/close
+      in the WAMR native symbol table, gated behind AKIRA_CAP_SYNC ("sync"
+      in the app manifest).
+
+endif # AKIRA_SYNC
+
 config AKIRA_THREAD
     bool "Enable Thread protocol support"
     default n

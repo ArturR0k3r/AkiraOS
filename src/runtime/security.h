@@ -117,9 +117,15 @@ extern "C" {
  * device in range. Manifest string: "mesh" */
 #define AKIRA_CAP_MESH          (1ULL << 38)
 
-/* Highest capability bit currently defined (AKIRA_CAP_MESH = bit 38).
+/* AkiraSync: open a distributed-ordering session and submit/consume events.
+ * Rides on AKIRA_CAP_MESH transport but is granted separately so an app can
+ * consume ordered state without being able to inject raw mesh frames.
+ * Manifest string: "sync" */
+#define AKIRA_CAP_SYNC          (1ULL << 39)
+
+/* Highest capability bit currently defined (AKIRA_CAP_SYNC = bit 39).
  * Keep in sync when adding new AKIRA_CAP_* bits above. */
-#define AKIRA_CAP_MAX_BIT       38
+#define AKIRA_CAP_MAX_BIT       39
 
 /* Union of every capability bit the runtime actually understands. A manifest
  * wildcard ("*") is bounded to this — it can never grant undefined future bits
