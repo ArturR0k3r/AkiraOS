@@ -118,8 +118,13 @@ extern "C" {
 
 /* Union of every capability bit the runtime actually understands. A manifest
  * wildcard ("*") is bounded to this — it can never grant undefined future bits
- * (which UINT64_MAX would have). */
-#define AKIRA_CAP_ALL_KNOWN     ((AKIRA_CAP_MQTT << 1) - 1ULL)
+ * (which UINT64_MAX would have).
+ *
+ * Derived from AKIRA_CAP_MAX_BIT rather than from a named capability: the
+ * previous ((AKIRA_CAP_MQTT << 1) - 1) form stopped at bit 35 and silently
+ * dropped every bit added after it. */
+#define AKIRA_CAP_ALL_KNOWN     ((AKIRA_CAP_MAX_BIT >= 63) ? UINT64_MAX \
+                                 : ((1ULL << (AKIRA_CAP_MAX_BIT + 1)) - 1ULL))
 
 /* Capabilities that let an app affect the world outside the sandbox, persist
  * state, or attack the RF/network environment. Granting any of these to an
