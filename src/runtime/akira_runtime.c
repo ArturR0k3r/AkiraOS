@@ -34,6 +34,10 @@
 #include <runtime/akira_ipc.h>
 #endif
 
+#ifdef CONFIG_AKIRA_WASM_MESH
+#include "akira_mesh_api.h"
+#endif
+
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
 #endif
@@ -779,6 +783,13 @@ static void wasm_app_thread_fn(void *p1, void *p2, void *p3)
     /* Release IPC subscriptions before the name slot is cleared */
 #ifdef CONFIG_AKIRA_WASM_IPC
     akira_ipc_cleanup_app(app->name);
+#endif
+
+    /* Release the mesh radio if the app exited (or crashed) mid-session —
+     * otherwise the radio stays acquired by "mesh" forever and no other
+     * subsystem can claim it. */
+#ifdef CONFIG_AKIRA_WASM_MESH
+    akira_mesh_api_cleanup();
 #endif
 
     app->exit_code = (int8_t)exit_code;

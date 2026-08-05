@@ -987,6 +987,26 @@ config AKIRA_MESH_RX_POLL_MS
       with only a brief gap afterward to let TX in. Longer = better packet
       capture but more TX latency on the shared half-duplex radio.
 
+config AKIRA_WASM_MESH
+    bool "Register mesh_* as WASM native symbols"
+    default y
+    depends on AKIRA_WASM_RUNTIME
+    help
+      Registers mesh_init/start/stop/send/broadcast/recv_pop/get_nodes/
+      get_stats/distribute_app in the WAMR native symbol table. Gated
+      behind AKIRA_CAP_MESH ("mesh" in the app manifest). Required by the
+      mesh_chat and mesh_hub apps.
+
+config AKIRA_WASM_MESH_RX_QUEUE_DEPTH
+    int "Mesh RX queue depth (messages)"
+    default 8
+    range 2 32
+    depends on AKIRA_WASM_MESH
+    help
+      Number of received mesh payloads buffered for mesh_recv_pop(). Each
+      slot costs ~210 bytes and the queue is allocated from PSRAM, not the
+      DRAM system heap. When full, the oldest message is dropped.
+
 endif # AKIRA_MESH
 
 config BT_RECONNECT_DELAY_MS

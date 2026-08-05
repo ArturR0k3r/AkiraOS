@@ -112,9 +112,14 @@ extern "C" {
  * to untrusted apps by default. Manifest string: "ble.spam" */
 #define AKIRA_CAP_BLE_SPAM      (1ULL << 37)
 
-/* Highest capability bit currently defined (AKIRA_CAP_BLE_SPAM = bit 37).
+/* AkiraMesh: join the mesh, send/broadcast frames, enumerate nodes.
+ * Elevated privilege — the app drives a shared radio and can reach every
+ * device in range. Manifest string: "mesh" */
+#define AKIRA_CAP_MESH          (1ULL << 38)
+
+/* Highest capability bit currently defined (AKIRA_CAP_MESH = bit 38).
  * Keep in sync when adding new AKIRA_CAP_* bits above. */
-#define AKIRA_CAP_MAX_BIT       37
+#define AKIRA_CAP_MAX_BIT       38
 
 /* Union of every capability bit the runtime actually understands. A manifest
  * wildcard ("*") is bounded to this — it can never grant undefined future bits
@@ -134,7 +139,7 @@ extern "C" {
         AKIRA_CAP_WIFI_INJECT | AKIRA_CAP_OTA_TRIGGER | AKIRA_CAP_HID | \
         AKIRA_CAP_STORAGE_WRITE | AKIRA_CAP_FS_WRITE | AKIRA_CAP_SETTINGS | \
         AKIRA_CAP_CRYPTO | AKIRA_CAP_POWER_CTRL | AKIRA_CAP_MATTER | \
-        AKIRA_CAP_MQTT | AKIRA_CAP_WDT )
+        AKIRA_CAP_MQTT | AKIRA_CAP_WDT | AKIRA_CAP_MESH )
 
 /**
  * @brief Sanitize a capability mask that came from an app-supplied manifest.

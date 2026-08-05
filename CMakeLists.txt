@@ -784,6 +784,10 @@ if(CONFIG_AKIRA_MESH)
     )
 endif()
 
+if(CONFIG_AKIRA_WASM_MESH)
+    target_sources(app PRIVATE src/api/akira_mesh_api.c)
+endif()
+
 # Services (Unified WASM runtime wrapper)
 # Using single unified runtime implementation in src/runtime
 # Runtime and native API registration happen in src/runtime/akira_runtime.c

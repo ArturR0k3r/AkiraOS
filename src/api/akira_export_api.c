@@ -36,6 +36,10 @@
 #include "akira_mqtt_api.h"
 #endif
 
+#ifdef CONFIG_AKIRA_WASM_MESH
+#include "akira_mesh_api.h"
+#endif
+
 #include <runtime/akira_runtime.h>
 #include <runtime/security.h>
 #include <zephyr/logging/log.h>
@@ -353,6 +357,18 @@ bool akira_register_native_apis()
         {"ha_light_register",  (void *)akira_native_ha_light_register,  "($$)i",     NULL},
         {"ha_light_report",    (void *)akira_native_ha_light_report,    "($iiiii)i", NULL},
         {"ha_light_poll",      (void *)akira_native_ha_light_poll,      "($*****i)i", NULL},
+#endif
+
+#ifdef CONFIG_AKIRA_WASM_MESH
+        {"mesh_init",           (void *)akira_native_mesh_init,           "(i$ii)i", NULL},
+        {"mesh_start",          (void *)akira_native_mesh_start,          "()i",     NULL},
+        {"mesh_stop",           (void *)akira_native_mesh_stop,           "()i",     NULL},
+        {"mesh_send",           (void *)akira_native_mesh_send,           "(**~)i",  NULL},
+        {"mesh_broadcast",      (void *)akira_native_mesh_broadcast,      "(*~i)i",  NULL},
+        {"mesh_recv_pop",       (void *)akira_native_mesh_recv_pop,       "(**~i)i", NULL},
+        {"mesh_get_nodes",      (void *)akira_native_mesh_get_nodes,      "(*i)i",   NULL},
+        {"mesh_get_stats",      (void *)akira_native_mesh_get_stats,      "(*)i",    NULL},
+        {"mesh_distribute_app", (void *)akira_native_mesh_distribute_app, "(*$*~)i", NULL},
 #endif
 
     };
