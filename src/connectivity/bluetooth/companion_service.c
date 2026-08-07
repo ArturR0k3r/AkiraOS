@@ -53,6 +53,7 @@ LOG_MODULE_REGISTER(companion_svc, CONFIG_AKIRA_LOG_LEVEL);
 #include "../../connectivity/ota/ota_manager.h"
 #include "../../settings/settings.h"
 #include "../../connectivity/cloud/cloud_app_handler.h"
+#include "../../storage/fs_manager.h"
 
 /* --------------------------------------------------------------------------
  * UUID definitions
@@ -92,7 +93,7 @@ static struct k_work s_cmd_work;
 /* apps.cmd blocks this queue up to APPS_CMD_TIMEOUT_MS waiting on the app's
  * IPC reply — must not run on the system workqueue, or a non-replying app
  * stalls every other subsystem's k_work_submit() for the same duration. */
-#define CMD_WORKQ_STACK_SIZE 4096
+#define CMD_WORKQ_STACK_SIZE 8192
 static K_THREAD_STACK_DEFINE(s_cmd_workq_stack, CMD_WORKQ_STACK_SIZE);
 static struct k_work_q s_cmd_workq;
 
@@ -473,8 +474,13 @@ static void handle_apps_install_end(const char *op, int id, const char *params)
         return;
     }
 
-    /* Write staged bytes to /tmp/ble_upload.akpkg then install */
-    char tmp_path[] = "/lfs/tmp/ble_upload.akpkg";
+    /* Write staged bytes to a temp file named after the real app — install_akpkg()
+     * only overrides this with the embedded manifest's name when that manifest is
+     * small enough to parse (see app_manager.c), so the fallback must be correct. */
+    char tmp_path[128];
+    snprintf(tmp_path, sizeof(tmp_path), "/lfs/tmp/%s.akpkg", s_xfer.app_name);
+    fs_manager_mkdir("/lfs/tmp");
+
     struct fs_file_t f;
     fs_file_t_init(&f);
 
@@ -959,10 +965,11 @@ static ssize_t data_up_write(struct bt_conn *conn,
                     s_xfer.path,
                     rc >= 0 ? "OK" : "FAIL",
                     s_xfer.received);
+            akira_free_buffer(s_xfer.buf);
+            memset(&s_xfer, 0, sizeof(s_xfer));
         }
-        /* For COMP_XFER_APP_DATA the install is triggered by apps.install.end */
-        akira_free_buffer(s_xfer.buf);
-        memset(&s_xfer, 0, sizeof(s_xfer));
+        /* For COMP_XFER_APP_DATA, leave s_xfer active — apps.install.end
+         * uses s_xfer.buf/received and cleans up itself. */
     }
 
     return (ssize_t)len;
@@ -1186,6 +1193,34 @@ void companion_svc_notify_status(void)
         return;
     }
 
+    /* running_apps: pulled from the app_manager registry. Heap-allocate the
+     * listing buffer — app_info_t carries a 512B commands_json field per
+     * entry, too large for a stack array on threads that call this function
+     * (BT RX WQ runs near its stack ceiling already). */
+    char running_apps_json[64] = "[]";
+    app_info_t *apps = akira_malloc_buffer(sizeof(app_info_t) * CONFIG_AKIRA_APP_MAX_INSTALLED);
+    if (apps) {
+        int count = app_manager_list(apps, CONFIG_AKIRA_APP_MAX_INSTALLED);
+        size_t off = 0;
+        bool first = true;
+        running_apps_json[off++] = '[';
+        for (int i = 0; i < count && off < sizeof(running_apps_json) - 3; i++) {
+            if (apps[i].state != APP_STATE_RUNNING) {
+                continue;
+            }
+            int written = snprintf(running_apps_json + off, sizeof(running_apps_json) - off,
+                                    "%s\"%s\"", first ? "" : ",", apps[i].name);
+            if (written < 0 || (size_t)written >= sizeof(running_apps_json) - off) {
+                break;
+            }
+            off += (size_t)written;
+            first = false;
+        }
+        running_apps_json[off++] = ']';
+        running_apps_json[off] = '\0';
+        akira_free_buffer(apps);
+    }
+
     /* Build the same JSON as cloud device.status.
      * free_heap: TODO — k_mem_slab_num_free_get() takes a specific slab, not
      * a global query; the system heap object isn't part of Zephyr's public
@@ -1194,8 +1229,8 @@ void companion_svc_notify_status(void)
      * because of it. Reporting 0 until a real heap-stats source is wired. */
     int n = snprintf((char *)s_status_buf, sizeof(s_status_buf),
                      "{\"fw\":\"%s\",\"free_heap\":%u,"
-                     "\"running_apps\":[],\"bt_rssi\":0}",
-                     APP_VERSION_STRING, 0U);
+                     "\"running_apps\":%s,\"bt_rssi\":0}",
+                     APP_VERSION_STRING, 0U, running_apps_json);
 
     if (n <= 0 || (size_t)n >= sizeof(s_status_buf)) {
         return;
