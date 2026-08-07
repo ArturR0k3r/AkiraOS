@@ -557,4 +557,120 @@ int akira_native_wifi_capture_pmkid(wasm_exec_env_t exec_env,
     return 0;
 }
 
+/* ── Client enumeration (passive sniff on one channel) ─────────────────── */
+
+#define CLIENT_SNIFF_MAX   64
+#define CLIENT_SNIFF_DEF_MS 4000
+
+/* WAMR-visible record (mirrors akira_wifi_client_t in SDK) */
+struct client_wire {
+    uint8_t mac[6];
+    int8_t  rssi;
+};
+
+static struct {
+    uint8_t            target_bssid[6];
+    struct client_wire *out;
+    int                max_clients;
+    int                count;
+    bool               armed;
+} g_cl_ctx;
+
+/* 802.11 address fields (payload[4]=ADDR1, payload[10]=ADDR2, [16]=ADDR3) */
+static bool mac_is_broadcast_or_multicast(const uint8_t *mac)
+{
+    return (mac[0] & 0x01) != 0;
+}
+
+static void client_sniffer_cb(void *buf, wifi_promiscuous_pkt_type_t type)
+{
+    if (!g_cl_ctx.armed) return;
+    if (type != WIFI_PKT_DATA && type != WIFI_PKT_MGMT) return;
+
+    wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t *)buf;
+    if (pkt->rx_ctrl.sig_len < 24) return;
+
+    uint8_t *payload = pkt->payload;
+    uint8_t  fc0     = payload[FC_OFFSET];
+    uint8_t  fc1     = payload[FC_OFFSET + 1];
+    uint8_t  ftype   = fc0 & 0x0C;
+    uint8_t  subtype = (fc0 >> 4) & 0x0F;
+    bool     from_ap = (fc1 & 0x02) != 0;   /* FromDS */
+    bool     to_ap   = (fc1 & 0x01) != 0;   /* ToDS   */
+
+    const uint8_t *client_mac = NULL;
+
+    if (ftype == 0x08 && from_ap &&
+        memcmp(payload + ADDR2_OFFSET, g_cl_ctx.target_bssid, 6) == 0) {
+        /* Data frame AP→client: BSSID in SA(ADDR2), client in DA(ADDR1) */
+        client_mac = payload + ADDR1_OFFSET;
+    } else if (ftype == 0x08 && to_ap &&
+               memcmp(payload + ADDR1_OFFSET, g_cl_ctx.target_bssid, 6) == 0) {
+        /* Data frame client→AP: BSSID in DA(ADDR1), client in SA(ADDR2) */
+        client_mac = payload + ADDR2_OFFSET;
+    } else if (ftype == 0x00 && subtype == 0x04) {
+        /* Probe request from any device sniffing on this channel */
+        client_mac = payload + ADDR2_OFFSET; /* SA */
+    }
+
+    if (!client_mac || mac_is_broadcast_or_multicast(client_mac)) return;
+
+    int8_t rssi = (int8_t)pkt->rx_ctrl.rssi;
+
+    /* Dedupe — keep the strongest RSSI per MAC */
+    for (int i = 0; i < g_cl_ctx.count; i++) {
+        if (memcmp(g_cl_ctx.out[i].mac, client_mac, 6) == 0) {
+            if (rssi > g_cl_ctx.out[i].rssi) g_cl_ctx.out[i].rssi = rssi;
+            return;
+        }
+    }
+
+    if (g_cl_ctx.count < g_cl_ctx.max_clients) {
+        memcpy(g_cl_ctx.out[g_cl_ctx.count].mac, client_mac, 6);
+        g_cl_ctx.out[g_cl_ctx.count].rssi = rssi;
+        g_cl_ctx.count++;
+    }
+}
+
+int akira_native_wifi_scan_clients(wasm_exec_env_t exec_env,
+                                    void *bssid_ptr, void *out_ptr,
+                                    uint32_t out_len, int32_t channel,
+                                    int32_t timeout_ms)
+{
+    if (!bssid_ptr || !out_ptr) return -EINVAL;
+    if (channel < 1 || channel > 14) return -EINVAL;
+
+    int max_clients = (int)(out_len / sizeof(struct client_wire));
+    if (max_clients < 1) return -EINVAL;
+    if (max_clients > CLIENT_SNIFF_MAX) max_clients = CLIENT_SNIFF_MAX;
+    if (timeout_ms < 1000) timeout_ms = CLIENT_SNIFF_DEF_MS;
+
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    WASM_ADDR_CHECK(inst, bssid_ptr, 6);
+    WASM_ADDR_CHECK(inst, out_ptr, out_len);
+
+    const uint8_t *bssid = (const uint8_t *)bssid_ptr;
+    struct client_wire *out = (struct client_wire *)out_ptr;
+
+    memcpy(g_cl_ctx.target_bssid, bssid, 6);
+    g_cl_ctx.out        = out;
+    g_cl_ctx.max_clients = max_clients;
+    g_cl_ctx.count      = 0;
+    g_cl_ctx.armed      = true;
+
+    esp_wifi_set_promiscuous_rx_cb(client_sniffer_cb);
+    esp_wifi_set_promiscuous(true);
+    esp_wifi_set_channel((uint8_t)channel, WIFI_SECOND_CHAN_NONE);
+
+    /* Block for the sniff window; the RX callback fills g_cl_ctx.out. */
+    k_sleep(K_MSEC(timeout_ms));
+
+    g_cl_ctx.armed = false;
+    esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(NULL);
+
+    LOG_INF("wifi_scan_clients: ch%d → %d clients", channel, g_cl_ctx.count);
+    return g_cl_ctx.count;
+}
+
 #endif /* CONFIG_WIFI && ESP32S3/ESP32 */

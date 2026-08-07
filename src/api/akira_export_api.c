@@ -142,6 +142,8 @@ bool akira_register_native_apis()
         {"wifi_deauth",         (void *)akira_native_wifi_deauth,         "(**iii)i",   NULL},
         /* PMKID capture: deauth + sniff EAPOL-Key M1 -- requires wifi.inject capability */
         {"wifi_capture_pmkid",  (void *)akira_native_wifi_capture_pmkid,  "(**i$*i)i",  NULL},
+        /* Client enumeration: passive sniff, {mac,rssi} records -- requires wifi.inject */
+        {"wifi_scan_clients",   (void *)akira_native_wifi_scan_clients,   "(**~ii)i",   NULL},
 #endif
 
 #if defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_SENSOR)

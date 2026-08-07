@@ -103,6 +103,12 @@ int akira_native_wifi_capture_pmkid(wasm_exec_env_t exec_env,
                                      void *bssid_ptr, void *client_ptr,
                                      int32_t channel, const char *ssid_str,
                                      void *result_ptr, int32_t timeout_ms);
+/* Client enumeration: passive promiscuous sniff on one channel; writes
+ * {mac[6], rssi} records (struct client_wire) into out, returns client count */
+int akira_native_wifi_scan_clients(wasm_exec_env_t exec_env,
+                                    void *bssid_ptr, void *out_ptr,
+                                    uint32_t out_len, int32_t channel,
+                                    int32_t timeout_ms);
 #endif
 
 /*
