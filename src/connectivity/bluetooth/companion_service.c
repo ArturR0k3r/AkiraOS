@@ -92,7 +92,7 @@ static struct k_work s_cmd_work;
 /* apps.cmd blocks this queue up to APPS_CMD_TIMEOUT_MS waiting on the app's
  * IPC reply — must not run on the system workqueue, or a non-replying app
  * stalls every other subsystem's k_work_submit() for the same duration. */
-#define CMD_WORKQ_STACK_SIZE 2048
+#define CMD_WORKQ_STACK_SIZE 4096
 static K_THREAD_STACK_DEFINE(s_cmd_workq_stack, CMD_WORKQ_STACK_SIZE);
 static struct k_work_q s_cmd_workq;
 
