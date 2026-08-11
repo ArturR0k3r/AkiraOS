@@ -43,6 +43,18 @@ int ed25519_sign(const uint8_t seed[32], const uint8_t *msg, uint32_t msg_len,
                   uint8_t sig[64]);
 
 /**
+ * @brief Verify an Ed25519 signature (RFC 8032 Verify).
+ * @param pub[in]      32-byte public key.
+ * @param msg[in]      Message that was signed.
+ * @param msg_len[in]  Message length in bytes.
+ * @param sig[in]      64-byte signature (R || S) to check.
+ * @return 0 if the signature is valid, -EINVAL if not (bad point encoding,
+ *         S out of range, or the signature equation doesn't hold).
+ */
+int ed25519_verify(const uint8_t pub[32], const uint8_t *msg, uint32_t msg_len,
+                    const uint8_t sig[64]);
+
+/**
  * @brief Run RFC 8032 §7.1 test vector 1 against this implementation.
  * @return 0 if the implementation matches the known-answer vector.
  */

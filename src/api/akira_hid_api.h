@@ -19,7 +19,9 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {

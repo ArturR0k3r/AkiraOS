@@ -8,7 +8,9 @@
 #ifndef AKIRA_COMMON_API_H
 #define AKIRA_COMMON_API_H
 
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
+#endif
 #include <stdint.h>
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME

@@ -43,6 +43,7 @@ struct ble_radio_data {
     bool initialized;
     bool scanning_active; /* continuous passive scan for mesh RX, lazy-started
                             * by recv() and never stopped. */
+    int16_t last_rx_rssi;
 };
 
 static struct ble_radio_data ble_data;
@@ -51,6 +52,7 @@ static struct bt_le_ext_adv *ble_ext_adv;
 
 struct ble_rx_msg {
     uint16_t len;
+    int16_t rssi;
     uint8_t data[AKIRA_BLE_MAX_PACKET];
 };
 /* mesh_rx_thread can't always drain between scan callback events under
@@ -76,6 +78,7 @@ static bool ble_adv_ad_cb(struct bt_data *data, void *user_data)
     const uint8_t *payload = &data->data[AKIRA_BLE_MAGIC_LEN];
     struct ble_rx_msg msg = {
         .len = (uint16_t)MIN(data->data_len - AKIRA_BLE_MAGIC_LEN, sizeof(msg.data)),
+        .rssi = info->rssi,
     };
 
     memcpy(msg.data, payload, msg.len);
@@ -287,6 +290,7 @@ static int ble_radio_recv(radio_handle_t *handle, uint8_t *buf, size_t buf_len,
     if (k_msgq_get(&ble_rx_msgq, &msg, K_MSEC(timeout_ms)) != 0) {
         return 0; /* no reassembled packet within timeout */
     }
+    radio_data->last_rx_rssi = msg.rssi;
 
     copy_len = MIN(msg.len, buf_len);
     memcpy(buf, msg.data, copy_len);
@@ -361,6 +365,14 @@ static int ble_radio_get_max_payload(radio_handle_t *handle, size_t *max_len)
     return 0;
 }
 
+static int ble_radio_get_last_rx_rssi(radio_handle_t *handle, int16_t *rssi)
+{
+    struct ble_radio_data *data = handle->priv_data;
+    if (!rssi) return -EINVAL;
+    *rssi = data->last_rx_rssi;
+    return 0;
+}
+
 static int ble_radio_get_hw_addr(radio_handle_t *handle, uint8_t *addr, size_t *addr_len)
 {
     struct ble_radio_data *data = handle->priv_data;
@@ -391,6 +403,7 @@ static const radio_ops_t ble_radio_ops = {
     .reset = ble_radio_reset,
     .set_event_callback = ble_radio_set_event_callback,
     .get_hw_addr = ble_radio_get_hw_addr,
+    .get_last_rx_rssi = ble_radio_get_last_rx_rssi,
 };
 
 /* Registers the handle only; ops->init() (bt_enable etc) is deferred to

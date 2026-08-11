@@ -2619,6 +2619,56 @@ static int cmd_mesh_send(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+static int cmd_mesh_linkdrop(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: mesh linkdrop <peer_id_hex>  (test-only: simulate peer out of range)");
+        return -EINVAL;
+    }
+    uint8_t peer[AKIRA_MESH_NODE_ID_LEN] = {0};
+    peer[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+    int ret = akira_mesh_debug_link_drop(peer);
+    if (ret) {
+        shell_error(sh, "mesh linkdrop failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "dropping all frames from %02x", peer[AKIRA_MESH_NODE_ID_LEN - 1]);
+    return 0;
+}
+
+static int cmd_mesh_linkrestore(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: mesh linkrestore <peer_id_hex>");
+        return -EINVAL;
+    }
+    uint8_t peer[AKIRA_MESH_NODE_ID_LEN] = {0};
+    peer[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+    int ret = akira_mesh_debug_link_restore(peer);
+    if (ret) {
+        shell_error(sh, "mesh linkrestore failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "restored link to %02x", peer[AKIRA_MESH_NODE_ID_LEN - 1]);
+    return 0;
+}
+
+static int cmd_mesh_power(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: mesh power <dbm>");
+        return -EINVAL;
+    }
+    int8_t dbm = (int8_t)atoi(argv[1]);
+    int ret = akira_mesh_set_tx_power(dbm);
+    if (ret) {
+        shell_error(sh, "mesh power failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "TX power set to %d dBm", dbm);
+    return 0;
+}
+
 static int cmd_mesh_app(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 3) {
@@ -2647,6 +2697,39 @@ static int cmd_mesh_app(const struct shell *sh, size_t argc, char **argv)
 
     shell_print(sh, "distributed '%s' (%d bytes) to %02x in %lld ms",
                 name, len, dest[AKIRA_MESH_NODE_ID_LEN - 1], ms);
+    return 0;
+}
+
+static int cmd_mesh_sendstream(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 3) {
+        shell_error(sh, "Usage: mesh sendstream <dest_id_hex> <size_bytes>");
+        return -EINVAL;
+    }
+
+    uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
+    dest[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+    size_t size = (size_t)strtoul(argv[2], NULL, 10);
+
+    static uint8_t stream_buf[4096];
+    if (size == 0 || size > sizeof(stream_buf)) {
+        shell_error(sh, "size must be 1..%zu", sizeof(stream_buf));
+        return -EINVAL;
+    }
+    for (size_t i = 0; i < size; i++) {
+        stream_buf[i] = (uint8_t)i;
+    }
+
+    int64_t t0 = k_uptime_get();
+    int ret = akira_mesh_send_stream(dest, stream_buf, size);
+    int64_t ms = k_uptime_get() - t0;
+    if (ret) {
+        shell_error(sh, "mesh sendstream failed: %d (%lld ms)", ret, ms);
+        return ret;
+    }
+
+    shell_print(sh, "streamed %zu bytes to %02x in %lld ms",
+                size, dest[AKIRA_MESH_NODE_ID_LEN - 1], ms);
     return 0;
 }
 
@@ -2683,7 +2766,11 @@ static int cmd_mesh_stop(const struct shell *sh, size_t argc, char **argv)
 SHELL_STATIC_SUBCMD_SET_CREATE(mesh_cmds,
     SHELL_CMD_ARG(init, NULL, "Init mesh: <node_id_hex> [ble|sub|lora]", cmd_mesh_init, 2, 1),
     SHELL_CMD_ARG(send, NULL, "Send: <dest_id_hex> <text>", cmd_mesh_send, 3, 0),
+    SHELL_CMD_ARG(sendstream, NULL, "Stream send: <dest_id_hex> <size_bytes>", cmd_mesh_sendstream, 3, 0),
     SHELL_CMD_ARG(app, NULL, "Distribute installed app: <dest_id_hex> <name>", cmd_mesh_app, 3, 0),
+    SHELL_CMD_ARG(linkdrop, NULL, "Test-only: simulate peer out of range: <peer_id_hex>", cmd_mesh_linkdrop, 2, 0),
+    SHELL_CMD_ARG(linkrestore, NULL, "Undo linkdrop: <peer_id_hex>", cmd_mesh_linkrestore, 2, 0),
+    SHELL_CMD_ARG(power, NULL, "Set mesh radio TX power: <dbm>", cmd_mesh_power, 2, 0),
     SHELL_CMD(info, NULL, "Show mesh statistics", cmd_mesh_info),
     SHELL_CMD(nodes, NULL, "List discovered nodes", cmd_mesh_nodes),
     SHELL_CMD(start, NULL, "Start mesh networking", cmd_mesh_start),

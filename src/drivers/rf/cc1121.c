@@ -208,6 +208,7 @@ static struct {
     uint32_t frequency_hz;
     uint32_t xosc_hz;
     int8_t tx_power_dbm;
+    int16_t last_rx_rssi;
     radio_event_cb_t event_cb;
     void *event_user_data;
 } g_cc1121;
@@ -1155,6 +1156,12 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
             /* rx_buf[payload_len+1..rx_bytes-1] = status. Skip the length byte. */
             memcpy(buffer, rx_buf + 1, payload_len);
 
+            /* Status byte 1 (Table 23, cc112x datasheet): appended RSSI, same
+             * 8-bit/1dB-LSB value as EXT_RSSI1 in cc1121_get_rssi() — same
+             * calibrated offset applies (see that function's comment). */
+            int8_t rssi_raw = (int8_t)rx_buf[rx_bytes - 2];
+            g_cc1121.last_rx_rssi = (int16_t)rssi_raw - 84;
+
             LOG_DBG("RX done: %d bytes", (int)payload_len);
 
             /* RXOFF_MODE=RX already returned the chip to RX and the burst
@@ -1166,7 +1173,7 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
                     .type = RADIO_EVENT_RX_DONE,
                     .data = buffer,
                     .len = payload_len,
-                    .rssi = 0,
+                    .rssi = g_cc1121.last_rx_rssi,
                     .user_data = g_cc1121.event_user_data,
                 };
                 g_cc1121.event_cb(&ev, g_cc1121.event_user_data);
@@ -1434,6 +1441,12 @@ static int cc1121_ops_recv(radio_handle_t *h, uint8_t *b, size_t l, uint32_t t) 
 static int cc1121_ops_set_frequency(radio_handle_t *h, uint32_t hz) { ARG_UNUSED(h); return cc1121_set_frequency(hz); }
 static int cc1121_ops_set_power(radio_handle_t *h, int8_t dbm)      { ARG_UNUSED(h); return cc1121_set_power(dbm); }
 static int cc1121_ops_get_rssi(radio_handle_t *h, int16_t *r)       { ARG_UNUSED(h); return cc1121_get_rssi(r); }
+static int cc1121_ops_get_last_rx_rssi(radio_handle_t *h, int16_t *r) {
+    ARG_UNUSED(h);
+    if (!r) return -EINVAL;
+    *r = g_cc1121.last_rx_rssi;
+    return 0;
+}
 static int cc1121_ops_set_mode(radio_handle_t *h, radio_mode_t m)   { ARG_UNUSED(h); return cc1121_set_mode(m); }
 static int cc1121_ops_set_modulation(radio_handle_t *h, radio_modulation_t m) { ARG_UNUSED(h); return cc1121_set_modulation(m); }
 static int cc1121_ops_set_bitrate(radio_handle_t *h, uint32_t bps)  { ARG_UNUSED(h); return cc1121_set_bitrate(bps); }
@@ -1455,6 +1468,7 @@ static const radio_ops_t cc1121_ops = {
     .set_frequency      = cc1121_ops_set_frequency,
     .set_power          = cc1121_ops_set_power,
     .get_rssi           = cc1121_ops_get_rssi,
+    .get_last_rx_rssi   = cc1121_ops_get_last_rx_rssi,
     .set_mode           = cc1121_ops_set_mode,
     .set_modulation     = cc1121_ops_set_modulation,
     .set_bitrate        = cc1121_ops_set_bitrate,

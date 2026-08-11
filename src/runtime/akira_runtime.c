@@ -72,6 +72,7 @@ akira_managed_app_t g_apps[AKIRA_MAX_WASM_INSTANCES];
  */
 static k_thread_stack_t *g_app_stacks[AKIRA_MAX_WASM_INSTANCES];
 
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
 /* Early SYS_INIT hook: allocates WASM thread stacks before BT/WiFi/USB init
  * fragment the heap. APPLICATION level 1 runs before all driver-level init
  * that would otherwise consume contiguous SRAM blocks. */
@@ -85,6 +86,7 @@ static int wasm_stacks_early_alloc(void)
     return 0;
 }
 SYS_INIT(wasm_stacks_early_alloc, APPLICATION, 1);
+#endif
 static struct k_thread g_app_threads[AKIRA_MAX_WASM_INSTANCES];
 
 /* Per-slot deferred cleanup context.
@@ -346,13 +348,17 @@ int akira_runtime_init(void)
     {
         g_slot_cleanup[i].slot = i;
         k_work_init(&g_slot_cleanup[i].work, slot_cleanup_work_fn);
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
         if (!g_app_stacks[i])
         {
             LOG_ERR("SRAM stack for slot %d missing (early alloc failed)", i);
         }
+#endif
     }
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
     LOG_DBG("App thread stacks: %u B each, pre-allocated at boot",
             CONFIG_AKIRA_WASM_APP_STACK_SIZE);
+#endif
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
     /*

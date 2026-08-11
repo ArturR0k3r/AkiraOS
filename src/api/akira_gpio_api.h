@@ -8,7 +8,9 @@
 #ifndef AKIRA_GPIO_API_H
 #define AKIRA_GPIO_API_H
 
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
+#endif
 #include <stdint.h>
 
 /* GPIO flags - mirror Zephyr's GPIO flags for WASM apps */

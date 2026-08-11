@@ -14,7 +14,9 @@
 #define AKIRA_DISPLAY_API_H
 
 #include <stdint.h>
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
+#endif
 
 /* ---------------------------------------------------------------------------
  * Platform-agnostic primitives (no security checks)

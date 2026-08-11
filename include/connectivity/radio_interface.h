@@ -217,6 +217,10 @@ typedef struct {
     int (*set_frequency)(struct radio_handle *handle, uint32_t freq_hz);
     int (*set_power)(struct radio_handle *handle, int8_t dbm);
     int (*get_rssi)(struct radio_handle *handle, int16_t *rssi);
+    /* RSSI of the last successfully received packet (not the live channel
+     * reading get_rssi() returns) — for "signal strength to this specific
+     * peer" use cases. NULL on radios that don't expose it. */
+    int (*get_last_rx_rssi)(struct radio_handle *handle, int16_t *rssi);
     int (*set_mode)(struct radio_handle *handle, radio_mode_t mode);
 
     /* Modulation — gated by RADIO_CAP_MOD_* */
@@ -488,6 +492,11 @@ static inline int radio_set_power(radio_handle_t *h, int8_t dbm)
 static inline int radio_get_rssi(radio_handle_t *h, int16_t *rssi)
 {
     return (h && h->ops && h->ops->get_rssi) ? h->ops->get_rssi(h, rssi) : -ENOSYS;
+}
+
+static inline int radio_get_last_rx_rssi(radio_handle_t *h, int16_t *rssi)
+{
+    return (h && h->ops && h->ops->get_last_rx_rssi) ? h->ops->get_last_rx_rssi(h, rssi) : -ENOSYS;
 }
 
 static inline int radio_set_mode(radio_handle_t *h, radio_mode_t mode)

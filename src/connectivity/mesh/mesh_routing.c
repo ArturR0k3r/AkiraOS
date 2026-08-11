@@ -43,6 +43,7 @@ struct route_entry *mesh_route_lookup(struct route_table *t, const uint8_t *dest
     struct route_entry *r = route_find(t, dest);
     if (!r) return NULL;
     if ((int32_t)(r->expiry_ms - now_ms) <= 0) return NULL;   /* expired */
+    r->last_used_ms = now_ms;
     return r;
 }
 
@@ -58,27 +59,40 @@ bool mesh_route_install(struct route_table *t, const uint8_t *dest, const uint8_
         for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_ROUTES; i++) {
             if (!t->e[i].valid) { r = &t->e[i]; break; }
         }
-        if (!r) return false;   /* table full */
+        if (!r) {
+            /* Table full: evict the least-recently-used entry instead of
+             * refusing new destinations forever once CONFIG_AKIRA_MESH_MAX_ROUTES
+             * is reached. */
+            r = &t->e[0];
+            for (int i = 1; i < CONFIG_AKIRA_MESH_MAX_ROUTES; i++) {
+                if (t->e[i].last_used_ms < r->last_used_ms) r = &t->e[i];
+            }
+        }
     }
     memcpy(r->dest_id, dest, AKIRA_MESH_NODE_ID_LEN);
     memcpy(r->next_hop, next_hop, AKIRA_MESH_NODE_ID_LEN);
     r->hop_count = hop_count;
     r->dest_seq = dest_seq;
     r->expiry_ms = expiry_ms;
+    r->last_used_ms = expiry_ms;   /* install counts as a fresh use */
     r->valid = true;
     return true;
 }
 
-void mesh_route_invalidate(struct route_table *t, const uint8_t *dest)
+bool mesh_route_invalidate(struct route_table *t, const uint8_t *dest)
 {
     struct route_entry *r = route_find(t, dest);
-    if (r) r->valid = false;
+    if (r && r->valid) {
+        r->valid = false;
+        return true;
+    }
+    return false;
 }
 
 void mesh_route_touch(struct route_table *t, const uint8_t *dest, uint32_t new_expiry_ms)
 {
     struct route_entry *r = route_find(t, dest);
-    if (r && r->valid) r->expiry_ms = new_expiry_ms;
+    if (r && r->valid) { r->expiry_ms = new_expiry_ms; r->last_used_ms = new_expiry_ms; }
 }
 
 void mesh_route_gc(struct route_table *t, uint32_t now_ms)
@@ -93,20 +107,29 @@ void mesh_route_gc(struct route_table *t, uint32_t now_ms)
 void mesh_ack_reset(struct ack_table *t) { memset(t, 0, sizeof(*t)); }
 
 int mesh_ack_add(struct ack_table *t, uint16_t seq, const uint8_t *dest,
-                 const uint8_t *payload, uint16_t len, uint32_t deadline_ms)
+                 const uint8_t *payload, uint16_t len, uint32_t now_ms,
+                 uint32_t deadline_ms)
 {
     if (len > MESH_ROUTING_PAYLOAD_MAX) return -EMSGSIZE;
+    int slot = -1;
     for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_PENDING_ACKS; i++) {
-        if (!t->e[i].active) {
-            struct pending_ack *e = &t->e[i];
-            e->seq_num = seq; e->len = len; e->retries = 0;
-            e->deadline_ms = deadline_ms; e->active = true;
-            memcpy(e->dest_id, dest, AKIRA_MESH_NODE_ID_LEN);
-            memcpy(e->payload, payload, len);
-            return i;
+        if (!t->e[i].active) { slot = i; break; }
+    }
+    if (slot < 0) {
+        /* Full: evict the oldest in-flight send. A busy mesh degrades by
+         * losing its least-recently-touched pending send instead of
+         * refusing all new reliable sends. */
+        slot = 0;
+        for (int i = 1; i < CONFIG_AKIRA_MESH_MAX_PENDING_ACKS; i++) {
+            if (t->e[i].last_used_ms < t->e[slot].last_used_ms) slot = i;
         }
     }
-    return -EBUSY;
+    struct pending_ack *e = &t->e[slot];
+    e->seq_num = seq; e->len = len; e->retries = 0;
+    e->deadline_ms = deadline_ms; e->last_used_ms = now_ms; e->active = true;
+    memcpy(e->dest_id, dest, AKIRA_MESH_NODE_ID_LEN);
+    memcpy(e->payload, payload, len);
+    return slot;
 }
 
 bool mesh_ack_clear(struct ack_table *t, uint16_t seq, const uint8_t *dest)
@@ -129,6 +152,7 @@ mesh_ack_action_t mesh_ack_tick(struct pending_ack *e, uint32_t now_ms, uint32_t
     if (e->retries >= CONFIG_AKIRA_MESH_MAX_RETRIES) return MESH_ACK_GIVE_UP;
     e->retries++;
     e->deadline_ms = now_ms + timeout_ms;
+    e->last_used_ms = now_ms;
     return MESH_ACK_RETRANSMIT;
 }
 
@@ -137,19 +161,31 @@ mesh_ack_action_t mesh_ack_tick(struct pending_ack *e, uint32_t now_ms, uint32_t
 void mesh_pr_reset(struct pending_route_q *q) { memset(q, 0, sizeof(*q)); }
 
 int mesh_pr_add(struct pending_route_q *q, const uint8_t *dest,
-                const uint8_t *payload, uint16_t len, uint32_t deadline_ms)
+                const uint8_t *payload, uint16_t len, uint32_t now_ms,
+                uint32_t deadline_ms, bool is_local_repair)
 {
     if (len > MESH_ROUTING_PAYLOAD_MAX) return -EMSGSIZE;
+    int slot = -1;
     for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_PENDING_ROUTES; i++) {
-        if (!q->e[i].active) {
-            struct pending_route *e = &q->e[i];
-            memcpy(e->dest_id, dest, AKIRA_MESH_NODE_ID_LEN);
-            memcpy(e->payload, payload, len);
-            e->len = len; e->deadline_ms = deadline_ms; e->active = true;
-            return i;
+        if (!q->e[i].active) { slot = i; break; }
+    }
+    if (slot < 0) {
+        slot = 0;
+        for (int i = 1; i < CONFIG_AKIRA_MESH_MAX_PENDING_ROUTES; i++) {
+            if (q->e[i].last_used_ms < q->e[slot].last_used_ms) slot = i;
         }
     }
-    return -EBUSY;
+    struct pending_route *e = &q->e[slot];
+    memcpy(e->dest_id, dest, AKIRA_MESH_NODE_ID_LEN);
+    memcpy(e->payload, payload, len);
+    e->len = len; e->deadline_ms = deadline_ms; e->last_used_ms = now_ms;
+    e->rreq_retries = 0;
+    /* First retry check fires one backoff interval after the initial RREQ,
+     * not at now_ms — mesh_pr_tick's own doubling picks up from here. */
+    e->next_rreq_ms = now_ms + (CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS << 1);
+    e->is_local_repair = is_local_repair;
+    e->active = true;
+    return slot;
 }
 
 struct pending_route *mesh_pr_next_for_dest(struct pending_route_q *q, const uint8_t *dest)
@@ -164,13 +200,28 @@ struct pending_route *mesh_pr_next_for_dest(struct pending_route_q *q, const uin
 void mesh_pr_clear_slot(struct pending_route *e) { e->active = false; }
 
 void mesh_pr_gc(struct pending_route_q *q, uint32_t now_ms,
-                void (*on_drop)(const uint8_t *dest, void *ctx), void *ctx)
+                void (*on_drop)(const uint8_t *dest, bool is_local_repair, void *ctx),
+                void *ctx)
 {
     for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_PENDING_ROUTES; i++) {
         struct pending_route *e = &q->e[i];
         if (e->active && (int32_t)(e->deadline_ms - now_ms) <= 0) {
-            if (on_drop) on_drop(e->dest_id, ctx);
+            if (on_drop) on_drop(e->dest_id, e->is_local_repair, ctx);
             e->active = false;
         }
+    }
+}
+
+void mesh_pr_tick(struct pending_route_q *q, uint32_t now_ms,
+                  void (*on_retry)(const uint8_t *dest, void *ctx), void *ctx)
+{
+    for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_PENDING_ROUTES; i++) {
+        struct pending_route *e = &q->e[i];
+        if (!e->active || e->rreq_retries >= CONFIG_AKIRA_MESH_RREQ_MAX_RETRIES) continue;
+        if ((int32_t)(e->next_rreq_ms - now_ms) > 0) continue;
+        e->rreq_retries++;
+        uint32_t backoff = CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS << (e->rreq_retries + 1);
+        e->next_rreq_ms = now_ms + backoff;
+        if (on_retry) on_retry(e->dest_id, ctx);
     }
 }

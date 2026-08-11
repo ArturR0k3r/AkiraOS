@@ -19,7 +19,9 @@
 #ifndef AKIRA_RTC_API_H
 #define AKIRA_RTC_API_H
 
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {

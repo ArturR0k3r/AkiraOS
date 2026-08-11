@@ -66,6 +66,7 @@ LOG_MODULE_REGISTER(akira_lr2021, LOG_LEVEL_INF);
 #define LR2021_CMD_GET_TX_FIFO_LEVEL    0x011D
 #define LR2021_CMD_GET_RX_PKT_LENGTH    0x0212
 #define LR2021_CMD_GET_RSSI_INST        0x020B
+#define LR2021_CMD_GET_LORA_PACKET_STATUS 0x022A
 #define LR2021_CMD_SET_RX               0x020C
 #define LR2021_CMD_SET_TX               0x020D
 #define LR2021_CMD_SET_TX_TEST          0x020E
@@ -76,6 +77,7 @@ LOG_MODULE_REGISTER(akira_lr2021, LOG_LEVEL_INF);
 #define LR2021_CMD_SET_FSK_PKT_PARAMS   0x0241
 #define LR2021_CMD_SET_FSK_CRC_PARAMS   0x0243
 #define LR2021_CMD_SET_FSK_SYNCWORD     0x0244
+#define LR2021_CMD_GET_FSK_PACKET_STATUS 0x0247
 
 /* LoRa packet radio (§5.6.4 / §9.9) */
 #define LR2021_CMD_SET_LORA_MOD_PARAMS  0x0220
@@ -87,6 +89,7 @@ LOG_MODULE_REGISTER(akira_lr2021, LOG_LEVEL_INF);
 #define LR2021_CMD_SET_BLE_CHAN_PARAMS  0x0261
 #define LR2021_CMD_SET_BLE_TX           0x0262  /* combines SetBleTxPduLen + SetTx(0) */
 #define LR2021_CMD_SET_BLE_TX_PDU_LEN   0x0266
+#define LR2021_CMD_GET_BLE_PACKET_STATUS 0x0265
 
 #define LR2021_BLE_MODE_1M              0x00
 #define LR2021_BLE_MODE_2M              0x01
@@ -173,6 +176,8 @@ static struct {
                                       * PHY rate must not clobber each other
                                       * across `rf mod` switches. */
     int8_t tx_power_dbm;
+    int16_t last_rx_rssi;           /* latched at RX_DONE, before any command
+                                      * that could re-arm RX and overwrite it */
     radio_event_cb_t event_cb;
     void *event_user_data;
 } g_lr2021;
@@ -793,20 +798,17 @@ static int lr2021_deinit(void) {
     }
     g_lr2021.rx_armed = false;
 
-    /* Chip must be in STANDBY before SET_SLEEP — issuing it directly from
-     * continuous RX (the normal state while mesh is running) leaves BUSY
-     * stuck high, wedging the chip until a full reboot. Same class of issue
-     * as the pld_len reset in lr2021_rx_arm_continuous(). */
-    {
-        uint8_t mode = LR2021_STANDBY_XOSC;
-        lr2021_write_command(LR2021_CMD_SET_STANDBY, &mode, 1);
-    }
-
-    uint8_t sleep_cfg[5] = { LR2021_SLEEP_RAM_RETENTION, 0, 0, 0, 0 };
-    lr2021_write_command(LR2021_CMD_SET_SLEEP, sleep_cfg, 5);
+    /* SET_SLEEP from continuous RX (the normal state while mesh is running)
+     * leaves BUSY stuck high, wedging the chip until a full reboot — the
+     * shared RF_RST line only pulses once per boot (rf_framework_claim_
+     * shared_reset()), so there is no recovery once that happens. SET_STANDBY
+     * alone reproduces cleanly with no such failure, so stop there instead
+     * of risking SLEEP for power savings we can't safely take. */
+    uint8_t mode = LR2021_STANDBY_XOSC;
+    lr2021_write_command(LR2021_CMD_SET_STANDBY, &mode, 1);
 
     g_lr2021.initialized = false;
-    g_lr2021.current_mode = RADIO_MODE_SLEEP;
+    g_lr2021.current_mode = RADIO_MODE_STANDBY;
     return 0;
 }
 
@@ -1042,7 +1044,14 @@ static int lr2021_lora_reissue_mod(void) {
         (uint8_t)((g_lr2021.lora_sf << 4) | (g_lr2021.lora_bw_code & 0x0F)),
         (uint8_t)((g_lr2021.lora_cr << 4) | lr2021_lora_ldro(g_lr2021.lora_sf)),
     };
-    return lr2021_write_command(LR2021_CMD_SET_LORA_MOD_PARAMS, args, 2);
+    int ret = lr2021_write_command(LR2021_CMD_SET_LORA_MOD_PARAMS, args, 2);
+    if (ret == 0) {
+        /* Chip already in continuous RX (armed with the old SF/BW/CR) keeps
+         * demodulating with the stale params until re-armed — same issue
+         * set_modulation() already handles below. */
+        g_lr2021.rx_armed = false;
+    }
+    return ret;
 }
 
 static int lr2021_set_spreading_factor(uint8_t sf) {
@@ -1372,6 +1381,8 @@ static int lr2021_rx_arm_continuous(void) {
     return 0;
 }
 
+static int lr2021_get_last_packet_rssi(int16_t *rssi);
+
 static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
@@ -1401,6 +1412,14 @@ static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms) {
         lr2021_read_command(LR2021_CMD_GET_RX_FIFO_LEVEL, NULL, 0, lvl_buf, 4);
         size_t pre_level = ((size_t)lvl_buf[0] << 8) | lvl_buf[1];
 
+        /* Packet status (rssi_pkt/snr_pkt) must also be read before the
+         * IRQ-clear below: it shares the same re-arm-on-clear side effect
+         * that forces reading pre_level first, so a query issued after the
+         * clear can return a status already overwritten by the newly-armed
+         * RX cycle instead of the packet that was just received. */
+        int16_t pre_rssi = 0;
+        lr2021_get_last_packet_rssi(&pre_rssi);
+
         uint8_t irq_buf[4] = { 0 };
         if (lr2021_read_command(LR2021_CMD_GET_AND_CLEAR_IRQ, NULL, 0, irq_buf, 4) < 0) {
             return -EIO;
@@ -1413,6 +1432,7 @@ static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms) {
         if (!(irq & LR2021_IRQ_RX_DONE)) {
             return 0;
         }
+        g_lr2021.last_rx_rssi = pre_rssi;
         if (irq & LR2021_IRQ_CRC_ERROR) {
             LOG_WRN("LR2021 CRC error — discarding packet");
             if (pre_level > 0 && pre_level <= max_len) {
@@ -1551,6 +1571,74 @@ static int lr2021_get_rssi(int16_t *rssi) {
     return 0;
 }
 
+static int lr2021_get_last_lora_rssi(int16_t *rssi) {
+    /* GetLoraPacketStatus is a read command (datasheet §9.9.9): opcode->BUSY
+     * ->read, no RX-mode forcing needed (unlike GetRssiInst) — it reports
+     * the last completed reception, updated at RxDone/CadDone.
+     * Response after Stat(16) is stripped by lr2021_read_command:
+     *   rsp[0]=rfu(2:0)/crc/coding_rate(3:0), rsp[1]=pkt_length,
+     *   rsp[2]=snr_pkt, rsp[3]=rssi_pkt(8:1), rsp[4]=rssi_signal_pkt(8:1),
+     *   rsp[5]=rfu(1:0)/detector(3:0)/rssi_pkt_bit(0)/rssi_signal_pkt_bit(0).
+     * rssi_pkt's own LSB lives packed into rsp[5] alongside detector flags
+     * at a bit position the extracted datasheet text doesn't unambiguously
+     * pin down — using only rsp[3] (bits 8:1) and treating the missing LSB
+     * as 0 costs at most 0.5dB, acceptable for a "signal strength to this
+     * peer" display, not precision link-budget math.
+     * Actual dBm = -rssi_pkt/2 = -(rsp[3]<<1)/2 = -rsp[3]. */
+    uint8_t rsp[6] = { 0 };
+    int ret = lr2021_read_command(LR2021_CMD_GET_LORA_PACKET_STATUS, NULL, 0, rsp, 6);
+    if (ret < 0) {
+        LOG_ERR("GetLoraPacketStatus failed: %d", ret);
+        return ret;
+    }
+    *rssi = -(int16_t)rsp[3];
+    return 0;
+}
+
+static int lr2021_get_last_fsk_rssi(int16_t *rssi) {
+    /* GetFskPacketStatus (datasheet §11.3.8), same response shape as
+     * GetBlePacketStatus below. After Stat(16) stripped:
+     *   rsp[0..1]=pkt_len(15:0), rsp[2]=rssi_avg(8:1), rsp[3]=rssi_sync(8:1),
+     *   rsp[4]=AddrMatch flags + rssi_avg(0)/rssi_sync(0), rsp[5]=Lqi.
+     * Using rssi_avg (whole-packet average, matches LoRa's rssi_pkt intent)
+     * bits 8:1 only, same ±0.5dB LSB tradeoff as the LoRa path above.
+     * Actual dBm = -rssi_avg/2 = -(rsp[2]<<1)/2 = -rsp[2]. */
+    uint8_t rsp[6] = { 0 };
+    int ret = lr2021_read_command(LR2021_CMD_GET_FSK_PACKET_STATUS, NULL, 0, rsp, 6);
+    if (ret < 0) {
+        LOG_ERR("GetFskPacketStatus failed: %d", ret);
+        return ret;
+    }
+    *rssi = -(int16_t)rsp[2];
+    return 0;
+}
+
+static int lr2021_get_last_ble_rssi(int16_t *rssi) {
+    /* GetBlePacketStatus (datasheet §15.3.6) — byte-for-byte identical
+     * response shape to GetFskPacketStatus, different opcode. */
+    uint8_t rsp[6] = { 0 };
+    int ret = lr2021_read_command(LR2021_CMD_GET_BLE_PACKET_STATUS, NULL, 0, rsp, 6);
+    if (ret < 0) {
+        LOG_ERR("GetBlePacketStatus failed: %d", ret);
+        return ret;
+    }
+    *rssi = -(int16_t)rsp[2];
+    return 0;
+}
+
+static int lr2021_get_last_packet_rssi(int16_t *rssi) {
+    if (!g_lr2021.initialized || !rssi) {
+        return -ENODEV;
+    }
+    switch (g_lr2021.modulation) {
+    case RADIO_MOD_LORA:    return lr2021_get_last_lora_rssi(rssi);
+    case RADIO_MOD_BLE_PHY: return lr2021_get_last_ble_rssi(rssi);
+    case RADIO_MOD_FSK:
+    case RADIO_MOD_GFSK:
+    default:                return lr2021_get_last_fsk_rssi(rssi);
+    }
+}
+
 static int lr2021_set_event_callback(radio_handle_t *handle, radio_event_cb_t cb, void *user_data) {
     ARG_UNUSED(handle);
     g_lr2021.event_cb = cb;
@@ -1684,6 +1772,16 @@ static int lr2021_ops_rx_wait(radio_handle_t *h, uint32_t t) { ARG_UNUSED(h); re
 static int lr2021_ops_set_frequency(radio_handle_t *h, uint32_t hz) { ARG_UNUSED(h); return lr2021_set_frequency(hz); }
 static int lr2021_ops_set_power(radio_handle_t *h, int8_t dbm)      { ARG_UNUSED(h); return lr2021_set_power(dbm); }
 static int lr2021_ops_get_rssi(radio_handle_t *h, int16_t *r)       { ARG_UNUSED(h); return lr2021_get_rssi(r); }
+/* Returns the value latched at RX_DONE inside lr2021_rx() rather than
+ * querying live: by the time the caller gets here the continuous-RX
+ * re-arm (triggered by lr2021_rx()'s own IRQ-clear) may already have
+ * overwritten the chip's packet-status registers. */
+static int lr2021_ops_get_last_rx_rssi(radio_handle_t *h, int16_t *r) {
+    ARG_UNUSED(h);
+    if (!r) return -EINVAL;
+    *r = g_lr2021.last_rx_rssi;
+    return 0;
+}
 static int lr2021_ops_set_mode(radio_handle_t *h, radio_mode_t m)   { ARG_UNUSED(h); return lr2021_set_mode(m); }
 static int lr2021_ops_set_modulation(radio_handle_t *h, radio_modulation_t m) { ARG_UNUSED(h); return lr2021_set_modulation(m); }
 static int lr2021_ops_set_bitrate(radio_handle_t *h, uint32_t bps)  { ARG_UNUSED(h); return lr2021_set_bitrate(bps); }
@@ -1702,6 +1800,7 @@ static const radio_ops_t lr2021_ops = {
     .set_frequency      = lr2021_ops_set_frequency,
     .set_power          = lr2021_ops_set_power,
     .get_rssi           = lr2021_ops_get_rssi,
+    .get_last_rx_rssi   = lr2021_ops_get_last_rx_rssi,
     .set_mode           = lr2021_ops_set_mode,
     .set_modulation     = lr2021_ops_set_modulation,
     .set_bitrate        = lr2021_ops_set_bitrate,

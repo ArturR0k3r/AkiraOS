@@ -366,11 +366,22 @@ int akira_rf_set_modulation(radio_modulation_t mod)
     return ret;
 }
 
+/* g_active_handle is NULL whenever no owner is currently registered through
+ * akira_rf_init()/akira_rf_select() (e.g. mesh init released it via
+ * akira_rf_release_all() and never handed it back) — but the LR2021 is still
+ * live and receiving on whatever SF/BW it was last given. Without this
+ * fallback, SF/BW changes silently no-op (-ENODEV) against a chip that's
+ * actually on the air. */
+static radio_handle_t *rf_phy_handle(void)
+{
+    return g_active_handle ? g_active_handle : radio_manager_get_by_name("LR2021");
+}
+
 int akira_rf_set_spreading_factor(uint8_t sf)
 {
     LOG_INF("RF set LoRa SF: %u", sf);
     if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
-    radio_handle_t *h = g_active_handle;
+    radio_handle_t *h = rf_phy_handle();
     int ret = (h && h->ops && h->ops->set_spreading_factor) ? h->ops->set_spreading_factor(h, sf) : -ENODEV;
     k_mutex_unlock(&s_chip_lock);
     return ret;
@@ -380,7 +391,7 @@ int akira_rf_set_bandwidth(uint32_t bw_hz)
 {
     LOG_INF("RF set BW: %u Hz", bw_hz);
     if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
-    radio_handle_t *h = g_active_handle;
+    radio_handle_t *h = rf_phy_handle();
     int ret = (h && h->ops && h->ops->set_bandwidth) ? h->ops->set_bandwidth(h, bw_hz) : -ENODEV;
     k_mutex_unlock(&s_chip_lock);
     return ret;

@@ -21,7 +21,9 @@
 #define AKIRA_IPC_API_H
 
 #include <stdint.h>
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {

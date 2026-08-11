@@ -10,7 +10,9 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
+#endif
 
 /* Max user-payload bytes per send/broadcast/recv, leaving room for the
  * AkiraMesh header inside mesh_manager's internal packet buffer. */

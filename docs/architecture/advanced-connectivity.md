@@ -104,6 +104,11 @@ CONFIG_AKIRA_THREAD_BORDER_ROUTER=n  # Enable for gateway functionality
 
 **Location:** `src/connectivity/mesh/`, `include/connectivity/akira_mesh.h`
 
+> For the full layered architecture (MAC/Network/Transport/Application/
+> Security) and a walkthrough of how packets actually route hop-by-hop
+> (AODV RREQ/RREP/RERR, local repair, selective-repeat stream mode), see
+> [mesh-networking.md](mesh-networking.md).
+
 Custom lightweight mesh networking with:
 - **Multi-transport** - BLE Mesh, 802.15.4, ESP-NOW (ESP32)
 - **Multi-hop routing** - AODV-based route discovery

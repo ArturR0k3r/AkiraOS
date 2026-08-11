@@ -155,6 +155,9 @@ static const char *BX_STR =
     "15112221349535400772501151409588531511454012693041857206046113283949847762202";
 static const char *BY_STR =
     "46316835694926478169428394003475163141307993866256225615783033603165251855960";
+/* sqrt(-1) mod p = 2^((p-1)/4) mod p (RFC 8032 §5.1.3 point decoding) */
+static const char *SQRT_M1_STR =
+    "19681161376707505956807079304988542015446066515923890162744021073123829784752";
 
 typedef struct {
 	mbedtls_mpi X, Y, Z, T;
@@ -456,7 +459,7 @@ static void ed25519_clamp(uint8_t a[32])
 }
 
 struct curve_ctx {
-	mbedtls_mpi p, d2, L;
+	mbedtls_mpi p, d, d2, L, sqrt_m1;
 	ge25519 B;
 };
 
@@ -465,20 +468,22 @@ static int curve_ctx_init(struct curve_ctx *c)
 	int ret;
 
 	mbedtls_mpi_init(&c->p);
+	mbedtls_mpi_init(&c->d);
 	mbedtls_mpi_init(&c->d2);
 	mbedtls_mpi_init(&c->L);
+	mbedtls_mpi_init(&c->sqrt_m1);
 	ge_init(&c->B);
 
 	ret = mbedtls_mpi_read_string(&c->p, 10, P_STR);
 	if (ret) return ret;
 	ret = mbedtls_mpi_read_string(&c->L, 10, L_STR);
 	if (ret) return ret;
+	ret = mbedtls_mpi_read_string(&c->sqrt_m1, 10, SQRT_M1_STR);
+	if (ret) return ret;
 
-	mbedtls_mpi d;
-	mbedtls_mpi_init(&d);
-	ret = mbedtls_mpi_read_string(&d, 10, D_STR);
-	if (ret == 0) ret = fe_add(&c->d2, &d, &d, &c->p);
-	mbedtls_mpi_free(&d);
+	ret = mbedtls_mpi_read_string(&c->d, 10, D_STR);
+	if (ret) return ret;
+	ret = fe_add(&c->d2, &c->d, &c->d, &c->p);
 	if (ret) return ret;
 
 	ret = mbedtls_mpi_read_string(&c->B.X, 10, BX_STR);
@@ -493,9 +498,101 @@ static int curve_ctx_init(struct curve_ctx *c)
 static void curve_ctx_free(struct curve_ctx *c)
 {
 	mbedtls_mpi_free(&c->p);
+	mbedtls_mpi_free(&c->d);
 	mbedtls_mpi_free(&c->d2);
 	mbedtls_mpi_free(&c->L);
+	mbedtls_mpi_free(&c->sqrt_m1);
 	ge_free(&c->B);
+}
+
+/*
+ * Decode a compressed point (RFC 8032 §5.1.3): y is the low 255 bits, the
+ * top bit of the last byte is x's sign. Recovers x via
+ * x^2 = (y^2-1)/(d*y^2+1) mod p, candidate x = x2^((p+3)/8) mod p (p is
+ * congruent to 5 mod 8, so this is the standard sqrt formula for this
+ * field), corrected by sqrt(-1) if the first candidate doesn't square back
+ * to x2. Returns -EINVAL if the 32 bytes don't encode a valid curve point.
+ */
+static int point_decode(const uint8_t in[32], ge25519 *out, const struct curve_ctx *c)
+{
+	uint8_t y_bytes[32];
+	int x_sign, ret;
+	mbedtls_mpi y, y2, u, v, vinv, x2, x, chk, exp, negx, one;
+
+	mbedtls_mpi_init(&y); mbedtls_mpi_init(&y2); mbedtls_mpi_init(&u);
+	mbedtls_mpi_init(&v); mbedtls_mpi_init(&vinv); mbedtls_mpi_init(&x2);
+	mbedtls_mpi_init(&x); mbedtls_mpi_init(&chk); mbedtls_mpi_init(&exp);
+	mbedtls_mpi_init(&negx); mbedtls_mpi_init(&one);
+
+	memcpy(y_bytes, in, 32);
+	x_sign = (y_bytes[31] & 0x80u) ? 1 : 0;
+	y_bytes[31] &= 0x7Fu;
+
+	ret = mbedtls_mpi_read_binary_le(&y, y_bytes, 32);
+	if (ret) goto done;
+	if (mbedtls_mpi_cmp_mpi(&y, &c->p) >= 0) { ret = -EINVAL; goto done; }
+
+	ret = mbedtls_mpi_lset(&one, 1);
+	if (ret) goto done;
+	ret = fe_mul(&y2, &y, &y, &c->p);
+	if (ret) goto done;
+	ret = fe_sub(&u, &y2, &one, &c->p);
+	if (ret) goto done;
+	ret = fe_mul(&v, &y2, &c->d, &c->p);
+	if (ret) goto done;
+	ret = fe_add(&v, &v, &one, &c->p);
+	if (ret) goto done;
+
+	ret = fe_inv(&vinv, &v, &c->p);
+	if (ret) goto done;
+	ret = fe_mul(&x2, &u, &vinv, &c->p);
+	if (ret) goto done;
+
+	ret = mbedtls_mpi_add_int(&exp, &c->p, 3);
+	if (ret) goto done;
+	ret = mbedtls_mpi_shift_r(&exp, 3);
+	if (ret) goto done;
+	ret = mbedtls_mpi_exp_mod(&x, &x2, &exp, &c->p, NULL);
+	if (ret) goto done;
+
+	ret = fe_mul(&chk, &x, &x, &c->p);
+	if (ret) goto done;
+	if (mbedtls_mpi_cmp_mpi(&chk, &x2) != 0) {
+		ret = fe_mul(&x, &x, &c->sqrt_m1, &c->p);
+		if (ret) goto done;
+		ret = fe_mul(&chk, &x, &x, &c->p);
+		if (ret) goto done;
+		if (mbedtls_mpi_cmp_mpi(&chk, &x2) != 0) { ret = -EINVAL; goto done; }
+	}
+
+	if (mbedtls_mpi_cmp_int(&x, 0) == 0 && x_sign) { ret = -EINVAL; goto done; }
+
+	{
+		int xb0 = mbedtls_mpi_get_bit(&x, 0);
+		if (xb0 < 0) { ret = xb0; goto done; }
+		if (xb0 != x_sign) {
+			ret = mbedtls_mpi_sub_mpi(&negx, &c->p, &x);
+			if (ret) goto done;
+			ret = fe_reduce(&x, &negx, &c->p);
+			if (ret) goto done;
+		}
+	}
+
+	ge_init(out);
+	ret = mbedtls_mpi_copy(&out->X, &x);
+	if (ret) goto done;
+	ret = mbedtls_mpi_copy(&out->Y, &y);
+	if (ret) goto done;
+	ret = mbedtls_mpi_lset(&out->Z, 1);
+	if (ret) goto done;
+	ret = fe_mul(&out->T, &x, &y, &c->p);
+
+done:
+	mbedtls_mpi_free(&y); mbedtls_mpi_free(&y2); mbedtls_mpi_free(&u);
+	mbedtls_mpi_free(&v); mbedtls_mpi_free(&vinv); mbedtls_mpi_free(&x2);
+	mbedtls_mpi_free(&x); mbedtls_mpi_free(&chk); mbedtls_mpi_free(&exp);
+	mbedtls_mpi_free(&negx); mbedtls_mpi_free(&one);
+	return ret;
 }
 
 int ed25519_keygen(const uint8_t seed[32], uint8_t pub[32])
@@ -628,6 +725,71 @@ done:
 	return ret ? -EIO : 0;
 }
 
+int ed25519_verify(const uint8_t pub[32], const uint8_t *msg, uint32_t msg_len,
+                    const uint8_t sig[64])
+{
+	struct curve_ctx c;
+	mbedtls_mpi s, k;
+	ge25519 A, R, sB, kA, rhs;
+	uint8_t *buf = NULL;
+	uint8_t k_hash[64];
+	uint8_t lhs_enc[32], rhs_enc[32];
+	int ret;
+
+	memset(&c, 0, sizeof(c));
+	mbedtls_mpi_init(&s); mbedtls_mpi_init(&k);
+	ge_init(&A); ge_init(&R); ge_init(&sB); ge_init(&kA); ge_init(&rhs);
+
+	ret = curve_ctx_init(&c);
+	if (ret) goto done;
+
+	/* Reject non-canonical S per RFC 8032 §5.1.7 (strict verification) —
+	 * without this a signature could be malleable (S, S+L both "work"). */
+	ret = mbedtls_mpi_read_binary_le(&s, sig + 32, 32);
+	if (ret) goto done;
+	if (mbedtls_mpi_cmp_mpi(&s, &c.L) >= 0) { ret = -EINVAL; goto done; }
+
+	ret = point_decode(pub, &A, &c);
+	if (ret) goto done;
+	ret = point_decode(sig, &R, &c);
+	if (ret) goto done;
+
+	buf = k_malloc(64u + (size_t)msg_len);
+	if (!buf) { ret = -ENOMEM; goto done; }
+	memcpy(buf, sig, 32);        /* R, taken from the signature as-is */
+	memcpy(buf + 32, pub, 32);
+	if (msg_len) memcpy(buf + 64, msg, msg_len);
+	ret = sha512_oneshot(buf, 64u + msg_len, k_hash);
+	if (ret) goto done;
+	ret = scalar_from_hash_le(&k, k_hash, &c.L);
+	if (ret) goto done;
+
+	/* Check [S]B == R + [k]A by comparing encoded points — avoids having
+	 * to normalize/compare projective coordinates directly. */
+	ret = scalarmult(&sB, &s, &c.B, &c.p, &c.d2);
+	if (ret) goto done;
+	ret = scalarmult(&kA, &k, &A, &c.p, &c.d2);
+	if (ret) goto done;
+	ret = point_add(&rhs, &R, &kA, &c.p, &c.d2);
+	if (ret) goto done;
+	ret = point_encode(&sB, &c.p, lhs_enc);
+	if (ret) goto done;
+	ret = point_encode(&rhs, &c.p, rhs_enc);
+	if (ret) goto done;
+
+	ret = (memcmp(lhs_enc, rhs_enc, 32) == 0) ? 0 : -EINVAL;
+
+done:
+	if (buf) {
+		memset(buf, 0, 64u + (size_t)msg_len);
+		k_free(buf);
+	}
+	mbedtls_mpi_free(&s); mbedtls_mpi_free(&k);
+	ge_free(&A); ge_free(&R); ge_free(&sB); ge_free(&kA); ge_free(&rhs);
+	curve_ctx_free(&c);
+	return ret;
+}
+
 int ed25519_self_test(void)
 {
 	/* RFC 8032 sec 7.1, test vector 1 */
@@ -652,6 +814,17 @@ int ed25519_self_test(void)
 	/* message is empty for test vector 1 */
 	if (ed25519_sign(seed, NULL, 0, sig) != 0) return -3;
 	if (memcmp(sig, expect_sig, 64) != 0) return -4;
+	if (ed25519_verify(pub, NULL, 0, sig) != 0) return -9;
+	{
+		uint8_t bad_sig[64];
+		memcpy(bad_sig, sig, 64);
+		bad_sig[0] ^= 1;
+		if (ed25519_verify(pub, NULL, 0, bad_sig) == 0) return -10;
+	}
+	{
+		static const uint8_t not_empty[1] = { 'x' };
+		if (ed25519_verify(pub, not_empty, 1, sig) == 0) return -11;
+	}
 
 	/* RFC 8032 sec 7.1, "TEST 1024" — 1023-octet message. This is the only
 	 * vector whose SHA512(R||A||M) computation exceeds one 128-byte block

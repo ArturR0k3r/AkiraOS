@@ -877,6 +877,52 @@ config AKIRA_MESH_MAX_SESSIONS
     help
       Maximum number of peers with a simultaneously cached E2E session key.
 
+config AKIRA_MESH_RREQ_RREP_SIGNING
+    bool "Sign RREQ/RREP handshake (Ed25519 + TOFU pin)"
+    default n
+    depends on AKIRA_MESH_E2E_CRYPTO
+    help
+      Closes the unauthenticated-ECDH MITM gap: without this, a malicious
+      relay can swap in its own ephemeral pubkey on both legs of the
+      RREQ/RREP handshake and transparently decrypt/re-encrypt traffic
+      through itself. With this on, orig_identity_pub/target_prekey_pub
+      are Ed25519-signed and the signer's key is TOFU-pinned per node ID
+      (see mesh_aodv.c). Sent as a separate follow-up frame (RREQ_SIG/
+      RREP_SIG), not inline — Ed25519 sig+pubkey is a fixed 96B that the
+      base RREQ/RREP (already 109B/105B) can't absorb on every radio;
+      CC1121's 125B FIFO has no headroom for it inline. Off = route
+      discovery unauthenticated (passive-eavesdropping-safe only).
+
+config AKIRA_MESH_SIGN_PENDING_MAX
+    int "Pending RREQ/RREP entries awaiting their sig frame"
+    default 4
+    depends on AKIRA_MESH_RREQ_RREP_SIGNING
+    help
+      A RREQ/RREP is held (not processed or relayed) until its matching
+      _SIG frame arrives or AKIRA_MESH_SIGN_WAIT_MS elapses. Separate
+      small table from AKIRA_MESH_MAX_PINS — this bounds concurrent
+      in-flight discoveries, not known peers.
+
+config AKIRA_MESH_SIGN_WAIT_MS
+    int "Max wait for a RREQ/RREP's sig follow-up frame (ms)"
+    default 800
+    depends on AKIRA_MESH_RREQ_RREP_SIGNING
+    help
+      The base frame and its _SIG follow-up are sent back-to-back but
+      arrive independently over the radio — CSMA backoff/requeue can
+      reorder frames within the same priority lane — so this bounds how
+      long a hop holds an unverified RREQ/RREP before giving up on it.
+
+config AKIRA_MESH_MAX_PINS
+    int "TOFU signing-key pin table size (peers)"
+    default 8
+    depends on AKIRA_MESH_RREQ_RREP_SIGNING
+    help
+      Maximum number of peer node IDs with a pinned Ed25519 signing key
+      (trust-on-first-use, see mesh_aodv.c RREQ/RREP handling). A relay
+      that swaps in a different key for an already-pinned node ID is
+      rejected. Oldest pin evicted when full.
+
 config AKIRA_MESH_SESSION_LIFETIME_S
     int "Session-key TTL (s)"
     default 300
@@ -916,6 +962,118 @@ config AKIRA_MESH_RX_IDLE_YIELD_MS
       return almost instantly either way). Without it the RX thread spins,
       continuously re-acquiring the shared SPI bus lock and starving other
       devices on the same bus (e.g. an SD card) of a fair turn.
+
+config AKIRA_MESH_MAC_TXQ_CRITICAL_LEN
+    int "MAC critical-lane TX queue depth"
+    default 8
+    help
+      Depth of the critical-priority TX queue (RREQ/RREP/RERR). Checked
+      first on every MAC TX thread iteration.
+
+config AKIRA_MESH_MAC_TXQ_HIGH_LEN
+    int "MAC high-lane TX queue depth"
+    default 8
+    help
+      Depth of the high-priority TX queue (ACK).
+
+config AKIRA_MESH_MAC_TXQ_MEDIUM_LEN
+    int "MAC medium-lane TX queue depth"
+    default 8
+    help
+      Depth of the medium-priority TX queue (STATUS_QUERY/STATUS_RESP/
+      STREAM_STATUS_*).
+
+config AKIRA_MESH_MAC_TXQ_LOW_LEN
+    int "MAC low-lane TX queue depth"
+    default 8
+    help
+      Depth of the low-priority TX queue (DATA/APP_CHUNK/STREAM_DATA).
+      Checked last on every MAC TX thread iteration.
+
+config AKIRA_MESH_MAC_POLL_MS
+    int "MAC TX thread idle/backoff poll interval (ms)"
+    default 10
+    help
+      Sleep this long when all TX lanes are empty, or when the frame at
+      the head of a lane isn't eligible to send yet (CCA backoff not
+      elapsed). Bounds how long a higher-priority frame arriving mid-wait
+      has to wait before the TX thread notices it.
+
+config AKIRA_MESH_CCA_BUSY_RSSI_DBM
+    int "CCA channel-busy RSSI threshold (dBm)"
+    default -85
+    help
+      RSSI at or above this value (less negative = stronger signal) is
+      treated as "channel busy" by software CSMA/CA. Only consulted on
+      radios advertising RADIO_CAP_CCA.
+
+config AKIRA_MESH_CCA_BACKOFF_MAX_MS
+    int "CCA random backoff ceiling (ms)"
+    default 50
+    help
+      On a busy channel, the MAC TX thread waits a random
+      0..this-value delay before rechecking.
+
+config AKIRA_MESH_CCA_MAX_RETRIES
+    int "CCA busy-recheck attempts before sending anyway"
+    default 3
+    help
+      CCA reduces collisions, it does not replace the existing ACK/retry
+      reliability backstop — a frame is never dropped purely because the
+      channel still looked busy after this many rechecks.
+
+config AKIRA_MESH_LOCAL_REPAIR_TIMEOUT_MS
+    int "Local route repair wait before falling back to RERR (ms)"
+    default 2000
+    help
+      When a relay node's forward lookup misses, it queues the packet and
+      fires its own RREQ before bouncing an error back to the original
+      source. This is how long it waits for that local RREQ to resolve.
+
+config AKIRA_MESH_RREQ_MAX_RETRIES
+    int "Extra RREQ attempts per route discovery"
+    default 2
+    help
+      Total RREQ attempts for one discovery = this value + 1 (the initial
+      attempt). Each retry's wait interval doubles (exponential backoff).
+
+config AKIRA_MESH_NEIGHBOR_TIMEOUT_MS
+    int "Neighbor-table entry eviction age (ms)"
+    default 60000
+    help
+      A neighbor not heard from (no beacon) for longer than this is
+      dropped from the node table, freeing the slot for new discoveries.
+      Should exceed roughly 3x beacon_interval_ms.
+
+config AKIRA_MESH_STREAM_WINDOW
+    int "Stream-mode selective-repeat window size (frames)"
+    default 8
+    help
+      Max frames in flight at once for akira_mesh_send_stream(), matching
+      the MAC bulk-lane queue depth.
+
+config AKIRA_MESH_STREAM_TX_GAP_MS
+    int "Stream-mode inter-frame pacing gap (ms)"
+    default 20
+    help
+      Minimum delay between consecutive frames within one burst, so a
+      stream send doesn't monopolize the shared channel even without
+      waiting for a per-frame ack.
+
+config AKIRA_MESH_STREAM_STATUS_INTERVAL
+    int "Stream-mode frames between STATUS_REQ checks"
+    default 8
+    help
+      How many frames the sender transmits before asking the receiver
+      which indices in the current window actually arrived.
+
+config AKIRA_MESH_ROUTE_DISCOVERY_POLL_MS
+    int "akira_mesh_send_stream() cold-path route/session poll interval (ms)"
+    default 100
+    help
+      How often akira_mesh_send_stream() re-checks for a resolved route and
+      installed E2E session while waiting out RREQ/RREP discovery for a
+      cold destination.
 
 config AKIRA_MESH_APP_AUTO_INSTALL
     bool "Auto-install apps received via mesh distribution"
@@ -1893,7 +2051,6 @@ config FS_FATFS_VOLUME_COUNT
 
 
 menu "WASM API Exports"
-    depends on AKIRA_WASM_RUNTIME
 
 config AKIRA_WASM_API
     bool "Enable WASM native API exports"

@@ -60,6 +60,15 @@ typedef enum {
     AKIRA_MESH_MSG_APP_START,      /* WASM app transfer header (name/size/count) */
     AKIRA_MESH_MSG_APP_STATUS_REQ, /* Query receiver's reassembly progress for an app_id */
     AKIRA_MESH_MSG_APP_STATUS_RESP,/* Reply: received-chunk bitmap, for resume */
+    AKIRA_MESH_MSG_STREAM_DATA,        /* Selective-repeat ARQ bulk-data frame */
+    AKIRA_MESH_MSG_STREAM_STATUS_REQ,  /* Query received-bitmap for a stream window */
+    AKIRA_MESH_MSG_STREAM_STATUS_RESP, /* Reply: bitmap of received indices */
+    /* Ed25519 sig+pubkey for a RREQ/RREP sent moments earlier, as a
+     * separate frame so the base RREQ/RREP stays small enough for every
+     * radio (see CONFIG_AKIRA_MESH_RREQ_RREP_SIGNING). Correlated to its
+     * base frame by (src_id, orig_seq/dest_seq), not by arrival order. */
+    AKIRA_MESH_MSG_ROUTE_REQ_SIG,
+    AKIRA_MESH_MSG_ROUTE_REPLY_SIG,
 } akira_mesh_msg_type_t;
 
 /* Mesh configuration */
@@ -133,6 +142,16 @@ int akira_mesh_start(void);
 int akira_mesh_stop(void);
 
 /**
+ * @brief Set the mesh radio's TX power
+ *
+ * @param dbm Requested power in dBm — clamped to the radio's supported
+ *            range by its driver.
+ * @return 0 on success, -ENODEV if mesh isn't initialized, negative errno
+ *         from the radio driver otherwise.
+ */
+int akira_mesh_set_tx_power(int8_t dbm);
+
+/**
  * @brief Send data to specific node
  *
  * Performs route discovery if needed and sends data via mesh.
@@ -143,6 +162,19 @@ int akira_mesh_stop(void);
  * @return 0 on success, negative errno on failure
  */
 int akira_mesh_send(const uint8_t *dest_id, const uint8_t *data, size_t len);
+
+/**
+ * @brief Send data to a node using selective-repeat ARQ (windowed burst +
+ * periodic batch status, not per-frame ack). Higher throughput than
+ * akira_mesh_send() on larger payloads over a lossy link; akira_mesh_send()
+ * remains the right choice for small/latency-sensitive single messages.
+ *
+ * @param dest_id Destination node ID
+ * @param data Data to send
+ * @param len Data length
+ * @return 0 on success, negative errno on failure
+ */
+int akira_mesh_send_stream(const uint8_t *dest_id, const uint8_t *data, size_t len);
 
 /**
  * @brief Broadcast data to all nodes
@@ -204,6 +236,33 @@ int akira_mesh_register_rx_callback(akira_mesh_rx_cb_t callback, void *user_data
  */
 int akira_mesh_distribute_app(const uint8_t *dest_id, const char *app_name,
                               const uint8_t *app_data, size_t app_len);
+
+/**
+ * @brief Test-only: silently drop every frame from peer_id at the earliest
+ * RX point, before any layer (routing, transport, app) sees it — simulates
+ * peer_id being out of radio range. For benchtop rigs where boards can't be
+ * physically separated enough to naturally force multi-hop; block the
+ * direct link between two nodes so AODV has to route through a third.
+ *
+ * @return 0 on success (including if already dropped), -ENOMEM if the
+ * blocklist is full, -EINVAL on null peer_id.
+ */
+int akira_mesh_debug_link_drop(const uint8_t *peer_id);
+
+/**
+ * @brief Undo akira_mesh_debug_link_drop() for peer_id.
+ * @return 0 on success, -ENOENT if peer_id wasn't dropped.
+ */
+int akira_mesh_debug_link_restore(const uint8_t *peer_id);
+
+/**
+ * @brief Test-only: query the link-drop blocklist. Exposed so mesh_aodv.c
+ * can filter RREQ/RREP on relay_id (the immediate-hop field, rewritten by
+ * every relay) instead of the frame's true, hop-invariant src_id — checking
+ * src_id there would also block a legitimately-relayed copy, defeating the
+ * whole simulation.
+ */
+bool akira_mesh_debug_link_is_dropped(const uint8_t *peer_id);
 
 #ifdef __cplusplus
 }

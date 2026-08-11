@@ -14,7 +14,9 @@
 #include <stddef.h>
 
 
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
+#endif
 
 /* Allocation header for quota tracking */
 #define AKIRA_ALLOC_MAGIC 0xAA4B5241

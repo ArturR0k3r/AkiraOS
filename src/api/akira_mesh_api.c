@@ -79,7 +79,9 @@ int akira_native_mesh_init(wasm_exec_env_t exec_env, int32_t node_id,
         snprintf(cfg.node_name, sizeof(cfg.node_name), "akira-%02x", (uint8_t)node_id);
     }
     cfg.role = (akira_mesh_role_t)role;
-    cfg.transport = AKIRA_MESH_TRANSPORT_SUBGHZ;
+    /* Only LR2021 (LoRa) is registered on this hardware — see the "On this
+     * hardware the mesh binds to the LR2021" doc comment in akira_api.h. */
+    cfg.transport = AKIRA_MESH_TRANSPORT_LORA;
     cfg.max_hops = AKIRA_MESH_MAX_HOPS;
     cfg.beacon_interval_ms = beacon_interval_ms ? beacon_interval_ms : 5000;
 
