@@ -89,6 +89,7 @@ static struct {
     akira_mesh_stats_t   *stats;
     akira_mesh_rx_cb_t   *rx_cb_ptr;
     void                **rx_ctx_ptr;
+    size_t                mtu;   /* radio's actual max payload, see mesh_manager.c's mesh_state.mtu */
     uint16_t              seq_num;
     /* Only guards forwarded (non-self-destined) APP_* frames — a relay
      * doesn't validate content, so seen-based loop/flood suppression is
@@ -166,10 +167,11 @@ static void app_dist_on_ack_notify(uint16_t seq, const uint8_t *src_id, bool tim
 }
 
 void mesh_app_dist_module_init(const akira_mesh_config_t *config, akira_mesh_stats_t *stats,
-                               akira_mesh_rx_cb_t *rx_cb_ptr, void **rx_ctx_ptr)
+                               size_t mtu, akira_mesh_rx_cb_t *rx_cb_ptr, void **rx_ctx_ptr)
 {
     memcpy(&s_app_dist.config, config, sizeof(*config));
     s_app_dist.stats = stats;
+    s_app_dist.mtu = mtu;
     s_app_dist.rx_cb_ptr = rx_cb_ptr;
     s_app_dist.rx_ctx_ptr = rx_ctx_ptr;
     s_app_dist.seq_num = 0;
@@ -283,7 +285,7 @@ static bool mesh_app_rx_chunk(const struct mesh_app_chunk_hdr *ch,
         return false;
     }
 
-    size_t stride = MESH_MAC_PACKET_BUF_SIZE - sizeof(struct mesh_header) -
+    size_t stride = s_app_dist.mtu - sizeof(struct mesh_header) -
                     sizeof(struct mesh_app_chunk_hdr);
     size_t off = (size_t)ch->chunk_index * stride;
     if (off + data_len > s_app_dist.app_rx.total_len) {
@@ -622,7 +624,7 @@ int akira_mesh_distribute_app(const uint8_t *dest_id, const char *app_name,
     if (name_len == 0 || name_len >= AKIRA_MESH_APP_NAME_LEN) return -ENAMETOOLONG;
     if (app_len > (size_t)CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024) return -EFBIG;
 
-    size_t stride = MESH_MAC_PACKET_BUF_SIZE - sizeof(struct mesh_header) -
+    size_t stride = s_app_dist.mtu - sizeof(struct mesh_header) -
                     sizeof(struct mesh_app_chunk_hdr);
     uint16_t chunk_count = (uint16_t)DIV_ROUND_UP(app_len, stride);
     if (chunk_count > MESH_APP_MAX_CHUNKS) return -EFBIG;
@@ -672,7 +674,12 @@ int akira_mesh_distribute_app(const uint8_t *dest_id, const char *app_name,
         int cret = -EBUSY;
         for (int attempt = 0; attempt < CONFIG_AKIRA_MESH_APP_TX_RETRIES; attempt++) {
             cret = mesh_send_app_and_wait(dest_id, AKIRA_MESH_MSG_APP_CHUNK, pkt, sizeof(*ch) + clen);
-            if (cret != -EBUSY) break;
+            /* -ETIMEDOUT (no ACK — a lost/corrupted chunk, unremarkable on
+             * a lossy radio) needs the same retry as -EBUSY (queue full);
+             * without it, this bails on the whole transfer over one dropped
+             * chunk instead of retrying it, defeating the point of the
+             * resumable bitmap this design otherwise relies on. */
+            if (cret != -EBUSY && cret != -ETIMEDOUT) break;
             k_msleep(CONFIG_AKIRA_MESH_APP_TX_GAP_MS);
         }
         if (cret) return cret;

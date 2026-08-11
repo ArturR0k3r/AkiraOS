@@ -193,7 +193,10 @@ static void send_ack(const uint8_t *to, uint16_t seq)
 {
     uint8_t pkt[sizeof(struct mesh_header)];
     struct mesh_header *h = (struct mesh_header *)pkt;
-    fill_transport_header(h, AKIRA_MESH_MSG_ACK, 1, to);
+    /* Same hop budget as everything else, not a fixed ttl=1 — an ACK for a
+     * DATA frame that traveled N hops needs N hops to get back, and the
+     * dispatch below relays it like any other addressed-elsewhere frame. */
+    fill_transport_header(h, AKIRA_MESH_MSG_ACK, s_transport.config.max_hops, to);
     h->seq_num = seq;   /* echo the acked seq */
     mesh_mac_send(MESH_MAC_PRIO_HIGH, pkt, sizeof(pkt));
 }
@@ -444,12 +447,22 @@ static void handle_stream_data_frame(const struct mesh_header *h, const uint8_t 
     size_t data_len = plen - sizeof(*sh);
     if (sh->frame_count == 0) return;
 
-    if (!s_stream_rx.active || memcmp(s_stream_rx.origin_id, h->src_id, AKIRA_MESH_NODE_ID_LEN) != 0 ||
-        s_stream_rx.frame_count != sh->frame_count) {
+    bool new_transfer = !s_stream_rx.active ||
+                        memcmp(s_stream_rx.origin_id, h->src_id, AKIRA_MESH_NODE_ID_LEN) != 0 ||
+                        s_stream_rx.frame_count != sh->frame_count;
+    if (new_transfer) {
+        /* Frame 0 specifically defines the stride, not whichever frame
+         * happens to arrive first — the sender's chunking (chunk_len =
+         * MIN(stride, ct_len - off)) only guarantees a full-stride frame at
+         * index 0; the last frame is typically shorter. Radio delivery has
+         * no ordering guarantee (CSMA requeue-on-busy can reorder frames in
+         * the same lane too), so if the last (short) frame arrives first,
+         * inferring stride from it truncates every later full-length frame.
+         * Drop non-zero-index frames for a transfer we haven't started yet
+         * — the selective-repeat retry (stream_query_and_retransmit) picks
+         * them back up once frame 0 has been seen. */
+        if (sh->frame_index != 0) return;
         stream_rx_reset();
-        /* First frame seen for a transfer defines the stride — every frame
-         * but the last is exactly this size, matching how the sender built
-         * it (see akira_mesh_send_stream). */
         size_t stride_guess = data_len;
         if (stride_guess == 0) return;
         s_stream_rx.buf = akira_malloc_buffer((size_t)sh->frame_count * stride_guess);
@@ -786,11 +799,14 @@ void mesh_transport_handle_frame(const uint8_t *buf, size_t len)
      * != us) are still deduped: a relay doesn't validate content, so
      * seen-based loop/flood suppression is both safe and wanted there. */
     bool self_dest = is_self(h->dest_id);
-    bool skip_dedup = (h->msg_type == AKIRA_MESH_MSG_ACK) ||
-                      (self_dest && (h->msg_type == AKIRA_MESH_MSG_DATA ||
-                                     h->msg_type == AKIRA_MESH_MSG_STREAM_DATA ||
-                                     h->msg_type == AKIRA_MESH_MSG_STREAM_STATUS_REQ ||
-                                     h->msg_type == AKIRA_MESH_MSG_STREAM_STATUS_RESP));
+    /* ACK now relays past 1 hop like everything else (see send_ack) — only
+     * skip dedup for it on the self_dest side, same as DATA/STREAM_*;
+     * a relayed (!self_dest) ACK still needs loop/flood suppression. */
+    bool skip_dedup = self_dest && (h->msg_type == AKIRA_MESH_MSG_ACK ||
+                                    h->msg_type == AKIRA_MESH_MSG_DATA ||
+                                    h->msg_type == AKIRA_MESH_MSG_STREAM_DATA ||
+                                    h->msg_type == AKIRA_MESH_MSG_STREAM_STATUS_REQ ||
+                                    h->msg_type == AKIRA_MESH_MSG_STREAM_STATUS_RESP);
     if (!skip_dedup) {
         k_mutex_lock(&s_transport.lock, K_FOREVER);
         bool dup = mesh_seen_check_and_add(&s_transport.seen, h->src_id, h->seq_num);
@@ -806,11 +822,19 @@ void mesh_transport_handle_frame(const uint8_t *buf, size_t len)
         handle_data(h, buf, len, payload, plen, now);
         break;
     case AKIRA_MESH_MSG_ACK:
-        k_mutex_lock(&s_transport.lock, K_FOREVER);
-        mesh_ack_clear(&s_transport.acks, h->seq_num, h->src_id);
-        k_mutex_unlock(&s_transport.lock);
-        if (s_transport.ack_notify_cb) {
-            s_transport.ack_notify_cb(h->seq_num, h->src_id, false);
+        if (self_dest) {
+            k_mutex_lock(&s_transport.lock, K_FOREVER);
+            mesh_ack_clear(&s_transport.acks, h->seq_num, h->src_id);
+            k_mutex_unlock(&s_transport.lock);
+            if (s_transport.ack_notify_cb) {
+                s_transport.ack_notify_cb(h->seq_num, h->src_id, false);
+            }
+        } else {
+            /* Not ours — an overhearing node on a shared-medium radio must
+             * not clear its own pending-ACK entry just because (seq_num,
+             * src_id) happens to collide with someone else's independent
+             * per-node counter; relay toward the real dest_id instead. */
+            transport_relay(h, buf, len);
         }
         break;
     case AKIRA_MESH_MSG_STREAM_DATA:

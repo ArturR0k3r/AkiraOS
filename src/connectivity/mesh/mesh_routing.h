@@ -34,6 +34,15 @@ struct seen_cache {
 void mesh_seen_reset(struct seen_cache *c);
 /* true if (src,seq) already present; else records it and returns false */
 bool mesh_seen_check_and_add(struct seen_cache *c, const uint8_t *src_id, uint16_t seq_num);
+/* Read-only lookup, no mutation — for callers that must verify a frame
+ * before letting it occupy a dedup slot (see mesh_seen_add below). Using
+ * check_and_add here would let a forged (src_id, seq_num) that fails
+ * verification still poison the cache and cause the real sender's later
+ * frame with that seq_num to be dropped as a dup. */
+bool mesh_seen_check(const struct seen_cache *c, const uint8_t *src_id, uint16_t seq_num);
+/* Unconditionally records (src_id, seq_num) — call only once the frame is
+ * judged legitimate (verified, or of a type with no verification step). */
+void mesh_seen_add(struct seen_cache *c, const uint8_t *src_id, uint16_t seq_num);
 
 /* ---- AODV seq compare + route table ---- */
 /* signed-difference seq compare: true if a is strictly newer than b */
@@ -58,7 +67,7 @@ struct route_entry *mesh_route_lookup(struct route_table *t, const uint8_t *dest
  * Returns true if the table changed. Evicts the least-recently-used entry
  * instead of failing when the table is full and dest isn't already present. */
 bool mesh_route_install(struct route_table *t, const uint8_t *dest, const uint8_t *next_hop,
-                        uint8_t hop_count, uint16_t dest_seq, uint32_t expiry_ms);
+                        uint8_t hop_count, uint16_t dest_seq, uint32_t now_ms, uint32_t expiry_ms);
 /* @return true if a valid entry for dest existed and was just invalidated,
  * false if there was nothing to invalidate (already invalid, or never
  * existed) — the caller uses this to decide whether propagating a RERR one
@@ -66,7 +75,8 @@ bool mesh_route_install(struct route_table *t, const uint8_t *dest, const uint8_
 bool mesh_route_invalidate(struct route_table *t, const uint8_t *dest);
 /* Extend expiry on a still-valid entry (route actively in use) — no-op if
  * absent/expired, does not install. */
-void mesh_route_touch(struct route_table *t, const uint8_t *dest, uint32_t new_expiry_ms);
+void mesh_route_touch(struct route_table *t, const uint8_t *dest, uint32_t now_ms,
+                      uint32_t new_expiry_ms);
 /* mark expired entries invalid */
 void mesh_route_gc(struct route_table *t, uint32_t now_ms);
 

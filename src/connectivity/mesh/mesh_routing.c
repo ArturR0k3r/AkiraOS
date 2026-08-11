@@ -9,7 +9,7 @@ void mesh_seen_reset(struct seen_cache *c)
     memset(c, 0, sizeof(*c));
 }
 
-bool mesh_seen_check_and_add(struct seen_cache *c, const uint8_t *src_id, uint16_t seq_num)
+bool mesh_seen_check(const struct seen_cache *c, const uint8_t *src_id, uint16_t seq_num)
 {
     for (uint16_t i = 0; i < CONFIG_AKIRA_MESH_SEEN_CACHE; i++) {
         if (c->entries[i].used &&
@@ -18,11 +18,22 @@ bool mesh_seen_check_and_add(struct seen_cache *c, const uint8_t *src_id, uint16
             return true;
         }
     }
+    return false;
+}
+
+void mesh_seen_add(struct seen_cache *c, const uint8_t *src_id, uint16_t seq_num)
+{
     struct seen_entry *e = &c->entries[c->head];
     memcpy(e->src_id, src_id, AKIRA_MESH_NODE_ID_LEN);
     e->seq_num = seq_num;
     e->used = true;
     c->head = (c->head + 1) % CONFIG_AKIRA_MESH_SEEN_CACHE;
+}
+
+bool mesh_seen_check_and_add(struct seen_cache *c, const uint8_t *src_id, uint16_t seq_num)
+{
+    if (mesh_seen_check(c, src_id, seq_num)) return true;
+    mesh_seen_add(c, src_id, seq_num);
     return false;
 }
 
@@ -48,7 +59,7 @@ struct route_entry *mesh_route_lookup(struct route_table *t, const uint8_t *dest
 }
 
 bool mesh_route_install(struct route_table *t, const uint8_t *dest, const uint8_t *next_hop,
-                        uint8_t hop_count, uint16_t dest_seq, uint32_t expiry_ms)
+                        uint8_t hop_count, uint16_t dest_seq, uint32_t now_ms, uint32_t expiry_ms)
 {
     struct route_entry *r = route_find(t, dest);
     if (r) {
@@ -65,7 +76,7 @@ bool mesh_route_install(struct route_table *t, const uint8_t *dest, const uint8_
              * is reached. */
             r = &t->e[0];
             for (int i = 1; i < CONFIG_AKIRA_MESH_MAX_ROUTES; i++) {
-                if (t->e[i].last_used_ms < r->last_used_ms) r = &t->e[i];
+                if ((int32_t)(t->e[i].last_used_ms - r->last_used_ms) < 0) r = &t->e[i];
             }
         }
     }
@@ -74,7 +85,7 @@ bool mesh_route_install(struct route_table *t, const uint8_t *dest, const uint8_
     r->hop_count = hop_count;
     r->dest_seq = dest_seq;
     r->expiry_ms = expiry_ms;
-    r->last_used_ms = expiry_ms;   /* install counts as a fresh use */
+    r->last_used_ms = now_ms;   /* install counts as a fresh use */
     r->valid = true;
     return true;
 }
@@ -89,10 +100,11 @@ bool mesh_route_invalidate(struct route_table *t, const uint8_t *dest)
     return false;
 }
 
-void mesh_route_touch(struct route_table *t, const uint8_t *dest, uint32_t new_expiry_ms)
+void mesh_route_touch(struct route_table *t, const uint8_t *dest, uint32_t now_ms,
+                      uint32_t new_expiry_ms)
 {
     struct route_entry *r = route_find(t, dest);
-    if (r && r->valid) { r->expiry_ms = new_expiry_ms; r->last_used_ms = new_expiry_ms; }
+    if (r && r->valid) { r->expiry_ms = new_expiry_ms; r->last_used_ms = now_ms; }
 }
 
 void mesh_route_gc(struct route_table *t, uint32_t now_ms)

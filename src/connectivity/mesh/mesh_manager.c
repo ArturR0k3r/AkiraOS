@@ -276,7 +276,7 @@ int akira_mesh_init(const akira_mesh_config_t *config)
     }
     mesh_transport_module_init(config, &mesh_state.stats, mesh_state.mtu,
                                &mesh_state.rx_callback, &mesh_state.rx_user_data);
-    mesh_app_dist_module_init(config, &mesh_state.stats,
+    mesh_app_dist_module_init(config, &mesh_state.stats, mesh_state.mtu,
                               &mesh_state.rx_callback, &mesh_state.rx_user_data);
 
     mesh_state.initialized = true;

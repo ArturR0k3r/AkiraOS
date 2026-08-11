@@ -288,6 +288,21 @@ static void fill_aodv_header(struct mesh_header *h, uint8_t type, uint8_t ttl, c
     k_mutex_unlock(&s_aodv.lock);
 }
 
+/* send_rreq runs from multiple threads (shell, RX-dispatch relay/local-repair
+ * paths, sysworkq via aodv_tick's mesh_pr_tick) — the increment must be
+ * locked like seq_num above, not a bare read-modify-write. Also used when
+ * replying (handle_route_req_verified) so a pure-responder node's aodv_seq
+ * advances too: without that, every RREP it ever sends carries dest_seq=0,
+ * which under CONFIG_AKIRA_MESH_RREQ_RREP_SIGNING signs byte-identical
+ * messages every time (see build_rrep_sign_msg). */
+static uint16_t next_aodv_seq(void)
+{
+    k_mutex_lock(&s_aodv.lock, K_FOREVER);
+    uint16_t v = ++s_aodv.aodv_seq;
+    k_mutex_unlock(&s_aodv.lock);
+    return v;
+}
+
 int mesh_aodv_module_init(const akira_mesh_config_t *config, akira_mesh_stats_t *stats)
 {
     memcpy(&s_aodv.config, config, sizeof(*config));
@@ -456,8 +471,13 @@ static void send_rrep_sig(const uint8_t *to_immediate, const struct aodv_rrep *r
 }
 #endif
 
-static void send_rreq(const uint8_t *target)
+/* void *ctx parameter unused directly — signature matches mesh_pr_tick's
+ * on_retry callback type exactly so it can be passed without a cast (a
+ * mismatched-signature function pointer cast is UB in C and breaks under
+ * CFI/-fsanitize=function even when it happens to work in practice). */
+static void send_rreq(const uint8_t *target, void *ctx)
 {
+    ARG_UNUSED(ctx);
     uint8_t bcast[AKIRA_MESH_NODE_ID_LEN];
     memset(bcast, 0xFF, sizeof(bcast));
     uint8_t pkt[sizeof(struct mesh_header) + sizeof(struct aodv_rreq)];
@@ -467,7 +487,7 @@ static void send_rreq(const uint8_t *target)
     struct aodv_rreq *rq = (struct aodv_rreq *)(pkt + sizeof(*h));
     memcpy(rq->target, target, AKIRA_MESH_NODE_ID_LEN);
     rq->rreq_id = h->seq_num;
-    rq->orig_seq = ++s_aodv.aodv_seq;
+    rq->orig_seq = next_aodv_seq();
     rq->dest_seq = 0;
     rq->hop_count = 0;
     memcpy(rq->relay_id, s_aodv.config.node_id, AKIRA_MESH_NODE_ID_LEN);
@@ -583,7 +603,7 @@ static void forward_data(struct mesh_header *h, const uint8_t *full, size_t len)
         send_rerr_broadcast(h->dest_id);
         return;
     }
-    send_rreq(h->dest_id);
+    send_rreq(h->dest_id, NULL);
 }
 
 static void flush_pending_for(const uint8_t *dest)
@@ -620,8 +640,9 @@ static void handle_route_req_verified(struct mesh_header *h, const uint8_t *buf,
             h->src_id[AKIRA_MESH_NODE_ID_LEN - 1], rq->relay_id[AKIRA_MESH_NODE_ID_LEN - 1],
             rq->hop_count, rq->target[AKIRA_MESH_NODE_ID_LEN - 1]);
     k_mutex_lock(&s_aodv.lock, K_FOREVER);
+    mesh_seen_add(&s_aodv.seen, h->src_id, h->seq_num);
     mesh_route_install(&s_aodv.routes, h->src_id, rq->relay_id,
-                       rq->hop_count + 1, rq->orig_seq, now + MESH_ROUTE_LIFETIME_MS);
+                       rq->hop_count + 1, rq->orig_seq, now, now + MESH_ROUTE_LIFETIME_MS);
     k_mutex_unlock(&s_aodv.lock);
 
     if (is_self(rq->target)) {
@@ -633,7 +654,7 @@ static void handle_route_req_verified(struct mesh_header *h, const uint8_t *buf,
                     h->src_id[0], h->src_id[1]);
         }
 #endif
-        send_rrep(h->src_id, s_aodv.config.node_id, s_aodv.aodv_seq, 0);
+        send_rrep(h->src_id, s_aodv.config.node_id, next_aodv_seq(), 0);
     } else if (h->ttl > 1) {
         uint8_t pkt[MESH_MAC_PACKET_BUF_SIZE];
         if (len <= sizeof(pkt)) {
@@ -683,7 +704,11 @@ static void handle_route_req(struct mesh_header *h, const uint8_t *buf, size_t l
         LOG_WRN("AODV: RREQ sig check failed orig=%02x", h->src_id[AKIRA_MESH_NODE_ID_LEN - 1]);
         return;
     }
-    relay_frame((struct mesh_header *)sig_buf, sig_buf, sig_len);
+    struct mesh_header *sh = (struct mesh_header *)sig_buf;
+    k_mutex_lock(&s_aodv.lock, K_FOREVER);
+    mesh_seen_add(&s_aodv.seen, sh->src_id, sh->seq_num);
+    k_mutex_unlock(&s_aodv.lock);
+    relay_frame(sh, sig_buf, sig_len);
 #endif
     handle_route_req_verified(h, buf, len, rq);
 }
@@ -720,6 +745,9 @@ static void handle_route_req_sig(struct mesh_header *h, const uint8_t *buf, size
         LOG_WRN("AODV: RREQ sig check failed orig=%02x", bh->src_id[AKIRA_MESH_NODE_ID_LEN - 1]);
         return;
     }
+    k_mutex_lock(&s_aodv.lock, K_FOREVER);
+    mesh_seen_add(&s_aodv.seen, h->src_id, h->seq_num);
+    k_mutex_unlock(&s_aodv.lock);
     relay_frame(h, buf, len);
     handle_route_req_verified(bh, base_buf, base_len, rq);
 }
@@ -733,8 +761,9 @@ static void handle_route_reply_verified(struct mesh_header *h, const uint8_t *bu
             rp->target[AKIRA_MESH_NODE_ID_LEN - 1], h->dest_id[AKIRA_MESH_NODE_ID_LEN - 1],
             rp->relay_id[AKIRA_MESH_NODE_ID_LEN - 1], rp->hop_count);
     k_mutex_lock(&s_aodv.lock, K_FOREVER);
+    mesh_seen_add(&s_aodv.seen, h->src_id, h->seq_num);
     mesh_route_install(&s_aodv.routes, rp->target, rp->relay_id,
-                       rp->hop_count + 1, rp->dest_seq, now + MESH_ROUTE_LIFETIME_MS);
+                       rp->hop_count + 1, rp->dest_seq, now, now + MESH_ROUTE_LIFETIME_MS);
     k_mutex_unlock(&s_aodv.lock);
 
 #if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
@@ -801,7 +830,11 @@ static void handle_route_reply(struct mesh_header *h, const uint8_t *buf, size_t
         LOG_WRN("AODV: RREP sig check failed target=%02x", rp->target[AKIRA_MESH_NODE_ID_LEN - 1]);
         return;
     }
-    relay_frame((struct mesh_header *)sig_buf, sig_buf, sig_len);
+    struct mesh_header *sh = (struct mesh_header *)sig_buf;
+    k_mutex_lock(&s_aodv.lock, K_FOREVER);
+    mesh_seen_add(&s_aodv.seen, sh->src_id, sh->seq_num);
+    k_mutex_unlock(&s_aodv.lock);
+    relay_frame(sh, sig_buf, sig_len);
 #endif
     handle_route_reply_verified(h, buf, len, rp);
 }
@@ -837,6 +870,9 @@ static void handle_route_reply_sig(struct mesh_header *h, const uint8_t *buf, si
         LOG_WRN("AODV: RREP sig check failed target=%02x", rp->target[AKIRA_MESH_NODE_ID_LEN - 1]);
         return;
     }
+    k_mutex_lock(&s_aodv.lock, K_FOREVER);
+    mesh_seen_add(&s_aodv.seen, h->src_id, h->seq_num);
+    k_mutex_unlock(&s_aodv.lock);
     relay_frame(h, buf, len);
     handle_route_reply_verified(bh, base_buf, base_len, rp);
 }
@@ -895,16 +931,32 @@ static void aodv_handle_control_frame(const uint8_t *buf, size_t len)
      * nodes. Keyed on (src_id, seq_num) same as every other layer's dedup;
      * separate cache instance from Transport's/AppDist's, so a numeric
      * coincidence between independent per-layer seq_num counters can't
-     * cross-contaminate — this cache only ever sees RREQ/RREP/RERR frames. */
+     * cross-contaminate — this cache only ever sees RREQ/RREP/RERR frames.
+     *
+     * Lookup only here, not check_and_add: h->seq_num is unauthenticated
+     * (never covered by RREQ/RREP_SIG's signature, which only signs
+     * orig_seq/dest_seq) — a forged frame with a victim's src_id and a
+     * seq_num the victim hasn't used yet would otherwise poison this cache
+     * before verification ever runs, so the victim's later genuine frame
+     * with that seq_num gets silently dropped as a dup. RREQ/RREP add to
+     * the cache themselves once verified (or immediately if signing is
+     * off, matching prior behavior — there's no verification step to wait
+     * for in that config). RERR has no verification either way, so it
+     * still adds immediately, right here. */
     k_mutex_lock(&s_aodv.lock, K_FOREVER);
-    bool dup = mesh_seen_check_and_add(&s_aodv.seen, h->src_id, h->seq_num);
+    bool dup = mesh_seen_check(&s_aodv.seen, h->src_id, h->seq_num);
     k_mutex_unlock(&s_aodv.lock);
     if (dup) return;
 
     switch (h->msg_type) {
     case AKIRA_MESH_MSG_ROUTE_REQ:   handle_route_req(h, buf, len, payload, plen); break;
     case AKIRA_MESH_MSG_ROUTE_REPLY: handle_route_reply(h, buf, len, payload, plen); break;
-    case AKIRA_MESH_MSG_ROUTE_ERROR: handle_route_error(payload, plen); break;
+    case AKIRA_MESH_MSG_ROUTE_ERROR:
+        k_mutex_lock(&s_aodv.lock, K_FOREVER);
+        mesh_seen_add(&s_aodv.seen, h->src_id, h->seq_num);
+        k_mutex_unlock(&s_aodv.lock);
+        handle_route_error(payload, plen);
+        break;
 #if defined(CONFIG_AKIRA_MESH_RREQ_RREP_SIGNING)
     case AKIRA_MESH_MSG_ROUTE_REQ_SIG:   handle_route_req_sig(h, buf, len, payload, plen); break;
     case AKIRA_MESH_MSG_ROUTE_REPLY_SIG: handle_route_reply_sig(h, buf, len, payload, plen); break;
@@ -931,7 +983,7 @@ static int aodv_resolve(const uint8_t *dest_id, uint8_t *next_hop_out)
         /* First miss for this dest: the caller is responsible for queueing
          * its own payload via queue_pending (below) — resolve() only fires
          * the initial RREQ so repeated polling doesn't spam duplicate RREQs. */
-        send_rreq(dest_id);
+        send_rreq(dest_id, NULL);
     }
     return -EHOSTUNREACH;
 }
@@ -959,7 +1011,7 @@ static void aodv_tick(uint32_t now_ms)
     k_mutex_lock(&s_aodv.lock, K_FOREVER);
     mesh_route_gc(&s_aodv.routes, now_ms);
     mesh_pr_gc(&s_aodv.proutes, now_ms, pending_route_drop, NULL);
-    mesh_pr_tick(&s_aodv.proutes, now_ms, (void (*)(const uint8_t *, void *))send_rreq, NULL);
+    mesh_pr_tick(&s_aodv.proutes, now_ms, send_rreq, NULL);
 #if defined(CONFIG_AKIRA_MESH_RREQ_RREP_SIGNING)
     sign_pending_gc(now_ms);
 #endif

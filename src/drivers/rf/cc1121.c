@@ -1221,6 +1221,11 @@ static int cc1121_get_rssi(int16_t *rssi)
     LOG_INF("RSSI raw: RSSI1=0x%02X RSSI0=0x%02X", rssi1, rssi0);
 
     cc1121_strobe(CC1121_SIDLE);
+    /* Chip is now idle regardless of what it was doing before this call —
+     * without updating current_mode, recv()'s current_mode!=RX cold-re-arm
+     * check is fooled into skipping SRX after this, leaving the chip idle
+     * while the driver still believes it's listening. */
+    g_cc1121.current_mode = RADIO_MODE_STANDBY;
 
     /* Build signed 12-bit value */
     int16_t raw = ((int16_t)(int8_t)rssi1) << 4;

@@ -112,14 +112,18 @@ mesh_mac_prio_t mesh_mac_prio_for_msg_type(uint8_t msg_type)
 
 /* CCA: only meaningful on radios that advertise it (CC1121/LR2021 today;
  * BLE's extended-adv send doesn't set RADIO_CAP_CCA, so this is skipped for
- * it automatically — no special-casing needed). Single non-blocking check —
- * the TX thread requeues on busy instead of sleeping here, so a lower-lane
- * frame's backoff never blocks a higher-priority frame arriving meanwhile. */
-static bool mesh_cca_busy(void)
+ * it automatically — no special-casing needed). Locked like every other
+ * radio access in this file (RX thread's recv() included) — an RSSI read
+ * is its own SPI transaction on the same chip and must not interleave with
+ * an in-flight send()/recv(). */
+static bool mesh_cca_busy(radio_handle_t *r)
 {
-    if (!radio_has_capability(s_mac.radio, RADIO_CAP_CCA)) return false;
+    if (!radio_has_capability(r, RADIO_CAP_CCA)) return false;
+    if (k_mutex_lock(&r->lock, K_MSEC(2000)) != 0) return false; /* can't sense, just send */
     int16_t rssi;
-    if (radio_get_rssi(s_mac.radio, &rssi) != 0) return false; /* can't sense, just send */
+    int ret = radio_get_rssi(r, &rssi);
+    k_mutex_unlock(&r->lock);
+    if (ret != 0) return false; /* can't sense, just send */
     return rssi >= CONFIG_AKIRA_MESH_CCA_BUSY_RSSI_DBM;
 }
 
@@ -131,45 +135,55 @@ static void mesh_mac_tx_thread_fn(void *a, void *b, void *c)
             k_msleep(CONFIG_AKIRA_MESH_MAC_POLL_MS);
             continue;
         }
+        radio_handle_t *r = s_mac.radio; /* latch: deinit() can NULL s_mac.radio concurrently */
 
         struct mac_frame f;
         struct k_msgq *from = NULL;
-        for (size_t i = 0; i < ARRAY_SIZE(s_txq_lanes); i++) {
-            if (k_msgq_get(s_txq_lanes[i], &f, K_NO_WAIT) == 0) {
-                from = s_txq_lanes[i];
-                break;
-            }
-        }
-        if (!from) {
-            k_msleep(CONFIG_AKIRA_MESH_MAC_POLL_MS);
-            continue;
-        }
-
+        bool ready = false;
         int64_t now = k_uptime_get();
-        if (f.retry_at && now < f.retry_at) {
-            if (k_msgq_put(from, &f, K_NO_WAIT) != 0) {
-                LOG_ERR("mesh_mac: frame dropped, lane full re-queuing backoff wait");
+
+        /* Top-down over all 4 lanes every pass, not just the first non-empty
+         * one — a CRITICAL frame mid-backoff must not block a ready LOW
+         * frame from going out just because it happened to be checked first. */
+        for (size_t i = 0; i < ARRAY_SIZE(s_txq_lanes) && !ready; i++) {
+            if (k_msgq_get(s_txq_lanes[i], &f, K_NO_WAIT) != 0) continue;
+            from = s_txq_lanes[i];
+
+            if (f.retry_at && now < f.retry_at) {
+                if (k_msgq_put(from, &f, K_NO_WAIT) != 0) {
+                    LOG_ERR("mesh_mac: frame dropped, lane %zu full re-queuing backoff wait", i);
+                }
+                continue;
             }
+
+            /* CCA never blocks a send indefinitely: after CCA_MAX_RETRIES
+             * busy requeues it sends anyway, since CCA reduces collisions
+             * but the ACK/retry layer above is the actual reliability
+             * backstop. */
+            if (f.cca_attempts < CONFIG_AKIRA_MESH_CCA_MAX_RETRIES && mesh_cca_busy(r)) {
+                f.cca_attempts++;
+                f.retry_at = now + (sys_rand32_get() % (CONFIG_AKIRA_MESH_CCA_BACKOFF_MAX_MS + 1));
+                if (k_msgq_put(from, &f, K_NO_WAIT) != 0) {
+                    LOG_ERR("mesh_mac: frame dropped, lane %zu full re-queuing CCA backoff", i);
+                }
+                continue;
+            }
+
+            ready = true;
+        }
+
+        if (!ready) {
             k_msleep(CONFIG_AKIRA_MESH_MAC_POLL_MS);
             continue;
         }
 
-        /* CCA never blocks a send indefinitely: after CCA_MAX_RETRIES busy
-         * requeues it sends anyway, since CCA reduces collisions but the
-         * ACK/retry layer above is the actual reliability backstop. */
-        if (f.cca_attempts < CONFIG_AKIRA_MESH_CCA_MAX_RETRIES && mesh_cca_busy()) {
-            f.cca_attempts++;
-            f.retry_at = now + (sys_rand32_get() % (CONFIG_AKIRA_MESH_CCA_BACKOFF_MAX_MS + 1));
-            if (k_msgq_put(from, &f, K_NO_WAIT) != 0) {
-                LOG_ERR("mesh_mac: frame dropped, lane full re-queuing CCA backoff");
-            }
-            continue; /* re-poll from top immediately — higher lanes get serviced now */
+        int lret = k_mutex_lock(&r->lock, K_MSEC(2000));
+        if (lret != 0) {
+            LOG_ERR("mesh_mac: radio lock timeout, frame dropped (len=%u)", f.len);
+            continue;
         }
-
-        int lret = k_mutex_lock(&s_mac.radio->lock, K_MSEC(2000));
-        if (lret != 0) continue;
-        int ret = s_mac.radio->ops->send(s_mac.radio, f.data, f.len);
-        k_mutex_unlock(&s_mac.radio->lock);
+        int ret = r->ops->send(r, f.data, f.len);
+        k_mutex_unlock(&r->lock);
         if (ret) {
             LOG_ERR("mesh_mac send failed: %d (len=%u)", ret, f.len);
         }
