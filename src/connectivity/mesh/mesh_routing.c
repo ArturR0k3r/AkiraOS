@@ -32,7 +32,9 @@ void mesh_seen_add(struct seen_cache *c, const uint8_t *src_id, uint16_t seq_num
 
 bool mesh_seen_check_and_add(struct seen_cache *c, const uint8_t *src_id, uint16_t seq_num)
 {
-    if (mesh_seen_check(c, src_id, seq_num)) return true;
+    if (mesh_seen_check(c, src_id, seq_num)) {
+        return true;
+    }
     mesh_seen_add(c, src_id, seq_num);
     return false;
 }
@@ -43,17 +45,23 @@ void mesh_route_reset(struct route_table *t) { memset(t, 0, sizeof(*t)); }
 
 static struct route_entry *route_find(struct route_table *t, const uint8_t *dest)
 {
-    for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_ROUTES; i++)
-        if (t->e[i].valid && memcmp(t->e[i].dest_id, dest, AKIRA_MESH_NODE_ID_LEN) == 0)
+    for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_ROUTES; i++) {
+        if (t->e[i].valid && memcmp(t->e[i].dest_id, dest, AKIRA_MESH_NODE_ID_LEN) == 0) {
             return &t->e[i];
+        }
+    }
     return NULL;
 }
 
 struct route_entry *mesh_route_lookup(struct route_table *t, const uint8_t *dest, uint32_t now_ms)
 {
     struct route_entry *r = route_find(t, dest);
-    if (!r) return NULL;
-    if ((int32_t)(r->expiry_ms - now_ms) <= 0) return NULL;   /* expired */
+    if (!r) {
+        return NULL;
+    }
+    if ((int32_t)(r->expiry_ms - now_ms) <= 0) {
+        return NULL;   /* expired */
+    }
     r->last_used_ms = now_ms;
     return r;
 }
@@ -65,7 +73,9 @@ bool mesh_route_install(struct route_table *t, const uint8_t *dest, const uint8_
     if (r) {
         bool newer = mesh_seq_newer(dest_seq, r->dest_seq);
         bool same_seq_better = (dest_seq == r->dest_seq) && (hop_count < r->hop_count);
-        if (!newer && !same_seq_better) return false;
+        if (!newer && !same_seq_better) {
+            return false;
+        }
     } else {
         for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_ROUTES; i++) {
             if (!t->e[i].valid) { r = &t->e[i]; break; }
@@ -76,7 +86,9 @@ bool mesh_route_install(struct route_table *t, const uint8_t *dest, const uint8_
              * is reached. */
             r = &t->e[0];
             for (int i = 1; i < CONFIG_AKIRA_MESH_MAX_ROUTES; i++) {
-                if ((int32_t)(t->e[i].last_used_ms - r->last_used_ms) < 0) r = &t->e[i];
+                if ((int32_t)(t->e[i].last_used_ms - r->last_used_ms) < 0) {
+                    r = &t->e[i];
+                }
             }
         }
     }
@@ -109,9 +121,11 @@ void mesh_route_touch(struct route_table *t, const uint8_t *dest, uint32_t now_m
 
 void mesh_route_gc(struct route_table *t, uint32_t now_ms)
 {
-    for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_ROUTES; i++)
-        if (t->e[i].valid && (int32_t)(t->e[i].expiry_ms - now_ms) <= 0)
+    for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_ROUTES; i++) {
+        if (t->e[i].valid && (int32_t)(t->e[i].expiry_ms - now_ms) <= 0) {
             t->e[i].valid = false;
+        }
+    }
 }
 
 /* ---- pending-ACK table + retransmit decision ---- */
@@ -122,7 +136,9 @@ int mesh_ack_add(struct ack_table *t, uint16_t seq, const uint8_t *dest,
                  const uint8_t *payload, uint16_t len, uint32_t now_ms,
                  uint32_t deadline_ms)
 {
-    if (len > MESH_ROUTING_PAYLOAD_MAX) return -EMSGSIZE;
+    if (len > MESH_ROUTING_PAYLOAD_MAX) {
+        return -EMSGSIZE;
+    }
     int slot = -1;
     for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_PENDING_ACKS; i++) {
         if (!t->e[i].active) { slot = i; break; }
@@ -133,7 +149,9 @@ int mesh_ack_add(struct ack_table *t, uint16_t seq, const uint8_t *dest,
          * refusing all new reliable sends. */
         slot = 0;
         for (int i = 1; i < CONFIG_AKIRA_MESH_MAX_PENDING_ACKS; i++) {
-            if (t->e[i].last_used_ms < t->e[slot].last_used_ms) slot = i;
+            if (t->e[i].last_used_ms < t->e[slot].last_used_ms) {
+                slot = i;
+            }
         }
     }
     struct pending_ack *e = &t->e[slot];
@@ -159,9 +177,15 @@ bool mesh_ack_clear(struct ack_table *t, uint16_t seq, const uint8_t *dest)
 
 mesh_ack_action_t mesh_ack_tick(struct pending_ack *e, uint32_t now_ms, uint32_t timeout_ms)
 {
-    if (!e->active) return MESH_ACK_SKIP;
-    if ((int32_t)(e->deadline_ms - now_ms) > 0) return MESH_ACK_SKIP;
-    if (e->retries >= CONFIG_AKIRA_MESH_MAX_RETRIES) return MESH_ACK_GIVE_UP;
+    if (!e->active) {
+        return MESH_ACK_SKIP;
+    }
+    if ((int32_t)(e->deadline_ms - now_ms) > 0) {
+        return MESH_ACK_SKIP;
+    }
+    if (e->retries >= CONFIG_AKIRA_MESH_MAX_RETRIES) {
+        return MESH_ACK_GIVE_UP;
+    }
     e->retries++;
     e->deadline_ms = now_ms + timeout_ms;
     e->last_used_ms = now_ms;
@@ -176,7 +200,9 @@ int mesh_pr_add(struct pending_route_q *q, const uint8_t *dest,
                 const uint8_t *payload, uint16_t len, uint32_t now_ms,
                 uint32_t deadline_ms, bool is_local_repair)
 {
-    if (len > MESH_ROUTING_PAYLOAD_MAX) return -EMSGSIZE;
+    if (len > MESH_ROUTING_PAYLOAD_MAX) {
+        return -EMSGSIZE;
+    }
     int slot = -1;
     for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_PENDING_ROUTES; i++) {
         if (!q->e[i].active) { slot = i; break; }
@@ -184,7 +210,9 @@ int mesh_pr_add(struct pending_route_q *q, const uint8_t *dest,
     if (slot < 0) {
         slot = 0;
         for (int i = 1; i < CONFIG_AKIRA_MESH_MAX_PENDING_ROUTES; i++) {
-            if (q->e[i].last_used_ms < q->e[slot].last_used_ms) slot = i;
+            if (q->e[i].last_used_ms < q->e[slot].last_used_ms) {
+                slot = i;
+            }
         }
     }
     struct pending_route *e = &q->e[slot];
@@ -202,10 +230,12 @@ int mesh_pr_add(struct pending_route_q *q, const uint8_t *dest,
 
 struct pending_route *mesh_pr_next_for_dest(struct pending_route_q *q, const uint8_t *dest)
 {
-    for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_PENDING_ROUTES; i++)
+    for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_PENDING_ROUTES; i++) {
         if (q->e[i].active &&
-            memcmp(q->e[i].dest_id, dest, AKIRA_MESH_NODE_ID_LEN) == 0)
+            memcmp(q->e[i].dest_id, dest, AKIRA_MESH_NODE_ID_LEN) == 0) {
             return &q->e[i];
+        }
+    }
     return NULL;
 }
 
@@ -218,7 +248,9 @@ void mesh_pr_gc(struct pending_route_q *q, uint32_t now_ms,
     for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_PENDING_ROUTES; i++) {
         struct pending_route *e = &q->e[i];
         if (e->active && (int32_t)(e->deadline_ms - now_ms) <= 0) {
-            if (on_drop) on_drop(e->dest_id, e->is_local_repair, ctx);
+            if (on_drop) {
+                on_drop(e->dest_id, e->is_local_repair, ctx);
+            }
             e->active = false;
         }
     }
@@ -229,11 +261,17 @@ void mesh_pr_tick(struct pending_route_q *q, uint32_t now_ms,
 {
     for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_PENDING_ROUTES; i++) {
         struct pending_route *e = &q->e[i];
-        if (!e->active || e->rreq_retries >= CONFIG_AKIRA_MESH_RREQ_MAX_RETRIES) continue;
-        if ((int32_t)(e->next_rreq_ms - now_ms) > 0) continue;
+        if (!e->active || e->rreq_retries >= CONFIG_AKIRA_MESH_RREQ_MAX_RETRIES) {
+            continue;
+        }
+        if ((int32_t)(e->next_rreq_ms - now_ms) > 0) {
+            continue;
+        }
         e->rreq_retries++;
         uint32_t backoff = CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS << (e->rreq_retries + 1);
         e->next_rreq_ms = now_ms + backoff;
-        if (on_retry) on_retry(e->dest_id, ctx);
+        if (on_retry) {
+            on_retry(e->dest_id, ctx);
+        }
     }
 }

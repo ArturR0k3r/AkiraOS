@@ -55,7 +55,9 @@ static uint8_t s_rx_buf[MESH_MAC_PACKET_BUF_SIZE]
 
 int mesh_mac_init(radio_handle_t *radio)
 {
-    if (!radio) return -EINVAL;
+    if (!radio) {
+        return -EINVAL;
+    }
     s_mac.radio = radio;
     s_mac.running = true;
     return 0;
@@ -80,9 +82,15 @@ int mesh_mac_register_rx_cb(mesh_mac_rx_cb_t cb, void *ctx)
 
 int mesh_mac_send(mesh_mac_prio_t prio, const uint8_t *buf, size_t len)
 {
-    if (!s_mac.running || !s_mac.radio) return -ENODEV;
-    if (len > MESH_MAC_PACKET_BUF_SIZE) return -EMSGSIZE;
-    if ((unsigned)prio >= ARRAY_SIZE(s_txq_lanes)) return -EINVAL;
+    if (!s_mac.running || !s_mac.radio){
+        return -ENODEV;
+    }
+    if (len > MESH_MAC_PACKET_BUF_SIZE){
+        return -EMSGSIZE;
+    }
+    if ((unsigned)prio >= ARRAY_SIZE(s_txq_lanes)){
+        return -EINVAL;
+    }
     struct mac_frame f = { .len = (uint16_t)len, .retry_at = 0, .cca_attempts = 0 };
     memcpy(f.data, buf, len);
     return (k_msgq_put(s_txq_lanes[prio], &f, K_NO_WAIT) == 0) ? 0 : -EBUSY;
@@ -118,12 +126,18 @@ mesh_mac_prio_t mesh_mac_prio_for_msg_type(uint8_t msg_type)
  * an in-flight send()/recv(). */
 static bool mesh_cca_busy(radio_handle_t *r)
 {
-    if (!radio_has_capability(r, RADIO_CAP_CCA)) return false;
-    if (k_mutex_lock(&r->lock, K_MSEC(2000)) != 0) return false; /* can't sense, just send */
+    if (!radio_has_capability(r, RADIO_CAP_CCA)) {
+        return false;
+    }
+    if (k_mutex_lock(&r->lock, K_MSEC(2000)) != 0) {
+        return false; /* can't sense, just send */
+    }
     int16_t rssi;
     int ret = radio_get_rssi(r, &rssi);
     k_mutex_unlock(&r->lock);
-    if (ret != 0) return false; /* can't sense, just send */
+    if (ret != 0) {
+        return false; /* can't sense, just send */
+    }
     return rssi >= CONFIG_AKIRA_MESH_CCA_BUSY_RSSI_DBM;
 }
 
@@ -145,8 +159,10 @@ static void mesh_mac_tx_thread_fn(void *a, void *b, void *c)
         /* Top-down over all 4 lanes every pass, not just the first non-empty
          * one — a CRITICAL frame mid-backoff must not block a ready LOW
          * frame from going out just because it happened to be checked first. */
-        for (size_t i = 0; i < ARRAY_SIZE(s_txq_lanes) && !ready; i++) {
-            if (k_msgq_get(s_txq_lanes[i], &f, K_NO_WAIT) != 0) continue;
+        for (size_t i = MESH_MAC_PRIO_CRITICAL; i <= MESH_MAC_PRIO_LOW && !ready; i++) {
+            if (k_msgq_get(s_txq_lanes[i], &f, K_NO_WAIT) != 0) {
+                continue;
+            }
             from = s_txq_lanes[i];
 
             if (f.retry_at && now < f.retry_at) {
@@ -217,7 +233,9 @@ static void mesh_mac_rx_thread_fn(void *a, void *b, void *c)
                  * deinit fix for what happens when that's skipped). Best
                  * effort: a failure here just leaves rssi at 0 ("unknown"),
                  * it doesn't invalidate the frame that was received. */
-                if (n > 0) radio_get_last_rx_rssi(r, &rssi);
+                if (n > 0) {
+                    radio_get_last_rx_rssi(r, &rssi);
+                }
                 k_mutex_unlock(&r->lock);
             }
         }

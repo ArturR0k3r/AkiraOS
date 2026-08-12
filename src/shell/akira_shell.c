@@ -2608,14 +2608,16 @@ static int cmd_mesh_send(const struct shell *sh, size_t argc, char **argv)
     dest[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
 
     const char *text = argv[2];
+    int64_t t0 = k_uptime_get();
     int ret = akira_mesh_send(dest, (const uint8_t *)text, strlen(text));
+    int64_t ms = k_uptime_get() - t0;
     if (ret) {
-        shell_error(sh, "mesh send failed: %d", ret);
+        shell_error(sh, "mesh send failed: %d (%lld ms)", ret, ms);
         return ret;
     }
 
-    shell_print(sh, "sent %zu bytes to %02x", strlen(text),
-                dest[AKIRA_MESH_NODE_ID_LEN - 1]);
+    shell_print(sh, "sent %zu bytes to %02x in %lld ms", strlen(text),
+                dest[AKIRA_MESH_NODE_ID_LEN - 1], ms);
     return 0;
 }
 

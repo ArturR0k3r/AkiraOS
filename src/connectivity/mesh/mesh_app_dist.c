@@ -214,7 +214,9 @@ static bool mesh_app_pick_dest(uint32_t total_len, bool *use_sd_out, const char 
  * idempotent already-in-flight no-op). Callers must ack only on true. */
 static bool mesh_app_rx_start(const uint8_t *src_id, const struct mesh_app_start_hdr *s)
 {
-    if (s->magic != MESH_APP_START_MAGIC) return false;
+    if (s->magic != MESH_APP_START_MAGIC) {
+        return false;
+    }
     if (crc16_ccitt(0xFFFF, (const uint8_t *)s,
                     offsetof(struct mesh_app_start_hdr, crc)) != s->crc) {
         LOG_WRN("Mesh APP_START dropped: CRC mismatch");
@@ -269,7 +271,9 @@ static bool mesh_app_rx_start(const uint8_t *src_id, const struct mesh_app_start
 static bool mesh_app_rx_chunk(const struct mesh_app_chunk_hdr *ch,
                               const uint8_t *data, size_t data_len)
 {
-    if (!s_app_dist.app_rx.active) return false;
+    if (!s_app_dist.app_rx.active) {
+        return false;
+    }
     uint16_t hdr_crc = crc16_ccitt(0xFFFF, (const uint8_t *)ch,
                                    offsetof(struct mesh_app_chunk_hdr, crc));
     if (crc16_ccitt(hdr_crc, data, data_len) != ch->crc) {
@@ -375,7 +379,9 @@ static int mesh_send_app_and_wait(const uint8_t *dest_id, uint8_t msg_type,
                                   const uint8_t *data, size_t len)
 {
     const mesh_router_ops_t *router = mesh_router_get_active();
-    if (!router) return -ENODEV;
+    if (!router) {
+        return -ENODEV;
+    }
 
     uint8_t next_hop[AKIRA_MESH_NODE_ID_LEN];
     bool have_route = (router->resolve(dest_id, next_hop) == 0);
@@ -393,7 +399,9 @@ static int mesh_send_app_and_wait(const uint8_t *dest_id, uint8_t msg_type,
             waited_ms += CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS;
             have_route = (router->resolve(dest_id, next_hop) == 0);
         }
-        if (!have_route) return -EHOSTUNREACH;
+        if (!have_route) {
+            return -EHOSTUNREACH;
+        }
     }
 
     /* mesh_transport_send_reliable builds the frame, tracks it in Transport's
@@ -420,7 +428,9 @@ static int mesh_send_app_and_wait(const uint8_t *dest_id, uint8_t msg_type,
     s_app_ack_wait.active = true;
     k_sem_reset(&s_app_ack_wait.sem);
 
-    if (s_app_dist.stats) s_app_dist.stats->messages_sent++;
+    if (s_app_dist.stats) {
+        s_app_dist.stats->messages_sent++;
+    }
     mesh_mac_send(MESH_MAC_PRIO_LOW, pkt, total);
 
     int wait_ret = k_sem_take(&s_app_ack_wait.sem,
@@ -438,9 +448,13 @@ static int mesh_query_app_rx_progress(const uint8_t *dest_id, uint32_t app_id,
                                       uint16_t *received_count_out)
 {
     const mesh_router_ops_t *router = mesh_router_get_active();
-    if (!router) return -ENODEV;
+    if (!router) {
+        return -ENODEV;
+    }
     uint8_t next_hop[AKIRA_MESH_NODE_ID_LEN];
-    if (router->resolve(dest_id, next_hop) != 0) return -EHOSTUNREACH;
+    if (router->resolve(dest_id, next_hop) != 0) {
+        return -EHOSTUNREACH;
+    }
 
     uint8_t pkt[MESH_MAC_PACKET_BUF_SIZE];
     struct mesh_header *h = (struct mesh_header *)pkt;
@@ -465,7 +479,9 @@ static int mesh_query_app_rx_progress(const uint8_t *dest_id, uint32_t app_id,
         *received_count_out = s_app_status_wait.received_count;
         size_t n = MIN(s_app_status_wait.bitmap_len, bitmap_cap);
         memcpy(bitmap_out, s_app_status_wait.bitmap, n);
-        if (n < bitmap_cap) memset(bitmap_out + n, 0, bitmap_cap - n);
+        if (n < bitmap_cap) {
+            memset(bitmap_out + n, 0, bitmap_cap - n);
+        }
     }
     return (wait_ret == 0 && got) ? 0 : -ETIMEDOUT;
 }
@@ -476,27 +492,39 @@ static int mesh_query_app_rx_progress(const uint8_t *dest_id, uint32_t app_id,
 
 static void transport_style_relay(struct mesh_header *h, const uint8_t *full, size_t len)
 {
-    if (h->ttl == 0) return;
+    if (h->ttl == 0) {
+        return;
+    }
     const mesh_router_ops_t *router = mesh_router_get_active();
-    if (!router) return;
+    if (!router) {
+        return;
+    }
     uint8_t next_hop[AKIRA_MESH_NODE_ID_LEN];
     if (router->resolve(h->dest_id, next_hop) == 0) {
         uint8_t pkt[MESH_MAC_PACKET_BUF_SIZE];
-        if (len > sizeof(pkt)) return;
+        if (len > sizeof(pkt)) {
+            return;
+        }
         memcpy(pkt, full, len);
         ((struct mesh_header *)pkt)->ttl = h->ttl - 1;
-        if (s_app_dist.stats) s_app_dist.stats->messages_forwarded++;
+        if (s_app_dist.stats) {
+            s_app_dist.stats->messages_forwarded++;
+        }
         mesh_mac_send(MESH_MAC_PRIO_LOW, pkt, len);
         return;
     }
-    if (h->ttl <= 1) return;
+    if (h->ttl <= 1) {
+        return;
+    }
     router->queue_pending(h->dest_id, full, (uint16_t)len,
                           CONFIG_AKIRA_MESH_LOCAL_REPAIR_TIMEOUT_MS, true);
 }
 
 void mesh_app_dist_handle_frame(const uint8_t *buf, size_t len)
 {
-    if (len < sizeof(struct mesh_header)) return;
+    if (len < sizeof(struct mesh_header)) {
+        return;
+    }
     struct mesh_header *h = (struct mesh_header *)buf;
     bool self_dest = is_self(h->dest_id);
 
@@ -504,7 +532,9 @@ void mesh_app_dist_handle_frame(const uint8_t *buf, size_t len)
         /* Relay path only — see s_app_dist.seen's declaration comment for
          * why self-destined frames must skip this. */
         bool dup = mesh_seen_check_and_add(&s_app_dist.seen, h->src_id, h->seq_num);
-        if (dup) return;
+        if (dup) {
+            return;
+        }
     }
 
     const uint8_t *payload = buf + sizeof(*h);
@@ -545,7 +575,9 @@ void mesh_app_dist_handle_frame(const uint8_t *buf, size_t len)
 
     case AKIRA_MESH_MSG_APP_STATUS_REQ:
         if (self_dest) {
-            if (plen < sizeof(struct mesh_app_status_req)) break;
+            if (plen < sizeof(struct mesh_app_status_req)) {
+                break;
+            }
             const struct mesh_app_status_req *req = (const struct mesh_app_status_req *)payload;
 
             uint8_t resp_pkt[MESH_MAC_PACKET_BUF_SIZE];
@@ -574,7 +606,9 @@ void mesh_app_dist_handle_frame(const uint8_t *buf, size_t len)
 
     case AKIRA_MESH_MSG_APP_STATUS_RESP:
         if (self_dest) {
-            if (plen < sizeof(struct mesh_app_status_resp)) break;
+            if (plen < sizeof(struct mesh_app_status_resp)) {
+                break;
+            }
             const struct mesh_app_status_resp *resp = (const struct mesh_app_status_resp *)payload;
             if (s_app_status_wait.active && resp->app_id == s_app_status_wait.app_id &&
                 memcmp(h->src_id, s_app_status_wait.dest, AKIRA_MESH_NODE_ID_LEN) == 0) {
@@ -604,7 +638,9 @@ void mesh_app_dist_handle_frame(const uint8_t *buf, size_t len)
 
 int akira_mesh_get_app_rx_status(akira_mesh_app_rx_status_t *out)
 {
-    if (!out) return -EINVAL;
+    if (!out) {
+        return -EINVAL;
+    }
     out->active = s_app_dist.app_rx.active;
     out->app_id = s_app_dist.app_rx.app_id;
     memcpy(out->app_name, s_app_dist.app_rx.app_name, AKIRA_MESH_APP_NAME_LEN);
@@ -618,16 +654,24 @@ int akira_mesh_get_app_rx_status(akira_mesh_app_rx_status_t *out)
 int akira_mesh_distribute_app(const uint8_t *dest_id, const char *app_name,
                               const uint8_t *app_data, size_t app_len)
 {
-    if (!dest_id || !app_name || !app_data || app_len == 0) return -EINVAL;
+    if (!dest_id || !app_name || !app_data || app_len == 0) {
+        return -EINVAL;
+    }
 
     size_t name_len = strlen(app_name);
-    if (name_len == 0 || name_len >= AKIRA_MESH_APP_NAME_LEN) return -ENAMETOOLONG;
-    if (app_len > (size_t)CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024) return -EFBIG;
+    if (name_len == 0 || name_len >= AKIRA_MESH_APP_NAME_LEN) {
+        return -ENAMETOOLONG;
+    }
+    if (app_len > (size_t)CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024) {
+        return -EFBIG;
+    }
 
     size_t stride = s_app_dist.mtu - sizeof(struct mesh_header) -
                     sizeof(struct mesh_app_chunk_hdr);
     uint16_t chunk_count = (uint16_t)DIV_ROUND_UP(app_len, stride);
-    if (chunk_count > MESH_APP_MAX_CHUNKS) return -EFBIG;
+    if (chunk_count > MESH_APP_MAX_CHUNKS) {
+        return -EFBIG;
+    }
 
     uint32_t app_id = crc32_ieee((const uint8_t *)app_name, name_len);
 
@@ -645,7 +689,9 @@ int akira_mesh_distribute_app(const uint8_t *dest_id, const char *app_name,
 
     int ret = mesh_send_app_and_wait(dest_id, AKIRA_MESH_MSG_APP_START,
                                      (const uint8_t *)&start, sizeof(start));
-    if (ret) return ret;
+    if (ret) {
+        return ret;
+    }
 
     /* Resume support: skip chunks the receiver already has. Best-effort —
      * a failed query just falls back to sending every chunk. */
@@ -679,13 +725,19 @@ int akira_mesh_distribute_app(const uint8_t *dest_id, const char *app_name,
              * without it, this bails on the whole transfer over one dropped
              * chunk instead of retrying it, defeating the point of the
              * resumable bitmap this design otherwise relies on. */
-            if (cret != -EBUSY && cret != -ETIMEDOUT) break;
+            if (cret != -EBUSY && cret != -ETIMEDOUT) {
+                break;
+            }
             k_msleep(CONFIG_AKIRA_MESH_APP_TX_GAP_MS);
         }
-        if (cret) return cret;
+        if (cret) {
+            return cret;
+        }
         k_msleep(CONFIG_AKIRA_MESH_APP_TX_GAP_MS);
     }
 
-    if (s_app_dist.stats) s_app_dist.stats->apps_distributed++;
+    if (s_app_dist.stats) {
+        s_app_dist.stats->apps_distributed++;
+    }
     return 0;
 }

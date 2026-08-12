@@ -1408,8 +1408,8 @@ static int lr2021_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms) {
         /* Read FIFO level BEFORE GET_AND_CLEAR_IRQ: the chip resets
          * GetRxFifoLevel to 0 when it re-arms continuous RX as a side-effect
          * of the IRQ-clear SPI command. Reading first gives the true byte count. */
-        uint8_t lvl_buf[4] = { 0 };
-        lr2021_read_command(LR2021_CMD_GET_RX_FIFO_LEVEL, NULL, 0, lvl_buf, 4);
+        uint8_t lvl_buf[2] = { 0 };
+        lr2021_read_command(LR2021_CMD_GET_RX_FIFO_LEVEL, NULL, 0, lvl_buf, 2);
         size_t pre_level = ((size_t)lvl_buf[0] << 8) | lvl_buf[1];
 
         /* Packet status (rssi_pkt/snr_pkt) must also be read before the

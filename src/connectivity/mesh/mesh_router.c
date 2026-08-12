@@ -28,7 +28,9 @@ static char s_active_name[MESH_ROUTER_NAME_MAX];
 
 int mesh_router_register(const char *name, const mesh_router_ops_t *ops)
 {
-    if (!name || !ops) return -EINVAL;
+    if (!name || !ops) {
+        return -EINVAL;
+    }
     for (int i = 0; i < MESH_ROUTER_MAX_REGISTERED; i++) {
         if (s_routers[i].used && strncmp(s_routers[i].name, name, MESH_ROUTER_NAME_MAX) == 0) {
             return -EALREADY;
@@ -48,7 +50,9 @@ int mesh_router_register(const char *name, const mesh_router_ops_t *ops)
 
 int mesh_router_unregister(const char *name)
 {
-    if (!name) return -EINVAL;
+    if (!name) {
+        return -EINVAL;
+    }
     if (s_active && strncmp(s_active_name, name, MESH_ROUTER_NAME_MAX) == 0) {
         return -EBUSY; /* release it first */
     }
@@ -63,7 +67,9 @@ int mesh_router_unregister(const char *name)
 
 int mesh_router_acquire(const char *name)
 {
-    if (!name) return -EINVAL;
+    if (!name) {
+        return -EINVAL;
+    }
     const mesh_router_ops_t *found = NULL;
     for (int i = 0; i < MESH_ROUTER_MAX_REGISTERED; i++) {
         if (s_routers[i].used && strncmp(s_routers[i].name, name, MESH_ROUTER_NAME_MAX) == 0) {
@@ -71,10 +77,16 @@ int mesh_router_acquire(const char *name)
             break;
         }
     }
-    if (!found) return -ENOENT;
-    if (s_active) mesh_router_release();
+    if (!found) {
+        return -ENOENT;
+    }
+    if (s_active) {
+        mesh_router_release();
+    }
     int ret = found->start ? found->start() : 0;
-    if (ret) return ret;
+    if (ret) {
+        return ret;
+    }
     s_active = found;
     strncpy(s_active_name, name, MESH_ROUTER_NAME_MAX - 1);
     s_active_name[MESH_ROUTER_NAME_MAX - 1] = '\0';
@@ -83,8 +95,12 @@ int mesh_router_acquire(const char *name)
 
 int mesh_router_release(void)
 {
-    if (!s_active) return 0;
-    if (s_active->stop) s_active->stop();
+    if (!s_active) {
+        return 0;
+    }
+    if (s_active->stop) {
+        s_active->stop();
+    }
     s_active = NULL;
     s_active_name[0] = '\0';
     return 0;

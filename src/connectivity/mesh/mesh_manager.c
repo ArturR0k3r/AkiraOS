@@ -50,7 +50,9 @@ static K_MUTEX_DEFINE(mesh_init_lock);
 static bool is_broadcast(const uint8_t *id)
 {
     for (int i = 0; i < AKIRA_MESH_NODE_ID_LEN; i++) {
-        if (id[i] != 0xFF) return false;
+        if (id[i] != 0xFF) {
+            return false;
+        }
     }
     return true;
 }
@@ -74,8 +76,12 @@ static bool link_is_dropped(const uint8_t *peer_id)
 
 int akira_mesh_debug_link_drop(const uint8_t *peer_id)
 {
-    if (!peer_id) return -EINVAL;
-    if (link_is_dropped(peer_id)) return 0;
+    if (!peer_id) {
+        return -EINVAL;
+    }
+    if (link_is_dropped(peer_id)) {
+        return 0;
+    }
     for (int i = 0; i < MESH_DEBUG_LINK_DROP_MAX; i++) {
         if (!s_link_drop_used[i]) {
             memcpy(s_link_drop[i], peer_id, AKIRA_MESH_NODE_ID_LEN);
@@ -88,7 +94,9 @@ int akira_mesh_debug_link_drop(const uint8_t *peer_id)
 
 int akira_mesh_debug_link_restore(const uint8_t *peer_id)
 {
-    if (!peer_id) return -EINVAL;
+    if (!peer_id) {
+        return -EINVAL;
+    }
     for (int i = 0; i < MESH_DEBUG_LINK_DROP_MAX; i++) {
         if (s_link_drop_used[i] && memcmp(s_link_drop[i], peer_id, AKIRA_MESH_NODE_ID_LEN) == 0) {
             s_link_drop_used[i] = false;
@@ -110,14 +118,20 @@ bool akira_mesh_debug_link_is_dropped(const uint8_t *peer_id)
 static void mesh_rx_from_mac(const uint8_t *buf, size_t len, int16_t rssi, void *ctx)
 {
     ARG_UNUSED(ctx);
-    if (len < sizeof(struct mesh_header)) return;
+    if (len < sizeof(struct mesh_header)) {
+        return;
+    }
     const struct mesh_header *h = (const struct mesh_header *)buf;
-    if (h->version != 1) return;
+    if (h->version != 1) {
+        return;
+    }
     /* Beacons are genuinely single-hop (never relayed), so src_id here
      * really is the immediate/only sender — unlike RREQ/RREP (filtered on
      * relay_id instead, in mesh_aodv.c) or DATA/STREAM (no per-hop field
      * exists to filter on at all; link-drop can't hop-force those). */
-    if (h->msg_type == AKIRA_MESH_MSG_BEACON && link_is_dropped(h->src_id)) return;
+    if (h->msg_type == AKIRA_MESH_MSG_BEACON && link_is_dropped(h->src_id)) {
+        return;
+    }
     mesh_state.stats.messages_received++;
 
     switch (h->msg_type) {
@@ -126,9 +140,13 @@ static void mesh_rx_from_mac(const uint8_t *buf, size_t len, int16_t rssi, void 
         break;
     case AKIRA_MESH_MSG_ROUTE_REQ:
     case AKIRA_MESH_MSG_ROUTE_REPLY:
-    case AKIRA_MESH_MSG_ROUTE_ERROR: {
+    case AKIRA_MESH_MSG_ROUTE_ERROR:
+    case AKIRA_MESH_MSG_ROUTE_REQ_SIG:
+    case AKIRA_MESH_MSG_ROUTE_REPLY_SIG: {
         const mesh_router_ops_t *router = mesh_router_get_active();
-        if (router) router->handle_control_frame(buf, len);
+        if (router) {
+            router->handle_control_frame(buf, len);
+        }
         break;
     }
     case AKIRA_MESH_MSG_DATA:
@@ -161,10 +179,14 @@ K_WORK_DELAYABLE_DEFINE(mesh_tick_work, mesh_tick_work_handler);
 static void mesh_tick_work_handler(struct k_work *w)
 {
     ARG_UNUSED(w);
-    if (!mesh_state.started) return;
+    if (!mesh_state.started) {
+        return;
+    }
     uint32_t now = k_uptime_get_32();
     const mesh_router_ops_t *router = mesh_router_get_active();
-    if (router) router->tick(now);
+    if (router) {
+        router->tick(now);
+    }
     mesh_transport_tick(now);
     k_work_schedule(&mesh_tick_work, K_MSEC(CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS));
 }

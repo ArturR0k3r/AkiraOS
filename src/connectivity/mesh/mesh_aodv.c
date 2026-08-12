@@ -188,7 +188,9 @@ static struct sign_pending *pending_get(struct sign_pending *table, const uint8_
     if (!slot) {
         slot = &table[0];
         for (size_t i = 1; i < CONFIG_AKIRA_MESH_SIGN_PENDING_MAX; i++) {
-            if ((int32_t)(table[i].expires_ms - slot->expires_ms) < 0) slot = &table[i];
+            if ((int32_t)(table[i].expires_ms - slot->expires_ms) < 0) {
+                slot = &table[i];
+            }
         }
     }
     memset(slot, 0, sizeof(*slot));
@@ -239,7 +241,9 @@ static bool check_rreq_sig(const struct aodv_rreq *rq, const uint8_t *src_id,
 {
     uint8_t msg[RREQ_SIGN_MSG_LEN];
     size_t len = build_rreq_sign_msg(msg, rq->orig_identity_pub, src_id, rq->target, rq->orig_seq);
-    if (ed25519_verify(sign_pub, msg, len, sig) != 0) return false;
+    if (ed25519_verify(sign_pub, msg, len, sig) != 0) {
+        return false;
+    }
     return pin_check_and_learn(src_id, sign_pub);
 }
 
@@ -266,7 +270,9 @@ static bool check_rrep_sig(const struct aodv_rrep *rp, const uint8_t *sign_pub, 
 {
     uint8_t msg[RREP_SIGN_MSG_LEN];
     size_t len = build_rrep_sign_msg(msg, rp->target_prekey_pub, rp->target, rp->dest_seq);
-    if (ed25519_verify(sign_pub, msg, len, sig) != 0) return false;
+    if (ed25519_verify(sign_pub, msg, len, sig) != 0) {
+        return false;
+    }
     return pin_check_and_learn(rp->target, sign_pub);
 }
 #endif /* CONFIG_AKIRA_MESH_RREQ_RREP_SIGNING */
@@ -331,7 +337,9 @@ int mesh_aodv_module_init(const akira_mesh_config_t *config, akira_mesh_stats_t 
 
 int mesh_aodv_get_nodes(akira_mesh_node_info_t *nodes, size_t max_nodes)
 {
-    if (!nodes || max_nodes == 0) return -EINVAL;
+    if (!nodes || max_nodes == 0) {
+        return -EINVAL;
+    }
     k_mutex_lock(&s_aodv.lock, K_FOREVER);
     size_t copy_count = MIN(s_aodv.node_count, max_nodes);
     memcpy(nodes, s_aodv.nodes, copy_count * sizeof(akira_mesh_node_info_t));
@@ -373,7 +381,9 @@ void mesh_aodv_dispatch_beacon(const uint8_t *src_id, const uint8_t *payload, si
         node->rssi = (int8_t)CLAMP(rssi, INT8_MIN, INT8_MAX);
         node->last_seen = k_uptime_get_32();
         node->role = AKIRA_MESH_ROLE_NODE;
-        if (s_aodv.stats) s_aodv.stats->nodes_discovered++;
+        if (s_aodv.stats) {
+            s_aodv.stats->nodes_discovered++;
+        }
         LOG_INF("Discovered mesh node: %s", node->name);
     }
     k_mutex_unlock(&s_aodv.lock);
@@ -412,17 +422,23 @@ K_WORK_DELAYABLE_DEFINE(beacon_work, beacon_work_handler);
 static void beacon_work_handler(struct k_work *w)
 {
     ARG_UNUSED(w);
-    if (!s_aodv.started) return;
+    if (!s_aodv.started) {
+        return;
+    }
     uint8_t bcast[AKIRA_MESH_NODE_ID_LEN];
     memset(bcast, 0xFF, sizeof(bcast));
     uint8_t pkt[64];
     struct mesh_header *h = (struct mesh_header *)pkt;
     fill_aodv_header(h, AKIRA_MESH_MSG_BEACON, 1, bcast);
     size_t nlen = strlen(s_aodv.config.node_name);
-    if (sizeof(*h) + nlen > sizeof(pkt)) nlen = sizeof(pkt) - sizeof(*h);
+    if (sizeof(*h) + nlen > sizeof(pkt)) {
+        nlen = sizeof(pkt) - sizeof(*h);
+    }
     memcpy(pkt + sizeof(*h), s_aodv.config.node_name, nlen);
     mesh_mac_send(MESH_MAC_PRIO_CRITICAL, pkt, sizeof(*h) + nlen);
-    if (s_aodv.stats) s_aodv.stats->messages_sent++;
+    if (s_aodv.stats) {
+        s_aodv.stats->messages_sent++;
+    }
     k_work_schedule(&beacon_work, K_MSEC(beacon_next_delay_ms()));
 }
 
@@ -551,12 +567,18 @@ static void send_rerr_broadcast(const uint8_t *unreachable)
 
 static void relay_frame(struct mesh_header *h, const uint8_t *full, size_t len)
 {
-    if (h->ttl == 0) return;
+    if (h->ttl == 0) {
+        return;
+    }
     uint8_t pkt[MESH_MAC_PACKET_BUF_SIZE];
-    if (len > sizeof(pkt)) return;
+    if (len > sizeof(pkt)) {
+        return;
+    }
     memcpy(pkt, full, len);
     ((struct mesh_header *)pkt)->ttl = h->ttl - 1;
-    if (s_aodv.stats) s_aodv.stats->messages_forwarded++;
+    if (s_aodv.stats) {
+        s_aodv.stats->messages_forwarded++;
+    }
     mesh_mac_send(mesh_mac_prio_for_msg_type(h->msg_type), pkt, len);
 }
 
@@ -574,7 +596,9 @@ static void pending_route_drop(const uint8_t *dest, bool is_local_repair, void *
 
 static void forward_data(struct mesh_header *h, const uint8_t *full, size_t len)
 {
-    if (h->ttl == 0) return;
+    if (h->ttl == 0) {
+        return;
+    }
     uint32_t now = k_uptime_get_32();
     k_mutex_lock(&s_aodv.lock, K_FOREVER);
     struct route_entry *r = mesh_route_lookup(&s_aodv.routes, h->dest_id, now);
@@ -614,11 +638,15 @@ static void flush_pending_for(const uint8_t *dest)
         if (!e) { k_mutex_unlock(&s_aodv.lock); break; }
         uint8_t buf[MESH_MAC_PACKET_BUF_SIZE];
         uint16_t l = e->len;
-        if (l > sizeof(buf)) l = sizeof(buf);
+        if (l > sizeof(buf)) {
+            l = sizeof(buf);
+        }
         memcpy(buf, e->payload, l);
         mesh_pr_clear_slot(e);
         k_mutex_unlock(&s_aodv.lock);
-        if (l < sizeof(struct mesh_header)) continue;
+        if (l < sizeof(struct mesh_header)) {
+            continue;
+        }
         /* Full stored packet (header+body), queued either by a source-side
          * send (Transport, via queue_pending) or by this file's own local
          * repair — re-transmit it as-is, TTL already correct from when it
@@ -675,8 +703,12 @@ static void handle_route_req_verified(struct mesh_header *h, const uint8_t *buf,
 static void handle_route_req(struct mesh_header *h, const uint8_t *buf, size_t len,
                              const uint8_t *payload, size_t plen)
 {
-    if (plen < sizeof(struct aodv_rreq)) return;
-    if (is_self(h->src_id)) return; /* our own RREQ, rebroadcast back to us */
+    if (plen < sizeof(struct aodv_rreq)) {
+        return;
+    }
+    if (is_self(h->src_id)) {
+        return; /* our own RREQ, rebroadcast back to us */
+    }
     const struct aodv_rreq *rq = (const struct aodv_rreq *)payload;
 #if defined(CONFIG_AKIRA_MESH_RREQ_RREP_SIGNING)
     uint32_t now = k_uptime_get_32();
@@ -696,7 +728,9 @@ static void handle_route_req(struct mesh_header *h, const uint8_t *buf, size_t l
         memset(p, 0, sizeof(*p));
     }
     k_mutex_unlock(&s_aodv.lock);
-    if (!have_sig) return;
+    if (!have_sig) {
+        return;
+    }
 
     const struct aodv_rreq_sig *rs =
         (const struct aodv_rreq_sig *)(sig_buf + sizeof(struct mesh_header));
@@ -717,8 +751,12 @@ static void handle_route_req(struct mesh_header *h, const uint8_t *buf, size_t l
 static void handle_route_req_sig(struct mesh_header *h, const uint8_t *buf, size_t len,
                                  const uint8_t *payload, size_t plen)
 {
-    if (plen < sizeof(struct aodv_rreq_sig)) return;
-    if (is_self(h->src_id)) return;
+    if (plen < sizeof(struct aodv_rreq_sig)) {
+        return;
+    }
+    if (is_self(h->src_id)) {
+        return;
+    }
     const struct aodv_rreq_sig *rs = (const struct aodv_rreq_sig *)payload;
     uint32_t now = k_uptime_get_32();
     uint8_t base_buf[MESH_MAC_PACKET_BUF_SIZE];
@@ -737,7 +775,9 @@ static void handle_route_req_sig(struct mesh_header *h, const uint8_t *buf, size
         memset(p, 0, sizeof(*p));
     }
     k_mutex_unlock(&s_aodv.lock);
-    if (!have_base) return;
+    if (!have_base) {
+        return;
+    }
 
     struct mesh_header *bh = (struct mesh_header *)base_buf;
     const struct aodv_rreq *rq = (const struct aodv_rreq *)(base_buf + sizeof(struct mesh_header));
@@ -802,7 +842,9 @@ static void handle_route_reply_verified(struct mesh_header *h, const uint8_t *bu
 static void handle_route_reply(struct mesh_header *h, const uint8_t *buf, size_t len,
                                const uint8_t *payload, size_t plen)
 {
-    if (plen < sizeof(struct aodv_rrep)) return;
+    if (plen < sizeof(struct aodv_rrep)) {
+        return;
+    }
     const struct aodv_rrep *rp = (const struct aodv_rrep *)payload;
 #if defined(CONFIG_AKIRA_MESH_RREQ_RREP_SIGNING)
     uint32_t now = k_uptime_get_32();
@@ -822,7 +864,9 @@ static void handle_route_reply(struct mesh_header *h, const uint8_t *buf, size_t
         memset(p, 0, sizeof(*p));
     }
     k_mutex_unlock(&s_aodv.lock);
-    if (!have_sig) return;
+    if (!have_sig) {
+        return;
+    }
 
     const struct aodv_rrep_sig *rs =
         (const struct aodv_rrep_sig *)(sig_buf + sizeof(struct mesh_header));
@@ -843,7 +887,9 @@ static void handle_route_reply(struct mesh_header *h, const uint8_t *buf, size_t
 static void handle_route_reply_sig(struct mesh_header *h, const uint8_t *buf, size_t len,
                                    const uint8_t *payload, size_t plen)
 {
-    if (plen < sizeof(struct aodv_rrep_sig)) return;
+    if (plen < sizeof(struct aodv_rrep_sig)) {
+        return;
+    }
     const struct aodv_rrep_sig *rs = (const struct aodv_rrep_sig *)payload;
     uint32_t now = k_uptime_get_32();
     uint8_t base_buf[MESH_MAC_PACKET_BUF_SIZE];
@@ -862,7 +908,9 @@ static void handle_route_reply_sig(struct mesh_header *h, const uint8_t *buf, si
         memset(p, 0, sizeof(*p));
     }
     k_mutex_unlock(&s_aodv.lock);
-    if (!have_base) return;
+    if (!have_base) {
+        return;
+    }
 
     struct mesh_header *bh = (struct mesh_header *)base_buf;
     const struct aodv_rrep *rp = (const struct aodv_rrep *)(base_buf + sizeof(struct mesh_header));
@@ -880,7 +928,9 @@ static void handle_route_reply_sig(struct mesh_header *h, const uint8_t *buf, si
 
 static void handle_route_error(const uint8_t *payload, size_t plen)
 {
-    if (plen < sizeof(struct aodv_rerr)) return;
+    if (plen < sizeof(struct aodv_rerr)) {
+        return;
+    }
     const struct aodv_rerr *re = (const struct aodv_rerr *)payload;
     k_mutex_lock(&s_aodv.lock, K_FOREVER);
     bool had_route = mesh_route_invalidate(&s_aodv.routes, re->unreachable);
@@ -901,7 +951,9 @@ static void handle_route_error(const uint8_t *payload, size_t plen)
 
 static void aodv_handle_control_frame(const uint8_t *buf, size_t len)
 {
-    if (len < sizeof(struct mesh_header)) return;
+    if (len < sizeof(struct mesh_header)) {
+        return;
+    }
     struct mesh_header *h = (struct mesh_header *)buf;
     const uint8_t *payload = buf + sizeof(*h);
     size_t plen = len - sizeof(*h);
@@ -921,7 +973,9 @@ static void aodv_handle_control_frame(const uint8_t *buf, size_t len)
     } else if (h->msg_type == AKIRA_MESH_MSG_ROUTE_REPLY && plen >= sizeof(struct aodv_rrep)) {
         immediate_sender = ((const struct aodv_rrep *)payload)->relay_id;
     }
-    if (akira_mesh_debug_link_is_dropped(immediate_sender)) return;
+    if (akira_mesh_debug_link_is_dropped(immediate_sender)) {
+        return;
+    }
 
     /* Without this, a duplicate copy of the same RREQ/RREP reaching a relay
      * from a redundant path gets rebroadcast again unconditionally (mesh_
@@ -946,7 +1000,9 @@ static void aodv_handle_control_frame(const uint8_t *buf, size_t len)
     k_mutex_lock(&s_aodv.lock, K_FOREVER);
     bool dup = mesh_seen_check(&s_aodv.seen, h->src_id, h->seq_num);
     k_mutex_unlock(&s_aodv.lock);
-    if (dup) return;
+    if (dup) {
+        return;
+    }
 
     switch (h->msg_type) {
     case AKIRA_MESH_MSG_ROUTE_REQ:   handle_route_req(h, buf, len, payload, plen); break;
@@ -975,10 +1031,14 @@ static int aodv_resolve(const uint8_t *dest_id, uint8_t *next_hop_out)
     k_mutex_lock(&s_aodv.lock, K_FOREVER);
     struct route_entry *r = mesh_route_lookup(&s_aodv.routes, dest_id, now);
     bool have = (r != NULL);
-    if (have) memcpy(next_hop_out, r->next_hop, AKIRA_MESH_NODE_ID_LEN);
+    if (have) {
+        memcpy(next_hop_out, r->next_hop, AKIRA_MESH_NODE_ID_LEN);
+    }
     bool already_pending = mesh_pr_next_for_dest(&s_aodv.proutes, dest_id) != NULL;
     k_mutex_unlock(&s_aodv.lock);
-    if (have) return 0;
+    if (have) {
+        return 0;
+    }
     if (!already_pending) {
         /* First miss for this dest: the caller is responsible for queueing
          * its own payload via queue_pending (below) — resolve() only fires
