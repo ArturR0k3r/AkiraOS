@@ -945,6 +945,19 @@ config AKIRA_MESH_RX_PRIORITY
     help
       Scheduling priority for the mesh receive thread.
 
+config AKIRA_MESH_TX_PRIORITY
+    int "Mesh TX thread priority"
+    default 6
+    help
+      Scheduling priority for the mesh transmit thread. Higher (lower
+      number) than AKIRA_MESH_RX_PRIORITY: TX holds radio->lock for the
+      whole send, including the TX_DONE poll — if RX runs at the same
+      priority, its idle-yield wakeup contends for that same lock every
+      cycle and each contended re-lock attempt costs a same-priority
+      context switch, stretching every poll iteration of an in-flight
+      send. Giving TX strict priority over an idle-polling RX removes
+      that tax without changing RX's own behavior.
+
 config AKIRA_MESH_RX_POLL_MS
     int "Mesh RX listen-window (ms)"
     default 5000
@@ -989,6 +1002,23 @@ config AKIRA_MESH_MAC_TXQ_LOW_LEN
     help
       Depth of the low-priority TX queue (DATA/APP_CHUNK/STREAM_DATA).
       Checked last on every MAC TX thread iteration.
+
+config AKIRA_MESH_LORA_SF
+    int "Mesh LoRa spreading factor"
+    default 7
+    help
+      Spreading factor mesh forces at LoRa bring-up, independent of the
+      chip's own power-on default — measured fastest at SF7/BW500 in the
+      airtime sweep (see AKIRA_MESH_LORA_BW_HZ).
+
+config AKIRA_MESH_LORA_BW_HZ
+    int "Mesh LoRa bandwidth (Hz)"
+    default 500000
+    help
+      Bandwidth mesh forces at LoRa bring-up. The chip's own devicetree
+      default (akira_default_lora_bw_hz) is 125000 Hz, tuned for range —
+      leaving mesh on that default cost 4x the real airtime per frame
+      before this was set explicitly. 500000 was measured fastest.
 
 config AKIRA_MESH_MAC_POLL_MS
     int "MAC TX thread idle/backoff poll interval (ms)"

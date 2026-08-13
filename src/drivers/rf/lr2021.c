@@ -216,16 +216,6 @@ static int lr2021_wait_busy(void) {
     return 0;
 }
 
-static inline void lr2021_cs_low(void) {
-    gpio_pin_set_dt(&g_lr2021.cs, 1);
-    k_usleep(1);
-}
-
-static inline void lr2021_cs_high(void) {
-    k_usleep(1);
-    gpio_pin_set_dt(&g_lr2021.cs, 0);
-}
-
 static int lr2021_spi_write(const uint8_t *data, size_t len) {
     struct spi_buf tx = { .buf = (void *)data, .len = len };
     struct spi_buf_set tx_set = { .buffers = &tx, .count = 1 };
@@ -260,8 +250,6 @@ static int lr2021_write_command(uint16_t opcode, const uint8_t *args, size_t arg
 
     uint8_t op_buf[2] = { (opcode >> 8) & 0xFF, opcode & 0xFF };
 
-    lr2021_cs_low();
-
     /* Send opcode + args in one SPI frame */
     if (args && args_len > 0) {
         struct spi_buf tx[2] = {
@@ -273,8 +261,6 @@ static int lr2021_write_command(uint16_t opcode, const uint8_t *args, size_t arg
     } else {
         ret = lr2021_spi_write(op_buf, 2);
     }
-
-    lr2021_cs_high();
 
     if (ret < 0) {
         LOG_ERR("SPI write cmd 0x%04X failed: %d", opcode, ret);
@@ -311,8 +297,6 @@ static int lr2021_read_command(uint16_t opcode, const uint8_t *args,
 
     uint8_t op_buf[2] = { (opcode >> 8) & 0xFF, opcode & 0xFF };
 
-    lr2021_cs_low();
-
     if (args && args_len > 0) {
         struct spi_buf tx[2] = {
             { .buf = op_buf, .len = 2 },
@@ -323,8 +307,6 @@ static int lr2021_read_command(uint16_t opcode, const uint8_t *args,
     } else {
         ret = lr2021_spi_write(op_buf, 2);
     }
-
-    lr2021_cs_high();
 
     if (ret < 0) {
         LOG_ERR("SPI read cmd 0x%04X phase1 failed: %d", opcode, ret);
@@ -349,9 +331,7 @@ static int lr2021_read_command(uint16_t opcode, const uint8_t *args,
     uint8_t tx_dummy[128];
     memset(tx_dummy, 0, total);
 
-    lr2021_cs_low();
     ret = lr2021_spi_transceive(tx_dummy, rx_local, total);
-    lr2021_cs_high();
 
     if (ret < 0) {
         LOG_ERR("SPI read cmd 0x%04X phase3 failed: %d", opcode, ret);
@@ -386,9 +366,7 @@ static int lr2021_read_fifo(uint8_t *data, size_t len) {
     tx[0] = op_buf[0];
     tx[1] = op_buf[1];
 
-    lr2021_cs_low();
     ret = lr2021_spi_transceive(tx, rx, tx_len);
-    lr2021_cs_high();
 
     if (ret < 0) {
         return ret;
@@ -612,6 +590,7 @@ static int lr2021_init(void) {
     g_lr2021.spi.config.frequency  = DT_PROP(LR2021_NODE, spi_max_frequency);
     g_lr2021.spi.config.operation  = SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB
                                      | SPI_WORD_SET(8);  /* SPI mode 0 (CPOL=0,CPHA=0) */
+    g_lr2021.spi.config.slave = DT_REG_ADDR(LR2021_NODE);
 
     /* --- CS GPIO --------------------------------------------------------- */
     g_lr2021.cs = (struct gpio_dt_spec)GPIO_DT_SPEC_GET(LR2021_NODE, cs_gpios);
@@ -621,6 +600,17 @@ static int lr2021_init(void) {
     }
     gpio_pin_configure_dt(&g_lr2021.cs, GPIO_OUTPUT_INACTIVE);
     gpio_pin_set_dt(&g_lr2021.cs, 0); /* Deassert CS */
+
+    /* CS must live inside spi_config so the framework toggles it under the
+     * same bus lock (spi_context) that serializes every other device on
+     * SPI2 — SD card included. A driver-managed raw GPIO toggle done
+     * outside spi_write_dt/spi_transceive_dt has no such lock: another
+     * thread's SD transaction can start while this CS is still asserted,
+     * since TX and RX now run on separate threads and can genuinely
+     * overlap on the shared bus. */
+    g_lr2021.spi.config.cs.gpio = g_lr2021.cs;
+    g_lr2021.spi.config.cs.delay = 0;
+    g_lr2021.spi.config.cs.cs_is_gpio = true;
 
     /* --- RESET GPIO ------------------------------------------------------ */
     g_lr2021.reset = (struct gpio_dt_spec)GPIO_DT_SPEC_GET(LR2021_NODE, reset_gpios);
@@ -1175,6 +1165,8 @@ static size_t lr2021_max_tx_len(void) {
                                                        : LR2021_MAX_PAYLOAD;
 }
 
+static int lr2021_rx_arm_continuous(void);
+
 static int lr2021_tx(const uint8_t *data, size_t len) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
@@ -1230,8 +1222,6 @@ static int lr2021_tx(const uint8_t *data, size_t len) {
         uint8_t ble_hdr[2] = { 0x00, (uint8_t)len };  /* flags=0, Length=payload len */
         bool is_ble = (g_lr2021.modulation == RADIO_MOD_BLE_PHY);
 
-        lr2021_cs_low();
-
         if (is_ble) {
             struct spi_buf tx[3] = {
                 { .buf = op_buf, .len = 2 },
@@ -1248,8 +1238,6 @@ static int lr2021_tx(const uint8_t *data, size_t len) {
             struct spi_buf_set tx_set = { .buffers = tx, .count = 2 };
             ret = spi_write_dt(&g_lr2021.spi, &tx_set);
         }
-
-        lr2021_cs_high();
 
         if (ret < 0) {
             LOG_ERR("TX FIFO write failed: %d", ret);
@@ -1311,7 +1299,17 @@ static int lr2021_tx(const uint8_t *data, size_t len) {
     }
 
     g_lr2021.current_mode = RADIO_MODE_STANDBY;  /* Auto fallback to standby */
-    g_lr2021.rx_armed = false;  /* left RX for TX — recv() re-arms continuous RX */
+    g_lr2021.rx_armed = false;
+    if (g_lr2021.use_irq) {
+        /* Re-arm continuous RX now, synchronously, still under the radio
+         * lock — not lazily on whichever thread's next recv() call. The
+         * peer can't possibly have replied yet (propagation + their own
+         * processing time is nonzero), so re-arming here means the
+         * IRQ-driven wake (see lr2021_rx_wait()) can never collide with a
+         * real incoming frame arriving mid-rearm. Deferring this always
+         * cost the same work later — this just makes the timing safe. */
+        lr2021_rx_arm_continuous();
+    }
     LOG_INF("LR2021 TX: %zu bytes at %u Hz, %d dBm",
             len, g_lr2021.frequency_hz, g_lr2021.tx_power_dbm);
     return 0;

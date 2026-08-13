@@ -25,6 +25,7 @@ struct mac_frame {
     uint8_t  data[MESH_MAC_PACKET_BUF_SIZE];
     int64_t  retry_at;      /* k_uptime_get() ms; not sent before this. 0 = ready now */
     uint8_t  cca_attempts;  /* CCA-busy requeues so far, caps at CCA_MAX_RETRIES */
+    int64_t  queued_at;     /* k_uptime_get() ms at mesh_mac_send() — diagnostic: isolates queue+CCA delay from airtime */
 };
 
 K_MSGQ_DEFINE(s_txq_critical, sizeof(struct mac_frame), CONFIG_AKIRA_MESH_MAC_TXQ_CRITICAL_LEN, 4);
@@ -139,7 +140,8 @@ int mesh_mac_send(mesh_mac_prio_t prio, const uint8_t *buf, size_t len)
     if ((unsigned)prio >= ARRAY_SIZE(s_txq_lanes)){
         return -EINVAL;
     }
-    struct mac_frame f = { .len = (uint16_t)len, .retry_at = 0, .cca_attempts = 0 };
+    struct mac_frame f = { .len = (uint16_t)len, .retry_at = 0, .cca_attempts = 0,
+                           .queued_at = k_uptime_get() };
     memcpy(f.data, buf, len);
     return (k_msgq_put(s_txq_lanes[prio], &f, K_NO_WAIT) == 0) ? 0 : -EBUSY;
 }
@@ -246,6 +248,8 @@ static void mesh_mac_tx_thread_fn(void *a, void *b, void *c)
             LOG_ERR("mesh_mac: radio lock timeout, frame dropped (len=%u)", f.len);
             continue;
         }
+        LOG_INF("mesh_mac TX: len=%u queue_delay=%lldms cca_attempts=%u",
+               f.len, k_uptime_get() - f.queued_at, f.cca_attempts);
         int ret = r->ops->send(r, f.data, f.len);
         k_mutex_unlock(&r->lock);
         if (ret) {
@@ -256,7 +260,7 @@ static void mesh_mac_tx_thread_fn(void *a, void *b, void *c)
 
 K_THREAD_DEFINE(mesh_mac_tx_thread, CONFIG_AKIRA_MESH_RX_STACK_SIZE,
                 mesh_mac_tx_thread_fn, NULL, NULL, NULL,
-                CONFIG_AKIRA_MESH_RX_PRIORITY, 0, 0);
+                CONFIG_AKIRA_MESH_TX_PRIORITY, 0, 0);
 
 static void mesh_mac_rx_thread_fn(void *a, void *b, void *c)
 {
@@ -292,6 +296,14 @@ static void mesh_mac_rx_thread_fn(void *a, void *b, void *c)
             if (s_mac.rx_cb) {
                 s_mac.rx_cb(s_rx_buf, (size_t)n, rssi, s_mac.rx_ctx);
             }
+        } else if (r->ops && r->ops->rx_wait) {
+            /* Lock-free (no SPI), blocks on the IRQ semaphore — wakes the
+             * instant a packet arrives instead of waiting out a fixed idle
+             * sleep. Safe now that TX re-arms RX eagerly at TX_DONE (see
+             * lr2021_tx()) instead of leaving the re-arm — and the semaphore
+             * reset that comes with it — to land at an unpredictable time
+             * relative to the peer's reply. */
+            r->ops->rx_wait(r, CONFIG_AKIRA_MESH_RX_IDLE_YIELD_MS);
         } else {
             /* The IRQ-driven recv path returns almost instantly regardless
              * of whether a packet arrived — with no sleep here this becomes
