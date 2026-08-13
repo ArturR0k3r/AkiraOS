@@ -603,6 +603,12 @@ static void forward_data(struct mesh_header *h, const uint8_t *full, size_t len)
     k_mutex_lock(&s_aodv.lock, K_FOREVER);
     struct route_entry *r = mesh_route_lookup(&s_aodv.routes, h->dest_id, now);
     bool have = (r != NULL);
+    if (have) {
+        /* Active relay traffic — push expiry out so a route in continuous
+         * use (e.g. mid app-chunk transfer) doesn't hard-expire on its
+         * fixed install-time lifetime and force a mid-transfer RREQ. */
+        mesh_route_touch(&s_aodv.routes, h->dest_id, now, now + MESH_ROUTE_LIFETIME_MS);
+    }
     k_mutex_unlock(&s_aodv.lock);
     if (have) {
         relay_frame(h, full, len);
@@ -1033,6 +1039,7 @@ static int aodv_resolve(const uint8_t *dest_id, uint8_t *next_hop_out)
     bool have = (r != NULL);
     if (have) {
         memcpy(next_hop_out, r->next_hop, AKIRA_MESH_NODE_ID_LEN);
+        mesh_route_touch(&s_aodv.routes, dest_id, now, now + MESH_ROUTE_LIFETIME_MS);
     }
     bool already_pending = mesh_pr_next_for_dest(&s_aodv.proutes, dest_id) != NULL;
     k_mutex_unlock(&s_aodv.lock);
