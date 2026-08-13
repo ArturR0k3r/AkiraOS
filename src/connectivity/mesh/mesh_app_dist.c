@@ -91,14 +91,6 @@ static struct {
     void                **rx_ctx_ptr;
     size_t                mtu;   /* radio's actual max payload, see mesh_manager.c's mesh_state.mtu */
     uint16_t              seq_num;
-    /* Only guards forwarded (non-self-destined) APP_* frames — a relay
-     * doesn't validate content, so seen-based loop/flood suppression is
-     * both safe and needed there, same reasoning as every other layer's
-     * dedup gate. Frames addressed to us skip this deliberately: their own
-     * chunk-index/CRC/app_id checks are idempotent and must still respond
-     * (re-ack) to an exact retry, which a "seen" bit would permanently
-     * swallow before it got the chance to. */
-    struct seen_cache     seen;
 
     /* WASM app reassembly. RX-thread-only: mesh_app_dist_handle_frame is the
      * sole reader and writer, always on the RX thread, so this needs no lock. */
@@ -175,7 +167,6 @@ void mesh_app_dist_module_init(const akira_mesh_config_t *config, akira_mesh_sta
     s_app_dist.rx_cb_ptr = rx_cb_ptr;
     s_app_dist.rx_ctx_ptr = rx_ctx_ptr;
     s_app_dist.seq_num = 0;
-    mesh_seen_reset(&s_app_dist.seen);
     memset(&s_app_dist.app_rx, 0, sizeof(s_app_dist.app_rx));
     s_app_ack_wait.active = false;
     k_sem_init(&s_app_ack_wait.sem, 0, 1);
@@ -529,14 +520,16 @@ void mesh_app_dist_handle_frame(const uint8_t *buf, size_t len)
     struct mesh_header *h = (struct mesh_header *)buf;
     bool self_dest = is_self(h->dest_id);
 
-    if (!self_dest) {
-        /* Relay path only — see s_app_dist.seen's declaration comment for
-         * why self-destined frames must skip this. */
-        bool dup = mesh_seen_check_and_add(&s_app_dist.seen, h->src_id, h->seq_num);
-        if (dup) {
-            return;
-        }
-    }
+    /* No dedup gate on the relay path: APP_* traffic is strict unicast
+     * next-hop forwarding off the route table, never flooded, so TTL alone
+     * already bounds worst-case loops — there's no multi-path-duplicate
+     * case here for a seen-cache to guard against. What a seen-cache *would*
+     * do is actively harmful: once a chunk's forward hop succeeds and gets
+     * cached as seen, a lost return ACK forces the sender to retransmit the
+     * identical (src,seq) frame, and a relay that still remembers it as
+     * "seen" silently drops that legitimate retry forever — the stalled
+     * chunk generates no new seq_nums to age the stuck entry out of the
+     * ring buffer, so the transfer can never recover. */
 
     const uint8_t *payload = buf + sizeof(*h);
     size_t plen = len - sizeof(*h);
@@ -695,15 +688,20 @@ int akira_mesh_distribute_app(const uint8_t *dest_id, const char *app_name,
     }
 
     /* Resume support: skip chunks the receiver already has. Best-effort —
-     * a failed query just falls back to sending every chunk. */
-    uint8_t resume_bitmap[MESH_APP_BITMAP_BYTES] = {0};
+     * a failed query just falls back to sending every chunk.
+     * MESH_APP_BITMAP_BYTES (8192 at the current 1MB app-size ceiling) is
+     * larger than CONFIG_SHELL_STACK_SIZE — this must stay off the stack of
+     * whichever thread calls in (the shell thread, synchronously), same
+     * class of bug as the one fixed in the app-chunk RX path. */
+    static uint8_t s_resume_bitmap[MESH_APP_BITMAP_BYTES] AKIRA_BULK_BSS;
+    memset(s_resume_bitmap, 0, sizeof(s_resume_bitmap));
     uint16_t resume_received_count = 0;
-    bool have_resume = (mesh_query_app_rx_progress(dest_id, app_id, resume_bitmap,
-                                                   sizeof(resume_bitmap),
+    bool have_resume = (mesh_query_app_rx_progress(dest_id, app_id, s_resume_bitmap,
+                                                   sizeof(s_resume_bitmap),
                                                    &resume_received_count) == 0);
 
     for (uint16_t i = 0; i < chunk_count; i++) {
-        if (have_resume && (resume_bitmap[i / 8] & BIT(i % 8))) {
+        if (have_resume && (s_resume_bitmap[i / 8] & BIT(i % 8))) {
             continue;
         }
         size_t off = (size_t)i * stride;

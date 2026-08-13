@@ -1729,7 +1729,8 @@ int app_manager_read_binary(const char *name, void *buf, size_t buf_size)
         } else {
             snprintf(path, sizeof(path), "%s/%03d_%s%s", APPS_DIR, app->id, name, exts[i]);
         }
-        ssize_t got = fs_manager_read_file(path, buf, buf_size);
+        size_t want = MIN((size_t)app->size, buf_size);
+        ssize_t got = fs_manager_read_file(path, buf, want);
         if (got >= 0) {
             return (int)got;
         }
