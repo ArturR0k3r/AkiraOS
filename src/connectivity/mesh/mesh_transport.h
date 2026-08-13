@@ -10,10 +10,20 @@ void mesh_transport_module_init(const akira_mesh_config_t *config,
 int mesh_transport_send_reliable(const uint8_t *dest_id, uint8_t msg_type,
                                  const uint8_t *data, size_t len);
 
+/* Fire-and-forget unicast: fails fast (-EHOSTUNREACH/-ENOTCONN) instead of
+ * queuing when no route/session exists, and never adds an ack_table entry —
+ * see AKIRA_MESH_MSG_DATA_UNRELIABLE in akira_mesh.h. */
+int mesh_transport_send_unreliable(const uint8_t *dest_id, const uint8_t *data, size_t len);
+
 /* Entry point for DATA/ACK/STREAM_* frames from the generic dispatch. */
 void mesh_transport_handle_frame(const uint8_t *buf, size_t len);
 
 void mesh_transport_tick(uint32_t now_ms);
+
+/* Soonest deadline_ms among active pending-ACK entries, or UINT32_MAX if
+ * none — lets the shared tick reschedule itself to fire exactly when a
+ * retransmit is due instead of on a fixed poll period. */
+uint32_t mesh_transport_next_ack_deadline_ms(void);
 
 /* Called once per real end-to-end ack or timed-out give-up, after Transport's
  * own ack_table bookkeeping — lets mesh_app_dist.c's blocking send wait for

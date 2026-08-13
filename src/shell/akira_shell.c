@@ -2621,6 +2621,30 @@ static int cmd_mesh_send(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+static int cmd_mesh_sendu(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 3) {
+        shell_error(sh, "Usage: mesh sendu <dest_id_hex> <text>");
+        return -EINVAL;
+    }
+
+    uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
+    dest[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+
+    const char *text = argv[2];
+    int64_t t0 = k_uptime_get();
+    int ret = akira_mesh_send_unreliable(dest, (const uint8_t *)text, strlen(text));
+    int64_t ms = k_uptime_get() - t0;
+    if (ret) {
+        shell_error(sh, "mesh sendu failed: %d (%lld ms)", ret, ms);
+        return ret;
+    }
+
+    shell_print(sh, "sent %zu bytes to %02x in %lld ms (unreliable)", strlen(text),
+                dest[AKIRA_MESH_NODE_ID_LEN - 1], ms);
+    return 0;
+}
+
 static int cmd_mesh_linkdrop(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 2) {
@@ -2768,6 +2792,7 @@ static int cmd_mesh_stop(const struct shell *sh, size_t argc, char **argv)
 SHELL_STATIC_SUBCMD_SET_CREATE(mesh_cmds,
     SHELL_CMD_ARG(init, NULL, "Init mesh: <node_id_hex> [ble|sub|lora]", cmd_mesh_init, 2, 1),
     SHELL_CMD_ARG(send, NULL, "Send: <dest_id_hex> <text>", cmd_mesh_send, 3, 0),
+    SHELL_CMD_ARG(sendu, NULL, "Fire-and-forget send: <dest_id_hex> <text>", cmd_mesh_sendu, 3, 0),
     SHELL_CMD_ARG(sendstream, NULL, "Stream send: <dest_id_hex> <size_bytes>", cmd_mesh_sendstream, 3, 0),
     SHELL_CMD_ARG(app, NULL, "Distribute installed app: <dest_id_hex> <name>", cmd_mesh_app, 3, 0),
     SHELL_CMD_ARG(linkdrop, NULL, "Test-only: simulate peer out of range: <peer_id_hex>", cmd_mesh_linkdrop, 2, 0),

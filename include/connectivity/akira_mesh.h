@@ -69,6 +69,11 @@ typedef enum {
      * base frame by (src_id, orig_seq/dest_seq), not by arrival order. */
     AKIRA_MESH_MSG_ROUTE_REQ_SIG,
     AKIRA_MESH_MSG_ROUTE_REPLY_SIG,
+    /* Fire-and-forget unicast — E2E encrypted like DATA, but the sender
+     * never waits for an ACK and the receiver never sends one. Fails fast
+     * (-EHOSTUNREACH/-ENOTCONN) instead of queuing when no route/session
+     * exists yet, unlike DATA's queue-and-retry-on-discovery. */
+    AKIRA_MESH_MSG_DATA_UNRELIABLE,
 } akira_mesh_msg_type_t;
 
 /* Mesh configuration */
@@ -162,6 +167,21 @@ int akira_mesh_set_tx_power(int8_t dbm);
  * @return 0 on success, negative errno on failure
  */
 int akira_mesh_send(const uint8_t *dest_id, const uint8_t *data, size_t len);
+
+/**
+ * @brief Fire-and-forget unicast send — no ACK wait, no retry, no queueing
+ * on a cold destination. Still E2E encrypted. Use when losing an occasional
+ * message is fine and you'd rather fail fast than pay akira_mesh_send()'s
+ * retry/tick latency.
+ *
+ * @param dest_id Destination node ID
+ * @param data Data to send
+ * @param len Data length
+ * @return 0 on success (queued for TX, not delivery-confirmed), -EHOSTUNREACH
+ *         if no route exists yet, -ENOTCONN if no E2E session exists yet,
+ *         negative errno otherwise.
+ */
+int akira_mesh_send_unreliable(const uint8_t *dest_id, const uint8_t *data, size_t len);
 
 /**
  * @brief Send data to a node using selective-repeat ARQ (windowed burst +

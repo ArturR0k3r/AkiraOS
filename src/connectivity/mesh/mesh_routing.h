@@ -88,6 +88,7 @@ struct pending_ack {
     uint8_t  retries;            /* initial send = retry 0 */
     uint32_t deadline_ms;
     uint32_t last_used_ms;       /* for LRU eviction when the table is full */
+    uint32_t sent_at_ms;         /* first-attempt timestamp — diagnostic: true E2E latency on clear */
     uint8_t  payload[MESH_ROUTING_PAYLOAD_MAX];
     bool     active;
 };
@@ -102,8 +103,10 @@ void mesh_ack_reset(struct ack_table *t);
 int  mesh_ack_add(struct ack_table *t, uint16_t seq, const uint8_t *dest,
                   const uint8_t *payload, uint16_t len, uint32_t now_ms,
                   uint32_t deadline_ms);
-/* Clear by (seq,dest). true if found. */
-bool mesh_ack_clear(struct ack_table *t, uint16_t seq, const uint8_t *dest);
+/* Clear by (seq,dest). true if found. elapsed_ms/retries_out (either may be
+ * NULL) report the cleared entry's age/retry-count for latency diagnostics. */
+bool mesh_ack_clear(struct ack_table *t, uint16_t seq, const uint8_t *dest,
+                    uint32_t now_ms, uint32_t *elapsed_ms, uint8_t *retries_out);
 /* Decide action for one entry at now_ms; on RETRANSMIT bumps retries + new deadline. */
 mesh_ack_action_t mesh_ack_tick(struct pending_ack *e, uint32_t now_ms, uint32_t timeout_ms);
 

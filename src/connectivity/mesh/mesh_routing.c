@@ -158,17 +158,21 @@ int mesh_ack_add(struct ack_table *t, uint16_t seq, const uint8_t *dest,
     struct pending_ack *e = &t->e[slot];
     e->seq_num = seq; e->len = len; e->retries = 0;
     e->deadline_ms = deadline_ms; e->last_used_ms = now_ms; e->active = true;
+    e->sent_at_ms = now_ms;
     memcpy(e->dest_id, dest, AKIRA_MESH_NODE_ID_LEN);
     memcpy(e->payload, payload, len);
     return slot;
 }
 
-bool mesh_ack_clear(struct ack_table *t, uint16_t seq, const uint8_t *dest)
+bool mesh_ack_clear(struct ack_table *t, uint16_t seq, const uint8_t *dest,
+                    uint32_t now_ms, uint32_t *elapsed_ms, uint8_t *retries_out)
 {
     for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_PENDING_ACKS; i++) {
         struct pending_ack *e = &t->e[i];
         if (e->active && e->seq_num == seq &&
             memcmp(e->dest_id, dest, AKIRA_MESH_NODE_ID_LEN) == 0) {
+            if (elapsed_ms) { *elapsed_ms = now_ms - e->sent_at_ms; }
+            if (retries_out) { *retries_out = e->retries; }
             e->active = false;
             return true;
         }

@@ -375,12 +375,96 @@ int mesh_transport_send_reliable(const uint8_t *dest_id, uint8_t msg_type,
 #endif /* CONFIG_AKIRA_MESH_E2E_CRYPTO */
 
 /* ------------------------------------------------------------------ */
+/* Fire-and-forget unicast send                                        */
+/* ------------------------------------------------------------------ */
+
+#if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+int mesh_transport_send_unreliable(const uint8_t *dest_id, const uint8_t *data, size_t len)
+{
+    const mesh_router_ops_t *router = mesh_router_get_active();
+    if (!router) {
+        return -ENODEV;
+    }
+    uint32_t now = k_uptime_get_32();
+    uint8_t next_hop[AKIRA_MESH_NODE_ID_LEN];
+    if (router->resolve(dest_id, next_hop) != 0) {
+        return -EHOSTUNREACH;  /* fail fast, unlike DATA's queue-and-wait */
+    }
+
+    k_mutex_lock(&s_transport.lock, K_FOREVER);
+    struct session_entry *sess = mesh_session_lookup(&s_transport.sessions, dest_id, now);
+    uint8_t enc_key[MESH_CRYPTO_SESSION_KEY_LEN];
+    uint8_t mac_key[MESH_CRYPTO_MAC_KEY_LEN];
+    bool have_key = (sess != NULL);
+    if (have_key) {
+        memcpy(enc_key, sess->enc_key, sizeof(enc_key));
+        memcpy(mac_key, sess->mac_key, sizeof(mac_key));
+    }
+    k_mutex_unlock(&s_transport.lock);
+    if (!have_key) {
+        return -ENOTCONN;  /* fail fast, unlike DATA's queue-and-wait */
+    }
+
+    uint8_t pkt[MESH_MAC_PACKET_BUF_SIZE];
+    struct mesh_header *h = (struct mesh_header *)pkt;
+    fill_transport_header(h, AKIRA_MESH_MSG_DATA_UNRELIABLE, s_transport.config.max_hops, dest_id);
+    uint8_t *body = pkt + sizeof(*h);
+
+    uint8_t nonce[MESH_CRYPTO_NONCE_LEN];
+    sys_csrand_get(nonce, sizeof(nonce));
+    memcpy(body, nonce, MESH_CRYPTO_NONCE_LEN);
+    uint8_t *ct = body + MESH_CRYPTO_NONCE_LEN;
+    if (mesh_crypto_aes256_ctr(enc_key, nonce, data, len, ct) != 0) {
+        memset(enc_key, 0, sizeof(enc_key));
+        memset(mac_key, 0, sizeof(mac_key));
+        return -EIO;
+    }
+    uint8_t tag[32];
+    mesh_crypto_hmac_sha256(mac_key, sizeof(mac_key), body, MESH_CRYPTO_NONCE_LEN + len, tag);
+    memcpy(ct + len, tag, MESH_CRYPTO_MAC_LEN);
+    size_t total = sizeof(*h) + MESH_CRYPTO_NONCE_LEN + len + MESH_CRYPTO_MAC_LEN;
+    memset(enc_key, 0, sizeof(enc_key));
+    memset(mac_key, 0, sizeof(mac_key));
+    memset(tag, 0, sizeof(tag));
+
+    if (s_transport.stats) {
+        s_transport.stats->messages_sent++;
+    }
+    return mesh_mac_send(MESH_MAC_PRIO_LOW, pkt, total);
+}
+#else /* !CONFIG_AKIRA_MESH_E2E_CRYPTO */
+int mesh_transport_send_unreliable(const uint8_t *dest_id, const uint8_t *data, size_t len)
+{
+    const mesh_router_ops_t *router = mesh_router_get_active();
+    if (!router) {
+        return -ENODEV;
+    }
+    uint8_t next_hop[AKIRA_MESH_NODE_ID_LEN];
+    if (router->resolve(dest_id, next_hop) != 0) {
+        return -EHOSTUNREACH;
+    }
+    uint8_t pkt[MESH_MAC_PACKET_BUF_SIZE];
+    struct mesh_header *h = (struct mesh_header *)pkt;
+    fill_transport_header(h, AKIRA_MESH_MSG_DATA_UNRELIABLE, s_transport.config.max_hops, dest_id);
+    memcpy(pkt + sizeof(*h), data, len);
+    size_t total = sizeof(*h) + len;
+    if (s_transport.stats) {
+        s_transport.stats->messages_sent++;
+    }
+    return mesh_mac_send(MESH_MAC_PRIO_LOW, pkt, total);
+}
+#endif /* CONFIG_AKIRA_MESH_E2E_CRYPTO */
+
+/* ------------------------------------------------------------------ */
 /* DATA/ACK dispatch                                                   */
 /* ------------------------------------------------------------------ */
 
 static void handle_data(struct mesh_header *h, const uint8_t *buf, size_t len,
-                        const uint8_t *payload, size_t plen, uint32_t now)
+                        const uint8_t *payload, size_t plen, uint32_t now, bool reliable)
 {
+#if !defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+    ARG_UNUSED(reliable);
+#endif
     if (is_self(h->dest_id)) {
 #if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
         if (plen < MESH_CRYPTO_NONCE_LEN + MESH_CRYPTO_MAC_LEN) {
@@ -413,11 +497,12 @@ static void handle_data(struct mesh_header *h, const uint8_t *buf, size_t len,
                                 MESH_CRYPTO_NONCE_LEN + ct_len, expect_tag);
         bool tag_ok = mesh_crypto_const_time_eq(expect_tag, tag, MESH_CRYPTO_MAC_LEN);
         if (!tag_ok) {
+            LOG_WRN("AkiraMesh: DATA MAC mismatch from %02x%02x, dropped "
+                   "(plen=%zu ct_len=%zu seq=%u)",
+                   h->src_id[0], h->src_id[1], plen, ct_len, h->seq_num);
             memset(enc_key, 0, sizeof(enc_key));
             memset(mac_key, 0, sizeof(mac_key));
             memset(expect_tag, 0, sizeof(expect_tag));
-            LOG_WRN("AkiraMesh: DATA MAC mismatch from %02x%02x, dropped",
-                    h->src_id[0], h->src_id[1]);
             return;
         }
 
@@ -430,7 +515,9 @@ static void handle_data(struct mesh_header *h, const uint8_t *buf, size_t len,
         k_mutex_lock(&s_transport.lock, K_FOREVER);
         bool dup = mesh_seen_check_and_add(&s_transport.seen, h->src_id, h->seq_num);
         k_mutex_unlock(&s_transport.lock);
-        send_ack(h->src_id, h->seq_num);
+        if (reliable) {
+            send_ack(h->src_id, h->seq_num);
+        }
         if (!dup && s_transport.rx_cb_ptr && *s_transport.rx_cb_ptr) {
             (*s_transport.rx_cb_ptr)(h->src_id, plaintext, ct_len, *s_transport.rx_ctx_ptr);
         }
@@ -688,8 +775,11 @@ static int stream_query_and_retransmit(const uint8_t *dest_id, const uint8_t *ct
     for (attempt = 0; attempt <= CONFIG_AKIRA_MESH_MAX_RETRIES; attempt++) {
         s_stream_tx.got_resp = false;
         k_sem_reset(&s_stream_tx.status_sem);
+        int64_t t0 = k_uptime_get();
         mesh_mac_send(MESH_MAC_PRIO_MEDIUM, pkt, sizeof(pkt));
         int wait_ret = k_sem_take(&s_stream_tx.status_sem, K_MSEC(mesh_mac_ack_timeout_ms()));
+        LOG_INF("stream status: base=%u window=%u attempt=%d wait=%lldms got_resp=%d",
+               base_index, window, attempt, k_uptime_get() - t0, s_stream_tx.got_resp);
         if (wait_ret == 0 && s_stream_tx.got_resp) {
             break;
         }
@@ -876,6 +966,7 @@ void mesh_transport_handle_frame(const uint8_t *buf, size_t len)
      * a relayed (!self_dest) ACK still needs loop/flood suppression. */
     bool skip_dedup = self_dest && (h->msg_type == AKIRA_MESH_MSG_ACK ||
                                     h->msg_type == AKIRA_MESH_MSG_DATA ||
+                                    h->msg_type == AKIRA_MESH_MSG_DATA_UNRELIABLE ||
                                     h->msg_type == AKIRA_MESH_MSG_STREAM_DATA ||
                                     h->msg_type == AKIRA_MESH_MSG_STREAM_STATUS_REQ ||
                                     h->msg_type == AKIRA_MESH_MSG_STREAM_STATUS_RESP);
@@ -893,13 +984,23 @@ void mesh_transport_handle_frame(const uint8_t *buf, size_t len)
 
     switch (h->msg_type) {
     case AKIRA_MESH_MSG_DATA:
-        handle_data(h, buf, len, payload, plen, now);
+        handle_data(h, buf, len, payload, plen, now, true);
+        break;
+    case AKIRA_MESH_MSG_DATA_UNRELIABLE:
+        handle_data(h, buf, len, payload, plen, now, false);
         break;
     case AKIRA_MESH_MSG_ACK:
         if (self_dest) {
+            uint32_t elapsed_ms = 0;
+            uint8_t retries = 0;
             k_mutex_lock(&s_transport.lock, K_FOREVER);
-            mesh_ack_clear(&s_transport.acks, h->seq_num, h->src_id);
+            bool cleared = mesh_ack_clear(&s_transport.acks, h->seq_num, h->src_id,
+                                          now, &elapsed_ms, &retries);
             k_mutex_unlock(&s_transport.lock);
+            if (cleared) {
+                LOG_INF("DATA seq=%u delivered in %ums (retries=%u)",
+                       h->seq_num, elapsed_ms, retries);
+            }
             if (s_transport.ack_notify_cb) {
                 s_transport.ack_notify_cb(h->seq_num, h->src_id, false);
             }
@@ -952,9 +1053,15 @@ void mesh_transport_tick(uint32_t now_ms)
         uint16_t gave_up_seq = 0;
         uint8_t gave_up_dest[AKIRA_MESH_NODE_ID_LEN];
         uint8_t gave_up_msg_type = 0;
+        uint32_t elapsed_ms = 0;
+        uint8_t retries = 0;
+        uint16_t retransmit_seq = 0;
 
         k_mutex_lock(&s_transport.lock, K_FOREVER);
         struct pending_ack *e = &s_transport.acks.e[i];
+        elapsed_ms = now_ms - e->sent_at_ms;
+        retries = e->retries;
+        retransmit_seq = e->seq_num;
         mesh_ack_action_t act = mesh_ack_tick(e, now_ms, mesh_mac_ack_timeout_ms());
         if (act == MESH_ACK_RETRANSMIT) {
             blen = e->len;
@@ -972,8 +1079,12 @@ void mesh_transport_tick(uint32_t now_ms)
         k_mutex_unlock(&s_transport.lock);
 
         if (act == MESH_ACK_RETRANSMIT) {
+            LOG_INF("DATA seq=%u no ack after %ums (retry %u), retransmitting",
+                   retransmit_seq, elapsed_ms, retries);
             mesh_mac_send(MESH_MAC_PRIO_LOW, buf, blen);
         } else if (gave_up) {
+            LOG_WRN("DATA seq=%u gave up after %ums (retries=%u)",
+                   gave_up_seq, elapsed_ms, retries);
             /* App/stream frames already fail the whole transfer on a real
              * give-up (their own wait logic) — no need to also nuke the
              * shared route over one of many frames in a transfer, which
@@ -990,4 +1101,18 @@ void mesh_transport_tick(uint32_t now_ms)
             }
         }
     }
+}
+
+uint32_t mesh_transport_next_ack_deadline_ms(void)
+{
+    uint32_t next = UINT32_MAX;
+    k_mutex_lock(&s_transport.lock, K_FOREVER);
+    for (int i = 0; i < CONFIG_AKIRA_MESH_MAX_PENDING_ACKS; i++) {
+        struct pending_ack *e = &s_transport.acks.e[i];
+        if (e->active && (next == UINT32_MAX || (int32_t)(e->deadline_ms - next) < 0)) {
+            next = e->deadline_ms;
+        }
+    }
+    k_mutex_unlock(&s_transport.lock);
+    return next;
 }

@@ -150,6 +150,7 @@ static void mesh_rx_from_mac(const uint8_t *buf, size_t len, int16_t rssi, void 
         break;
     }
     case AKIRA_MESH_MSG_DATA:
+    case AKIRA_MESH_MSG_DATA_UNRELIABLE:
     case AKIRA_MESH_MSG_ACK:
     case AKIRA_MESH_MSG_STREAM_DATA:
     case AKIRA_MESH_MSG_STREAM_STATUS_REQ:
@@ -176,6 +177,10 @@ static void mesh_rx_from_mac(const uint8_t *buf, size_t len, int16_t rssi, void 
 static void mesh_tick_work_handler(struct k_work *w);
 K_WORK_DELAYABLE_DEFINE(mesh_tick_work, mesh_tick_work_handler);
 
+/* Floor on the self-reschedule delay: keeps a burst of near-simultaneous
+ * deadlines from spinning the tick in a near-zero-delay loop. */
+#define MESH_TICK_MIN_MS 20
+
 static void mesh_tick_work_handler(struct k_work *w)
 {
     ARG_UNUSED(w);
@@ -188,7 +193,24 @@ static void mesh_tick_work_handler(struct k_work *w)
         router->tick(now);
     }
     mesh_transport_tick(now);
-    k_work_schedule(&mesh_tick_work, K_MSEC(CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS));
+
+    /* Reschedule for exactly when the next pending-ACK retransmit is due,
+     * instead of a fixed poll period — a missed ACK used to cost up to a
+     * full CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS extra wait regardless of how
+     * soon it actually timed out. Falls back to the fixed period when
+     * nothing is pending, so route GC/RREQ retry keep their old cadence. */
+    uint32_t next_deadline = mesh_transport_next_ack_deadline_ms();
+    uint32_t delay_ms;
+    if (next_deadline == UINT32_MAX) {
+        delay_ms = CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS;
+    } else {
+        int32_t remaining = (int32_t)(next_deadline - now);
+        delay_ms = remaining > (int32_t)MESH_TICK_MIN_MS ? (uint32_t)remaining : MESH_TICK_MIN_MS;
+        if (delay_ms > CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS) {
+            delay_ms = CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS;
+        }
+    }
+    k_work_schedule(&mesh_tick_work, K_MSEC(delay_ms));
 }
 
 /* ------------------------------------------------------------------ */
@@ -227,6 +249,11 @@ int akira_mesh_init(const akira_mesh_config_t *config)
                     radio_manager_release(r, "mesh");
                     mesh_state.radio = NULL;
                 } else {
+                    /* Force mesh's own known-fast SF/BW instead of
+                     * inheriting the chip's devicetree default (125 kHz,
+                     * tuned for range) — see AKIRA_MESH_LORA_BW_HZ. */
+                    radio_set_spreading_factor(r, CONFIG_AKIRA_MESH_LORA_SF);
+                    radio_set_bandwidth(r, CONFIG_AKIRA_MESH_LORA_BW_HZ);
                     mesh_state.radio = r;
                 }
             } else {
@@ -401,6 +428,29 @@ int akira_mesh_send(const uint8_t *dest_id, const uint8_t *data, size_t len)
 #else
     /* 1:1 messages are always encrypted (mandatory, not optional) and this
      * build has no crypto module. Never fall back to plaintext DATA. */
+    return -ENOTSUP;
+#endif
+}
+
+int akira_mesh_send_unreliable(const uint8_t *dest_id, const uint8_t *data, size_t len)
+{
+    if (!mesh_state.initialized || !dest_id || !data) {
+        return -EINVAL;
+    }
+    if (!mesh_state.started) {
+        return -ENODEV;
+    }
+    if (is_broadcast(dest_id)) {
+        return -EINVAL;  /* unicast only */
+    }
+
+#if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+    if (mesh_state.mtu < sizeof(struct mesh_header) + MESH_CRYPTO_OVERHEAD ||
+        len > mesh_state.mtu - sizeof(struct mesh_header) - MESH_CRYPTO_OVERHEAD) {
+        return -EMSGSIZE;
+    }
+    return mesh_transport_send_unreliable(dest_id, data, len);
+#else
     return -ENOTSUP;
 #endif
 }
