@@ -230,6 +230,13 @@ typedef struct {
     int (*set_bandwidth)(struct radio_handle *handle, uint32_t bw_hz);
     int (*set_coding_rate)(struct radio_handle *handle, uint8_t cr);
 
+    /* Current LoRa PHY params, for callers that need to estimate time-on-air
+     * (e.g. an ACK timeout that scales with SF/BW instead of a fixed
+     * constant). cr is the driver's raw CR field (denominator = cr+4).
+     * NULL, or -ENOTSUP if modulation isn't LoRa, on radios without LoRa. */
+    int (*get_lora_params)(struct radio_handle *handle, uint8_t *sf,
+                           uint32_t *bw_hz, uint8_t *cr);
+
     /* Raw OOK capture/replay — gated by RADIO_CAP_RAW_MODE.
      * raw_capture: stream the hard-sliced OOK bitstream from the RX FIFO into
      *   buf (8 samples/byte at sample_rate_hz). Returns bytes captured.

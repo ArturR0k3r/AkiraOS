@@ -1,4 +1,5 @@
 #include "mesh_routing.h"
+#include "mesh_mac.h"
 #include <string.h>
 #include <errno.h>
 
@@ -222,7 +223,7 @@ int mesh_pr_add(struct pending_route_q *q, const uint8_t *dest,
     e->rreq_retries = 0;
     /* First retry check fires one backoff interval after the initial RREQ,
      * not at now_ms — mesh_pr_tick's own doubling picks up from here. */
-    e->next_rreq_ms = now_ms + (CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS << 1);
+    e->next_rreq_ms = now_ms + (mesh_mac_ack_timeout_ms() << 1);
     e->is_local_repair = is_local_repair;
     e->active = true;
     return slot;
@@ -268,7 +269,7 @@ void mesh_pr_tick(struct pending_route_q *q, uint32_t now_ms,
             continue;
         }
         e->rreq_retries++;
-        uint32_t backoff = CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS << (e->rreq_retries + 1);
+        uint32_t backoff = mesh_mac_ack_timeout_ms() << (e->rreq_retries + 1);
         e->next_rreq_ms = now_ms + backoff;
         if (on_retry) {
             on_retry(e->dest_id, ctx);

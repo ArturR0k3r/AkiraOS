@@ -387,16 +387,17 @@ static int mesh_send_app_and_wait(const uint8_t *dest_id, uint8_t msg_type,
     bool have_route = (router->resolve(dest_id, next_hop) == 0);
     if (!have_route) {
         uint32_t waited_ms = 0;
+        const uint32_t ack_timeout_ms = mesh_mac_ack_timeout_ms();
         const uint32_t route_wait_budget_ms =
-            CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS * (CONFIG_AKIRA_MESH_MAX_RETRIES + 1);
+            ack_timeout_ms * (CONFIG_AKIRA_MESH_MAX_RETRIES + 1);
         /* resolve() re-fires a RREQ on every miss where nothing is already
          * queued for this dest (nothing is, here — this loop only polls, it
          * never calls queue_pending) — so the poll cadence itself IS the
-         * RREQ resend cadence. Must stay at ACK_TIMEOUT_MS, not a tighter
+         * RREQ resend cadence. Must stay at ack_timeout_ms, not a tighter
          * gap, or this floods RREQs. */
         while (!have_route && waited_ms < route_wait_budget_ms) {
-            k_sleep(K_MSEC(CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS));
-            waited_ms += CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS;
+            k_sleep(K_MSEC(ack_timeout_ms));
+            waited_ms += ack_timeout_ms;
             have_route = (router->resolve(dest_id, next_hop) == 0);
         }
         if (!have_route) {
@@ -434,7 +435,7 @@ static int mesh_send_app_and_wait(const uint8_t *dest_id, uint8_t msg_type,
     mesh_mac_send(MESH_MAC_PRIO_LOW, pkt, total);
 
     int wait_ret = k_sem_take(&s_app_ack_wait.sem,
-                              K_MSEC(CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS *
+                              K_MSEC(mesh_mac_ack_timeout_ms() *
                                      (CONFIG_AKIRA_MESH_MAX_RETRIES + 2)));
     bool acked = s_app_ack_wait.acked;
     s_app_ack_wait.active = false;
@@ -471,7 +472,7 @@ static int mesh_query_app_rx_progress(const uint8_t *dest_id, uint32_t app_id,
 
     mesh_mac_send(MESH_MAC_PRIO_MEDIUM, pkt, total);
 
-    int wait_ret = k_sem_take(&s_app_status_wait.sem, K_MSEC(CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS));
+    int wait_ret = k_sem_take(&s_app_status_wait.sem, K_MSEC(mesh_mac_ack_timeout_ms()));
 
     s_app_status_wait.active = false;
     bool got = s_app_status_wait.got_resp;

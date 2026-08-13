@@ -80,6 +80,54 @@ int mesh_mac_register_rx_cb(mesh_mac_rx_cb_t cb, void *ctx)
     return 0;
 }
 
+/* Single-frame LoRa time-on-air estimate, ms. Tsym = 2^SF / BW and the
+ * 8-symbol preamble are the LR2021 datasheet's own basis (SF = chips/symbol
+ * = 2^SF; 8-symbol preamble recommended for SF != 5,6); the payload-symbol
+ * count and the low-data-rate-optimization threshold below are the standard
+ * public LoRa PHY formula, not datasheet-specific values. Assumes explicit
+ * header, CRC on — the driver's own TX default. */
+static uint32_t lora_airtime_ms(uint8_t sf, uint32_t bw_hz, uint8_t cr, size_t payload_bytes)
+{
+    if (sf < 5 || sf > 12 || bw_hz == 0) {
+        return 0;
+    }
+    uint64_t tsym_us = ((uint64_t)1 << sf) * 1000000ULL / bw_hz;
+    bool de = tsym_us > 16000; /* LDRO mandatory once a symbol exceeds 16ms */
+
+    int32_t num = (int32_t)(8 * payload_bytes) - (4 * sf) + 28 + 16;
+    int32_t denom = 4 * (sf - (de ? 2 : 0));
+    int32_t n_payload_sym = 8; /* preamble's symbol-8 sync/header floor */
+    if (num > 0 && denom > 0) {
+        n_payload_sym += ((num + denom - 1) / denom) * (cr + 4);
+    }
+
+    uint64_t preamble_us = 49ULL * tsym_us / 4; /* (8 + 4.25) symbols */
+    uint64_t payload_us = (uint64_t)n_payload_sym * tsym_us;
+    return (uint32_t)((preamble_us + payload_us + 999) / 1000);
+}
+
+uint32_t mesh_mac_ack_timeout_ms(void)
+{
+    uint32_t base = CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS;
+    if (!s_mac.radio || !s_mac.radio->ops || !s_mac.radio->ops->get_lora_params) {
+        return base;
+    }
+    uint8_t sf, cr;
+    uint32_t bw_hz;
+    if (s_mac.radio->ops->get_lora_params(s_mac.radio, &sf, &bw_hz, &cr) != 0) {
+        return base;
+    }
+    uint32_t frame_ms = lora_airtime_ms(sf, bw_hz, cr, MESH_MAC_PACKET_BUF_SIZE);
+    if (frame_ms == 0) {
+        return base;
+    }
+    /* Request + reply airtime, plus the ~200ms MAC-queue/RX-window
+     * contention margin measured on real hardware (RX thread's blocking
+     * recv() window holding the radio lock against a pending TX). */
+    uint32_t round_trip = 2 * frame_ms + 200;
+    return (round_trip > base) ? round_trip : base;
+}
+
 int mesh_mac_send(mesh_mac_prio_t prio, const uint8_t *buf, size_t len)
 {
     if (!s_mac.running || !s_mac.radio){

@@ -40,4 +40,11 @@ mesh_mac_prio_t mesh_mac_prio_for_msg_type(uint8_t msg_type);
  * existing single-callback contract) — called from the MAC RX thread. */
 int mesh_mac_register_rx_cb(mesh_mac_rx_cb_t cb, void *ctx);
 
+/* CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS, widened to fit a request+reply round
+ * trip at the radio's current SF/BW when that would exceed the configured
+ * default (e.g. LoRa at high SF) — never narrower than the config value.
+ * Falls back to the config value on radios without get_lora_params (e.g.
+ * BLE/802.15.4) or when the radio isn't in LoRa mode. */
+uint32_t mesh_mac_ack_timeout_ms(void);
+
 #endif /* AKIRA_MESH_MAC_H */

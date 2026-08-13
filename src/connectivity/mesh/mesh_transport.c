@@ -286,7 +286,7 @@ int mesh_transport_send_reliable(const uint8_t *dest_id, uint8_t msg_type,
         memcpy(enc + 1, data, len);
         k_mutex_lock(&s_transport.lock, K_FOREVER);
         int pr = mesh_pr_add(&s_transport.pending_keys, dest_id, enc, (uint16_t)(len + 1),
-                             now, now + CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS *
+                             now, now + mesh_mac_ack_timeout_ms() *
                              (CONFIG_AKIRA_MESH_MAX_RETRIES + 1), false);
         k_mutex_unlock(&s_transport.lock);
         return (pr < 0) ? -EBUSY : 0;
@@ -324,7 +324,7 @@ int mesh_transport_send_reliable(const uint8_t *dest_id, uint8_t msg_type,
 
     k_mutex_lock(&s_transport.lock, K_FOREVER);
     int slot = mesh_ack_add(&s_transport.acks, seq, dest_id, pkt, total, now,
-                            now + CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS);
+                            now + mesh_mac_ack_timeout_ms());
     k_mutex_unlock(&s_transport.lock);
     if (slot < 0) {
         return -EBUSY;
@@ -356,7 +356,7 @@ int mesh_transport_send_reliable(const uint8_t *dest_id, uint8_t msg_type,
     if (have_route) {
         k_mutex_lock(&s_transport.lock, K_FOREVER);
         int slot = mesh_ack_add(&s_transport.acks, seq, dest_id, pkt, total, now,
-                                now + CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS);
+                                now + mesh_mac_ack_timeout_ms());
         k_mutex_unlock(&s_transport.lock);
         if (slot < 0) {
             return -EBUSY;
@@ -368,7 +368,7 @@ int mesh_transport_send_reliable(const uint8_t *dest_id, uint8_t msg_type,
     }
 
     int pr = router->queue_pending(dest_id, pkt, (uint16_t)total,
-                                   CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS *
+                                   mesh_mac_ack_timeout_ms() *
                                    (CONFIG_AKIRA_MESH_MAX_RETRIES + 1), false);
     return (pr < 0) ? -EBUSY : 0;
 }
@@ -689,7 +689,7 @@ static int stream_query_and_retransmit(const uint8_t *dest_id, const uint8_t *ct
         s_stream_tx.got_resp = false;
         k_sem_reset(&s_stream_tx.status_sem);
         mesh_mac_send(MESH_MAC_PRIO_MEDIUM, pkt, sizeof(pkt));
-        int wait_ret = k_sem_take(&s_stream_tx.status_sem, K_MSEC(CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS));
+        int wait_ret = k_sem_take(&s_stream_tx.status_sem, K_MSEC(mesh_mac_ack_timeout_ms()));
         if (wait_ret == 0 && s_stream_tx.got_resp) {
             break;
         }
@@ -741,7 +741,7 @@ int akira_mesh_send_stream(const uint8_t *dest_id, const uint8_t *data, size_t l
      * up to the same total budget mesh_transport_send_reliable's cold path
      * uses for its own queued retry window. */
     uint32_t discovery_deadline = k_uptime_get_32() +
-        CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS * (CONFIG_AKIRA_MESH_MAX_RETRIES + 1);
+        mesh_mac_ack_timeout_ms() * (CONFIG_AKIRA_MESH_MAX_RETRIES + 1);
 
     uint8_t next_hop[AKIRA_MESH_NODE_ID_LEN];
     if (router->resolve(dest_id, next_hop) != 0) {
@@ -955,7 +955,7 @@ void mesh_transport_tick(uint32_t now_ms)
 
         k_mutex_lock(&s_transport.lock, K_FOREVER);
         struct pending_ack *e = &s_transport.acks.e[i];
-        mesh_ack_action_t act = mesh_ack_tick(e, now_ms, CONFIG_AKIRA_MESH_ACK_TIMEOUT_MS);
+        mesh_ack_action_t act = mesh_ack_tick(e, now_ms, mesh_mac_ack_timeout_ms());
         if (act == MESH_ACK_RETRANSMIT) {
             blen = e->len;
             if (blen > sizeof(buf)) {

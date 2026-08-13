@@ -402,37 +402,49 @@ static int lr2021_read_fifo(uint8_t *data, size_t len) {
  * RF framework operations
  * ========================================================================= */
 
+/* Datasheet Table 9-3 LoRa bandwidth <-> chip code map — shared by
+ * lr2021_bw_hz_to_code() and its reverse, lr2021_bw_code_to_hz(). */
+static const struct { uint32_t hz; uint8_t code; } lr2021_bw_table[] = {
+    {  31000, 0x2 },
+    {  41000, 0xA },
+    {  62000, 0x3 },
+    {  83000, 0xB },
+    { 101000, 0xC },
+    { 125000, 0x4 },
+    { 203000, 0xD },
+    { 250000, 0x5 },
+    { 406000, 0xE },
+    { 500000, 0x6 },
+    { 812000, 0xF },
+    {1000000, 0x7 },
+};
+
 /* Map a LoRa bandwidth in Hz to the chip's bw code (datasheet Table 9-3).
  * Clamps to the closest supported bandwidth; always returns a valid code. */
 static int lr2021_bw_hz_to_code(uint32_t bw_hz) {
-    static const struct { uint32_t hz; uint8_t code; } table[] = {
-        {  31000, 0x2 },
-        {  41000, 0xA },
-        {  62000, 0x3 },
-        {  83000, 0xB },
-        { 101000, 0xC },
-        { 125000, 0x4 },
-        { 203000, 0xD },
-        { 250000, 0x5 },
-        { 406000, 0xE },
-        { 500000, 0x6 },
-        { 812000, 0xF },
-        {1000000, 0x7 },
-    };
-
-    uint8_t best_code = table[0].code;
+    uint8_t best_code = lr2021_bw_table[0].code;
     uint32_t best_diff = UINT32_MAX;
 
-    for (size_t i = 0; i < ARRAY_SIZE(table); i++) {
-        uint32_t diff = (bw_hz > table[i].hz) ? (bw_hz - table[i].hz)
-                                              : (table[i].hz - bw_hz);
+    for (size_t i = 0; i < ARRAY_SIZE(lr2021_bw_table); i++) {
+        uint32_t diff = (bw_hz > lr2021_bw_table[i].hz) ? (bw_hz - lr2021_bw_table[i].hz)
+                                                        : (lr2021_bw_table[i].hz - bw_hz);
         if (diff < best_diff) {
             best_diff = diff;
-            best_code = table[i].code;
+            best_code = lr2021_bw_table[i].code;
         }
     }
 
     return best_code;
+}
+
+/* Reverse of lr2021_bw_hz_to_code() — 0 (invalid) if code isn't in the table. */
+static uint32_t lr2021_bw_code_to_hz(uint8_t code) {
+    for (size_t i = 0; i < ARRAY_SIZE(lr2021_bw_table); i++) {
+        if (lr2021_bw_table[i].code == code) {
+            return lr2021_bw_table[i].hz;
+        }
+    }
+    return 0;
 }
 
 /* Map an FSK double-sided bandwidth in Hz to an rx_bw code (datasheet Table 11-2).
@@ -1788,6 +1800,19 @@ static int lr2021_ops_set_bitrate(radio_handle_t *h, uint32_t bps)  { ARG_UNUSED
 static int lr2021_ops_set_sf(radio_handle_t *h, uint8_t sf)   { ARG_UNUSED(h); return lr2021_set_spreading_factor(sf); }
 static int lr2021_ops_set_bw(radio_handle_t *h, uint32_t bw)  { ARG_UNUSED(h); return lr2021_set_bandwidth(bw); }
 static int lr2021_ops_set_cr(radio_handle_t *h, uint8_t cr)   { ARG_UNUSED(h); return lr2021_set_coding_rate(cr); }
+static int lr2021_ops_get_lora_params(radio_handle_t *h, uint8_t *sf, uint32_t *bw_hz, uint8_t *cr) {
+    ARG_UNUSED(h);
+    if (!g_lr2021.initialized) {
+        return -ENODEV;
+    }
+    if (g_lr2021.modulation != RADIO_MOD_LORA) {
+        return -ENOTSUP;
+    }
+    *sf = g_lr2021.lora_sf;
+    *bw_hz = lr2021_bw_code_to_hz(g_lr2021.lora_bw_code);
+    *cr = g_lr2021.lora_cr;
+    return 0;
+}
 
 static const radio_ops_t lr2021_ops = {
     .init               = lr2021_ops_init,
@@ -1807,6 +1832,7 @@ static const radio_ops_t lr2021_ops = {
     .set_spreading_factor = lr2021_ops_set_sf,
     .set_bandwidth        = lr2021_ops_set_bw,
     .set_coding_rate      = lr2021_ops_set_cr,
+    .get_lora_params      = lr2021_ops_get_lora_params,
 };
 
 static radio_handle_t lr2021_handle = {
