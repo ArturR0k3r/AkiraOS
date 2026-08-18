@@ -407,6 +407,18 @@ int akira_rf_set_coding_rate(uint8_t cr)
     return ret;
 }
 
+int akira_rf_set_lora_hopping(bool enable, uint16_t hop_period_syms,
+                               const uint32_t *freqs, uint8_t num_freqs)
+{
+    LOG_INF("RF set LoRa hopping: %s", enable ? "enable" : "disable");
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = rf_phy_handle();
+    int ret = (h && h->ops && h->ops->set_lora_hopping) ?
+              h->ops->set_lora_hopping(h, enable, hop_period_syms, freqs, num_freqs) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
 int akira_rf_get_rssi(int16_t *rssi)
 {
     if (!rssi) return -EINVAL;

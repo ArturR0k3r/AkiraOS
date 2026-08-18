@@ -84,6 +84,10 @@ LOG_MODULE_REGISTER(akira_lr2021, LOG_LEVEL_INF);
 #define LR2021_CMD_SET_LORA_PKT_PARAMS  0x0221
 #define LR2021_CMD_SET_LORA_SYNCWORD    0x0223
 #define LR2021_CMD_GET_LORA_PKT_STATUS  0x022A  /* reserved: future SNR, not wired */
+#define LR2021_CMD_SET_LORA_HOPPING     0x022C
+
+/* SetLoraHopping freq_hopx list: datasheet §9.9.11 "up to 40" */
+#define LR2021_MAX_HOP_FREQS 40
 
 #define LR2021_CMD_SET_BLE_MOD_PARAMS   0x0260
 #define LR2021_CMD_SET_BLE_CHAN_PARAMS  0x0261
@@ -169,6 +173,10 @@ static struct {
     uint8_t lora_sf;                /* 5..12 */
     uint8_t lora_bw_code;           /* chip code: 0x4=125k, 0x5=250k, 0x6=500k */
     uint8_t lora_cr;                /* 1..4 → 4/5..4/8 (chip encoding) */
+    bool lora_hop_enabled;          /* SetLoraHopping intra-packet hop state */
+    uint16_t lora_hop_period_syms;  /* LoRa symbols between hops (0..8191) */
+    uint32_t lora_hop_freqs[LR2021_MAX_HOP_FREQS];
+    uint8_t lora_hop_num_freqs;
     uint8_t fsk_rx_bw_code;         /* manual FSK rx_bw code; 0 => auto (Carson) */
     uint32_t frequency_hz;
     uint32_t bitrate_bps;
@@ -1128,6 +1136,60 @@ static int lr2021_set_coding_rate(uint8_t cr) {
     return ret;
 }
 
+/* SetLoraHopping (0x022C, datasheet Table 9-15): intra-packet LoRa hopping.
+ * enable=false sends hop_ctrl=0 only — "other parameters are ignored" per
+ * datasheet, no freq bytes needed. hop_period_syms is 13 bits (0..8191). */
+static int lr2021_set_lora_hopping(bool enable, uint16_t hop_period_syms,
+                                    const uint32_t *freqs, uint8_t num_freqs) {
+    if (!g_lr2021.initialized) {
+        return -ENODEV;
+    }
+    if (g_lr2021.modulation != RADIO_MOD_LORA) {
+        return -ENOTSUP;
+    }
+
+    if (!enable) {
+        uint8_t args[2] = { 0x00, 0x00 };  /* hop_ctrl(1:0)=0, hop_period=0 */
+        int ret = lr2021_write_command(LR2021_CMD_SET_LORA_HOPPING, args, sizeof(args));
+        if (ret == 0) {
+            g_lr2021.lora_hop_enabled = false;
+            LOG_INF("LR2021 LoRa hopping disabled");
+        }
+        return ret;
+    }
+
+    if (hop_period_syms > 0x1FFF) {
+        LOG_ERR("Invalid hop_period: %u (max 8191 symbols)", hop_period_syms);
+        return -EINVAL;
+    }
+    if (num_freqs == 0 || num_freqs > LR2021_MAX_HOP_FREQS) {
+        LOG_ERR("Invalid hop freq count: %u (1..%u)", num_freqs, LR2021_MAX_HOP_FREQS);
+        return -EINVAL;
+    }
+
+    uint8_t args[2 + LR2021_MAX_HOP_FREQS * 4];
+    args[0] = (1 << 6) | ((hop_period_syms >> 8) & 0x1F);  /* hop_ctrl(1:0)=1, hop_period(12:8) */
+    args[1] = hop_period_syms & 0xFF;                       /* hop_period(7:0) */
+    for (uint8_t i = 0; i < num_freqs; i++) {
+        uint32_t f = freqs[i];
+        args[2 + i * 4 + 0] = (f >> 24) & 0xFF;
+        args[2 + i * 4 + 1] = (f >> 16) & 0xFF;
+        args[2 + i * 4 + 2] = (f >> 8) & 0xFF;
+        args[2 + i * 4 + 3] = f & 0xFF;
+    }
+
+    int ret = lr2021_write_command(LR2021_CMD_SET_LORA_HOPPING, args, 2 + num_freqs * 4);
+    if (ret == 0) {
+        g_lr2021.lora_hop_enabled = true;
+        g_lr2021.lora_hop_period_syms = hop_period_syms;
+        memcpy(g_lr2021.lora_hop_freqs, freqs, num_freqs * sizeof(uint32_t));
+        g_lr2021.lora_hop_num_freqs = num_freqs;
+        LOG_INF("LR2021 LoRa hopping enabled: %u freqs, period %u syms",
+                num_freqs, hop_period_syms);
+    }
+    return ret;
+}
+
 /* Apply packet params for the active modulation. pld_len is the TX payload
  * length, or 0 on RX-arm (LoRa: accept any length; FSK: max length 0xFF). */
 static int lr2021_apply_pkt_params(size_t pld_len) {
@@ -1798,6 +1860,11 @@ static int lr2021_ops_set_bitrate(radio_handle_t *h, uint32_t bps)  { ARG_UNUSED
 static int lr2021_ops_set_sf(radio_handle_t *h, uint8_t sf)   { ARG_UNUSED(h); return lr2021_set_spreading_factor(sf); }
 static int lr2021_ops_set_bw(radio_handle_t *h, uint32_t bw)  { ARG_UNUSED(h); return lr2021_set_bandwidth(bw); }
 static int lr2021_ops_set_cr(radio_handle_t *h, uint8_t cr)   { ARG_UNUSED(h); return lr2021_set_coding_rate(cr); }
+static int lr2021_ops_set_lora_hopping(radio_handle_t *h, bool enable, uint16_t hop_period_syms,
+                                        const uint32_t *freqs, uint8_t num_freqs) {
+    ARG_UNUSED(h);
+    return lr2021_set_lora_hopping(enable, hop_period_syms, freqs, num_freqs);
+}
 static int lr2021_ops_get_lora_params(radio_handle_t *h, uint8_t *sf, uint32_t *bw_hz, uint8_t *cr) {
     ARG_UNUSED(h);
     if (!g_lr2021.initialized) {
@@ -1831,6 +1898,7 @@ static const radio_ops_t lr2021_ops = {
     .set_bandwidth        = lr2021_ops_set_bw,
     .set_coding_rate      = lr2021_ops_set_cr,
     .get_lora_params      = lr2021_ops_get_lora_params,
+    .set_lora_hopping     = lr2021_ops_set_lora_hopping,
 };
 
 static radio_handle_t lr2021_handle = {
@@ -1839,7 +1907,8 @@ static radio_handle_t lr2021_handle = {
     .capabilities = RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_CCA | RADIO_CAP_RAW_MODE |
                     RADIO_CAP_LOW_POWER | RADIO_CAP_BAND_SUBGHZ | RADIO_CAP_BAND_2GHZ4 |
                     RADIO_CAP_MOD_FSK | RADIO_CAP_MOD_LORA | RADIO_CAP_MOD_BPSK |
-                    RADIO_CAP_MOD_FLRC | RADIO_CAP_MOD_BLE_PHY | RADIO_CAP_MOD_OQPSK,
+                    RADIO_CAP_MOD_FLRC | RADIO_CAP_MOD_BLE_PHY | RADIO_CAP_MOD_OQPSK |
+                    RADIO_CAP_LORA_HOPPING,
     .ops          = &lr2021_ops,
 };
 

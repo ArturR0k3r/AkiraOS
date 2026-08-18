@@ -52,6 +52,7 @@ typedef enum {
 #define RADIO_CAP_AUTO_ACK      BIT(9)  /* Automatic acknowledgments */
 #define RADIO_CAP_CSMA_CA       BIT(10) /* CSMA/CA collision avoidance */
 #define RADIO_CAP_RAW_MODE      BIT(11) /* Raw frame access */
+#define RADIO_CAP_LORA_HOPPING  BIT(12) /* SetLoraHopping intra-packet freq hop */
 
 /* Modulation capabilities */
 #define RADIO_CAP_MOD_FSK       BIT(16) /* FSK / GFSK */
@@ -236,6 +237,14 @@ typedef struct {
      * NULL, or -ENOTSUP if modulation isn't LoRa, on radios without LoRa. */
     int (*get_lora_params)(struct radio_handle *handle, uint8_t *sf,
                            uint32_t *bw_hz, uint8_t *cr);
+
+    /* Intra-packet LoRa frequency hopping (Semtech SetLoraHopping) — gated by
+     * RADIO_CAP_LORA_HOPPING. enable=false disables (other params ignored).
+     * hop_period_syms: LoRa symbols per hop (0..8191). freqs: up to 40
+     * entries. NULL on radios without native hopping support. */
+    int (*set_lora_hopping)(struct radio_handle *handle, bool enable,
+                            uint16_t hop_period_syms, const uint32_t *freqs,
+                            uint8_t num_freqs);
 
     /* Raw OOK capture/replay — gated by RADIO_CAP_RAW_MODE.
      * raw_capture: stream the hard-sliced OOK bitstream from the RX FIFO into
@@ -534,6 +543,14 @@ static inline int radio_set_bandwidth(radio_handle_t *h, uint32_t bw_hz)
 static inline int radio_set_coding_rate(radio_handle_t *h, uint8_t cr)
 {
     return (h && h->ops && h->ops->set_coding_rate) ? h->ops->set_coding_rate(h, cr) : -ENOSYS;
+}
+
+static inline int radio_set_lora_hopping(radio_handle_t *h, bool enable,
+                                         uint16_t hop_period_syms,
+                                         const uint32_t *freqs, uint8_t num_freqs)
+{
+    return (h && h->ops && h->ops->set_lora_hopping) ?
+           h->ops->set_lora_hopping(h, enable, hop_period_syms, freqs, num_freqs) : -ENOSYS;
 }
 
 #ifdef __cplusplus

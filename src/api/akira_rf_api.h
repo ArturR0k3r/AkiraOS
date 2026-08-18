@@ -54,6 +54,8 @@ int akira_rf_set_modulation(radio_modulation_t mod);
 int akira_rf_set_spreading_factor(uint8_t sf);
 int akira_rf_set_bandwidth(uint32_t bw_hz);
 int akira_rf_set_coding_rate(uint8_t cr);
+int akira_rf_set_lora_hopping(bool enable, uint16_t hop_period_syms,
+                              const uint32_t *freqs, uint8_t num_freqs);
 int akira_rf_get_rssi(int16_t *rssi);
 radio_handle_t *akira_rf_get_active_handle(void);
 

@@ -477,6 +477,54 @@ static int cmd_rf_lora_cr(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+/* rf lora hop disable
+ * rf lora hop enable <period_symbols> <freq_hz1> [freq_hz2 ... up to 40] */
+#define RF_LORA_HOP_MAX_FREQS 40
+static int cmd_rf_lora_hop(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: rf lora hop <enable <period_symbols> <freq_hz...> | disable>");
+        return -EINVAL;
+    }
+
+    if (strcmp(argv[1], "disable") == 0) {
+        int ret = akira_rf_set_lora_hopping(false, 0, NULL, 0);
+        if (ret < 0) {
+            shell_error(sh, "Failed to disable hopping: %d", ret);
+            return ret;
+        }
+        shell_print(sh, "LoRa hopping disabled");
+        return 0;
+    }
+
+    if (strcmp(argv[1], "enable") == 0) {
+        if (argc < 4) {
+            shell_error(sh, "Usage: rf lora hop enable <period_symbols> <freq_hz1> [freq_hz2...]");
+            return -EINVAL;
+        }
+        uint8_t num_freqs = (uint8_t)(argc - 3);
+        if (num_freqs > RF_LORA_HOP_MAX_FREQS) {
+            shell_error(sh, "Too many freqs (max %u)", RF_LORA_HOP_MAX_FREQS);
+            return -EINVAL;
+        }
+        uint16_t period = (uint16_t)atoi(argv[2]);
+        uint32_t freqs[RF_LORA_HOP_MAX_FREQS];
+        for (uint8_t i = 0; i < num_freqs; i++) {
+            freqs[i] = (uint32_t)atol(argv[3 + i]);
+        }
+        int ret = akira_rf_set_lora_hopping(true, period, freqs, num_freqs);
+        if (ret < 0) {
+            shell_error(sh, "Failed to enable hopping: %d", ret);
+            return ret;
+        }
+        shell_print(sh, "LoRa hopping enabled: %u freqs, period %u symbols", num_freqs, period);
+        return 0;
+    }
+
+    shell_error(sh, "Unknown subcommand '%s' (enable|disable)", argv[1]);
+    return -EINVAL;
+}
+
 /* Shared raw capture buffer: capture fills it, replay re-sends it. */
 #if defined(CONFIG_AKIRA_PSRAM)
 static uint8_t  s_rf_cap_buf[4096] __attribute__((section(".ext_ram.bss")));
@@ -523,6 +571,8 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf_test,
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf_lora,
     SHELL_CMD_ARG(sf, NULL, "Set LoRa spreading factor (5..12)", cmd_rf_lora_sf, 2, 0),
     SHELL_CMD_ARG(cr, NULL, "Set LoRa coding rate 4/N (5..8)", cmd_rf_lora_cr, 2, 0),
+    SHELL_CMD_ARG(hop, NULL, "Intra-packet freq hopping: enable <period> <freqs...> | disable",
+                  cmd_rf_lora_hop, 2, RF_LORA_HOP_MAX_FREQS + 1),
     SHELL_SUBCMD_SET_END
 );
 
@@ -536,7 +586,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf,
     SHELL_CMD_ARG(mod,     NULL,         "Set modulation (fsk|ook|lora|ble)", cmd_rf_mod,  2, 0),
     SHELL_CMD_ARG(bw,      NULL,         "Set bandwidth Hz (FSK or LoRa)", cmd_rf_bw, 2, 0),
     SHELL_CMD_ARG(bitrate, NULL,         "Set FSK bitrate (bps)", cmd_rf_bitrate, 2, 0),
-    SHELL_CMD(lora, &sub_rf_lora,        "LoRa parameters (sf|cr)", NULL),
+    SHELL_CMD(lora, &sub_rf_lora,        "LoRa parameters (sf|cr|hop)", NULL),
     SHELL_CMD_ARG(send,    NULL,         "Send data",               cmd_rf_send,   2, 0),
     SHELL_CMD_ARG(sweep,   NULL,         "Send multiple packets",   cmd_rf_sweep,  2, 2),
     SHELL_CMD_ARG(recv,    NULL,         "Receive data",            cmd_rf_recv,   1, 1),
