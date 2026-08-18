@@ -402,7 +402,7 @@ static int cmd_rf_test_nohandle(const struct shell *sh, size_t argc, char **argv
 static int cmd_rf_mod(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 2) {
-        shell_error(sh, "Usage: rf mod <fsk|ook|lora|ble>");
+        shell_error(sh, "Usage: rf mod <fsk|ook|lora|ble|flrc>");
         return -EINVAL;
     }
     radio_modulation_t mod;
@@ -414,8 +414,10 @@ static int cmd_rf_mod(const struct shell *sh, size_t argc, char **argv)
         mod = RADIO_MOD_LORA;
     } else if (strcmp(argv[1], "ble") == 0) {
         mod = RADIO_MOD_BLE_PHY;
+    } else if (strcmp(argv[1], "flrc") == 0) {
+        mod = RADIO_MOD_FLRC;
     } else {
-        shell_error(sh, "Unknown modulation '%s' (fsk|ook|lora|ble)", argv[1]);
+        shell_error(sh, "Unknown modulation '%s' (fsk|ook|lora|ble|flrc)", argv[1]);
         return -EINVAL;
     }
     int ret = akira_rf_set_modulation(mod);

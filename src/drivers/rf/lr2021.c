@@ -89,6 +89,11 @@ LOG_MODULE_REGISTER(akira_lr2021, LOG_LEVEL_INF);
 /* SetLoraHopping freq_hopx list: datasheet §9.9.11 "up to 40" */
 #define LR2021_MAX_HOP_FREQS 40
 
+/* FLRC packet radio (§5.6.4.4 / §18.4) */
+#define LR2021_CMD_SET_FLRC_MOD_PARAMS  0x0248
+#define LR2021_CMD_SET_FLRC_PKT_PARAMS  0x0249
+#define LR2021_CMD_SET_FLRC_SYNCWORD    0x024C
+
 #define LR2021_CMD_SET_BLE_MOD_PARAMS   0x0260
 #define LR2021_CMD_SET_BLE_CHAN_PARAMS  0x0261
 #define LR2021_CMD_SET_BLE_TX           0x0262  /* combines SetBleTxPduLen + SetTx(0) */
@@ -183,6 +188,7 @@ static struct {
     uint32_t ble_bitrate_bps;       /* separate from bitrate_bps: FSK and BLE
                                       * PHY rate must not clobber each other
                                       * across `rf mod` switches. */
+    uint32_t flrc_bitrate_bps;      /* separate from bitrate_bps, same reason */
     int8_t tx_power_dbm;
     int16_t last_rx_rssi;           /* latched at RX_DONE, before any command
                                       * that could re-arm RX and overwrite it */
@@ -453,6 +459,37 @@ static uint8_t lr2021_fsk_bw_hz_to_code(uint32_t bw_hz) {
     else                      return  24;  /* BW_769  */
 }
 
+/* Datasheet Table 18-1: FLRC raw bit rate <-> chip bitrate_bw code. Bandwidth
+ * is fixed by the code (not independently selectable). */
+static const struct { uint32_t bps; uint8_t code; } lr2021_flrc_br_table[] = {
+    { 2600000, 0x00 },
+    { 2080000, 0x01 },
+    { 1300000, 0x02 },
+    { 1040000, 0x03 },
+    {  650000, 0x04 },
+    {  520000, 0x05 },
+    {  325000, 0x06 },
+    {  260000, 0x07 },
+};
+
+/* Map a desired FLRC bit rate to the chip's bitrate_bw code. Clamps to the
+ * closest supported rate; always returns a valid code. */
+static uint8_t lr2021_flrc_br_to_code(uint32_t bps) {
+    uint8_t best_code = lr2021_flrc_br_table[0].code;
+    uint32_t best_diff = UINT32_MAX;
+
+    for (size_t i = 0; i < ARRAY_SIZE(lr2021_flrc_br_table); i++) {
+        uint32_t diff = (bps > lr2021_flrc_br_table[i].bps) ? (bps - lr2021_flrc_br_table[i].bps)
+                                                             : (lr2021_flrc_br_table[i].bps - bps);
+        if (diff < best_diff) {
+            best_diff = diff;
+            best_code = lr2021_flrc_br_table[i].code;
+        }
+    }
+
+    return best_code;
+}
+
 /* Apply the full FSK configuration: packet type, modulation, packet params,
  * CRC, syncword. Chip must be in STANDBY. Caller sets g_lr2021.modulation. */
 static int lr2021_fsk_apply(void) {
@@ -578,6 +615,38 @@ static int lr2021_ble_apply(void) {
         0x8E, 0x89, 0xBE, 0xD6,  /* Syncword / access address (32-bit) */
     };
     return lr2021_write_command(LR2021_CMD_SET_BLE_CHAN_PARAMS, chan_args, 9);
+}
+
+/* SetFlrcModulationParams: bitrate_bw code + cr(1/2) + pulse_shape(none). */
+static int lr2021_flrc_set_mod(uint32_t bps) {
+    uint8_t code = lr2021_flrc_br_to_code(bps);
+    uint8_t args[2] = { code, 0x00 };  /* cr=1/2, pulse_shape=none */
+
+    int ret = lr2021_write_command(LR2021_CMD_SET_FLRC_MOD_PARAMS, args, 2);
+    if (ret == 0) {
+        g_lr2021.flrc_bitrate_bps = lr2021_flrc_br_table[code].bps;
+        LOG_INF("LR2021 FLRC bitrate: %u bps (code 0x%X)", g_lr2021.flrc_bitrate_bps, code);
+    }
+    return ret;
+}
+
+/* Apply FLRC configuration: packet type, modulation, syncword.
+ * Chip must be in STANDBY. Caller sets g_lr2021.modulation. */
+static int lr2021_flrc_apply(void) {
+    uint8_t pkt_type = LR2021_PKT_TYPE_FLRC;
+    int ret = lr2021_write_command(LR2021_CMD_SET_PACKET_TYPE, &pkt_type, 1);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = lr2021_flrc_set_mod(g_lr2021.flrc_bitrate_bps);
+    if (ret < 0) {
+        return ret;
+    }
+
+    /* Private-network 32-bit syncword on correlator 1, same constant as FSK. */
+    uint8_t sync_args[5] = { 0x01, 0x93, 0x0B, 0x51, 0xDE };
+    return lr2021_write_command(LR2021_CMD_SET_FLRC_SYNCWORD, sync_args, 5);
 }
 
 static int lr2021_init(void) {
@@ -752,6 +821,7 @@ static int lr2021_init(void) {
     g_lr2021.frequency_hz = LR2021_DT_FREQ_HZ;
     g_lr2021.bitrate_bps  = LR2021_DT_BITRATE;
     g_lr2021.ble_bitrate_bps = 1000000;  /* default to 1M PHY */
+    g_lr2021.flrc_bitrate_bps = 1300000; /* default: FLRC_BR_1_300_BW_1_2 */
     g_lr2021.modulation = RADIO_MOD_FSK;   /* FSK default at boot */
     g_lr2021.lora_sf    = LR2021_DT_LORA_SF;
     g_lr2021.lora_cr    = (uint8_t)(LR2021_DT_LORA_CR - 4);  /* 5..8 → 1..4 */
@@ -995,6 +1065,10 @@ static int lr2021_set_modulation(radio_modulation_t mod) {
         g_lr2021.modulation = RADIO_MOD_BLE_PHY;
         ret = lr2021_ble_apply();
         break;
+    case RADIO_MOD_FLRC:
+        g_lr2021.modulation = RADIO_MOD_FLRC;
+        ret = lr2021_flrc_apply();
+        break;
     default:
         LOG_WRN("Modulation %d not supported", mod);
         return -ENOSYS;
@@ -1011,6 +1085,9 @@ static int lr2021_set_bitrate(uint32_t bps) {
 
     if (g_lr2021.modulation == RADIO_MOD_BLE_PHY) {
         return lr2021_ble_set_mod(bps);
+    }
+    if (g_lr2021.modulation == RADIO_MOD_FLRC) {
+        return lr2021_flrc_set_mod(bps);
     }
 
     /* FSK modulation params: bitrate(32) | pulse_shape(8) | rx_bw(8) | fdev(24)
@@ -1212,6 +1289,21 @@ static int lr2021_apply_pkt_params(size_t pld_len) {
         return lr2021_write_command(LR2021_CMD_SET_BLE_TX_PDU_LEN, args, 1);
     }
 
+    if (g_lr2021.modulation == RADIO_MOD_FLRC) {
+        /* SetFlrcPacketParams: agc_pbl_len=32bit, sync_len=32bit(2 units),
+         * sync_tx=Syncword1, sync_match=MATCH_1, pkt_format=Dynamic (variable
+         * length, matches FSK/LoRa send()/recv() contract), Crc=16-bit.
+         * pld_len is the max-accept length on RX-arm (pld_len==0): use the
+         * datasheet max (511), same pattern as FSK's 0xFF-for-max. */
+        uint16_t flrc_len = (pld_len == 0 || pld_len > 511) ? 511 : (uint16_t)pld_len;
+        uint8_t args[4] = {
+            (uint8_t)((0x07 << 2) | 0x02),          /* rfu=0, agc_pbl_len=32bit, sync_len=32bit */
+            (uint8_t)((1 << 6) | (1 << 3) | (0 << 2) | 0x01), /* sync_tx=1, sync_match=MATCH_1, Dynamic, Crc16 */
+            (uint8_t)(flrc_len >> 8), (uint8_t)flrc_len,
+        };
+        return lr2021_write_command(LR2021_CMD_SET_FLRC_PKT_PARAMS, args, 4);
+    }
+
     /* FSK: variable length, 8-bit header, CRC2 + whitening.
      * pld_len is the max-receive / TX length. On RX-arm (pld_len==0) the FSK
      * field must be 0xFF (accept any length up to 255) — unlike LoRa, 0x00 here
@@ -1236,6 +1328,9 @@ static int lr2021_tx(const uint8_t *data, size_t len) {
     size_t max_len = lr2021_max_tx_len();
     if (!data || len == 0 || len > max_len) {
         return -EINVAL;
+    }
+    if (g_lr2021.modulation == RADIO_MOD_FLRC && len < 6) {
+        return -EINVAL;  /* FLRC min payload per datasheet §18.4.2 */
     }
 
     /* Go to standby before config commands. Semtech chips require Standby (not
