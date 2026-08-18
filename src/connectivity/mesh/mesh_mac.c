@@ -297,18 +297,10 @@ static void mesh_mac_rx_thread_fn(void *a, void *b, void *c)
                 s_mac.rx_cb(s_rx_buf, (size_t)n, rssi, s_mac.rx_ctx);
             }
         } else if (r->ops && r->ops->rx_wait) {
-            /* Lock-free (no SPI), blocks on the IRQ semaphore — wakes the
-             * instant a packet arrives instead of waiting out a fixed idle
-             * sleep. Safe now that TX re-arms RX eagerly at TX_DONE (see
-             * lr2021_tx()) instead of leaving the re-arm — and the semaphore
-             * reset that comes with it — to land at an unpredictable time
-             * relative to the peer's reply. */
+            /* Blocks on IRQ semaphore for radio's that implement IRQ receive */
             r->ops->rx_wait(r, CONFIG_AKIRA_MESH_RX_IDLE_YIELD_MS);
         } else {
-            /* The IRQ-driven recv path returns almost instantly regardless
-             * of whether a packet arrived — with no sleep here this becomes
-             * a tight loop that re-acquires the shared SPI bus lock
-             * continuously, starving other bus users (e.g. an SD card). */
+            /* Sleeps and keeps polling recv for radio's that don't implement IRQ receive */
             k_msleep(CONFIG_AKIRA_MESH_RX_IDLE_YIELD_MS);
         }
     }

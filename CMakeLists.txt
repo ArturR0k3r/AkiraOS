@@ -821,7 +821,7 @@ if(CONFIG_AKIRA_MESH)
         src/connectivity/mesh/mesh_session.c
         src/connectivity/mesh/mesh_mac.c
         src/connectivity/mesh/mesh_router.c
-        src/connectivity/mesh/mesh_aodv.c
+        src/connectivity/mesh/routers/mesh_aodv.c
         src/connectivity/mesh/mesh_transport.c
         src/connectivity/mesh/mesh_app_dist.c
         src/api/akira_mesh_api.c

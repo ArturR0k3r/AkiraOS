@@ -18,7 +18,7 @@
 #include "connectivity/bluetooth/bt_manager.h"
 #include "mesh_mac.h"
 #include "mesh_router.h"
-#include "mesh_aodv.h"
+#include "routers/mesh_aodv.h"
 #include "mesh_transport.h"
 #include "mesh_app_dist.h"
 #include "mesh_routing.h"

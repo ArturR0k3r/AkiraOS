@@ -19,28 +19,45 @@ graph TB
     classDef helper fill:#f39c12,stroke:#fff,color:#fff
 
     CALLER["caller (shell, app, OTA)"]:::caller
-    APP["Application — mesh_app_dist.c<br/>splits a WASM app into chunks"]:::layer
-    TRANSPORT["Transport — mesh_transport.c<br/>reliable (ACK+retry) + unreliable send, encryption"]:::layer
-    NETWORK["Network — mesh_router.c / mesh_aodv.c<br/>finds a path to the destination (AODV routing)"]:::layer
-    MAC["MAC — mesh_mac.c<br/>priority TX queue + CSMA/CA, only file allowed to touch the radio"]:::layer
+
+    subgraph STACK[" "]
+        direction LR
+        TRANSPORT["Transport — mesh_transport.c<br/>reliable (ACK+retry) + unreliable send, encryption"]:::layer
+        ROUTER["Network — mesh_router.c<br/>pluggable routing interface (start/resolve/queue_pending/tick)"]:::layer
+        MAC["MAC — mesh_mac.c<br/>priority TX queue + CSMA/CA, only file allowed to touch the radio"]:::layer
+        TRANSPORT --> ROUTER --> MAC
+    end
+
     PHY["PHY — radio_interface.h<br/>the actual chip (LR2021, CC1121, BLE)"]:::phy
     WAVES["radio waves"]:::caller
 
-    MANAGER["mesh_manager.c<br/>wiring: starts each layer, routes RX frames, shared retry timer"]:::helper
     CRYPTO["mesh_crypto.c / mesh_session.c<br/>encrypt/decrypt, ECDH key setup"]:::helper
+    AODV["mesh_aodv.c<br/>current router impl, registers into mesh_router.c"]:::helper
+    MANAGER["mesh_manager.c<br/>wiring: starts each layer, routes RX frames, shared retry timer"]:::helper
+    APP["mesh_app_dist.c<br/>splits a WASM app into chunks, one more caller into Transport"]:::helper
 
-    CALLER --> APP --> TRANSPORT --> NETWORK --> MAC --> PHY --> WAVES
-    MANAGER -.starts / routes RX.-> APP
-    MANAGER -.starts / routes RX.-> TRANSPORT
-    MANAGER -.starts / routes RX.-> NETWORK
-    MANAGER -.starts / routes RX.-> MAC
+    CALLER --> TRANSPORT
+    MAC --> PHY --> WAVES
     TRANSPORT -.encrypt/decrypt.-> CRYPTO
-    NETWORK -.ECDH on RREQ/RREP.-> CRYPTO
+    AODV -.mesh_router_register.-> ROUTER
+    AODV -.RREQ/RREP/RERR/beacon, mesh_mac_send.-> MAC
+    MANAGER -.wiring + RX routing.-> STACK
+    APP -.mesh_transport_send_reliable.-> TRANSPORT
 ```
 
-Each layer only talks to the one below it. `mesh_crypto.c`/`mesh_session.c`
-and `mesh_manager.c` aren't layers — they're helpers the layers above call
-directly, not links in the send path.
+Send path: `CALLER → TRANSPORT → ROUTER → MAC → PHY → WAVES`.
+`mesh_crypto.c`/`mesh_session.c`, `mesh_aodv.c`, `mesh_manager.c`, and
+`mesh_app_dist.c` aren't layers — they're helpers the layers above call
+directly (or, for AODV, register into), not links in the send path itself.
+Transport calls Crypto directly; Router just dispatches to whichever
+implementation is registered (`mesh_aodv.c` today; a second protocol like
+BATMAN could register the same way) and has no routing logic of its own;
+`mesh_manager.c` starts each layer and routes RX frames back up;
+`mesh_app_dist.c` is a second caller straight into Transport
+(`mesh_transport_send_reliable`) used only for WASM app-chunk transfer —
+`akira_mesh_send`/`_unreliable` (shell/app/OTA) call Transport directly and
+never go through it. `mesh_aodv.c` also talks to MAC directly for its own
+control frames.
 
 ## Sending a Packet
 
@@ -157,7 +174,8 @@ sent you the radio packet. Route-finding frames (RREQ/RREP) separately track
 |---|---|
 | `mesh_manager.c` | wiring, public API, RX routing |
 | `mesh_mac.c` | radio access, priority TX queue, CSMA/CA |
-| `mesh_router.c` / `mesh_aodv.c` | route finding |
+| `mesh_aodv.c` | route finding (AODV) |
+| `mesh_router.c` | pluggable router registry (register/get_active) |
 | `mesh_transport.c` | reliable + unreliable send, encryption, stream mode |
 | `mesh_app_dist.c` | WASM app transfer |
 | `mesh_crypto.c` / `mesh_session.c` | encryption primitives, key storage |

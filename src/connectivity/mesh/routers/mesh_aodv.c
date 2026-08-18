@@ -10,23 +10,21 @@
  * node_id before re-transmitting — distinct from src_id/target on
  * mesh_header, which always mean "true originator"/"true destination" and
  * never change across hops (DATA/ACK/dedup/E2E-crypto need that). hop_count
- * is incremented by every hop for the same reason: earlier code fed
- * route_entry.next_hop/hop_count from h->src_id and a hardcoded 1, which
- * only happen to be correct at the exact first hop — every route beyond
- * that was recorded as "1 hop away" regardless of real distance. Forwarding
- * itself doesn't break from this (forward_data only checks route
- * *existence*, never reads next_hop — see relay_frame), but hop-count-based
- * route comparison and diagnostics were silently wrong.
+ * is incremented by every hop for the same reason: route_entry.hop_count
+ * must reflect true hop distance, not a fixed value, since it drives
+ * hop-count-based route comparison and diagnostics (forward_data itself
+ * only checks route *existence*, never reads next_hop/hop_count — see
+ * relay_frame).
  *
  * @copyright Copyright (c) 2026 PenEngineering S.R.L
  */
 
 #include "mesh_aodv.h"
-#include "mesh_router.h"
-#include "mesh_mac.h"
-#include "mesh_routing.h"
+#include "../mesh_router.h"
+#include "../mesh_mac.h"
+#include "../mesh_routing.h"
 #if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
-#include "mesh_crypto.h"
+#include "../mesh_crypto.h"
 #include "ed25519.h"
 #endif
 #include <zephyr/kernel.h>
