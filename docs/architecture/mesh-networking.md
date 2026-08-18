@@ -20,7 +20,7 @@ graph TB
 
     CALLER["caller (shell, app, OTA)"]:::caller
     APP["Application — mesh_app_dist.c<br/>splits a WASM app into chunks"]:::layer
-    TRANSPORT["Transport — mesh_transport.c<br/>reliable send (ACK+retry), encryption"]:::layer
+    TRANSPORT["Transport — mesh_transport.c<br/>reliable (ACK+retry) + unreliable send, encryption"]:::layer
     NETWORK["Network — mesh_router.c / mesh_aodv.c<br/>finds a path to the destination (AODV routing)"]:::layer
     MAC["MAC — mesh_mac.c<br/>priority TX queue + CSMA/CA, only file allowed to touch the radio"]:::layer
     PHY["PHY — radio_interface.h<br/>the actual chip (LR2021, CC1121, BLE)"]:::phy
@@ -61,8 +61,9 @@ directly, not links in the send path.
    with a matching route re-sends it further. This repeats hop by hop
    until it reaches the target.
 
-A route is forgotten after ~30s unused. A broken link mid-route triggers a
-local retry (find a new path from where it broke) before giving up.
+A route is forgotten after `CONFIG_AKIRA_MESH_ROUTE_LIFETIME_S` unused. A
+broken link mid-route triggers a local retry (find a new path from where it
+broke) before giving up.
 
 ## Encryption (E2EE)
 
@@ -74,8 +75,8 @@ local retry (find a new path from where it broke) before giving up.
 - Each message: fresh random nonce, AES-256-CTR encryption, HMAC-SHA256 tag.
   Receiver checks the tag before trusting anything; bad tag = silently
   dropped.
-- A session key lasts 5 minutes idle, refreshed automatically while a
-  transfer is active so it never expires mid-transfer.
+- A session key lasts `CONFIG_AKIRA_MESH_SESSION_LIFETIME_S` idle, refreshed
+  automatically while a transfer is active so it never expires mid-transfer.
 
 ## MAC / Channel Access (`mesh_mac.c`)
 
@@ -135,31 +136,20 @@ Note: `src_id`/`dest_id` are who started/wants the message, not who just
 sent you the radio packet. Route-finding frames (RREQ/RREP) separately track
 "immediate previous hop" for that.
 
-## Neighbor Info (`mesh nodes`)
-
-Each node tracks its direct neighbors: name, hop count, RSSI (signal
-strength in dBm from the last received frame — more negative = weaker/
-farther), last-seen time.
-
 ## Reliability
 
-- **Normal send**: waits for an ACK, retries a few times, then gives up.
+- **Normal send** (`akira_mesh_send`): waits for an ACK, retries a few
+  times, then gives up. Queues and triggers route discovery on a cold
+  route.
+- **Unreliable send** (`akira_mesh_send_unreliable`): fire-and-forget, no
+  ACK, no retry. Needs an already-known route and session key — fails fast
+  (`-EHOSTUNREACH` / `-ENOTCONN`) instead of queuing on a cold route. Still
+  E2E encrypted like normal send.
 - **Stream mode** (`akira_mesh_send_stream`): for bigger payloads. Sends a
   batch of frames, checks once which ones landed, resends only the gaps.
   Needs an already-known route (send a normal message first).
 - **App distribution**: same idea as stream mode, one chunk per ACK,
   resumable if interrupted.
-
-## Shell Commands
-
-```
-mesh init <id_hex> [ble|sub|lora]   # e.g. mesh init 01 lora
-mesh start / mesh stop
-mesh send <dest_hex> <text>         # reliable 1-to-1 (or broadcast if dest = FF)
-mesh sendstream <dest_hex> <size>   # bulk send
-mesh nodes                          # see neighbors + RSSI
-mesh info                           # stats
-```
 
 ## File Map
 
@@ -168,7 +158,7 @@ mesh info                           # stats
 | `mesh_manager.c` | wiring, public API, RX routing |
 | `mesh_mac.c` | radio access, priority TX queue, CSMA/CA |
 | `mesh_router.c` / `mesh_aodv.c` | route finding |
-| `mesh_transport.c` | reliable send, encryption, stream mode |
+| `mesh_transport.c` | reliable + unreliable send, encryption, stream mode |
 | `mesh_app_dist.c` | WASM app transfer |
 | `mesh_crypto.c` / `mesh_session.c` | encryption primitives, key storage |
 | `mesh_routing.c` | shared tables (routes, pending sends, dedup) |
