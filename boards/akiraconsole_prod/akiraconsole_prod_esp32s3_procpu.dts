@@ -83,14 +83,14 @@
 			zephyr,code = <6>;
 		};
 		btn_b: btn_b {
-			gpios = <&gpio0 16 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			gpios = <&gpio0 16 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
 			label = "BTN B (SW3)";
-			zephyr,code = <7>;   /* AKIRA_BTN_B */
+			zephyr,code = <8>;
 		};
 		btn_x: btn_x {
-			gpios = <&gpio0 17 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			gpios = <&gpio0 17 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
 			label = "BTN X (SW4)";
-			zephyr,code = <8>;   /* AKIRA_BTN_X */
+			zephyr,code = <9>;
 		};
 		btn_y: btn_y {
 			gpios = <&gpio1 9 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>; // GPIO41

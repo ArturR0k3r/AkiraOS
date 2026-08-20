@@ -178,6 +178,7 @@ static struct {
     uint8_t lora_sf;                /* 5..12 */
     uint8_t lora_bw_code;           /* chip code: 0x4=125k, 0x5=250k, 0x6=500k */
     uint8_t lora_cr;                /* 1..4 → 4/5..4/8 (chip encoding) */
+    uint8_t lora_sync;              /* 8-bit LoRa sync word (default 0x12 private) */
     bool lora_hop_enabled;          /* SetLoraHopping intra-packet hop state */
     uint16_t lora_hop_period_syms;  /* LoRa symbols between hops (0..8191) */
     uint32_t lora_hop_freqs[LR2021_MAX_HOP_FREQS];
@@ -552,8 +553,8 @@ static int lr2021_lora_apply(void) {
         return ret;
     }
 
-    /* Private-network syncword. */
-    uint8_t sync = 0x12;
+    /* Sync word — stored so lr2021_set_sync_word() can reissue cleanly. */
+    uint8_t sync = g_lr2021.lora_sync;
     ret = lr2021_write_command(LR2021_CMD_SET_LORA_SYNCWORD, &sync, 1);
     if (ret < 0) {
         LOG_ERR("SetLoraSyncword failed: %d", ret);
@@ -858,6 +859,7 @@ static int lr2021_init(void) {
      * set_bitrate all guard on `initialized` and would otherwise return -ENODEV,
      * leaving the chip on default modulation (never applying bitrate/fdev). */
     g_lr2021.initialized = true;
+    g_lr2021.lora_sync   = 0x12;   /* Semtech private-network default */
 
     lr2021_set_frequency(g_lr2021.frequency_hz);
     lr2021_fsk_apply();
@@ -1209,6 +1211,42 @@ static int lr2021_set_coding_rate(uint8_t cr) {
     int ret = lr2021_lora_reissue_mod();
     if (ret == 0) {
         LOG_INF("LR2021 LoRa CR 4/%u", cr);
+    }
+    return ret;
+}
+
+int lr2021_set_sync_word(uint8_t sync)
+{
+    if (!g_lr2021.initialized) {
+        return -ENODEV;
+    }
+    if (g_lr2021.modulation != RADIO_MOD_LORA) {
+        return -ENOTSUP;
+    }
+    g_lr2021.lora_sync = sync;
+
+    /* SET_LORA_SYNCWORD must be issued in STANDBY — reissue_mod() only
+     * rewrites mod params and never sends the sync word, so a call that
+     * skipped this would leave the old sync active (gate never engages). */
+    {
+        uint8_t mode = LR2021_STANDBY_XOSC;
+        int ret = lr2021_write_command(LR2021_CMD_SET_STANDBY, &mode, 1);
+        if (ret < 0) {
+            return ret;
+        }
+        ret = lr2021_write_command(LR2021_CMD_SET_LORA_SYNCWORD, &sync, 1);
+        if (ret < 0) {
+            LOG_ERR("SetLoraSyncword failed: %d", ret);
+            return ret;
+        }
+    }
+
+    /* Re-issue mod params so the chip's packet config is coherent, and
+     * flag RX for re-arm — an armed RX would keep the old sync until
+     * re-armed (same stale-params issue as SF/BW changes). */
+    int ret = lr2021_lora_reissue_mod();
+    if (ret == 0) {
+        LOG_INF("LR2021 LoRa sync word 0x%02X", sync);
     }
     return ret;
 }

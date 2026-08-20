@@ -70,6 +70,7 @@ int akira_rf_wake(void);
 int akira_rf_tx_cw_start(void);
 int akira_rf_tx_cw_stop(void);
 int akira_rf_tx_cw_set_freq(uint32_t freq_hz);
+int akira_rf_set_sync_word(uint8_t sync);
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 /* WASM native export functions (with capability checks) */
@@ -90,6 +91,7 @@ int akira_native_rf_set_bitrate(wasm_exec_env_t exec_env, int32_t bps);
 int akira_native_rf_tx_cw_start(wasm_exec_env_t exec_env);
 int akira_native_rf_tx_cw_stop(wasm_exec_env_t exec_env);
 int akira_native_rf_tx_cw_set_freq(wasm_exec_env_t exec_env, uint32_t freq_hz);
+int akira_native_rf_set_sync_word(wasm_exec_env_t exec_env, uint32_t sync);
 
 #if defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
 /* WiFi spectrum scan (per-channel max RSSI) */

@@ -275,7 +275,14 @@ int akira_native_storage_write(wasm_exec_env_t exec_env,
 
 void akira_native_storage_close(wasm_exec_env_t exec_env, int32_t fd)
 {
-    AKIRA_CHECK_CAP_OR_RETURN_VOID(exec_env, AKIRA_CAP_STORAGE_READ);
+    /* Closing must work with the cap that opened the fd — write-only apps
+     * (storage.write, no storage.read) still need to close what they wrote.
+     * Previously gated on READ alone, leaking one fd per save until the
+     * table exhausted (ENOMEM on later opens). */
+    if (!akira_security_check_exec(exec_env, AKIRA_CAP_STORAGE_WRITE) &&
+        !akira_security_check_exec(exec_env, AKIRA_CAP_STORAGE_READ)) {
+        return;
+    }
 
     k_mutex_lock(&s_fd_mutex, K_FOREVER);
 

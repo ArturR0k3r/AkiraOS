@@ -116,6 +116,7 @@ bool akira_register_native_apis()
         {"rf_tx_cw_start",         (void *)akira_native_rf_tx_cw_start,         "()i",     NULL},
         {"rf_tx_cw_stop",          (void *)akira_native_rf_tx_cw_stop,          "()i",     NULL},
         {"rf_tx_cw_set_freq",      (void *)akira_native_rf_tx_cw_set_freq,      "(i)i",    NULL},
+        {"rf_set_sync_word",       (void *)akira_native_rf_set_sync_word,       "(i)i",    NULL},
         /* Raw OOK/ASK signal capture and replay */
         {"rf_raw_capture",         (void *)akira_native_rf_raw_capture,         "(iiii)i", NULL},
         {"rf_raw_replay",          (void *)akira_native_rf_raw_replay,          "(iiii)i", NULL},

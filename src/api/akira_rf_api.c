@@ -613,7 +613,14 @@ int akira_rf_recv_pop(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
 int akira_rf_tx_cw_start(void)
 {
     LOG_INF("RF CW start");
-    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    /* Pause the RX daemon first: otherwise its recv() loop sees rx_armed=false
+     * after CW keys and re-arms RX (SetRx), yanking the chip out of TX CW —
+     * jamming silently never stays on while packets keep flowing. */
+    akira_rf_daemon_pause();
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) {
+        akira_rf_daemon_resume();
+        return -EBUSY;
+    }
 
     int ret = -ENODEV;
 #if defined(CONFIG_AKIRA_LR2021)
@@ -624,6 +631,9 @@ int akira_rf_tx_cw_start(void)
     /* Other chips can add their CW implementation here. */
 
     k_mutex_unlock(&s_chip_lock);
+    if (ret < 0) {
+        akira_rf_daemon_resume(); /* failed to key — restore RX */
+    }
     return ret;
 }
 
@@ -640,6 +650,9 @@ int akira_rf_tx_cw_stop(void)
 #endif
 
     k_mutex_unlock(&s_chip_lock);
+
+    /* Daemon was paused by start — bring RX back only now. */
+    akira_rf_daemon_resume();
     return ret;
 }
 
@@ -663,6 +676,28 @@ int akira_rf_tx_cw_set_freq(uint32_t freq_hz)
         if (ret == 0) {
             ret = lr2021_tx_cw_start();
         }
+    }
+#endif
+
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
+/**
+ * @brief Set the 8-bit LoRa sync word (LR2021 only).
+ *
+ * Wrong sync word → the chip's correlator never locks → no packets delivered
+ * (SYNC_FAIL). Matching sync → packets land in the RX FIFO. This is the
+ * discriminator a sniffer/infiltrator uses to brute-force the sync word.
+ */
+int akira_rf_set_sync_word(uint8_t sync)
+{
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+
+    int ret = -ENODEV;
+#if defined(CONFIG_AKIRA_LR2021)
+    if (g_active_chip == AKIRA_RF_CHIP_LR2021) {
+        ret = lr2021_set_sync_word(sync);
     }
 #endif
 
@@ -802,6 +837,14 @@ int akira_native_rf_tx_cw_set_freq(wasm_exec_env_t exec_env, uint32_t freq_hz)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
     return akira_rf_tx_cw_set_freq(freq_hz);
+}
+
+/* Set LoRa sync word (8-bit). Type: "(i)i" */
+int akira_native_rf_set_sync_word(wasm_exec_env_t exec_env, uint32_t sync)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+    if (sync > 0xFF) return -EINVAL;
+    return akira_rf_set_sync_word((uint8_t)sync);
 }
 
 /* ── Raw Sub-GHz OOK capture / replay ──────────────────────────────────── */

@@ -27,6 +27,10 @@ int lr2021_tx_cw_stop(void);
  *  frequency+power via the normal path first. */
 int lr2021_tx_cw_set_freq_fast(uint32_t freq_hz);
 
+/** @brief Set the 8-bit LoRa sync word (0x00–0xFF). Re-issues LoRa config
+ *  and re-arms RX so the new sync takes effect immediately. */
+int lr2021_set_sync_word(uint8_t sync);
+
 #ifdef __cplusplus
 }
 #endif

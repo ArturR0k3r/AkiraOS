@@ -171,9 +171,13 @@ int akira_native_input_poll_event(wasm_exec_env_t exec_env,
         return -EINVAL;
     }
 
-    /* Validate that evt_ptr falls within the WASM app's linear memory. */
-    void *native_ptr = wasm_runtime_addr_app_to_native(inst, evt_ptr);
-    if (!native_ptr) {
+    /* "(*~)" ABI: WAMR already converted the app address to a native
+     * pointer before invoking us — do NOT call addr_app_to_native again
+     * (double conversion yields a garbage host address).  Mirror
+     * akira_native_wifi_scan_aps, which uses the passed pointer directly. */
+    void *native_ptr = (void *)evt_ptr;
+    if (!native_ptr || !wasm_runtime_validate_native_addr(inst, native_ptr,
+                                                          sizeof(akira_input_event_t))) {
         LOG_ERR("input_poll_event: invalid WASM pointer 0x%08x", evt_ptr);
         return -EINVAL;
     }

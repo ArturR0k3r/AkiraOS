@@ -38,6 +38,10 @@ typedef struct
 /**
  * @brief Button ID constants — match the zephyr,code values in the DTS overlay.
  * Bit N of akira_input_get_bitmask() is set when the button with code N is held.
+ *
+ * Physical wiring note: on akiraconsole_prod, X is on GPIO16 (SW3) and B is on
+ * GPIO17 (SW4); node names follow silkscreen.  Codes below are the logical
+ * constants apps use and match akira_console.h (B=8, X=9, Y=7).
  */
 #define AKIRA_BTN_HOME 1 /**< Home/OK button (GPIO0, active-low pull-up) */
 #define AKIRA_BTN_UP 2
@@ -45,9 +49,9 @@ typedef struct
 #define AKIRA_BTN_LEFT 4
 #define AKIRA_BTN_RIGHT 5
 #define AKIRA_BTN_A 6 /**< Confirm / launch */
-#define AKIRA_BTN_B 7 /**< Back / cancel */
-#define AKIRA_BTN_X 8
-#define AKIRA_BTN_Y 9 /**< Context menu / alternate action */
+#define AKIRA_BTN_B 8 /**< Back / cancel */
+#define AKIRA_BTN_X 9
+#define AKIRA_BTN_Y 7 /**< Context menu / alternate action */
 
 /**
  * @brief Maximum dial axis value returned by akira_input_get_dial().
