@@ -714,6 +714,59 @@ config AKIRA_RADIO_MAX_RADIOS
       Size of the radio registry. Must be >= total number of drivers
       that call radio_manager_register() at boot.
 
+if WIFI
+
+config AKIRA_RADIO_WIFI_MESH
+    bool
+    default y
+    select NET_DHCPV4_SERVER
+    help
+      Hidden enabler: radio_wifi.c's mesh transport UDP send/recv needs
+      Zephyr's DHCPv4 server for the SoftAP (gateway) side.
+
+config AKIRA_RADIO_WIFI_MESH_SSID
+    string "AkiraMesh WiFi transport SSID"
+    default "akiramesh"
+    depends on AKIRA_RADIO_WIFI_MESH
+    help
+      Fixed SSID the mesh gateway node's SoftAP advertises and every other
+      mesh node STA-connects to (radio_wifi.c). Same network for every
+      node in one mesh — not the board's general/cloud WiFi network.
+
+config AKIRA_RADIO_WIFI_MESH_PSK
+    string "AkiraMesh WiFi transport PSK (empty = open network)"
+    default "akiramesh123"
+    depends on AKIRA_RADIO_WIFI_MESH
+    help
+      Pre-shared key for the mesh SoftAP. Change from the default before
+      any real deployment.
+
+config AKIRA_RADIO_WIFI_MESH_PORT
+    int "AkiraMesh WiFi transport UDP port"
+    default 47500
+    range 1024 65535
+    depends on AKIRA_RADIO_WIFI_MESH
+    help
+      UDP port every mesh node binds/sends on for raw mesh frames.
+
+config AKIRA_RADIO_WIFI_MESH_MTU
+    int "AkiraMesh WiFi transport max frame payload (bytes)"
+    default 1400
+    depends on AKIRA_RADIO_WIFI_MESH
+    help
+      Reported via radio_ops.get_max_payload() — sizes mesh_state.mtu in
+      akira_mesh_init(). Kept under typical WiFi/UDP MTU minus headers.
+
+config AKIRA_RADIO_WIFI_MESH_CONNECT_TIMEOUT_MS
+    int "AkiraMesh WiFi STA connect timeout (ms)"
+    default 15000
+    depends on AKIRA_RADIO_WIFI_MESH
+    help
+      How long a non-gateway node's wifi_radio_init() blocks waiting to
+      associate with the mesh gateway's SoftAP before failing.
+
+endif # WIFI
+
 config AKIRA_MATTER
     bool "Enable Matter protocol support"
     default n
@@ -806,7 +859,7 @@ config AKIRA_MESH
     depends on AKIRA_RADIO_MANAGER
     help
       Enable AkiraMesh - custom lightweight mesh networking protocol.
-      Supports multi-transport (BLE Mesh, 802.15.4, ESP-NOW),
+      Supports multi-transport (BLE, 802.15.4, WiFi, SubGHz/LoRa),
       multi-hop routing, WASM app distribution, and state synchronization.
 
 if AKIRA_MESH
@@ -839,12 +892,14 @@ config AKIRA_MESH_TRANSPORT_802154
     help
       Enable custom protocol over 802.15.4 (higher throughput)
 
-config AKIRA_MESH_TRANSPORT_ESPNOW
-    bool "Enable ESP-NOW transport"
-    default n
-    depends on WIFI_ESP32
+config AKIRA_MESH_TRANSPORT_WIFI
+    bool "Enable WiFi transport"
+    default y if WIFI
+    depends on WIFI
     help
-      Enable ESP-NOW transport (ESP32 optimization)
+      Enable AkiraMesh over WiFi (radio_wifi.c, UDP over a single-SoftAP
+      segment) — highest throughput of the four transports, single-hop
+      range only (see AKIRA_RADIO_WIFI_MESH_* for SSID/PSK/port).
 
 config AKIRA_MESH_MAX_RETRIES
     int "End-to-end retransmit attempts (beyond initial send)"

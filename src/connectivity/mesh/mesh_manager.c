@@ -16,6 +16,7 @@
 #include "connectivity/akira_mesh.h"
 #include "connectivity/radio_interface.h"
 #include "connectivity/bluetooth/bt_manager.h"
+#include "radio/radio_wifi.h"
 #include "mesh_mac.h"
 #include "mesh_router.h"
 #include "routers/mesh_aodv.h"
@@ -261,6 +262,12 @@ int akira_mesh_init(const akira_mesh_config_t *config)
             }
             break;
         }
+        case AKIRA_MESH_TRANSPORT_WIFI:
+#if defined(CONFIG_WIFI)
+            radio_wifi_set_gateway(config->role == AKIRA_MESH_ROLE_GATEWAY);
+#endif
+            mesh_state.radio = radio_manager_acquire_by_type(RADIO_TYPE_WIFI, "mesh");
+            break;
         case AKIRA_MESH_TRANSPORT_SUBGHZ:
         default: {
             radio_handle_t *r = radio_manager_get_by_name("CC1121");

@@ -2552,7 +2552,7 @@ static void mesh_shell_rx_cb(const uint8_t *src_id, const uint8_t *data,
 static int cmd_mesh_init(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 2) {
-        shell_error(sh, "Usage: mesh init <node_id_hex> [ble|sub|lora]  (e.g. mesh init 01 sub)");
+        shell_error(sh, "Usage: mesh init <node_id_hex> [ble|sub|lora|wifi] [gw]  (e.g. mesh init 01 wifi gw)");
         return -EINVAL;
     }
 
@@ -2570,16 +2570,21 @@ static int cmd_mesh_init(const struct shell *sh, size_t argc, char **argv)
         } else if (strcmp(argv[2], "lora") == 0) {
             transport = AKIRA_MESH_TRANSPORT_LORA;
             transport_name = "lora";
+        } else if (strcmp(argv[2], "wifi") == 0) {
+            transport = AKIRA_MESH_TRANSPORT_WIFI;
+            transport_name = "wifi";
         } else {
-            shell_error(sh, "Unknown transport '%s' (want ble|sub|lora)", argv[2]);
+            shell_error(sh, "Unknown transport '%s' (want ble|sub|lora|wifi)", argv[2]);
             return -EINVAL;
         }
     }
 
+    bool is_gateway = (argc >= 4) && (strcmp(argv[3], "gw") == 0);
+
     akira_mesh_config_t cfg = {0};
     cfg.node_id[AKIRA_MESH_NODE_ID_LEN - 1] = id;
     snprintf(cfg.node_name, sizeof(cfg.node_name), "akira-%02x", id);
-    cfg.role = AKIRA_MESH_ROLE_NODE;
+    cfg.role = is_gateway ? AKIRA_MESH_ROLE_GATEWAY : AKIRA_MESH_ROLE_NODE;
     cfg.transport = transport;
     cfg.max_hops = AKIRA_MESH_MAX_HOPS;
     cfg.beacon_interval_ms = 5000;
@@ -2642,6 +2647,49 @@ static int cmd_mesh_sendu(const struct shell *sh, size_t argc, char **argv)
 
     shell_print(sh, "sent %zu bytes to %02x in %lld ms (unreliable)", strlen(text),
                 dest[AKIRA_MESH_NODE_ID_LEN - 1], ms);
+    return 0;
+}
+
+/* Sustained fire-and-forget throughput: back-to-back akira_mesh_send_unreliable()
+ * calls, no per-frame wait — this is the actual code path a continuous
+ * PCM-style stream would use, unlike sendstream's ARQ+pacing. */
+static int cmd_mesh_sendu_burst(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 4) {
+        shell_error(sh, "Usage: mesh sendu_burst <dest_id_hex> <count> <size_bytes>");
+        return -EINVAL;
+    }
+
+    uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
+    dest[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+    uint32_t count = (uint32_t)strtoul(argv[2], NULL, 10);
+    size_t size = (size_t)strtoul(argv[3], NULL, 10);
+
+    static uint8_t burst_buf[256];
+    if (count == 0 || size == 0 || size > sizeof(burst_buf)) {
+        shell_error(sh, "count must be >0, size must be 1..%zu", sizeof(burst_buf));
+        return -EINVAL;
+    }
+    for (size_t i = 0; i < size; i++) {
+        burst_buf[i] = (uint8_t)i;
+    }
+
+    uint32_t sent = 0, failed = 0;
+    int64_t t0 = k_uptime_get();
+    for (uint32_t i = 0; i < count; i++) {
+        int ret = akira_mesh_send_unreliable(dest, burst_buf, size);
+        if (ret) {
+            failed++;
+        } else {
+            sent++;
+        }
+    }
+    int64_t ms = k_uptime_get() - t0;
+
+    uint64_t bytes = (uint64_t)sent * size;
+    uint32_t kbps = (ms > 0) ? (uint32_t)((bytes * 8) / (uint64_t)ms) : 0;
+    shell_print(sh, "sendu_burst: %u/%u sent (%u failed), %llu bytes in %lld ms (%u kbit/s)",
+                sent, count, failed, bytes, ms, kbps);
     return 0;
 }
 
@@ -2790,9 +2838,10 @@ static int cmd_mesh_stop(const struct shell *sh, size_t argc, char **argv)
 }
 
 SHELL_STATIC_SUBCMD_SET_CREATE(mesh_cmds,
-    SHELL_CMD_ARG(init, NULL, "Init mesh: <node_id_hex> [ble|sub|lora]", cmd_mesh_init, 2, 1),
+    SHELL_CMD_ARG(init, NULL, "Init mesh: <node_id_hex> [ble|sub|lora|wifi] [gw]", cmd_mesh_init, 2, 2),
     SHELL_CMD_ARG(send, NULL, "Send: <dest_id_hex> <text>", cmd_mesh_send, 3, 0),
     SHELL_CMD_ARG(sendu, NULL, "Fire-and-forget send: <dest_id_hex> <text>", cmd_mesh_sendu, 3, 0),
+    SHELL_CMD_ARG(sendu_burst, NULL, "Fire-and-forget throughput test: <dest_id_hex> <count> <size_bytes>", cmd_mesh_sendu_burst, 4, 0),
     SHELL_CMD_ARG(sendstream, NULL, "Stream send: <dest_id_hex> <size_bytes>", cmd_mesh_sendstream, 3, 0),
     SHELL_CMD_ARG(app, NULL, "Distribute installed app: <dest_id_hex> <name>", cmd_mesh_app, 3, 0),
     SHELL_CMD_ARG(linkdrop, NULL, "Test-only: simulate peer out of range: <peer_id_hex>", cmd_mesh_linkdrop, 2, 0),

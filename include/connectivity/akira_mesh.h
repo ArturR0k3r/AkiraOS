@@ -3,7 +3,7 @@
  * @brief AkiraMesh Protocol - Hardware-Agnostic Mesh Networking
  *
  * Custom lightweight mesh protocol supporting:
- * - Multi-transport (BLE Mesh, 802.15.4, WiFi ESP-NOW)
+ * - Multi-transport (BLE Mesh, 802.15.4, WiFi)
  * - Multi-hop routing with AODV-based route discovery
  * - WASM app distribution across mesh
  * - State synchronization between nodes
@@ -38,6 +38,7 @@ typedef enum {
     AKIRA_MESH_TRANSPORT_SUBGHZ = 0, /* CC1121 (FSK/OOK) */
     AKIRA_MESH_TRANSPORT_LORA,       /* LR2021 (LoRa) */
     AKIRA_MESH_TRANSPORT_BLE,        /* radio_ble.c */
+    AKIRA_MESH_TRANSPORT_WIFI,       /* radio_wifi.c, UDP over one SoftAP segment */
 } akira_mesh_transport_t;
 
 /* Node role */

@@ -102,6 +102,16 @@ static struct {
 #endif
 } s_stream_rx;
 
+/* CONFIG_AKIRA_MESH_STREAM_TX_GAP_MS exists so a burst doesn't monopolize a
+ * genuinely shared, half-duplex airtime (LoRa/CC1121/BLE) — WiFi's own
+ * 802.11 CSMA/CA already arbitrates the channel, so the extra gap there is
+ * pure added latency. */
+static uint32_t stream_tx_gap_ms(void)
+{
+    return (s_transport.config.transport == AKIRA_MESH_TRANSPORT_WIFI)
+           ? 0 : CONFIG_AKIRA_MESH_STREAM_TX_GAP_MS;
+}
+
 static bool is_self(const uint8_t *id)
 {
     return memcmp(id, s_transport.config.node_id, AKIRA_MESH_NODE_ID_LEN) == 0;
@@ -800,7 +810,7 @@ static int stream_query_and_retransmit(const uint8_t *dest_id, const uint8_t *ct
         size_t plen = build_stream_frame(fpkt, dest_id, s_transport.config.max_hops,
                                          idx, frame_count, ct, ct_len, stride, nonce, tag);
         mesh_mac_send(MESH_MAC_PRIO_LOW, fpkt, plen);
-        k_msleep(CONFIG_AKIRA_MESH_STREAM_TX_GAP_MS);
+        k_msleep(stream_tx_gap_ms());
     }
     return 0;
 }
@@ -914,7 +924,7 @@ int akira_mesh_send_stream(const uint8_t *dest_id, const uint8_t *data, size_t l
             size_t plen = build_stream_frame(pkt, dest_id, s_transport.config.max_hops,
                                              idx, frame_count, ct, len, stride, nonce, tag);
             mesh_mac_send(MESH_MAC_PRIO_LOW, pkt, plen);
-            k_msleep(CONFIG_AKIRA_MESH_STREAM_TX_GAP_MS);
+            k_msleep(stream_tx_gap_ms());
             if ((i + 1) % CONFIG_AKIRA_MESH_STREAM_STATUS_INTERVAL == 0) {
                 stream_query_and_retransmit(dest_id, ct, len, stride, frame_count,
                                             base_index, window, nonce, tag);
