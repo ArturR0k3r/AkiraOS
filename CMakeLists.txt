@@ -590,6 +590,10 @@ if(CONFIG_AKIRA_ILI9341_DRIVER)
     target_sources(app PRIVATE src/drivers/display/akira_ili9341.c)
 endif()
 
+if(CONFIG_AKIRA_LP5817)
+    target_sources(app PRIVATE src/drivers/display/lp5817.c)
+endif()
+
 if(CONFIG_CHARGER_BQ25601)
     target_sources(app PRIVATE src/drivers/charger/bq25601.c)
 endif()

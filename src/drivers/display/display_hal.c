@@ -14,6 +14,9 @@
 #include <zephyr/logging/log.h>
 #include <string.h>
 #include "../platform_hal.h"
+#ifdef CONFIG_AKIRA_LP5817
+#include "lp5817.h"
+#endif
 #include "../lib/mem_helper.h"
 
 LOG_MODULE_REGISTER(display_hal, LOG_LEVEL_INF);
@@ -40,7 +43,7 @@ static struct display_capabilities display_caps = {0};
 #define BACKLIGHT_NODE DT_ALIAS(pwm_backlight0)
 #define BL_PWM_NODE DT_CHILD(BACKLIGHT_NODE, bl_pwm)
 
-#if DT_NODE_EXISTS(BACKLIGHT_NODE)
+#if DT_NODE_EXISTS(BACKLIGHT_NODE) && !defined(CONFIG_AKIRA_LP5817)
 static const struct pwm_dt_spec bl_pwm = PWM_DT_SPEC_GET(BL_PWM_NODE);
 #endif
 
@@ -65,7 +68,20 @@ int akira_display_hal_init(void)
     }
 
     /* Force max backlight at startup. */
-#if DT_NODE_EXISTS(BACKLIGHT_NODE)
+#ifdef CONFIG_AKIRA_LP5817
+    /* AkiraConsole Prod: the panel backlight is an LP5817 I2C LED driver
+     * (U7), not a PWM GPIO.  It powers up with every register cleared, so
+     * without this the panel is completely dark no matter what is drawn. */
+    if (akira_lp5817_init() == 0)
+    {
+        akira_display_hal_set_brightness(255);
+        LOG_INF("LP5817 backlight set to max (255)");
+    }
+    else
+    {
+        LOG_WRN("LP5817 backlight init failed — panel will stay dark");
+    }
+#elif DT_NODE_EXISTS(BACKLIGHT_NODE)
     if (pwm_is_ready_dt(&bl_pwm))
     {
         akira_display_hal_set_brightness(255);
@@ -396,7 +412,9 @@ int akira_display_hal_get_capabilities(struct display_capabilities *caps)
  */
 void akira_display_hal_set_brightness(uint8_t brightness)
 {
-#if DT_NODE_EXISTS(BACKLIGHT_NODE)
+#ifdef CONFIG_AKIRA_LP5817
+    (void)akira_lp5817_set_brightness(brightness);
+#elif DT_NODE_EXISTS(BACKLIGHT_NODE)
     if (pwm_is_ready_dt(&bl_pwm))
     {
         uint32_t pulse = (uint32_t)bl_pwm.period * brightness / 255;
@@ -463,23 +481,13 @@ void akira_display_hal_set_blank(bool blank)
     if (blank)
     {
         /* Backlight off first, then panel blank */
-#if DT_NODE_EXISTS(BACKLIGHT_NODE)
-        if (pwm_is_ready_dt(&bl_pwm))
-        {
-            pwm_set_dt(&bl_pwm, bl_pwm.period, 0); /* 0% duty = off */
-        }
-#endif
+        akira_display_hal_set_brightness(0);
         display_blanking_on(display_dev);
     }
     else
     {
         display_blanking_off(display_dev);
-#if DT_NODE_EXISTS(BACKLIGHT_NODE)
-        if (pwm_is_ready_dt(&bl_pwm))
-        {
-            pwm_set_dt(&bl_pwm, bl_pwm.period, bl_pwm.period); /* 100% */
-        }
-#endif
+        akira_display_hal_set_brightness(255);
     }
 #endif
 }

@@ -185,12 +185,16 @@
 				height             = <240>;
 				x-offset           = <0>;
 				y-offset           = <0>;
-				// inversion-off omitted → driver sends INVON (required for IPS panel)
+				// Measured on hardware: sending INVON produced a colour-negative
+				// image, so this panel wants INVOFF.
+				inversion-off;
 			vcom          = <0x19>;
 			gctrl         = <0x35>;
 			vrhs          = <0x12>;
 			vdvs          = <0x20>;
-			mdac          = <0x68>;
+			// 0x60 = MX|MV (landscape). D3 (BGR) deliberately CLEAR: the Zephyr
+			// driver reports PIXEL_FORMAT_RGB_565, so BGR here swapped red/blue.
+			mdac          = <0x60>;
 			gamma         = <0x01>;
 			colmod        = <0x55>;
 			lcm           = <0x2c>;
@@ -199,7 +203,10 @@
 			pwctrl1-param = [a4 a1];
 			pvgam-param   = [D0 04 0D 11 13 2B 3F 54 4C 18 0D 0B 1F 23];
 			nvgam-param   = [D0 04 0C 11 13 2C 3F 44 51 2F 1F 1F 20 23];
-			ram-param     = [00 F0];
+			// RAMCTRL param2 bit3 = ENDIAN. Set (F0 -> F8) so the panel reads
+			// pixels little-endian, matching the native uint16_t framebuffer.
+			// Avoids byte-swapping 153600 B on every frame in software.
+			ram-param     = [00 F8];
 			rgb-param     = [CD 08 14];
 			mipi-mode     = "MIPI_DBI_MODE_SPI_4WIRE";
 			status        = "okay";

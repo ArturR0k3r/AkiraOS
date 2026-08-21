@@ -229,6 +229,16 @@ config AKIRA_ILI9341_DRIVER
       (akira,ili9341 binding).  CMakeLists.txt appends the board's
       *_ili9341.overlay and compiles src/drivers/display/akira_ili9341.c.
 
+config AKIRA_LP5817
+    bool "LP5817 I2C backlight LED driver (AkiraConsole Prod)"
+    depends on DISPLAY && I2C
+    help
+      TI LP5817 3-channel I2C LED driver (U7) sinking the panel backlight
+      strings on AkiraConsole Production Rev A.3.  The board has no PWM
+      backlight GPIO — the LP5817 at I2C 0x2D is the only way to light the
+      panel, and it powers up fully disabled.  Without this the display
+      initialises correctly but stays completely dark.
+
 # Backward-compat aliases — C code and CMakeLists.txt reference these names.
 config AKIRA_ST7789V_DRIVER
     bool
