@@ -28,11 +28,13 @@
 /* ------------------------------------------------------------------ */
 /* RGB565 palette (matching settings_screen.c defines)                */
 /* ------------------------------------------------------------------ */
-#define SS_C_BLACK 0x0000u
-#define SS_C_WHITE 0xFFFFu
-#define SS_C_GRAY 0x7BEFu
-#define SS_C_DKGRAY 0x39E7u
-#define SS_C_GLASS_BODY 0x0000u
+/* THEME: light (black on white) — must stay in sync with shell_theme.h.
+ * As there, these names are ROLES: SS_C_BLACK is the background. */
+#define SS_C_BLACK 0xFFFFu      /* BACKGROUND — white (was 0x0000) */
+#define SS_C_WHITE 0x0000u      /* FOREGROUND — black (was 0xFFFF) */
+#define SS_C_GRAY 0x8410u       /* de-emphasised   (was 0x7BEF) */
+#define SS_C_DKGRAY 0xC618u     /* nearest the bg  (was 0x39E7) */
+#define SS_C_GLASS_BODY 0xFFFFu /* glass fill = bg (was 0x0000) */
 
 /* ------------------------------------------------------------------ */
 /* Shared draw functions — implemented in settings_screen.c           */

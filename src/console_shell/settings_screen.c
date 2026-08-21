@@ -12,9 +12,9 @@ LOG_MODULE_REGISTER(akira_shell_settings, CONFIG_AKIRA_LOG_LEVEL);
  * @brief AkiraConsole Settings — WiFi connect/disconnect, Web Server
  *        start/stop, About.  Pure akira_display_* renderer, no LVGL.
  *
- * Color palette (standard RGB565, INVON disabled — same as home_screen.c):
- *   C_BLACK = 0x0000  →  displayed black
- *   C_WHITE = 0xFFFF  →  displayed white
+ * Colour palette comes from shell_theme.h.  C_BLACK/C_WHITE are ROLE names
+ * (background / foreground), not literal colours — the shell currently runs
+ * the light theme, so C_BLACK is white and C_WHITE is black.
  *
  * Layout (320×240):
  *   y=  0..31   Title header bar
@@ -53,15 +53,9 @@ LOG_MODULE_REGISTER(akira_shell_settings, CONFIG_AKIRA_LOG_LEVEL);
 #endif
 #endif
 
-/* ------------------------------------------------------------------ */
-/* Palette                                                            */
-/* ------------------------------------------------------------------ */
-#define C_BLACK 0x0000u
-#define C_WHITE 0xFFFFu
-#define C_GRAY 0x7BEFu
-#define C_DKGRAY 0x39E7u
-#define C_GLASS_HILIT 0x7BEFu
-#define C_GLASS_BODY 0x0000u
+/* Palette comes from shell_theme.h (included above).  It used to be
+ * duplicated here with identical values; the copies are gone so the theme
+ * has a single definition and cannot drift. */
 
 /* ------------------------------------------------------------------ */
 /* Geometry — width from CONFIG_AKIRA_OS_SHELL_SCREEN_W (shell_theme.h) */

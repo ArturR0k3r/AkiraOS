@@ -27,21 +27,31 @@
 /* ------------------------------------------------------------------ */
 /* RGB565 colour palette                                               */
 /* ------------------------------------------------------------------ */
-#define SHELL_C_BLACK    0x0000u   /* pure black                      */
-#define SHELL_C_WHITE    0xFFFFu   /* pure white                      */
-#define SHELL_C_GRAY     0x7BEFu   /* mid-gray (COLOR_GRAY)           */
-#define SHELL_C_DKGRAY   0x39E7u   /* dark gray (COLOR_DARK_GRAY)     */
-#define SHELL_C_LTGRAY   0xD6BAu   /* light gray separator            */
-#define SHELL_C_RED      0xF800u   /* error indicator                 */
+/* THEME: light (black on white).
+ *
+ * Every screen clears to SHELL_C_BLACK and draws in SHELL_C_WHITE, so these
+ * two names denote ROLES — background and foreground — not literal colours.
+ * To go back to the dark theme, swap the two values below and restore the
+ * grays to their commented originals; no call site changes.
+ *
+ * The grays are the exact per-component RGB565 inverses of the dark-theme
+ * values, so every contrast relationship is preserved: what used to sit just
+ * above the background (DKGRAY on black) still sits just below it on white. */
+#define SHELL_C_BLACK    0xFFFFu   /* BACKGROUND — white (was 0x0000) */
+#define SHELL_C_WHITE    0x0000u   /* FOREGROUND — black (was 0xFFFF) */
+#define SHELL_C_GRAY     0x8410u   /* mid-gray, de-emphasised (was 0x7BEF) */
+#define SHELL_C_DKGRAY   0xC618u   /* nearest the background (was 0x39E7)  */
+#define SHELL_C_LTGRAY   0x2945u   /* separator, high contrast (was 0xD6BA) */
+#define SHELL_C_RED      0xF800u   /* error indicator — unchanged     */
 
 /* Flat short aliases (used by all Liquid Crystal screens) */
 #define C_BLACK       SHELL_C_BLACK
 #define C_WHITE       SHELL_C_WHITE
 #define C_GRAY        SHELL_C_GRAY
 #define C_DKGRAY      SHELL_C_DKGRAY
-#define C_GLASS       0x2104u   /* dither pixel (unused — no dithering) */
-#define C_GLASS_BODY  0x0000u   /* glass fill = black (transparent look) */
-#define C_GLASS_HILIT 0x7BEFu   /* glass top-sheen highlight          */
+#define C_GLASS       0xDEFBu   /* dither pixel (unused — no dithering) */
+#define C_GLASS_BODY  0xFFFFu   /* glass fill = background (transparent) */
+#define C_GLASS_HILIT 0x8410u   /* glass top-sheen highlight          */
 
 /* ------------------------------------------------------------------ */
 /* Screen geometry (landscape — width from CONFIG_AKIRA_OS_SHELL_SCREEN_W) */

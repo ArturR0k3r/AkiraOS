@@ -27,9 +27,17 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* The only two colours the kit permits (RGB565). */
-#define AKIRA_UI_INK   0x0000u /* black — screen background / idle stroke   */
-#define AKIRA_UI_PAPER 0xFFFFu /* white — foreground / selected fill        */
+/* The only two colours the kit permits (RGB565).
+ *
+ * THEME: light (black on white).  Swap these two values to invert the whole
+ * kit back to dark (white on black) — nothing else needs to change.
+ *
+ * Note the historical names are the opposite way round from typography:
+ * AKIRA_UI_INK is the screen BACKGROUND and AKIRA_UI_PAPER is the FOREGROUND.
+ * They are kept because AkiraSDK/wasm_apps/common/akira_ui.h exposes them to
+ * WASM apps as public API. */
+#define AKIRA_UI_INK   0xFFFFu /* white — screen background / idle stroke   */
+#define AKIRA_UI_PAPER 0x0000u /* black — foreground / selected fill        */
 
 /* 8x13 px character cell → 50 cols x 18 rows on 400x240 (kit grid). The
  * shell font advances 8 px/char horizontally, so text width == strlen*8. */
