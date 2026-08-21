@@ -324,6 +324,7 @@ int akira_native_crypto_ed25519_sign(wasm_exec_env_t exec_env,
 	return 0;
 }
 
+#ifdef CONFIG_AKIRA_CRYPTO_ED25519_SELFTEST
 static int ed25519_boot_self_test(void)
 {
 	int ret = ed25519_self_test();
@@ -335,6 +336,7 @@ static int ed25519_boot_self_test(void)
 	return 0;
 }
 SYS_INIT(ed25519_boot_self_test, APPLICATION, 90);
+#endif /* CONFIG_AKIRA_CRYPTO_ED25519_SELFTEST */
 
 #else /* !CONFIG_AKIRA_WASM_CRYPTO_ED25519 */
 

@@ -46,7 +46,10 @@ LOG_MODULE_REGISTER(companion_svc, CONFIG_AKIRA_LOG_LEVEL);
 
 /* Forward-declared internal headers (pulled in via include paths) */
 #include "../../runtime/app_manager/app_manager.h"
+#include <lib/akpkg.h>
+#ifdef CONFIG_AKIRA_OTA
 #include "../../connectivity/ota/ota_manager.h"
+#endif
 #include <settings/settings.h>
 #include <akira.h>
 
@@ -367,42 +370,57 @@ static void handle_apps_install_end(const char *op, int id, const char *params)
         return;
     }
 
-    /* Write staged bytes to /tmp/ble_upload.akpkg then install */
-    char tmp_path[] = "/lfs/tmp/ble_upload.akpkg";
-    struct fs_file_t f;
-    fs_file_t_init(&f);
+    /* Install straight from the staged buffer, dispatching on format exactly
+     * as bt_app_transfer.c does.
+     *
+     * This used to write the bytes to /lfs/tmp/ble_upload.akpkg and call
+     * app_manager_install_from_path(), which broke two ways: nothing in the
+     * tree creates /lfs/tmp (so fs_open returned -ENOENT), and that path
+     * validates raw WASM/AOT magic — a real .akpkg is gzip, so it failed with
+     * "Invalid WASM/AOT magic". Installing from memory needs no temp file and
+     * handles both formats. */
+    int rc;
 
-    int rc = fs_open(&f, tmp_path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
-    if (rc) {
-        LOG_ERR("fs_open %s failed: %d", tmp_path, rc);
-        send_resp(op, id, false, "storage error");
-        goto cleanup;
+    if (akpkg_is_gzip(s_xfer.buf, s_xfer.received)) {
+        LOG_INF("BLE install: .akpkg (gzip) format, %u bytes", s_xfer.received);
+        char name_buf[APP_NAME_MAX_LEN];
+        strncpy(name_buf, s_xfer.app_name, sizeof(name_buf) - 1);
+        name_buf[sizeof(name_buf) - 1] = '\0';
+        rc = app_manager_install_akpkg(name_buf, sizeof(name_buf),
+                                       s_xfer.buf, s_xfer.received,
+                                       APP_SOURCE_BLE);
+        /* app_manager_install_akpkg() lets the package manifest's "name" win
+         * over the caller-supplied one and writes the resolved name back into
+         * name_buf.  Copy it into the transfer state (as bt_app_transfer.c
+         * does) so the log, the status notification and the response to the
+         * phone all report the app's real name rather than the placeholder
+         * the phone sent at install.begin. */
+        strncpy(s_xfer.app_name, name_buf, sizeof(s_xfer.app_name) - 1);
+        s_xfer.app_name[sizeof(s_xfer.app_name) - 1] = '\0';
+    } else {
+        LOG_INF("BLE install: raw WASM/AOT, %u bytes", s_xfer.received);
+        rc = app_manager_install(s_xfer.app_name, s_xfer.buf, s_xfer.received,
+                                 NULL, APP_SOURCE_BLE);
     }
 
-    ssize_t written = fs_write(&f, s_xfer.buf, s_xfer.received);
-    fs_close(&f);
-
-    if (written < 0 || (uint32_t)written != s_xfer.received) {
-        LOG_ERR("fs_write failed: %d", (int)written);
-        fs_unlink(tmp_path);
-        send_resp(op, id, false, "write error");
-        goto cleanup;
-    }
-
-    rc = app_manager_install_from_path(tmp_path);
-    fs_unlink(tmp_path);
-
-    if (rc) {
+    if (rc < 0) {
         char err[32];
         snprintf(err, sizeof(err), "install failed: %d", rc);
+        LOG_ERR("BLE app install failed: %d", rc);
         send_resp(op, id, false, err);
     } else {
-        LOG_INF("BLE app install complete: %s", s_xfer.app_name);
-        send_resp(op, id, true, NULL);
+        LOG_INF("BLE app install complete: %s (id=%d)", s_xfer.app_name, rc);
+        /* Hand the resolved name back so the phone can show what actually got
+         * installed — install.end previously answered with no data at all. */
+        char done[96];
+        snprintf(done, sizeof(done), "{\"name\":\"%s\",\"id\":%d}",
+                 s_xfer.app_name, rc);
+        send_resp(op, id, true, done);
         companion_svc_notify_status();
     }
 
-cleanup:
+    /* Staged buffer is owned here now that data_up_write() no longer frees it
+     * for app transfers — release it on every path. */
     akira_free_buffer(s_xfer.buf);
     memset(&s_xfer, 0, sizeof(s_xfer));
     akira_sd_card_set_transfer_active(false);
@@ -667,15 +685,25 @@ static void handle_ota_start(const char *op, int id, const char *params)
     send_resp(op, id, false, "ota over BLE not supported; use WiFi");
 }
 
+/* The OTA manager is only compiled when CONFIG_AKIRA_OTA is set (it also needs
+ * FLASH_MAP + BOOTLOADER_MCUBOOT).  The companion service is useful without it
+ * — app install, settings, files and shell passthrough are all independent —
+ * so report a well-formed "unavailable" status rather than forcing every
+ * companion build to link the whole OTA manager. */
 static void handle_ota_status(const char *op, int id, const char *params)
 {
     ARG_UNUSED(params);
     char buf[CHAR_BUF_SIZE];
+#ifdef CONFIG_AKIRA_OTA
     const struct ota_progress *st = ota_get_progress();
     snprintf(buf, sizeof(buf),
              "{\"state\":\"%s\",\"progress\":%u,\"version\":\"\"}",
              st ? ota_state_to_string(st->state) : "idle",
              st ? st->percentage : 0);
+#else
+    snprintf(buf, sizeof(buf),
+             "{\"state\":\"unavailable\",\"progress\":0,\"version\":\"\"}");
+#endif
     send_resp(op, id, true, buf);
 }
 
@@ -844,11 +872,21 @@ static ssize_t data_up_write(struct bt_conn *conn,
                     s_xfer.path,
                     rc >= 0 ? "OK" : "FAIL",
                     s_xfer.received);
+
+            akira_free_buffer(s_xfer.buf);
+            memset(&s_xfer, 0, sizeof(s_xfer));
+            akira_sd_card_set_transfer_active(false);
+        } else {
+            /* COMP_XFER_APP_DATA: the staged image must SURVIVE until
+             * apps.install.end consumes it.  Freeing it here left
+             * handle_apps_install_end() looking at s_xfer.active == false,
+             * so it answered "no active transfer" and silently installed
+             * nothing (no device-side log — only the phone saw the error).
+             * Cleanup happens in handle_apps_install_end(), and on
+             * disconnect / the next install.begin if the peer goes away. */
+            LOG_INF("BLE app staged: %u bytes, awaiting apps.install.end",
+                    s_xfer.received);
         }
-        /* For COMP_XFER_APP_DATA the install is triggered by apps.install.end */
-        akira_free_buffer(s_xfer.buf);
-        memset(&s_xfer, 0, sizeof(s_xfer));
-        akira_sd_card_set_transfer_active(false);
     }
 
     return (ssize_t)len;
@@ -959,7 +997,29 @@ static void conn_cb_connected(struct bt_conn *conn, uint8_t err)
     }
     s_conn = bt_conn_ref(conn);
     LOG_INF("Companion: phone connected");
+
+    /* The negotiated ATT MTU bounds every DATA_UP frame the phone can send.
+     * A peer chunking to CHAR_BUF_SIZE (244 B) needs an MTU of at least 247;
+     * anything lower and its writes are rejected client-side, which surfaces
+     * only as an opaque "GATT operation failed" with nothing logged here.
+     * MTU exchange happens shortly after connect, so this is logged from the
+     * exchange callback below rather than here. */
     companion_svc_notify_status();
+}
+
+/* ATT MTU changes are reported through bt_gatt_cb, not bt_conn_cb. */
+static void conn_cb_mtu_updated(struct bt_conn *conn, uint16_t tx, uint16_t rx)
+{
+    ARG_UNUSED(conn);
+    uint16_t usable = (rx < tx ? rx : tx);
+
+    if (usable < CHAR_BUF_SIZE + 3U) {
+        LOG_WRN("Companion: ATT MTU %u (tx=%u rx=%u) is below the %u needed "
+                "for %u-byte transfers — peer writes will fail",
+                usable, tx, rx, CHAR_BUF_SIZE + 3U, CHAR_BUF_SIZE);
+    } else {
+        LOG_INF("Companion: ATT MTU %u (tx=%u rx=%u)", usable, tx, rx);
+    }
 }
 
 static void conn_cb_disconnected(struct bt_conn *conn, uint8_t reason)
@@ -982,6 +1042,10 @@ static void conn_cb_disconnected(struct bt_conn *conn, uint8_t reason)
 BT_CONN_CB_DEFINE(companion_conn_cb) = {
     .connected    = conn_cb_connected,
     .disconnected = conn_cb_disconnected,
+};
+
+static struct bt_gatt_cb companion_gatt_cb = {
+    .att_mtu_updated = conn_cb_mtu_updated,
 };
 
 /* --------------------------------------------------------------------------
@@ -1013,6 +1077,8 @@ int companion_svc_init(void)
 
     k_work_init(&s_cmd_work, cmd_work_handler);
     k_work_init_delayable(&s_status_timer, status_timer_handler);
+
+    bt_gatt_cb_register(&companion_gatt_cb);
 
     /* Start periodic status notifications */
     k_work_reschedule(&s_status_timer,

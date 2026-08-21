@@ -240,6 +240,22 @@ config FUEL_GAUGE_STC3115
       voltage, current and temperature through Zephyr's fuel_gauge API, which
       akira_power_manager surfaces on the OS shell status bar.
 
+config AKIRA_CRYPTO_ED25519_SELFTEST
+    bool "Run the Ed25519/SHA-512 known-answer self-test at boot"
+    default y
+    help
+      Validates the vendored SHA-512 + Ed25519 implementation against RFC 8032
+      test vector 1 during boot (see the note in src/api/ed25519.c: mbedTLS's
+      SHA-512 is unresolved on this target, so the vendored one is used).
+
+      The implementation is static code — the result cannot change between
+      boots of the same firmware — but the test costs ~8 s of CPU on the
+      ESP32-S3 and that is paid on EVERY boot, including every wake from deep
+      sleep, during which the console appears dead.
+
+      Keep enabled for bring-up and when changing crypto code; disable on
+      battery-powered builds once a firmware image has been validated.
+
 config AKIRA_LP5817
     bool "LP5817 I2C backlight LED driver (AkiraConsole Prod)"
     depends on DISPLAY && I2C

@@ -1004,27 +1004,41 @@ int bt_manager_start_advertising_custom(const uint8_t svc_uuid128[16])
         BT_GAP_ADV_FAST_INT_MAX_2,
         NULL);
 
-    /* Flags only in advert payload — keeps it minimal */
-    struct bt_data custom_ad[] = {
-        BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-    };
+    /* AD payload: flags + the 128-bit service UUID = 3 + 18 = 21 B, inside
+     * the 31 B legacy limit.  The UUID belongs here rather than in the scan
+     * response so a central can filter on the service without issuing a scan
+     * request — that is how both the companion app and WASM BLE apps find
+     * the device.
+     *
+     * Previously the name AND the UUID shared the scan response: 2 + 12 for
+     * "AkiraConsole" plus 2 + 16 for the UUID is 32 B, one over the limit, so
+     * bt_le_adv_start() rejected the whole thing with "Too big advertising
+     * data" and the device advertised nothing at all. */
+    static const uint8_t ad_flags = (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR);
 
-    /* Scan response: name + optional 128-bit service UUID */
-    struct bt_data sd[2];
-    uint8_t sd_count = 0;
+    struct bt_data custom_ad[2];
+    uint8_t ad_count = 0;
 
-    sd[sd_count++] = (struct bt_data)BT_DATA(
-        BT_DATA_NAME_COMPLETE,
-        bt_mgr.config.device_name,
-        strlen(bt_mgr.config.device_name));
-
+    custom_ad[ad_count++] = (struct bt_data)BT_DATA(BT_DATA_FLAGS,
+                                                    &ad_flags, 1);
     if (svc_uuid128) {
-        sd[sd_count++] = (struct bt_data)BT_DATA(
+        custom_ad[ad_count++] = (struct bt_data)BT_DATA(
             BT_DATA_UUID128_ALL, svc_uuid128, 16);
     }
 
-    int err = bt_le_adv_start(&adv_param, custom_ad, ARRAY_SIZE(custom_ad),
-                               sd, sd_count);
+    /* Scan response: device name only.  Clamp to what still fits the 31 B
+     * payload once the 2 B AD-structure header is accounted for. */
+    size_t name_len = strlen(bt_mgr.config.device_name);
+    if (name_len > 29U) {
+        name_len = 29U;
+    }
+
+    struct bt_data sd[] = {
+        BT_DATA(BT_DATA_NAME_COMPLETE, bt_mgr.config.device_name, name_len),
+    };
+
+    int err = bt_le_adv_start(&adv_param, custom_ad, ad_count,
+                               sd, ARRAY_SIZE(sd));
     if (err == -EALREADY) {
         LOG_INF("BT already advertising");
         return 0;

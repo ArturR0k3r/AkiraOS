@@ -58,7 +58,13 @@ struct __packed mesh_app_chunk_hdr {
  * stride is always far larger (~226B at the LR2021's 255B MTU), so actual
  * chunk_index values stay well under the wire field's uint16_t range even
  * at the largest configured app size. */
-#define MESH_APP_MIN_STRIDE   16
+/* 64 B, not 16: at CONFIG_AKIRA_APP_MAX_SIZE_KB=1024 a 16 B floor sizes the
+ * bitmap at 65536 chunks = 8 KB of internal DRAM, which no ESP32-S3 build
+ * running BT + WiFi can afford. Real stride is ~226 B (LR2021 255 B MTU), so
+ * 64 B still leaves a 3.5x margin, and a transfer announcing more chunks than
+ * MESH_APP_MAX_CHUNKS is rejected outright by the chunk_count check in
+ * mesh_app_start() rather than overflowing anything. */
+#define MESH_APP_MIN_STRIDE   64
 #define MESH_APP_MAX_CHUNKS   ((CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024) / MESH_APP_MIN_STRIDE)
 #define MESH_APP_BITMAP_BYTES DIV_ROUND_UP(MESH_APP_MAX_CHUNKS, 8)
 
