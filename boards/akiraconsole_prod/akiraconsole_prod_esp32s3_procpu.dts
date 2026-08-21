@@ -35,66 +35,73 @@
 	// =========================================================================
 	// Buttons — direct ESP32-S3 GPIO connections
 	//
-	// D-pad + face: active-high, 100Ω series + 10k pull-up on PCB;
-	//   GPIO input configured with pull-down for noise immunity.
-	// BTN.OK (SW10 / GPIO0): active-low pull-up — also the BOOT mode trigger.
+	// VERIFIED AGAINST THE SCHEMATIC (HWAkiraConsole.kicad_pcb):
+	// EVERY button is ACTIVE LOW.  Each net has a 10k pull-up to +3.3V
+	// (R28/R29/R32/R33/R43/R44/R45/R46/R49), a 100R series resistor and a
+	// 100n debounce cap; the tactile switch (GT-TC126B) shorts the net to GND
+	// when pressed.
 	//
-	// zephyr,code maps to AKIRA_BTN_* (akira_input.h):
-	//   INPUT_KEY_0=OK  2=UP 3=DOWN 4=LEFT 5=RIGHT 6=A 7=B 8=X 9=Y
+	// These were previously declared GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH, which
+	// both fought the external pull-up and inverted the sense — so every
+	// button read as permanently pressed, flooding the input queue
+	// ("Event dropped, queue full") and making the OS shell navigate itself.
+	//
+	// zephyr,code maps to AKIRA_BTN_* (src/api/akira_input_api.h):
+	//   1=HOME/OK 2=UP 3=DOWN 4=LEFT 5=RIGHT 6=A 7=B 8=X 9=Y
 	// =========================================================================
 	gpio_keys {
 		compatible = "gpio-keys";
 
 		btn_ok: btn_ok {
 			gpios = <&gpio0 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
-			label = "BTN OK (BOOT / SW10)";
+			label = "BTN OK (BOOT / SW7)";
 			zephyr,code = <1>; /* AKIRA_BTN_HOME = 1; INPUT_KEY_0 = 11, wrong value */
 		};
 		btn_up: btn_up {
-			gpios = <&gpio0 4 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 4 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BTN Up (SW5)";
 			zephyr,code = <2>;
 		};
 		btn_down: btn_down {
-			gpios = <&gpio0 5 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 5 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BTN Down (SW6)";
 			zephyr,code = <3>;
 		};
 		btn_left: btn_left {
-			gpios = <&gpio0 6 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
-			label = "BTN Left (SW7)";
+			gpios = <&gpio0 6 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "BTN Left (SW10)";
 			zephyr,code = <4>;
 		};
 		btn_right: btn_right {
-			gpios = <&gpio0 7 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 7 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BTN Right (SW8)";
 			zephyr,code = <5>;
 		};
 		btn_a: btn_a {
-			gpios = <&gpio0 15 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 15 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BTN A (SW2)";
 			zephyr,code = <6>;
 		};
 		btn_b: btn_b {
-			gpios = <&gpio0 16 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 16 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BTN B (SW3)";
-			zephyr,code = <8>;
+			zephyr,code = <7>;   /* AKIRA_BTN_B */
 		};
 		btn_x: btn_x {
-			gpios = <&gpio0 17 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 17 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BTN X (SW4)";
-			zephyr,code = <9>;
+			zephyr,code = <8>;   /* AKIRA_BTN_X */
 		};
 		btn_y: btn_y {
-			gpios = <&gpio1 9 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>; // GPIO41
+			gpios = <&gpio1 9 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>; // GPIO41
 			label = "BTN Y (SW1)";
-			zephyr,code = <7>;
+			zephyr,code = <9>;   /* AKIRA_BTN_Y */
 		};
 	};
 
 	// =========================================================================
 	// LEDs
-	// D9 — LED.ACT (green, LTST-S270KGKT), GPIO42, 270Ω series resistor.
+	// D9 — LED.ACT (green, LTST-S270KGKT), GPIO46, 270Ω series resistor.
 	// D8 — power indicator (yellow, LTST-S270KSKT) driven by power rail, no GPIO.
 	// D10 — charge indicator (yellow, LTST-S270KSKT) driven by BQ25601 STAT pin.
 	// =========================================================================
@@ -307,12 +314,31 @@
 	// 7-bit addr 0x55 (8-bit WRITE=0xAA, READ=0xAB)
 	// Sense resistor: 1mΩ (R16, 0603 PA0603FRP7W0R001L).
 	// Single-cell: VC1 tied to VC2. Dual back-to-back NFETs AO3400A (Q4/Q5).
-	// Battery connector J8 (B3B-PH-SM4-TB): pin1=PACK, pin2=BAT, pin3=GND.
+	// Battery connector J9 (53261-0371): pin1=VBAT, pin2=TS (thermistor),
+	// pin3=sense return through R16 (10 mOhm). There is no J8 on this board.
 	// -------------------------------------------------------------------------
+	// NOTE: no BQ28Z610 is fitted.  The schematic (U4) and a live I2C scan
+	// both show an ST STC3115AIQT fuel gauge at 0x70 instead — nothing ACKs
+	// at 0x55.  Left declared but disabled: enabling it would bind the
+	// bq28z610 driver to an address with no device.  Driving the real part
+	// needs an STC3115 driver, which does not exist yet.
 	bq28z610: bq28z610@55 {
 		compatible = "ti,bq28z610";
 		reg        = <0x55>;
-		status     = "okay";
+		status     = "disabled";
+	};
+
+	// -------------------------------------------------------------------------
+	// STC3115AIQT — Li-Ion fuel gauge (U4), I2C 0x70.  THE part actually fitted.
+	// Current sensed across R16 (10 mOhm) at J9 pin 3; ALM -> BAT_INT (GPIO3).
+	// -------------------------------------------------------------------------
+	stc3115: stc3115@70 {
+		compatible                   = "st,stc3115";
+		reg                          = <0x70>;
+		sense-resistor-milliohm      = <10>;   /* R16 */
+		design-capacity-mah          = <2000>;
+		internal-resistance-milliohm = <200>;
+		status                       = "okay";
 	};
 
 	// -------------------------------------------------------------------------

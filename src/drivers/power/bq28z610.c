@@ -346,7 +346,7 @@ static int bq28z610_app_probe(void)
         }
     } else {
         LOG_WRN("BQ28Z610 @ 0x%02X: addr NACK (err=%d) — IC has no power. "
-                "Connect battery to J8 (pin1=PACK, pin2=BAT, pin3=GND).",
+                "Connect a battery to the pack connector.",
                 cfg->i2c.addr, addr_ret);
     }
     return 0;

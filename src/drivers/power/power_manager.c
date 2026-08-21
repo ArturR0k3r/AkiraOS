@@ -150,9 +150,12 @@ int power_manager_init(void)
 
 #ifdef CONFIG_FUEL_GAUGE
     /* Bind to the first fuel gauge device on the bus (declared in DTS). */
-    /* Prefer the BQ28Z610 fitted on AkiraConsole Production.
+    /* Prefer the STC3115 fitted on AkiraConsole Production (U4 @ 0x70).
      * Falls back to any generic fuel_gauge node if present (other boards). */
-#if DT_HAS_COMPAT_STATUS_OKAY(ti_bq28z610)
+#if DT_HAS_COMPAT_STATUS_OKAY(st_stc3115)
+    /* AkiraConsole Production fits an STC3115 at 0x70 (U4). */
+    g_pm.fuel_gauge = DEVICE_DT_GET_ANY(st_stc3115);
+#elif DT_HAS_COMPAT_STATUS_OKAY(ti_bq28z610)
     g_pm.fuel_gauge = DEVICE_DT_GET_ANY(ti_bq28z610);
 #else
     g_pm.fuel_gauge = DEVICE_DT_GET_ANY(zephyr_fuel_gauge);
@@ -173,7 +176,7 @@ int power_manager_init(void)
                     (unsigned)soc_val.relative_state_of_charge);
         } else {
             LOG_WRN("Fuel gauge: %s found but not responding (err=%d) — "
-                    "check battery connector J8",
+                    "check battery connector J9",
                     g_pm.fuel_gauge->name, probe_ret);
             /* Keep g_pm.fuel_gauge set so periodic retries can recover. */
         }

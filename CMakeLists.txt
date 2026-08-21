@@ -602,6 +602,10 @@ if(CONFIG_FUEL_GAUGE_BQ28Z610)
     target_sources(app PRIVATE src/drivers/power/bq28z610.c)
 endif()
 
+if(CONFIG_FUEL_GAUGE_STC3115)
+    target_sources(app PRIVATE src/drivers/power/stc3115.c)
+endif()
+
 if(CONFIG_AKIRA_NFC_MANAGER)
     target_sources(app PRIVATE src/connectivity/nfc/nfc_manager.c)
 endif()
