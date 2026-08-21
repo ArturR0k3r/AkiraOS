@@ -2037,6 +2037,10 @@ int app_manager_run_from_sd(const char *name_or_path)
 
 /* ===== .akpkg install ===== */
 
+/* Upper bound on a package manifest accepted for parsing. Generous on
+ * purpose: it is a sanity check against a malformed tar header, not a budget. */
+#define AKPKG_MANIFEST_MAX_BYTES 65536u
+
 int app_manager_install_akpkg(char *name, size_t name_size,
                               const uint8_t *pkg, size_t pkg_len,
                               app_source_t source)
@@ -2123,10 +2127,26 @@ int app_manager_install_akpkg(char *name, size_t name_size,
     app_manifest_t manifest;
     bool has_manifest = false;
 
-    if (mfst_size > 0 && mfst_size < 4096u) {
+    /* Ceiling only guards against a corrupt tar entry claiming an absurd
+     * size — app_manifest_parse() scans the buffer by explicit length and has
+     * no internal size limit, and the copy comes from the PSRAM-backed
+     * allocator.  This was 4096, which silently skipped the whole block for
+     * any larger manifest: the app kept the caller-supplied name instead of
+     * the manifest's, and installed with default metadata because
+     * has_manifest stayed false.  A real 5689-byte manifest hit exactly that.
+     * Note the raw JSON is persisted below with no size limit at all, so the
+     * old bound was inconsistent with the rest of this function too. */
+    if (mfst_size >= AKPKG_MANIFEST_MAX_BYTES) {
+        LOG_WRN("akpkg: manifest is %zu B, above the %u B parse limit — "
+                "keeping caller name '%s' and installing with defaults",
+                mfst_size, (unsigned)AKPKG_MANIFEST_MAX_BYTES, name);
+    } else if (mfst_size > 0) {
         /* app_manifest_parse requires a null-terminated string. */
         char *json_copy = akira_malloc_buffer(mfst_size + 1u);
-        if (json_copy) {
+        if (!json_copy) {
+            LOG_WRN("akpkg: cannot allocate %zu B for manifest — "
+                    "installing with defaults", mfst_size + 1u);
+        } else {
             memcpy(json_copy, mfst_ptr, mfst_size);
             json_copy[mfst_size] = '\0';
             if (app_manifest_parse(json_copy, mfst_size, &manifest) == 0) {
@@ -2134,9 +2154,13 @@ int app_manager_install_akpkg(char *name, size_t name_size,
                 /* Manifest name always takes precedence over the caller-supplied name.
                  * Write back into the caller's buffer so they see the final name. */
                 if (manifest.name[0]) {
+                    LOG_INF("akpkg: manifest name '%s' overrides '%s'",
+                            manifest.name, name);
                     strncpy(name, manifest.name, name_size - 1);
                     name[name_size - 1] = '\0';
                 }
+            } else {
+                LOG_WRN("akpkg: manifest parse failed — installing with defaults");
             }
             akira_free_buffer(json_copy);
         }
