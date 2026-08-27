@@ -113,6 +113,22 @@ config AKIRA_WASM_APP_PRIORITY
       rate.  Decrease (higher priority) only if an app needs real-time
       scheduling and you accept potential shell unresponsiveness.
 
+config AKIRA_DISPLAY_COMPOSITOR_STACK_SIZE
+    int "Display compositor thread stack size (bytes)"
+    default 2048
+    depends on AKIRA_WASM_RUNTIME
+    help
+      Stack for the dedicated thread that blits presented framebuffers to
+      the physical display. No WAMR/WASI call chain here (unlike the WASM
+      app thread), just display_write() — much smaller stack suffices.
+
+config AKIRA_DISPLAY_COMPOSITOR_PRIORITY
+    int "Display compositor thread scheduling priority"
+    default 14
+    depends on AKIRA_WASM_RUNTIME
+    help
+      Preemptive thread priority for the display compositor thread.
+
 config MAX_CONTAINERS
     int "Maximum number of concurrently loaded WASM containers"
     default 8
