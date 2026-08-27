@@ -217,7 +217,8 @@ int main(void)
 #endif
 #endif
 
-#if defined(CONFIG_AKIRA_HTTP_SERVER) && defined(CONFIG_AKIRA_OTA)
+#if defined(CONFIG_AKIRA_HTTP_SERVER)
+#if defined(CONFIG_AKIRA_OTA)
     /* Initialize OTA manager (required by /upload endpoint) */
     if (ota_manager_init() < 0)
     {
@@ -227,6 +228,7 @@ int main(void)
     {
         LOG_INF("OTA manager initialized");
     }
+#endif
 
     if (akira_http_server_init() < 0)
     {
