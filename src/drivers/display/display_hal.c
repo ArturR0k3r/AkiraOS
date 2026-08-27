@@ -219,8 +219,6 @@ int akira_display_hal_init(void)
 void akira_display_hal_flush_buf(const uint16_t *fb)
 {
 #if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
-    int64_t flush_start_ms = k_uptime_get();
-
     if (display_dev == NULL)
     {
         return;
@@ -384,8 +382,6 @@ void akira_display_hal_flush_buf(const uint16_t *fb)
             LOG_ERR("display_write(rgb565 full) -> %d", ret);
         }
     }
-
-    LOG_INF("flush: %lld ms", k_uptime_delta(&flush_start_ms));
 #endif /* DT_NODE_EXISTS(DT_CHOSEN(zephyr_display)) */
 }
 
