@@ -82,8 +82,6 @@ static void akira_input_cb(struct input_event *evt, void *user_data)
         atomic_and(&g_btn_state, (atomic_val_t)~bit);
     }
 
-    LOG_INF("btn code=%u %s", evt->code, evt->value ? "pressed" : "released");
-
     /* Enqueue the edge event. If full, evict the oldest entry and retry —
      * a stale queued edge the consumer is already behind on is worthless;
      * dropping the newest instead (Zephyr's k_msgq_put default) can lose
