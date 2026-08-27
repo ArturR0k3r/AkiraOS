@@ -93,7 +93,7 @@ int akira_native_rf_tx_cw_stop(wasm_exec_env_t exec_env);
 int akira_native_rf_tx_cw_set_freq(wasm_exec_env_t exec_env, uint32_t freq_hz);
 int akira_native_rf_set_sync_word(wasm_exec_env_t exec_env, uint32_t sync);
 
-#if defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
+#if defined(CONFIG_WIFI)
 /* WiFi spectrum scan (per-channel max RSSI) */
 int akira_native_wifi_scan_rssi(wasm_exec_env_t exec_env,
                                  uint32_t buf_ptr, uint32_t buf_len);
