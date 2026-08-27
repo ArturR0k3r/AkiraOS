@@ -82,13 +82,23 @@ static void akira_input_cb(struct input_event *evt, void *user_data)
         atomic_and(&g_btn_state, (atomic_val_t)~bit);
     }
 
-    /* Enqueue the edge event; silently drop if ring buffer is full.
-     * A full queue means the WASM app isn't draining fast enough — not fatal. */
+    LOG_INF("btn code=%u %s", evt->code, evt->value ? "pressed" : "released");
+
+    /* Enqueue the edge event. If full, evict the oldest entry and retry —
+     * a stale queued edge the consumer is already behind on is worthless;
+     * dropping the newest instead (Zephyr's k_msgq_put default) can lose
+     * exactly the release/HOME edge that matters. */
     akira_input_event_t e = {
         .button_id = (uint32_t)evt->code,
         .pressed   = (uint32_t)evt->value,
     };
-    (void)k_msgq_put(&g_event_queue, &e, K_NO_WAIT);
+    if (k_msgq_put(&g_event_queue, &e, K_NO_WAIT) != 0) {
+        akira_input_event_t discard;
+
+        LOG_WRN("event queue full, evicting oldest for code=%u %s", evt->code, evt->value ? "pressed" : "released");
+        (void)k_msgq_get(&g_event_queue, &discard, K_NO_WAIT);
+        (void)k_msgq_put(&g_event_queue, &e, K_NO_WAIT);
+    }
 }
 
 /* Register callback at link time.  NULL = match any input device.
