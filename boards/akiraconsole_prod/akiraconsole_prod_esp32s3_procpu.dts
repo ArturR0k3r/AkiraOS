@@ -186,7 +186,7 @@
 		st7789v_prod: st7789v@1 {
 			compatible         = "sitronix,st7789v";
 			reg                = <1>;           // SPI2 cs-gpios[1] = GPIO10
-			mipi-max-frequency = <20000000>;    /* 20 MHz — ST7789V rated up to 16 MHz; 20 MHz confirmed stable on 40-pin FFC */
+			mipi-max-frequency = <80000000>;    /* 80 MHz — GP-SPI's clock-source ceiling (APB, divider bypass); ST7789V rated to 16 MHz but runs clean here */
 				ready-time-ms      = <120>;         // extra margin after reset
 				width              = <320>;
 				height             = <240>;
@@ -418,6 +418,9 @@
 	pinctrl-0     = <&spim2_default>;
 	pinctrl-names = "default";
 	clock-frequency = <80000000>;
+	dma-enabled;
+	dmas          = <&dma 0>, <&dma 1>;
+	dma-names     = "rx", "tx";
 	#address-cells = <1>;
 	#size-cells    = <0>;
 
@@ -527,6 +530,11 @@
 	size   = <DT_SIZE_M(8)>;
 	status = "okay";
 };
+
+// =============================================================================
+// GDMA — SPI2 DMA (display shares &spi2)
+// =============================================================================
+&dma { status = "okay"; };
 
 // =============================================================================
 // Watchdog

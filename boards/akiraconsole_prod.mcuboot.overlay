@@ -23,3 +23,4 @@
 &spi2         { status = "disabled"; };
 &wifi         { status = "disabled"; };
 &esp32_bt_hci { status = "disabled"; };
+&dma          { status = "disabled"; };
