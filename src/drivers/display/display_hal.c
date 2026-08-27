@@ -50,6 +50,28 @@ static const struct pwm_dt_spec bl_pwm = PWM_DT_SPEC_GET(BL_PWM_NODE);
 /* Display reset is handled by the ST7789V driver via device tree reset-gpios.
  * Do not manually control GPIO15 (RESET) - driver manages hardware reset timing. */
 
+/* Dedicated blit thread, pinned to core0 — the opposite core from WASM app
+ * threads (pinned core1, akira_runtime.c) — so app compute for frame N+1
+ * overlaps the blit of frame N instead of serializing on one core. */
+#define COMPOSITOR_CORE_ID 0
+
+static void compositor_thread_fn(void *p1, void *p2, void *p3)
+{
+    ARG_UNUSED(p1);
+    ARG_UNUSED(p2);
+    ARG_UNUSED(p3);
+
+    for (;;)
+    {
+        const uint16_t *fb = akira_framebuffer_wait_present();
+        akira_display_hal_flush_buf(fb);
+        akira_framebuffer_present_done();
+    }
+}
+
+K_THREAD_STACK_DEFINE(compositor_stack, CONFIG_AKIRA_DISPLAY_COMPOSITOR_STACK_SIZE);
+static struct k_thread compositor_tid;
+
 /**
  * @brief Initialize the hardware display
  * @return 0 on success, negative errno on error
@@ -172,6 +194,14 @@ int akira_display_hal_init(void)
         return ret;
     }
 
+    k_thread_create(&compositor_tid, compositor_stack,
+                    K_THREAD_STACK_SIZEOF(compositor_stack),
+                    compositor_thread_fn, NULL, NULL, NULL,
+                    CONFIG_AKIRA_DISPLAY_COMPOSITOR_PRIORITY,
+                    0, K_FOREVER);
+    k_thread_cpu_pin(&compositor_tid, COMPOSITOR_CORE_ID);
+    k_thread_start(&compositor_tid);
+
     return 0;
 
 #else
@@ -181,21 +211,21 @@ int akira_display_hal_init(void)
 }
 
 /**
- * @brief Flush framebuffer to physical display
+ * @brief Flush an explicit framebuffer to physical display hardware
  *
- * Transfers the contents of the Akira framebuffer to the physical display
- * hardware using Zephyr's display_write() API.
+ * Transfers the given buffer to the physical display hardware using
+ * Zephyr's display_write() API.
  */
-void akira_display_hal_flush(void)
+void akira_display_hal_flush_buf(const uint16_t *fb)
 {
 #if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
+    int64_t flush_start_ms = k_uptime_get();
 
     if (display_dev == NULL)
     {
         return;
     }
 
-    uint16_t *const fb = akira_framebuffer_get();
     if (fb == NULL)
     {
         LOG_ERR("Framebuffer is NULL");
@@ -355,7 +385,19 @@ void akira_display_hal_flush(void)
         }
     }
 
+    LOG_INF("flush: %lld ms", k_uptime_delta(&flush_start_ms));
 #endif /* DT_NODE_EXISTS(DT_CHOSEN(zephyr_display)) */
+}
+
+/**
+ * @brief Flush framebuffer to physical display
+ *
+ * Convenience wrapper around akira_display_hal_flush_buf() for callers
+ * with no double buffer (shell commands, boot test pattern).
+ */
+void akira_display_hal_flush(void)
+{
+    akira_display_hal_flush_buf(akira_framebuffer_get());
 }
 
 /**

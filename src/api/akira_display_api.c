@@ -146,7 +146,7 @@ void akira_display_flush(void)
 #if AKIRA_PLATFORM_NATIVE_SIM
     akira_sim_show_display();
 #else
-    akira_display_hal_flush();
+    akira_framebuffer_present();
 #endif
 }
 

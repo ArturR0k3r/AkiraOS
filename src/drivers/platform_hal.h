@@ -215,6 +215,25 @@ const char *akira_hal_platform(void);
 uint16_t *akira_framebuffer_get(void);
 
 /**
+ * @brief Hand the just-drawn framebuffer to the display compositor and
+ * flip to the other buffer. Blocks if the compositor is still consuming
+ * the previously presented buffer (bounds app to 1 frame of lead).
+ */
+void akira_framebuffer_present(void);
+
+/**
+ * @brief Compositor-side: block until a frame is presented.
+ * @return Buffer to blit. Valid until akira_framebuffer_present_done().
+ */
+const uint16_t *akira_framebuffer_wait_present(void);
+
+/**
+ * @brief Compositor-side: release the buffer obtained from
+ * akira_framebuffer_wait_present() after the blit finishes.
+ */
+void akira_framebuffer_present_done(void);
+
+/**
  * @brief Initialize hardware display HAL
  * @return 0 on success, negative errno on error
  */
@@ -224,6 +243,13 @@ int akira_display_hal_init(void);
  * @brief Flush framebuffer to physical display hardware
  */
 void akira_display_hal_flush(void);
+
+/**
+ * @brief Flush an explicit framebuffer to physical display hardware.
+ * Used by the display compositor thread; akira_display_hal_flush() is a
+ * convenience wrapper around this for callers with no double buffer.
+ */
+void akira_display_hal_flush_buf(const uint16_t *fb);
 
 /**
  * @brief Clear framebuffer to black and flush to display

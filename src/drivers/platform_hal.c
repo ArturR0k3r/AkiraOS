@@ -46,12 +46,52 @@ static uint32_t *shared_buttons = NULL;
  * 400×240).  Boards with smaller displays simply leave the tail unused.
  */
 #define AKIRA_FB_MAX_PIXELS (400 * 240)
+#define AKIRA_FB_NUM_BUFFERS 2
 #if defined(CONFIG_ESP_SPIRAM)
-__attribute__((section(".ext_ram.bss"), aligned(4))) static uint16_t hw_framebuffer[AKIRA_FB_MAX_PIXELS];
+__attribute__((section(".ext_ram.bss"), aligned(4))) static uint16_t hw_framebuffer[AKIRA_FB_NUM_BUFFERS][AKIRA_FB_MAX_PIXELS];
 #elif defined(CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM) && defined(CONFIG_MEMC)
-__attribute__((section(".ext_ram.bss"), aligned(4))) static uint16_t hw_framebuffer[AKIRA_FB_MAX_PIXELS];
+__attribute__((section(".ext_ram.bss"), aligned(4))) static uint16_t hw_framebuffer[AKIRA_FB_NUM_BUFFERS][AKIRA_FB_MAX_PIXELS];
 #endif
 /* On targets without SPIRAM/MEMC, akira_framebuffer_get() returns NULL — no buffer needed. */
+
+/* Double-buffer handoff to the display compositor thread. Multiple threads
+ * call akira_display_flush() -> this function concurrently (akira_os_shell
+ * thread, system workqueue via g_auto_flush_work/g_sd_install_work, and a
+ * WASM app's own thread) — not single-producer. fb_present_mutex serializes
+ * the give(frame_ready)/take(buffer_free)/write_idx-flip sequence so two
+ * racing producers can't collide on the same semaphore credit (frame_ready
+ * caps at 1 — a second concurrent give() is silently dropped) or desync
+ * fb_write_idx, which otherwise can permanently wedge a producer in
+ * take(buffer_free) forever (the compositor only ever hands back one
+ * credit per real frame it consumed). */
+static uint8_t fb_write_idx;           /* buffer the app is currently drawing into */
+static const uint16_t *fb_present_buf; /* buffer handed to the compositor */
+static struct k_sem fb_sem_frame_ready = Z_SEM_INITIALIZER(fb_sem_frame_ready, 0, 1);
+static struct k_sem fb_sem_buffer_free = Z_SEM_INITIALIZER(fb_sem_buffer_free, 1, 1);
+K_MUTEX_DEFINE(fb_present_mutex);
+
+void akira_framebuffer_present(void)
+{
+    k_mutex_lock(&fb_present_mutex, K_FOREVER);
+    fb_present_buf = hw_framebuffer[fb_write_idx];
+    k_sem_give(&fb_sem_frame_ready);
+    /* Blocks only if the compositor hasn't finished the previous buffer yet
+     * — bounds producers to at most one frame ahead of the blit. */
+    k_sem_take(&fb_sem_buffer_free, K_FOREVER);
+    fb_write_idx ^= 1U;
+    k_mutex_unlock(&fb_present_mutex);
+}
+
+const uint16_t *akira_framebuffer_wait_present(void)
+{
+    k_sem_take(&fb_sem_frame_ready, K_FOREVER);
+    return fb_present_buf;
+}
+
+void akira_framebuffer_present_done(void)
+{
+    k_sem_give(&fb_sem_buffer_free);
+}
 
 int akira_hal_init(void)
 {
@@ -185,7 +225,7 @@ uint16_t *akira_framebuffer_get(void)
 {
 #if defined(CONFIG_ESP_SPIRAM) || \
     (defined(CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM) && defined(CONFIG_MEMC))
-    return hw_framebuffer;
+    return hw_framebuffer[fb_write_idx];
 #else
     LOG_WRN("akira_framebuffer_get: no SPIRAM framebuffer (need CONFIG_ESP_SPIRAM)");
     return NULL;
