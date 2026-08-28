@@ -537,12 +537,18 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 
         /* Phase 1 wake: require HOME held for CONFIG_AKIRA_WAIT_WAKE_HOLD_MS.
          * A plain tap is ignored — prevents accidental wakes from pocket
-         * button contact.  We track level (btns), not edge (just_pressed),
-         * so a continuous hold is detected across loop iterations. */
+         * button contact.  We track level, not edge (just_pressed), so a
+         * continuous hold is detected across loop iterations.
+         *
+         * Read the raw pin instead of the debounced akira_input_get_bitmask():
+         * home_wake_isr wakes this thread the instant the edge fires, which is
+         * faster than gpio-keys' debounce_interval_ms delay before it updates
+         * the bitmask — btns here would still read the pre-press level, so the
+         * hold timer would never start on a normal-length press. */
         static int64_t s_wake_hold_since_ms;
         if (s_display_blanked)
         {
-            bool home_now = !!(btns & BIT(AKIRA_BTN_HOME));
+            bool home_now = gpio_pin_get_dt(&home_wake_gpio) > 0;
             if (!home_now)
             {
                 s_wake_hold_since_ms = 0;
@@ -787,8 +793,13 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
              * in, so the wake rate here dominates standby battery life —
              * previously a fixed 1 Hz for a frame that changes once a minute.
              * HOME down falls through to the 20ms poll so the
-             * CONFIG_AKIRA_WAIT_WAKE_HOLD_MS hold detector stays accurate. */
-            if (s_display_blanked && !(btns & BIT(AKIRA_BTN_HOME)))
+             * CONFIG_AKIRA_WAIT_WAKE_HOLD_MS hold detector stays accurate.
+             * Gate on the raw pin, not btns: btns lags by debounce_interval_ms,
+             * so right after the press edge this would still see HOME up and
+             * re-enter the multi-second sem block with nothing but the release
+             * edge left to wake it — starving the hold detector of every
+             * iteration until it's too late to reach the threshold. */
+            if (s_display_blanked && gpio_pin_get_dt(&home_wake_gpio) <= 0)
             {
                 uint32_t idle_ms = wait_screen_ms_to_next_update();
                 if (idle_ms > WAIT_SCREEN_UPDATE_MAX_MS)
