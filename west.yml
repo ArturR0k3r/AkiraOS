@@ -3,8 +3,8 @@ manifest:
   projects:
     # Zephyr RTOS
     - name: zephyr
-      url: https://github.com/zephyrproject-rtos/zephyr
-      revision: v4.3.0
+      url: https://github.com/drxgoshh/zephyr
+      revision: AkiraConsole-fix
       west-commands: scripts/west-commands.yml
       import: true
     
