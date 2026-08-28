@@ -42,6 +42,13 @@ LOG_MODULE_REGISTER(akira_lr2021, LOG_LEVEL_INF);
 #define LR2021_CMD_SET_DIO_FUNC         0x0112
 #define LR2021_CMD_SET_DIO_IRQ_CFG      0x0115
 #define LR2021_CMD_CALIB_FE              0x0123
+/* Datasheet §6.4: "Image calibration is necessary if there is a frequency
+ * change > 10MHz, or a temperature change > 10°C." CalibFE (§6.4.2) "launches
+ * all Receiver Front End (Rx + PLL) calibrations at the given frequencies" —
+ * it bundles the image/ADC-offset cal with the PLL cal, so the tighter 10MHz
+ * threshold governs (vs. the 50MHz PLL/AAF-only threshold in §6.4.1, which
+ * covers the separate Calibrate command, not CalibFE). */
+#define LR2021_CALIB_FE_THRESHOLD_HZ     10000000U
 #define LR2021_CMD_SET_SLEEP            0x0127
 #define LR2021_CMD_SET_STANDBY          0x0128
 #define LR2021_CMD_SET_FS               0x0129
@@ -185,6 +192,8 @@ static struct {
     uint8_t lora_hop_num_freqs;
     uint8_t fsk_rx_bw_code;         /* manual FSK rx_bw code; 0 => auto (Carson) */
     uint32_t frequency_hz;
+    bool calib_fe_done[2];        /* per Rx path (0=LF,1=HF): has CalibFE run at least once */
+    uint32_t calib_fe_freq_hz[2]; /* per Rx path: frequency at last CalibFE */
     uint32_t bitrate_bps;
     uint32_t ble_bitrate_bps;       /* separate from bitrate_bps: FSK and BLE
                                       * PHY rate must not clobber each other
@@ -231,6 +240,34 @@ static int lr2021_wait_busy(void) {
     return 0;
 }
 
+/* CS is a raw GPIO toggle, not framework-managed: Zephyr's spi_context
+ * GPIO-CS control (spi_cs_is_gpio) never actually gets the LR2021 to drive
+ * MISO on this ESP32-S3/TCA6408 combination — every read comes back as
+ * zero bytes with a success return code. A driver-owned toggle around the
+ * transfer is the only mechanism confirmed to work.
+ *
+ * That raw toggle must still be serialized against the SD card on the same
+ * SPI2 bus: lr2021_spi_lock()/_unlock() take spi_context's own semaphore
+ * (via SPI_LOCK_ON on a zero-length transfer) so CS can't be caught mid-
+ * toggle by a concurrent SD transaction. */
+static inline void lr2021_spi_lock(void) {
+    spi_write_dt(&g_lr2021.spi, NULL);
+}
+
+static inline void lr2021_spi_unlock(void) {
+    spi_release_dt(&g_lr2021.spi);
+}
+
+static inline void lr2021_cs_low(void) {
+    gpio_pin_set_dt(&g_lr2021.cs, 1);
+    k_usleep(1);
+}
+
+static inline void lr2021_cs_high(void) {
+    k_usleep(1);
+    gpio_pin_set_dt(&g_lr2021.cs, 0);
+}
+
 static int lr2021_spi_write(const uint8_t *data, size_t len) {
     struct spi_buf tx = { .buf = (void *)data, .len = len };
     struct spi_buf_set tx_set = { .buffers = &tx, .count = 1 };
@@ -265,6 +302,9 @@ static int lr2021_write_command(uint16_t opcode, const uint8_t *args, size_t arg
 
     uint8_t op_buf[2] = { (opcode >> 8) & 0xFF, opcode & 0xFF };
 
+    lr2021_spi_lock();
+    lr2021_cs_low();
+
     /* Send opcode + args in one SPI frame */
     if (args && args_len > 0) {
         struct spi_buf tx[2] = {
@@ -276,6 +316,9 @@ static int lr2021_write_command(uint16_t opcode, const uint8_t *args, size_t arg
     } else {
         ret = lr2021_spi_write(op_buf, 2);
     }
+
+    lr2021_cs_high();
+    lr2021_spi_unlock();
 
     if (ret < 0) {
         LOG_ERR("SPI write cmd 0x%04X failed: %d", opcode, ret);
@@ -312,6 +355,9 @@ static int lr2021_read_command(uint16_t opcode, const uint8_t *args,
 
     uint8_t op_buf[2] = { (opcode >> 8) & 0xFF, opcode & 0xFF };
 
+    lr2021_spi_lock();
+    lr2021_cs_low();
+
     if (args && args_len > 0) {
         struct spi_buf tx[2] = {
             { .buf = op_buf, .len = 2 },
@@ -322,6 +368,9 @@ static int lr2021_read_command(uint16_t opcode, const uint8_t *args,
     } else {
         ret = lr2021_spi_write(op_buf, 2);
     }
+
+    lr2021_cs_high();
+    lr2021_spi_unlock();
 
     if (ret < 0) {
         LOG_ERR("SPI read cmd 0x%04X phase1 failed: %d", opcode, ret);
@@ -346,7 +395,11 @@ static int lr2021_read_command(uint16_t opcode, const uint8_t *args,
     uint8_t tx_dummy[128];
     memset(tx_dummy, 0, total);
 
+    lr2021_spi_lock();
+    lr2021_cs_low();
     ret = lr2021_spi_transceive(tx_dummy, rx_local, total);
+    lr2021_cs_high();
+    lr2021_spi_unlock();
 
     if (ret < 0) {
         LOG_ERR("SPI read cmd 0x%04X phase3 failed: %d", opcode, ret);
@@ -381,7 +434,11 @@ static int lr2021_read_fifo(uint8_t *data, size_t len) {
     tx[0] = op_buf[0];
     tx[1] = op_buf[1];
 
+    lr2021_spi_lock();
+    lr2021_cs_low();
     ret = lr2021_spi_transceive(tx, rx, tx_len);
+    lr2021_cs_high();
+    lr2021_spi_unlock();
 
     if (ret < 0) {
         return ret;
@@ -666,8 +723,13 @@ static int lr2021_init(void) {
 
     g_lr2021.spi.bus = spi_dev;
     g_lr2021.spi.config.frequency  = DT_PROP(LR2021_NODE, spi_max_frequency);
+    /* SPI_LOCK_ON: hold spi_context's bus semaphore across the raw CS
+     * toggle + transfer below, so the SD card (same SPI2 bus) can't
+     * interleave a transaction while LR2021's CS is asserted. Released
+     * explicitly by lr2021_spi_unlock() once CS goes back high. */
     g_lr2021.spi.config.operation  = SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB
-                                     | SPI_WORD_SET(8);  /* SPI mode 0 (CPOL=0,CPHA=0) */
+                                     | SPI_WORD_SET(8)    /* SPI mode 0 (CPOL=0,CPHA=0) */
+                                     | SPI_LOCK_ON;
     g_lr2021.spi.config.slave = DT_REG_ADDR(LR2021_NODE);
 
     /* --- CS GPIO --------------------------------------------------------- */
@@ -678,17 +740,6 @@ static int lr2021_init(void) {
     }
     gpio_pin_configure_dt(&g_lr2021.cs, GPIO_OUTPUT_INACTIVE);
     gpio_pin_set_dt(&g_lr2021.cs, 0); /* Deassert CS */
-
-    /* CS must live inside spi_config so the framework toggles it under the
-     * same bus lock (spi_context) that serializes every other device on
-     * SPI2 — SD card included. A driver-managed raw GPIO toggle done
-     * outside spi_write_dt/spi_transceive_dt has no such lock: another
-     * thread's SD transaction can start while this CS is still asserted,
-     * since TX and RX now run on separate threads and can genuinely
-     * overlap on the shared bus. */
-    g_lr2021.spi.config.cs.gpio = g_lr2021.cs;
-    g_lr2021.spi.config.cs.delay = 0;
-    g_lr2021.spi.config.cs.cs_is_gpio = true;
 
     /* --- RESET GPIO ------------------------------------------------------ */
     g_lr2021.reset = (struct gpio_dt_spec)GPIO_DT_SPEC_GET(LR2021_NODE, reset_gpios);
@@ -959,15 +1010,31 @@ static int lr2021_set_frequency(uint32_t freq_hz) {
     int ret = lr2021_write_command(LR2021_CMD_SET_RF_FREQUENCY, args, 4);
     if (ret == 0) {
         g_lr2021.frequency_hz = freq_hz;
-        LOG_INF("LR2021 frequency: %u Hz", freq_hz);
+        LOG_DBG("LR2021 frequency: %u Hz", freq_hz);
     } else {
         return ret;
     }
 
-    /* CalibFe (front-end: ADC offset, PPF, image calibration) — required
-     * after every frequency change. Not optional per datasheet §5.6.3:
-     * "will not work if device is in Rx or Tx mode", so force Standby
-     * first. No args = calibrate at the frequency just set. */
+    /* CalibFe (front-end: ADC offset, PPF, image calibration) is per Rx path
+     * (LF/HF) and is redundant when the frequency hasn't moved far enough to
+     * matter (see LR2021_CALIB_FE_THRESHOLD_HZ above) — skip it for small
+     * hops (e.g. channel-sweep scans) to avoid a CalibFE SPI round-trip
+     * (blocks on hardware BUSY) on every step. It must still run at least
+     * once per path (datasheet §6.4.2: "There is no Front End calibration
+     * performed after a POR or cold start or wakeup after sleep without
+     * retention. The CalibFE command must thus be executed..."). */
+    uint8_t rx_path = (freq_hz >= 1000000000U) ? 1 : 0;
+    uint32_t last_calib = g_lr2021.calib_fe_freq_hz[rx_path];
+    uint32_t delta = (freq_hz > last_calib) ? (freq_hz - last_calib) : (last_calib - freq_hz);
+    bool need_calib = !g_lr2021.calib_fe_done[rx_path] || delta > LR2021_CALIB_FE_THRESHOLD_HZ;
+
+    if (!need_calib) {
+        return 0;
+    }
+
+    /* CalibFe: not optional per datasheet §5.6.3: "will not work if device
+     * is in Rx or Tx mode", so force Standby first. No args = calibrate at
+     * the frequency just set. */
     {
         uint8_t standby = LR2021_STANDBY_XOSC;
         lr2021_write_command(LR2021_CMD_SET_STANDBY, &standby, 1);
@@ -982,6 +1049,9 @@ static int lr2021_set_frequency(uint32_t freq_hz) {
     ret = lr2021_write_command(LR2021_CMD_CALIB_FE, NULL, 0);
     if (ret < 0) {
         LOG_WRN("LR2021 CalibFe failed: %d", ret);
+    } else {
+        g_lr2021.calib_fe_done[rx_path] = true;
+        g_lr2021.calib_fe_freq_hz[rx_path] = freq_hz;
     }
     return 0;
 }
@@ -1417,6 +1487,9 @@ static int lr2021_tx(const uint8_t *data, size_t len) {
         uint8_t ble_hdr[2] = { 0x00, (uint8_t)len };  /* flags=0, Length=payload len */
         bool is_ble = (g_lr2021.modulation == RADIO_MOD_BLE_PHY);
 
+        lr2021_spi_lock();
+        lr2021_cs_low();
+
         if (is_ble) {
             struct spi_buf tx[3] = {
                 { .buf = op_buf, .len = 2 },
@@ -1433,6 +1506,9 @@ static int lr2021_tx(const uint8_t *data, size_t len) {
             struct spi_buf_set tx_set = { .buffers = tx, .count = 2 };
             ret = spi_write_dt(&g_lr2021.spi, &tx_set);
         }
+
+        lr2021_cs_high();
+        lr2021_spi_unlock();
 
         if (ret < 0) {
             LOG_ERR("TX FIFO write failed: %d", ret);
@@ -1753,7 +1829,10 @@ static int lr2021_get_rssi(int16_t *rssi) {
         if (ret < 0) {
             return ret;
         }
-        k_msleep(50);
+        /* SetRxPath/SetRx already block on BUSY (datasheet PLL-lock/RX-entry
+         * transitions are 10-120us, Table 3-23) — this is margin on top of
+         * that, not the primary sync. */
+        k_msleep(1);
     }
 
     /* GetRssiInst is a read command (datasheet §7.2.3): opcode→BUSY→read.

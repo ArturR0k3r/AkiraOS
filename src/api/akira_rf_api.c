@@ -328,7 +328,7 @@ int akira_rf_receive(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
 
 int akira_rf_set_frequency(uint32_t freq_hz)
 {
-    LOG_INF("RF set frequency: %u Hz", freq_hz);
+    LOG_DBG("RF set frequency: %u Hz", freq_hz);
     if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
     radio_handle_t *h = g_active_handle;
     int ret = (h && h->ops && h->ops->set_frequency) ? h->ops->set_frequency(h, freq_hz) : -ENODEV;
