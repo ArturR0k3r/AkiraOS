@@ -47,7 +47,7 @@
 	// ("Event dropped, queue full") and making the OS shell navigate itself.
 	//
 	// zephyr,code maps to AKIRA_BTN_* (src/api/akira_input_api.h):
-	//   1=HOME/OK 2=UP 3=DOWN 4=LEFT 5=RIGHT 6=A 7=B 8=X 9=Y
+	//   1=HOME/OK 2=UP 3=DOWN 4=LEFT 5=RIGHT 6=A 7=Y 8=B 9=X
 	// =========================================================================
 	gpio_keys {
 		compatible = "gpio-keys";
@@ -95,7 +95,7 @@
 		btn_y: btn_y {
 			gpios = <&gpio1 9 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>; // GPIO41
 			label = "BTN Y (SW1)";
-			zephyr,code = <9>;   /* AKIRA_BTN_Y */
+			zephyr,code = <7>;   /* AKIRA_BTN_Y */
 		};
 	};
 
