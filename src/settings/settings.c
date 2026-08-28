@@ -234,6 +234,14 @@ static int crypto_decrypt(const uint8_t *input, size_t input_len, char *output, 
 
 static K_MUTEX_DEFINE(akira_settings_mutex);
 
+/* Given once akira_settings_init() (APPLICATION level) finishes. The shell's
+ * own POST_KERNEL init starts its thread earlier and, under CONFIG_SMP, that
+ * thread can run on the other core in parallel with the rest of boot -- so a
+ * command typed the instant the prompt appears can otherwise race storage
+ * init. submit_settings_work() waits on this instead of failing outright. */
+static K_SEM_DEFINE(storage_ready_sem, 0, 1);
+#define SETTINGS_INIT_WAIT_MS 3000
+
 /* Bumped by the settings workqueue on every successful mutation (set, delete,
  * clear), from any caller — shell, settings UI, HTTP, BLE companion.  Lets hot
  * loops cache values they would otherwise re-read from NVS on every tick; an
@@ -1312,6 +1320,14 @@ static int submit_settings_work(struct akira_setting_work *work)
 {
     if (!storage.initialized)
     {
+        if (k_sem_take(&storage_ready_sem, K_MSEC(SETTINGS_INIT_WAIT_MS)) == 0)
+        {
+            k_sem_give(&storage_ready_sem); /* re-arm for any other waiter */
+        }
+    }
+
+    if (!storage.initialized)
+    {
         if (work->callback)
         {
             if (work->key)
@@ -1390,6 +1406,7 @@ int akira_settings_init(void)
                            NULL);
 
         storage.initialized = true;
+        k_sem_give(&storage_ready_sem);
         LOG_INF("Storage initialized to %s", (!storage.type) ? "FLASH" : "SD");
     }
     else
@@ -1401,7 +1418,7 @@ int akira_settings_init(void)
 
 int akira_settings_set(const char *key, const char *value, uint8_t is_encrypted)
 {
-    if (!key || !value || !storage.initialized)
+    if (!key || !value)
     {
         return -EINVAL;
     }
