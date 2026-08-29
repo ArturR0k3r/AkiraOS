@@ -21,9 +21,6 @@
 #define MAX_KEY_LEN CONFIG_AKIRA_SETTINGS_MAX_KEY_LEN
 #define MAX_VALUE_LEN CONFIG_AKIRA_SETTINGS_MAX_VALUE_LEN
 
-#define MAX_NAMESPACE_LEN 48
-#define MAX_FILEPATH_LEN 96
-
 #define MINIMUM_ENCRYPTED_LEN 32
 
 /* Helper macro to convert hex string to byte array */
@@ -42,12 +39,6 @@ typedef struct {
     char* key;   
     char* value; 
 } settings_iterator_t;
-
-typedef enum{
-    AKIRA_SETTINGS_STORAGE_FLASH = 0,
-    AKIRA_SETTINGS_STORAGE_SD,
-    AKIRA_SETTINGS_STORAGE_AUTO
-} settings_storage_type_t;
 
 typedef enum {
     AKIRA_SETTINGS_OP_SET = 0,

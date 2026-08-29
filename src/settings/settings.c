@@ -1,5 +1,4 @@
 #include "settings.h"
-#include "fs_manager.h"
 #include <zephyr/kernel.h>
 #include <zephyr/fs/nvs.h>
 #include <zephyr/shell/shell.h>
@@ -269,145 +268,11 @@ struct akira_setting_work
 static struct
 {
     struct nvs_fs nvs;
-    settings_storage_type_t type;
     bool initialized;
-    bool sd_available;
 
     struct k_work_q work_queue;
 } storage = {
-    .type = AKIRA_SETTINGS_STORAGE_FLASH,
-    .initialized = false,
-    .sd_available = false};
-
-/*===========================================================================*/
-/* SD functions - NOT SUPPORTED YET                                          */
-/*===========================================================================*/
-
-static int parse_key(const char *full_key, char *namespace, char *key)
-{
-    if (!full_key || !namespace || !key)
-    {
-        return -EINVAL;
-    }
-
-    const char *last = strrchr(full_key, '/');
-    if (!last)
-    {
-        strcpy(key, full_key);
-        namespace[0] = '\0';
-        return 0;
-    }
-
-    strcpy(key, last + 1);
-
-    size_t ns_len = last - full_key;
-    memcpy(namespace, full_key, ns_len);
-    namespace[ns_len] = '\0';
-
-    return 0;
-}
-
-static int get_namespace_filepath(const char *namespace, char *filepath, size_t max_len)
-{
-    const char *last_slash = strrchr(namespace, '/');
-    const char *filename = last_slash ? (last_slash + 1) : namespace;
-
-    int ret = snprintf(filepath, max_len, "/SD:/settings/%s/%s.txt", namespace, filename);
-    if (ret < 0 || ret >= max_len)
-    {
-        return -EINVAL;
-    }
-    return 0;
-}
-
-static int create_namespace_dir(const char *namespace)
-{
-    char dirpath[MAX_FILEPATH_LEN];
-    snprintf(dirpath, sizeof(dirpath), "/SD:/settings/%s", namespace);
-
-    char *p = dirpath + strlen("/SD:/settings/");
-    while ((p = strchr(p, '/')) != NULL)
-    {
-        *p = '\0';
-        fs_manager_mkdir(dirpath);
-        *p = '/';
-        p++;
-    }
-    int ret = fs_manager_mkdir(dirpath);
-    return ret;
-}
-
-static char *escape_value(const char *value)
-{
-    if (!value)
-        return NULL;
-
-    size_t len = strlen(value);
-    size_t escaped_len = len * 2 + 1;
-    char *escaped = k_malloc(escaped_len);
-    if (!escaped)
-        return NULL;
-
-    char *dst = escaped;
-    for (const char *src = value; *src; src++)
-    {
-        if (*src == '\n')
-        {
-            *dst++ = '\\';
-            *dst++ = 'n';
-        }
-        else if (*src == '\r')
-        {
-            *dst++ = '\\';
-            *dst++ = 'r';
-        }
-        else if (*src == '\\')
-        {
-            *dst++ = '\\';
-            *dst++ = '\\';
-        }
-        else
-        {
-            *dst++ = *src;
-        }
-    }
-    *dst = '\0';
-    return escaped;
-}
-
-static char *unescape_value(const char *value)
-{
-    if (!value)
-        return NULL;
-
-    size_t len = strlen(value);
-    char *unescaped = k_malloc(len + 1);
-    if (!unescaped)
-        return NULL;
-
-    char *dst = unescaped;
-    for (const char *src = value; *src; src++)
-    {
-        if (*src == '\\' && *(src + 1))
-        {
-            src++;
-            if (*src == 'n')
-                *dst++ = '\n';
-            else if (*src == 'r')
-                *dst++ = '\r';
-            else if (*src == '\\')
-                *dst++ = '\\';
-            else
-                *dst++ = *src;
-        }
-        else
-        {
-            *dst++ = *src;
-        }
-    }
-    *dst = '\0';
-    return unescaped;
-}
+    .initialized = false};
 
 /* Compact NVS entries: reads all valid entries, rewrites them sequentially
  * from SETTINGS_START_ID, and updates the counter.  Called at init when
@@ -463,352 +328,38 @@ static int compact_entries(uint16_t counter)
 static int settings_get_id(const char *key)
 {
     int ret;
-    if (storage.type == AKIRA_SETTINGS_STORAGE_FLASH)
+    uint16_t counter;
+    ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
+    if (ret < 0)
     {
-        uint16_t counter;
-        ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
+        LOG_WRN("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
+        return ret;
+    }
+    settings_entry_t entry;
+    for (uint16_t i = 0; i < counter; i++)
+    {
+        ret = nvs_read(&storage.nvs, SETTINGS_START_ID + i, &entry, sizeof(entry));
         if (ret < 0)
         {
-            LOG_WRN("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
+            if (ret == -ENOENT)
+            {
+                /* Hole: this slot was deleted or never written — skip it */
+                continue;
+            }
+            LOG_WRN("Failed to read entry at index: %d (%d)", i, ret);
             return ret;
         }
-        settings_entry_t entry;
-        for (uint16_t i = 0; i < counter; i++)
+        if (strcmp(entry.key, key) == 0)
         {
-            ret = nvs_read(&storage.nvs, SETTINGS_START_ID + i, &entry, sizeof(entry));
-            if (ret < 0)
-            {
-                if (ret == -ENOENT)
-                {
-                    /* Hole: this slot was deleted or never written — skip it */
-                    continue;
-                }
-                LOG_WRN("Failed to read entry at index: %d (%d)", i, ret);
-                return ret;
-            }
-            if (strcmp(entry.key, key) == 0)
-            {
-                return SETTINGS_START_ID + i;
-            }
+            return SETTINGS_START_ID + i;
         }
-    }
-    else
-    {
-        return -ENOTSUP;
     }
     return -1;
-}
-
-static int sd_get_value(const char *namespace, const char *key, char *value, size_t max_len)
-{
-    char filepath[MAX_FILEPATH_LEN];
-
-    int ret = get_namespace_filepath(namespace, filepath, sizeof(filepath));
-    if (ret < 0)
-    {
-        return ret;
-    }
-
-    ssize_t file_size = fs_manager_get_size(filepath);
-    if (file_size < 0)
-    {
-        return -ENOENT;
-    }
-
-    char *buffer = k_malloc(file_size + 1);
-    if (!buffer)
-    {
-        return -ENOMEM;
-    }
-
-    ssize_t read_len = fs_manager_read_file(filepath, buffer, file_size);
-    if (read_len < 0)
-    {
-        k_free(buffer);
-        return read_len;
-    }
-
-    buffer[read_len] = '\0';
-
-    char search[MAX_KEY_LEN + 2];
-    snprintf(search, sizeof(search), "%s-", key);
-
-    char *line = buffer;
-    while (line)
-    {
-        char *next_line = strchr(line, '\n');
-
-        if (strncmp(line, search, strlen(search)) == 0)
-        {
-            char *val_start = line + strlen(search);
-            size_t val_len = next_line ? (next_line - val_start) : strlen(val_start);
-
-            if (val_len >= max_len)
-            {
-                val_len = max_len - 1;
-            }
-
-            strncpy(value, val_start, val_len);
-            value[val_len] = '\0';
-
-            char *unescaped = unescape_value(value);
-            if (unescaped)
-            {
-                strncpy(value, unescaped, max_len - 1);
-                value[max_len - 1] = '\0';
-                k_free(unescaped);
-            }
-
-            k_free(buffer);
-            return 0;
-        }
-
-        line = next_line ? (next_line + 1) : NULL;
-    }
-
-    k_free(buffer);
-    return -ENOENT;
-}
-
-static int sd_set_value(const char *namespace, const char *key, const char *value, const char *full_key)
-{
-    char filepath[MAX_FILEPATH_LEN];
-
-    int ret = get_namespace_filepath(namespace, filepath, sizeof(filepath));
-    if (ret < 0)
-    {
-        return ret;
-    }
-
-    create_namespace_dir(namespace);
-
-    char *escaped = escape_value(value);
-    if (!escaped)
-    {
-        return -ENOMEM;
-    }
-
-    size_t new_line_size = strlen(key) + 1 + strlen(escaped) + 2;
-    char *new_line = k_malloc(new_line_size);
-    if (!new_line)
-    {
-        k_free(escaped);
-        return -ENOMEM;
-    }
-
-    int new_line_len = snprintf(new_line, new_line_size, "%s-%s\n", key, escaped);
-    k_free(escaped);
-
-    if (new_line_len >= new_line_size)
-    {
-        k_free(new_line);
-        return -E2BIG;
-    }
-
-    char *old_content = NULL;
-    size_t old_size = 0;
-    bool is_new_key = true;
-
-    ssize_t file_size = fs_manager_get_size(filepath);
-    if (file_size > 0)
-    {
-        old_content = k_malloc(file_size + 1);
-        if (!old_content)
-        {
-            k_free(new_line);
-            return -ENOMEM;
-        }
-
-        ssize_t read_len = fs_manager_read_file(filepath, old_content, file_size);
-        if (read_len > 0)
-        {
-            old_content[read_len] = '\0';
-            old_size = read_len;
-            is_new_key = false;
-        }
-        else
-        {
-            k_free(old_content);
-            old_content = NULL;
-        }
-    }
-
-    size_t new_size = old_size + new_line_len + 1;
-    char *new_content = k_malloc(new_size);
-    if (!new_content)
-    {
-        if (old_content)
-            k_free(old_content);
-        k_free(new_line);
-        return -ENOMEM;
-    }
-
-    char *dst = new_content;
-
-    char search[MAX_KEY_LEN + 2];
-    snprintf(search, sizeof(search), "%s-", key);
-
-    bool found = false;
-
-    if (old_content)
-    {
-        char *line = old_content;
-        while (line && *line)
-        {
-            char *next_line = strchr(line, '\n');
-            size_t line_len = next_line ? (next_line - line + 1) : strlen(line);
-
-            if (!found && strncmp(line, search, strlen(search)) == 0)
-            {
-                strcpy(dst, new_line);
-                dst += new_line_len;
-                found = true;
-            }
-            else
-            {
-                memcpy(dst, line, line_len);
-                dst += line_len;
-            }
-
-            line = next_line ? (next_line + 1) : NULL;
-        }
-    }
-
-    if (!found)
-    {
-        strcpy(dst, new_line);
-        dst += new_line_len;
-    }
-
-    k_free(new_line);
-
-    *dst = '\0';
-    size_t final_size = dst - new_content;
-
-    ret = fs_manager_write_file(filepath, new_content, final_size);
-
-    if (old_content)
-        k_free(old_content);
-    k_free(new_content);
-
-    return (ret >= 0) ? 0 : ret;
-}
-
-static int sd_delete_value(const char *namespace, const char *key, const char *full_key)
-{
-    char filepath[MAX_FILEPATH_LEN];
-
-    int ret = get_namespace_filepath(namespace, filepath, sizeof(filepath));
-    if (ret < 0)
-    {
-        return ret;
-    }
-
-    ssize_t file_size = fs_manager_get_size(filepath);
-    if (file_size < 0)
-    {
-        return -ENOENT;
-    }
-
-    char *old_content = k_malloc(file_size + 1);
-    if (!old_content)
-    {
-        return -ENOMEM;
-    }
-
-    ssize_t read_len = fs_manager_read_file(filepath, old_content, file_size);
-    if (read_len < 0)
-    {
-        k_free(old_content);
-        return read_len;
-    }
-    old_content[read_len] = '\0';
-
-    char *new_content = k_malloc(file_size + 1);
-    if (!new_content)
-    {
-        k_free(old_content);
-        return -ENOMEM;
-    }
-
-    char search[MAX_KEY_LEN + 2];
-    snprintf(search, sizeof(search), "%s-", key);
-
-    char *dst = new_content;
-    char *line = old_content;
-    bool found = false;
-
-    while (line && *line)
-    {
-        char *next_line = strchr(line, '\n');
-        size_t line_len = next_line ? (next_line - line + 1) : strlen(line);
-
-        if (strncmp(line, search, strlen(search)) == 0)
-        {
-            found = true;
-        }
-        else
-        {
-            memcpy(dst, line, line_len);
-            dst += line_len;
-        }
-
-        line = next_line ? (next_line + 1) : NULL;
-    }
-
-    if (!found)
-    {
-        k_free(old_content);
-        k_free(new_content);
-        return -ENOENT;
-    }
-
-    *dst = '\0';
-    size_t new_size = dst - new_content;
-
-    if (new_size > 0)
-    {
-        ret = fs_manager_write_file(filepath, new_content, new_size);
-    }
-    else
-    {
-        ret = fs_manager_delete_file(filepath);
-    }
-
-    k_free(old_content);
-    k_free(new_content);
-
-    if (ret >= 0)
-    {
-    }
-
-    return (ret >= 0) ? 0 : ret;
 }
 
 /*===========================================================================*/
 /*            Internal Functions                                             */
 /*===========================================================================*/
-
-static int init_sd(void)
-{
-    int ret = fs_manager_exists("/SD:");
-    if (ret <= 0)
-    {
-        LOG_WRN("SD card not available: %d", ret);
-        return -ENODEV;
-    }
-
-    ret = fs_manager_mkdir("/SD:/settings");
-    if (ret != 0)
-    {
-        LOG_ERR("Failed to create settings directory: %d", ret);
-        return ret;
-    }
-
-    storage.sd_available = true;
-    LOG_INF("SD card type initialized");
-    return 0;
-}
 
 static int init_flash(void)
 {
@@ -936,293 +487,184 @@ static int settings_set(const char *key, const char *value, uint8_t is_encrypted
 #endif /* CONFIG_AKIRA_SETTINGS_ENCRYPTION */
     }
 
-    if (storage.type == AKIRA_SETTINGS_STORAGE_FLASH)
+    settings_entry_t entry;
+    strncpy(entry.key, key, sizeof(entry.key) - 1);
+    entry.key[sizeof(entry.key) - 1] = '\0';
+    // Use b64_value if it exits, that means that its encrypted
+    strncpy(entry.value, b64_value ? b64_value : value, sizeof(entry.value) - 1);
+    entry.value[sizeof(entry.value) - 1] = '\0';
+    entry.encrypted = is_encrypted ? 1 : 0;
+
+    uint16_t counter;
+    ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
+    if (ret < 0)
     {
-        settings_entry_t entry;
-        strncpy(entry.key, key, sizeof(entry.key) - 1);
-        entry.key[sizeof(entry.key) - 1] = '\0';
-        // Use b64_value if it exits, that means that its encrypted
-        strncpy(entry.value, b64_value ? b64_value : value, sizeof(entry.value) - 1);
-        entry.value[sizeof(entry.value) - 1] = '\0';
-        entry.encrypted = is_encrypted ? 1 : 0;
-
-        uint16_t counter;
-        ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
-        if (ret < 0)
-        {
-            LOG_WRN("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
-            if (b64_value)
-                k_free(b64_value);
-            return ret;
-        }
-
-        int entry_id = settings_get_id(key);
-        if (entry_id < 0)
-        { // Not found, need to add it
-            entry_id = SETTINGS_START_ID + counter;
-            ret = nvs_write(&storage.nvs, entry_id, &entry, sizeof(entry));
-            if (ret < 0)
-            {
-                LOG_WRN("Failed to add %s - %s at index %d", key, value, entry_id);
-                if (b64_value)
-                    k_free(b64_value);
-                return ret;
-            }
-            counter++;
-            ret = nvs_write(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
-            if (ret < 0)
-            {
-                LOG_WRN("Failed to increment counter %d -> %d", (counter - 1), counter);
-                return ret;
-            }
-        }
-        else
-        { // Overwrite the current value for key
-            ret = nvs_write(&storage.nvs, entry_id, &entry, sizeof(entry));
-            if (ret < 0)
-            {
-                LOG_WRN("Failed to change value of %s to %s at index %d", key, value, entry_id);
-                if (b64_value)
-                    k_free(b64_value);
-                return ret;
-            }
-        }
-        if (b64_value)
-            k_free(b64_value);
-        return 0;
-    }
-    else
-    {
-        if (!storage.sd_available)
-        {
-            LOG_INF("SD card not available");
-            return -ENOTSUP;
-        }
-        char namespace[MAX_NAMESPACE_LEN];
-        char local_key[MAX_KEY_LEN];
-
-        ret = parse_key(key, namespace, local_key);
-        if (ret < 0)
-        {
-            if (b64_value)
-                k_free(b64_value);
-            return ret;
-        }
-
-        ret = sd_set_value(namespace, local_key, b64_value ? b64_value : value, key);
+        LOG_WRN("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
         if (b64_value)
             k_free(b64_value);
         return ret;
     }
-    return -1;
+
+    int entry_id = settings_get_id(key);
+    if (entry_id < 0)
+    { // Not found, need to add it
+        entry_id = SETTINGS_START_ID + counter;
+        ret = nvs_write(&storage.nvs, entry_id, &entry, sizeof(entry));
+        if (ret < 0)
+        {
+            LOG_WRN("Failed to add %s - %s at index %d", key, value, entry_id);
+            if (b64_value)
+                k_free(b64_value);
+            return ret;
+        }
+        counter++;
+        ret = nvs_write(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
+        if (ret < 0)
+        {
+            LOG_WRN("Failed to increment counter %d -> %d", (counter - 1), counter);
+            return ret;
+        }
+    }
+    else
+    { // Overwrite the current value for key
+        ret = nvs_write(&storage.nvs, entry_id, &entry, sizeof(entry));
+        if (ret < 0)
+        {
+            LOG_WRN("Failed to change value of %s to %s at index %d", key, value, entry_id);
+            if (b64_value)
+                k_free(b64_value);
+            return ret;
+        }
+    }
+    if (b64_value)
+        k_free(b64_value);
+    return 0;
 }
 
 static int settings_get(const char *key, char *value, size_t max_len)
 {
     int ret = -1;
 
-    if (storage.type == AKIRA_SETTINGS_STORAGE_FLASH)
+    int entry_id = settings_get_id(key);
+    if (entry_id < 0)
     {
-        int entry_id = settings_get_id(key);
-        if (entry_id < 0)
-        {
-            LOG_DBG("Couldn't find key: %s", key);
-            return entry_id;
-        }
-
-        settings_entry_t entry;
-        ret = nvs_read(&storage.nvs, entry_id, &entry, sizeof(entry));
-        if (ret < 0)
-        {
-            LOG_WRN("Failed to read key %s at index %d", key, entry_id);
-            return ret;
-        }
-
-        if (entry.encrypted)
-        {
-#ifdef CONFIG_AKIRA_SETTINGS_ENCRYPTION
-            uint8_t decoded[MAX_VALUE_LEN];
-            size_t decoded_len;
-            ret = base64_decode(decoded, sizeof(decoded), &decoded_len,
-                                entry.value, strlen(entry.value));
-
-            if (ret != 0)
-            {
-                LOG_ERR("Base64 decode failed: %d", ret);
-                return ret;
-            }
-
-            return crypto_decrypt(decoded, decoded_len, value, max_len);
-#else
-            LOG_ERR("Entry is encrypted but encryption not enabled");
-            return -ENOTSUP;
-#endif
-        }
-        else
-        {
-            strncpy(value, entry.value, max_len - 1);
-            value[max_len - 1] = '\0';
-        }
-
-        return 0;
+        LOG_DBG("Couldn't find key: %s", key);
+        return entry_id;
     }
-    else
+
+    settings_entry_t entry;
+    ret = nvs_read(&storage.nvs, entry_id, &entry, sizeof(entry));
+    if (ret < 0)
     {
-        if (!storage.sd_available)
-        {
-            LOG_INF("SD card not available");
-            return -ENOTSUP;
-        }
-        char namespace[MAX_NAMESPACE_LEN];
-        char local_key[MAX_KEY_LEN];
-
-        ret = parse_key(key, namespace, local_key);
-        if (ret < 0)
-        {
-            return ret;
-        }
-
-        ret = sd_get_value(namespace, local_key, value, max_len);
+        LOG_WRN("Failed to read key %s at index %d", key, entry_id);
         return ret;
     }
 
-    return -1;
+    if (entry.encrypted)
+    {
+#ifdef CONFIG_AKIRA_SETTINGS_ENCRYPTION
+        uint8_t decoded[MAX_VALUE_LEN];
+        size_t decoded_len;
+        ret = base64_decode(decoded, sizeof(decoded), &decoded_len,
+                            entry.value, strlen(entry.value));
+
+        if (ret != 0)
+        {
+            LOG_ERR("Base64 decode failed: %d", ret);
+            return ret;
+        }
+
+        return crypto_decrypt(decoded, decoded_len, value, max_len);
+#else
+        LOG_ERR("Entry is encrypted but encryption not enabled");
+        return -ENOTSUP;
+#endif
+    }
+    else
+    {
+        strncpy(value, entry.value, max_len - 1);
+        value[max_len - 1] = '\0';
+    }
+
+    return 0;
 }
 
 static int settings_delete(const char *key)
 {
     int ret = -1;
-    if (storage.type == AKIRA_SETTINGS_STORAGE_FLASH)
+    int entry_id = settings_get_id(key);
+    if (entry_id < 0)
     {
-        int entry_id = settings_get_id(key);
-        if (entry_id < 0)
-        {
-            LOG_DBG("Couldn't find key: %s", key);
-            return entry_id;
-        }
-
-        uint16_t counter;
-        ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
-        if (ret < 0)
-        {
-            LOG_INF("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
-            return ret;
-        }
-
-        uint16_t last_index = counter - 1;
-        int last_entry_id = SETTINGS_START_ID + last_index;
-
-        if (entry_id != last_entry_id)
-        { // Write the last key to the value we want to remove. This is done to avoid shifting all of the settings.
-            settings_entry_t last_entry;
-            ret = nvs_read(&storage.nvs, last_entry_id, &last_entry, sizeof(last_entry));
-            if (ret < 0)
-            {
-                LOG_WRN("Failed to read last entry at index: %d (%d)", last_entry_id, ret);
-                return ret;
-            }
-
-            ret = nvs_write(&storage.nvs, entry_id, &last_entry, sizeof(last_entry));
-            if (ret < 0)
-            {
-                LOG_WRN("Failed to move last entry to index %d (%d)", entry_id, ret);
-                return ret;
-            }
-
-            ret = nvs_delete(&storage.nvs, last_entry_id);
-            if (ret < 0)
-            {
-                LOG_WRN("Failed to delete last entry at index %d (%d)", last_entry_id, ret);
-                return ret;
-            }
-        }
-        else
-        { // If it is the last entry, it won't affect the rest so just delete it
-            ret = nvs_delete(&storage.nvs, entry_id);
-            if (ret < 0)
-            {
-                LOG_WRN("Failed to delete %s at index %d", key, entry_id);
-                return ret;
-            }
-        }
-
-        counter--;
-        ret = nvs_write(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
-        if (ret < 0)
-        {
-            LOG_WRN("Failed to decrement counter to %d (%d)", counter, ret);
-            return ret;
-        }
-
-        return 0;
+        LOG_DBG("Couldn't find key: %s", key);
+        return entry_id;
     }
-    else
+
+    uint16_t counter;
+    ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
+    if (ret < 0)
     {
-        if (!storage.sd_available)
-        {
-            LOG_INF("SD card not available");
-            return -ENOTSUP;
-        }
-        char namespace[MAX_NAMESPACE_LEN];
-        char local_key[MAX_KEY_LEN];
-
-        ret = parse_key(key, namespace, local_key);
-        if (ret < 0)
-        {
-            return ret;
-        }
-
-        ret = sd_delete_value(namespace, local_key, key);
+        LOG_INF("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
         return ret;
     }
-    return -1;
+
+    uint16_t last_index = counter - 1;
+    int last_entry_id = SETTINGS_START_ID + last_index;
+
+    if (entry_id != last_entry_id)
+    { // Write the last key to the value we want to remove. This is done to avoid shifting all of the settings.
+        settings_entry_t last_entry;
+        ret = nvs_read(&storage.nvs, last_entry_id, &last_entry, sizeof(last_entry));
+        if (ret < 0)
+        {
+            LOG_WRN("Failed to read last entry at index: %d (%d)", last_entry_id, ret);
+            return ret;
+        }
+
+        ret = nvs_write(&storage.nvs, entry_id, &last_entry, sizeof(last_entry));
+        if (ret < 0)
+        {
+            LOG_WRN("Failed to move last entry to index %d (%d)", entry_id, ret);
+            return ret;
+        }
+
+        ret = nvs_delete(&storage.nvs, last_entry_id);
+        if (ret < 0)
+        {
+            LOG_WRN("Failed to delete last entry at index %d (%d)", last_entry_id, ret);
+            return ret;
+        }
+    }
+    else
+    { // If it is the last entry, it won't affect the rest so just delete it
+        ret = nvs_delete(&storage.nvs, entry_id);
+        if (ret < 0)
+        {
+            LOG_WRN("Failed to delete %s at index %d", key, entry_id);
+            return ret;
+        }
+    }
+
+    counter--;
+    ret = nvs_write(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
+    if (ret < 0)
+    {
+        LOG_WRN("Failed to decrement counter to %d (%d)", counter, ret);
+        return ret;
+    }
+
+    return 0;
 }
 
 static int settings_clear(void)
 {
-    int ret = -1;
-    if (storage.type == AKIRA_SETTINGS_STORAGE_FLASH)
+    int ret = nvs_clear(&storage.nvs);
+    if (!ret)
     {
-        ret = nvs_clear(&storage.nvs);
+        storage.initialized = false;
+        ret = init_flash(); // We need to reinitialize the flash
         if (!ret)
         {
-            storage.initialized = false;
-            ret = init_flash(); // We need to reinitialize the flash
-            if (!ret)
-            {
-                storage.initialized = true;
-            }
-        }
-    }
-    else
-    {
-        if (!storage.sd_available)
-        {
-            LOG_INF("SD card not available");
-            return -ENOTSUP;
-        }
-        struct fs_dir_t dir;
-        fs_dir_t_init(&dir);
-
-        if (fs_opendir(&dir, "/SD:/settings") == 0)
-        {
-            struct fs_dirent entry;
-            while (fs_readdir(&dir, &entry) == 0)
-            {
-                if (entry.name[0] == '\0')
-                    break;
-
-                if (entry.type == FS_DIR_ENTRY_DIR &&
-                    strcmp(entry.name, ".") != 0 && strcmp(entry.name, "..") != 0)
-                {
-                    char dirpath[MAX_FILEPATH_LEN];
-                    snprintf(dirpath, sizeof(dirpath), "/SD:/settings/%.*s",
-                             (int)(sizeof(dirpath) - sizeof("/SD:/settings/")),
-                             entry.name);
-                    fs_manager_delete_dir(dirpath);
-                }
-            }
-            fs_closedir(&dir);
+            storage.initialized = true;
         }
     }
     return 0;
@@ -1363,37 +805,7 @@ int akira_settings_init(void)
         return ret;
     }
 
-    switch (storage.type)
-    {
-    case AKIRA_SETTINGS_STORAGE_FLASH:
-        ret = init_flash();
-        if (!ret)
-        {
-            storage.type = AKIRA_SETTINGS_STORAGE_FLASH;
-        }
-        break;
-
-    case AKIRA_SETTINGS_STORAGE_SD:
-        ret = init_sd();
-        if (!ret)
-        {
-            storage.type = AKIRA_SETTINGS_STORAGE_SD;
-        }
-        else
-        {
-            LOG_WRN("SD Unavailable, falling back to flash memory.");
-            storage.type = AKIRA_SETTINGS_STORAGE_FLASH;
-            return akira_settings_init();
-        }
-        break;
-
-    case AKIRA_SETTINGS_STORAGE_AUTO:
-        storage.type = AKIRA_SETTINGS_STORAGE_FLASH;
-        return akira_settings_init();
-
-    default:
-        return -EINVAL;
-    }
+    ret = init_flash();
 
     if (!ret)
     {
@@ -1407,7 +819,7 @@ int akira_settings_init(void)
 
         storage.initialized = true;
         k_sem_give(&storage_ready_sem);
-        LOG_INF("Storage initialized to %s", (!storage.type) ? "FLASH" : "SD");
+        LOG_INF("Storage initialized to FLASH");
     }
     else
     {
@@ -1600,78 +1012,70 @@ int akira_settings_list(settings_iterator_t *iter)
         return -EINVAL;
     }
     int ret = -1;
-    if (storage.type == AKIRA_SETTINGS_STORAGE_FLASH)
-    {
 
-        if (iter->count == 0)
-        { // Initiliaze iterator
-            uint16_t counter;
-            ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
-            if (ret < 0)
-            {
-                LOG_WRN("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
-                return ret;
-            }
-            iter->count = counter;
-            iter->index = 0;
-        }
-
-        if (iter->index >= iter->count)
-        {
-            return 1; // Indicate end of iteration
-        }
-
-        settings_entry_t entry;
-        int entry_id = SETTINGS_START_ID + iter->index;
-        ret = nvs_read(&storage.nvs, entry_id, &entry, sizeof(entry));
+    if (iter->count == 0)
+    { // Initiliaze iterator
+        uint16_t counter;
+        ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
         if (ret < 0)
         {
-            LOG_WRN("Failed to read at index %d", entry_id);
+            LOG_WRN("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
             return ret;
         }
+        iter->count = counter;
+        iter->index = 0;
+    }
 
-        strncpy(iter->key, entry.key, MAX_KEY_LEN - 1);
-        iter->key[MAX_KEY_LEN - 1] = '\0';
+    if (iter->index >= iter->count)
+    {
+        return 1; // Indicate end of iteration
+    }
 
-        if (entry.encrypted)
-        {
+    settings_entry_t entry;
+    int entry_id = SETTINGS_START_ID + iter->index;
+    ret = nvs_read(&storage.nvs, entry_id, &entry, sizeof(entry));
+    if (ret < 0)
+    {
+        LOG_WRN("Failed to read at index %d", entry_id);
+        return ret;
+    }
+
+    strncpy(iter->key, entry.key, MAX_KEY_LEN - 1);
+    iter->key[MAX_KEY_LEN - 1] = '\0';
+
+    if (entry.encrypted)
+    {
 #ifdef CONFIG_AKIRA_SETTINGS_ENCRYPTION
-            uint8_t decoded[MAX_VALUE_LEN];
-            size_t decoded_len;
-            ret = base64_decode(decoded, sizeof(decoded), &decoded_len,
-                                entry.value, strlen(entry.value));
+        uint8_t decoded[MAX_VALUE_LEN];
+        size_t decoded_len;
+        ret = base64_decode(decoded, sizeof(decoded), &decoded_len,
+                            entry.value, strlen(entry.value));
 
-            if (ret == 0)
+        if (ret == 0)
+        {
+            ret = crypto_decrypt(decoded, decoded_len, iter->value, MAX_VALUE_LEN);
+            if (ret < 0)
             {
-                ret = crypto_decrypt(decoded, decoded_len, iter->value, MAX_VALUE_LEN);
-                if (ret < 0)
-                {
-                    LOG_WRN("Failed to decrypt value at index %d", entry_id);
-                    strncpy(iter->value, "[ENCRYPTED]", MAX_VALUE_LEN - 1);
-                }
-            }
-            else
-            {
+                LOG_WRN("Failed to decrypt value at index %d", entry_id);
                 strncpy(iter->value, "[ENCRYPTED]", MAX_VALUE_LEN - 1);
             }
-#else
-            strncpy(iter->value, "[ENCRYPTED]", MAX_VALUE_LEN - 1);
-#endif
         }
         else
         {
-            strncpy(iter->value, entry.value, MAX_VALUE_LEN - 1);
+            strncpy(iter->value, "[ENCRYPTED]", MAX_VALUE_LEN - 1);
         }
-
-        iter->value[MAX_VALUE_LEN - 1] = '\0';
-        ++(iter->index);
-        return 0;
+#else
+        strncpy(iter->value, "[ENCRYPTED]", MAX_VALUE_LEN - 1);
+#endif
     }
     else
     {
-        LOG_INF("List not implemented for SD yet");
+        strncpy(iter->value, entry.value, MAX_VALUE_LEN - 1);
     }
-    return -1;
+
+    iter->value[MAX_VALUE_LEN - 1] = '\0';
+    ++(iter->index);
+    return 0;
 }
 
 int akira_settings_set_async(const char *key, const char *value, settings_wq_callback_t callback, void *user_data, uint8_t is_encrypted)
@@ -1964,7 +1368,7 @@ static int cmd_settings_clear(const struct shell *sh, size_t argc, char **argv)
         shell_error(sh, "Usage: settings clear confirm");
         shell_print(sh, "");
         shell_print(sh, "Description:");
-        shell_print(sh, "  Erases ALL stored settings from flash/SD card.");
+        shell_print(sh, "  Erases ALL stored settings from flash.");
         shell_print(sh, "  This removes both encrypted and plaintext data.");
         shell_print(sh, "");
         shell_warn(sh, "⚠️  WARNING: This will DELETE ALL stored data!");
@@ -2003,8 +1407,7 @@ static int cmd_settings_info(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "");
     shell_print(sh, "Storage Configuration:");
     shell_print(sh, "───────────────────────────────────────────────────────");
-    shell_print(sh, "Storage type:     %s",
-                storage.type == AKIRA_SETTINGS_STORAGE_FLASH ? "Flash (NVS)" : "SD Card");
+    shell_print(sh, "Storage type:     Flash (NVS)");
     shell_print(sh, "Max value length: %d bytes", MAX_VALUE_LEN);
     shell_print(sh, "Max keys:         %d", MAX_KEYS);
 
@@ -2014,23 +1417,16 @@ static int cmd_settings_info(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "Encryption:       Disabled");
 #endif
 
-    if (storage.type == AKIRA_SETTINGS_STORAGE_FLASH)
-    {
-        uint16_t counter;
-        int ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
+    uint16_t counter;
+    int ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
 
-        if (ret >= 0)
-        {
-            shell_print(sh, "Current keys:     %d", counter);
-            shell_print(sh, "Available slots:  %d", MAX_KEYS - counter);
-
-            int usage_x10 = (counter * 1000) / MAX_KEYS;
-            shell_print(sh, "Usage:            %d.%d%%", usage_x10 / 10, usage_x10 % 10);
-        }
-    }
-    else if (storage.type == AKIRA_SETTINGS_STORAGE_SD)
+    if (ret >= 0)
     {
-        LOG_INF("Not implemented yet for SD");
+        shell_print(sh, "Current keys:     %d", counter);
+        shell_print(sh, "Available slots:  %d", MAX_KEYS - counter);
+
+        int usage_x10 = (counter * 1000) / MAX_KEYS;
+        shell_print(sh, "Usage:            %d.%d%%", usage_x10 / 10, usage_x10 % 10);
     }
 
     shell_print(sh, "───────────────────────────────────────────────────────");
