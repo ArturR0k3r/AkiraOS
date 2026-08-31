@@ -78,7 +78,13 @@ void akira_framebuffer_present(void)
     /* Blocks only if the compositor hasn't finished the previous buffer yet
      * — bounds producers to at most one frame ahead of the blit. */
     k_sem_take(&fb_sem_buffer_free, K_FOREVER);
+    uint8_t presented_idx = fb_write_idx;
     fb_write_idx ^= 1U;
+    /* Seed the new write buffer with the frame just presented so apps that
+     * draw deltas (not a full redraw every frame) don't alternate onto a
+     * stale/uninitialized buffer every other present(). */
+    memcpy(hw_framebuffer[fb_write_idx], hw_framebuffer[presented_idx],
+           sizeof(hw_framebuffer[0]));
     k_mutex_unlock(&fb_present_mutex);
 }
 
