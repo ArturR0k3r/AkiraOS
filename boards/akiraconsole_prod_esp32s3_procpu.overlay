@@ -118,7 +118,7 @@
 // USB Device — HID interface
 // =============================================================================
 &zephyr_udc0 {
-	status = "disabled";  // HID interface only, no CDC ACM console
+	status = "okay";  // HID interface only, no CDC ACM console
 
 	hid_dev_0: hid_dev_0 {
 		compatible            = "zephyr,hid-device";

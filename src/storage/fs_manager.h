@@ -218,6 +218,12 @@ bool fs_manager_has_persistent_storage(void);
 bool fs_manager_sd_available(void);
 
 /**
+ * Force SD availability state (used by USB MSC mode entry/exit)
+ * @param available new availability state
+ */
+void fs_manager_set_sd_available(bool available);
+
+/**
  * RAM file info for listing
  */
 typedef struct {

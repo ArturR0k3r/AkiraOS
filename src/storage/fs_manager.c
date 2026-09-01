@@ -977,6 +977,16 @@ bool fs_manager_sd_available(void)
 }
 
 /**
+ * Force SD availability state (used by USB MSC mode entry/exit — the SD
+ * card is physically still there, but AkiraOS must stop touching it while
+ * a host PC owns the volume).
+ */
+void fs_manager_set_sd_available(bool available)
+{
+    fs_state.sd_available = available;
+}
+
+/**
  * List files in RAM storage
  */
 int fs_manager_list_ram_files(ram_file_info_t *info, size_t max_count)

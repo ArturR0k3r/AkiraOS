@@ -872,8 +872,12 @@ static int usb_hid_transport_init_fn(hid_device_type_t device_types)
         return ret;
     }
 
-    /* Register ALL classes  */
-    ret = usbd_register_all_classes(usbd_ctx, USBD_SPEED_FS, 1, NULL);
+    /* Register HID's classes through the mode system (not
+     * usbd_register_all_classes()) so usb_manager's mode tracks HID as
+     * already active — otherwise the first usb_manager_activate(USB_MODE_HID)
+     * in usb_hid_transport_enable() re-registers these same classes and
+     * fails with -EBUSY (Zephyr refuses double-registration). */
+    ret = usb_manager_register_initial_classes(USB_MODE_HID);
     if (ret)
     {
         LOG_ERR("Failed to register USB classes: %d", ret);
@@ -926,6 +930,13 @@ static int usb_hid_transport_enable(void)
         return ret;
     }
 
+    ret = usb_manager_activate(USB_MODE_HID);
+    if (ret != 0)
+    {
+        LOG_ERR("Failed to activate USB HID mode: %d", ret);
+        return ret;
+    }
+
     k_mutex_lock(&usb_hid_ctx.mutex, K_FOREVER);
     usb_hid_ctx.enabled = true;
     k_mutex_unlock(&usb_hid_ctx.mutex);
@@ -960,6 +971,10 @@ static int usb_hid_transport_disable(void)
     k_mutex_lock(&usb_hid_ctx.mutex, K_FOREVER);
     usb_hid_ctx.enabled = false;
     k_mutex_unlock(&usb_hid_ctx.mutex);
+
+    /* Not actionable here — there's nothing to roll back to at disable
+     * time. usb_manager_activate() logs its own failure internally. */
+    (void)usb_manager_activate(USB_MODE_IDLE);
 
     LOG_INF("USB HID transport disabled");
 

@@ -849,6 +849,11 @@ if(CONFIG_AKIRA_SD_CARD)
     target_sources(app PRIVATE src/storage/sd_card.c)
 endif()
 
+# USB Mass Storage ownership shim for the SD card
+if(CONFIG_AKIRA_USB_MSC)
+    target_sources(app PRIVATE src/storage/usb_msc.c)
+endif()
+
 
 # Storage drivers for app sources
 if(CONFIG_AKIRA_APP_SOURCE_SD)
