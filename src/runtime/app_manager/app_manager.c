@@ -12,6 +12,7 @@
 #include <lib/akpkg.h>
 #include "../security/app_signing.h"
 #include "../storage/fs_manager.h"
+#include "../storage/sd_card.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include "../../akira.h"
@@ -1884,6 +1885,12 @@ int app_manager_run_from_sd(const char *name_or_path)
         return -EINVAL;
     }
 
+    /* Marks the SD card busy for the load-only window below — the app has
+     * no further SD dependency once akira_runtime_install_with_manifest()
+     * returns (it fully parses the binary into WAMR's own memory), so this
+     * must be cleared before that call, not held for the app's lifetime. */
+    akira_sd_card_set_transfer_active(true);
+
     char path[APP_PATH_MAX_LEN];
     char name[APP_NAME_MAX_LEN];
 
@@ -1919,6 +1926,7 @@ int app_manager_run_from_sd(const char *name_or_path)
 
     if (!fs_manager_exists(path)) {
         LOG_ERR("SD XIP: app not found on SD: %s", path);
+        akira_sd_card_set_transfer_active(false);
         return -ENOENT;
     }
 
@@ -1927,11 +1935,13 @@ int app_manager_run_from_sd(const char *name_or_path)
     if (find_app_by_name(name) != NULL) {
         k_mutex_unlock(&g_registry_mutex);
         LOG_WRN("SD XIP: '%s' is installed — use 'app start %s'", name, name);
+        akira_sd_card_set_transfer_active(false);
         return -EEXIST;
     }
     if (find_transient_by_name(name) != NULL) {
         k_mutex_unlock(&g_registry_mutex);
         LOG_WRN("SD XIP: '%s' is already running from SD", name);
+        akira_sd_card_set_transfer_active(false);
         return -EBUSY;
     }
     k_mutex_unlock(&g_registry_mutex);
@@ -1940,16 +1950,19 @@ int app_manager_run_from_sd(const char *name_or_path)
     ssize_t size = fs_manager_get_size(path);
     if (size < 0) {
         LOG_ERR("SD XIP: failed to get size of %s: %zd", path, size);
+        akira_sd_card_set_transfer_active(false);
         return (int)size;
     }
     if (size > (ssize_t)(CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024)) {
         LOG_ERR("SD XIP: binary too large (%zd bytes)", size);
+        akira_sd_card_set_transfer_active(false);
         return -EFBIG;
     }
 
     uint8_t *buffer = akira_malloc_buffer((size_t)size);
     if (!buffer) {
         LOG_ERR("SD XIP: failed to allocate %zd bytes", size);
+        akira_sd_card_set_transfer_active(false);
         return -ENOMEM;
     }
 
@@ -1957,8 +1970,10 @@ int app_manager_run_from_sd(const char *name_or_path)
     if (bytes_read != size) {
         akira_free_buffer(buffer);
         LOG_ERR("SD XIP: read mismatch %zd != %zd", bytes_read, size);
+        akira_sd_card_set_transfer_active(false);
         return bytes_read < 0 ? (int)bytes_read : -EIO;
     }
+    akira_sd_card_set_transfer_active(false);
 
     /* ---- Optional sidecar JSON manifest ---- */
     char *json = akira_malloc_buffer(512);
