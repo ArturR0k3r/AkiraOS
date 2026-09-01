@@ -562,6 +562,7 @@ static void handle_files_read(const char *op, int id, const char *params)
         send_resp(op, id, false, "open failed");
         return;
     }
+    akira_sd_card_set_transfer_active(true);
 
     /* Send data in COMP_DATA_PAYLOAD_MAX chunks via DATA_DOWN notifications */
     extern const struct bt_gatt_attr *companion_attrs;
@@ -606,6 +607,7 @@ static void handle_files_read(const char *op, int id, const char *params)
     }
 
     fs_close(&f);
+    akira_sd_card_set_transfer_active(false);
 }
 
 static void handle_files_write(const char *op, int id, const char *params)
