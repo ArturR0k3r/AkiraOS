@@ -211,6 +211,15 @@ static void usb_manager_msg_cb(struct usbd_context *const ctx,
             break;
         }
         k_mutex_unlock(&usb_mgr_ctx.mutex);
+        LOG_INF("VBUS attached");
+        if (usb_manager_get_mode() != USB_MODE_MSC) {
+            /* HID (gamepad/FIDO) is the resting default, registered at boot
+             * regardless of VBUS — the device is never actually sitting in
+             * USB_MODE_IDLE in normal operation. So "not already MSC" is
+             * the real idle condition here: let the shell offer to switch
+             * into MSC unless it's already there. */
+            usb_manager_notify_callbacks(USB_EVENT_VBUS_ATTACH_IDLE);
+        }
         break;
         
     case USBD_MSG_VBUS_REMOVED:

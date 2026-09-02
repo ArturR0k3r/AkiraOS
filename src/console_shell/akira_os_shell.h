@@ -20,6 +20,8 @@
 #ifndef AKIRA_OS_SHELL_H
 #define AKIRA_OS_SHELL_H
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -53,6 +55,17 @@ void akira_os_shell_go_home(void);
  * Safe to call from any thread (e.g. SD hotplug callback).
  */
 void akira_os_shell_notify_app_changed(void);
+
+/**
+ * @brief Notify the shell that USB Mass Storage took/released the SD card.
+ *
+ * Shows/hides a blocking "USB Storage Connected" overlay so the user can't
+ * try to launch a game the host currently owns.
+ * Safe to call from any thread.
+ *
+ * @param active true once MSC has taken the SD card, false once released.
+ */
+void akira_os_shell_notify_usb_msc(bool active);
 
 /**
  * @brief Pre-empt the shell into WASM-dormant mode before launching a WASM app.

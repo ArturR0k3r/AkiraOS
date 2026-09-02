@@ -16,6 +16,9 @@
 #include <storage/sd_card.h>
 #include <storage/fs_manager.h>
 #endif
+#if defined(CONFIG_AKIRA_USB_MSC)
+#include <storage/usb_msc.h>
+#endif
 
 LOG_MODULE_REGISTER(sd_manager, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -63,6 +66,23 @@ static void sd_manager_hotplug_cb(bool present, void *user_data)
 }
 #endif
 
+#if defined(CONFIG_AKIRA_USB_MSC)
+/* MSC took/released the SD card — the registry and screen never hear about
+ * this otherwise, since it isn't a physical hotplug event. */
+static void sd_manager_msc_cb(bool owns_sd, void *user_data)
+{
+    ARG_UNUSED(user_data);
+    if (owns_sd) {
+        app_manager_unregister_sd_apps();
+        notify_state_change(SD_STATE_UNMOUNTED);
+    } else {
+        app_manager_register_sd_apps();
+        notify_state_change(SD_STATE_MOUNTED);
+    }
+    akira_os_shell_notify_app_changed();
+}
+#endif
+
 static void sd_state_log_cb(sd_state_t state, void *user_data)
 {
     ARG_UNUSED(user_data);
@@ -74,6 +94,9 @@ int sd_manager_init(void)
 {
 #ifdef CONFIG_AKIRA_SD_HOTPLUG
     akira_sd_card_register_hotplug_cb(sd_manager_hotplug_cb, NULL); /* slot 0 */
+#endif
+#if defined(CONFIG_AKIRA_USB_MSC)
+    akira_usb_msc_register_state_cb(sd_manager_msc_cb, NULL);
 #endif
     sd_manager_register_callback(sd_state_log_cb, NULL);
 

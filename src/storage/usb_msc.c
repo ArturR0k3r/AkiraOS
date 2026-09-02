@@ -39,9 +39,37 @@ USBD_DEFINE_MSC_LUN(sd, AKIRA_MSC_SD_DISK_NAME, "AkiraOS", "SD Card", "1.0");
 static bool g_msc_owns_sd;
 static bool g_enter_cancel_requested;
 
+#define AKIRA_USB_MSC_MAX_CBS 2
+static struct {
+    akira_usb_msc_state_cb_t cb;
+    void                     *user_data;
+} g_state_cbs[AKIRA_USB_MSC_MAX_CBS];
+
 bool akira_usb_msc_owns_sd(void)
 {
     return g_msc_owns_sd;
+}
+
+int akira_usb_msc_register_state_cb(akira_usb_msc_state_cb_t cb, void *user_data)
+{
+    for (int i = 0; i < AKIRA_USB_MSC_MAX_CBS; i++) {
+        if (!g_state_cbs[i].cb) {
+            g_state_cbs[i].cb        = cb;
+            g_state_cbs[i].user_data = user_data;
+            return 0;
+        }
+    }
+    LOG_WRN("USB MSC: no free state callback slots");
+    return -ENOMEM;
+}
+
+static void notify_state_cbs(bool owns_sd)
+{
+    for (int i = 0; i < AKIRA_USB_MSC_MAX_CBS; i++) {
+        if (g_state_cbs[i].cb) {
+            g_state_cbs[i].cb(owns_sd, g_state_cbs[i].user_data);
+        }
+    }
 }
 
 static int shim_init(struct disk_info *disk)
@@ -123,6 +151,7 @@ int akira_usb_msc_enter(void)
     akira_sd_card_release_for_usb_msc();
     fs_manager_set_sd_available(false);
     g_msc_owns_sd = true;
+    notify_state_cbs(true);
 
     return usb_manager_activate(USB_MODE_MSC);
 }
@@ -137,4 +166,5 @@ void akira_usb_msc_exit(void)
     g_msc_owns_sd = false;
     usb_manager_activate(USB_MODE_IDLE);
     akira_sd_card_init();
+    notify_state_cbs(false);
 }

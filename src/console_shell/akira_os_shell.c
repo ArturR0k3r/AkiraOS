@@ -35,6 +35,7 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 #include "shell_theme.h"
 #include "install_progress_screen.h"
 #include "wait_screen.h"
+#include "ui/akira_ui.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
@@ -64,6 +65,9 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 #endif
 #if defined(CONFIG_AKIRA_USB)
 #include <connectivity/usb/usb_manager.h>
+#endif
+#if defined(CONFIG_AKIRA_USB_MSC)
+#include <storage/usb_msc.h>
 #endif
 #if defined(CONFIG_BT)
 #include <connectivity/bluetooth/bt_manager.h>
@@ -106,6 +110,8 @@ typedef enum
     CMD_APP_STATE_CHANGED, /* App lifecycle changed — refresh home list */
     CMD_INSTALL_PROGRESS,  /* Install progress update */
     CMD_SD_CARD_EVENT,     /* SD card inserted/removed */
+    CMD_USB_MSC_EVENT,     /* USB MSC took/released the SD card */
+    CMD_USB_TRUST_EVENT,   /* VBUS attached/removed while USB mode is IDLE */
 } shell_cmd_t;
 
 typedef struct
@@ -125,6 +131,16 @@ typedef struct
         {
             bool present;
         } sd;
+        /* CMD_USB_MSC_EVENT */
+        struct
+        {
+            bool active;
+        } msc;
+        /* CMD_USB_TRUST_EVENT */
+        struct
+        {
+            bool arm; /* true = VBUS attached (arm prompt), false = removed (cancel) */
+        } trust;
     };
 } shell_event_t;
 
@@ -144,6 +160,18 @@ K_MSGQ_DEFINE(g_shell_msgq,
 /* ------------------------------------------------------------------ */
 
 static bool g_wasm_active; /* true while a WASM app has the display */
+#if defined(CONFIG_AKIRA_USB_MSC)
+/* true while the USB-storage modal owns the display — CMD_APP_STATE_CHANGED's
+ * home_screen_refresh() must not repaint over it (both events land in the
+ * same queue drain, refresh's usually processed after the modal is shown). */
+static bool g_msc_modal_active;
+/* Set by shell_usb_event_cb() (USB stack thread) on VBUS attach while IDLE,
+ * cleared by VBUS removal or once the shell thread has shown the prompt.
+ * Deferred to the shell thread rather than acted on directly — the confirm
+ * dialog and akira_usb_msc_enter() need display/input ownership, which only
+ * the shell thread has, and must wait for HOME/idle if the user is mid-app. */
+static bool g_msc_trust_pending;
+#endif
 
 /* SD popup state */
 static bool g_sd_popup_active;
@@ -248,6 +276,32 @@ static void sd_popup_tick_fn(void)
     }
 }
 
+#if defined(CONFIG_AKIRA_USB_MSC)
+/* USB MSC modal — plain notice, not a progress widget (nothing is "%
+ * done" while the card is handed to the host). */
+#define MSC_MODAL_W 240
+#define MSC_MODAL_H 70
+#define MSC_MODAL_X ((SCR_W - MSC_MODAL_W) / 2)
+#define MSC_MODAL_Y ((SCR_H - MSC_MODAL_H) / 2)
+
+static void usb_msc_modal_draw(void)
+{
+    int px = MSC_MODAL_X;
+    int py = MSC_MODAL_Y;
+
+    akira_display_rect(px, py, MSC_MODAL_W, MSC_MODAL_H, C_BLACK);
+    akira_display_rect_outline(px, py, MSC_MODAL_W, MSC_MODAL_H, C_WHITE);
+    akira_display_rect_outline(px + 1, py + 1, MSC_MODAL_W - 2, MSC_MODAL_H - 2, C_WHITE);
+
+    akira_display_text(px + 8, py + 8, "USB Storage", C_WHITE);
+    akira_display_hline(px + 8, py + 20, MSC_MODAL_W - 16, C_WHITE);
+    akira_display_text(px + 8, py + 30, "Connected to host", C_WHITE);
+    akira_display_text(px + 8, py + 44, "Do not unplug", C_WHITE);
+
+    akira_display_flush();
+}
+#endif
+
 /* ------------------------------------------------------------------ */
 /* IPC lifecycle listener thread                                       */
 /* ------------------------------------------------------------------ */
@@ -325,6 +379,12 @@ void akira_os_shell_go_home(void)
 void akira_os_shell_notify_app_changed(void)
 {
     shell_event_t ev = {.type = CMD_APP_STATE_CHANGED};
+    k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
+}
+
+void akira_os_shell_notify_usb_msc(bool active)
+{
+    shell_event_t ev = {.type = CMD_USB_MSC_EVENT, .msc = {.active = active}};
     k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
 }
 
@@ -617,8 +677,13 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 
             /* s_prev_btns and just_pressed already computed at loop top.
              * Guard with !s_display_blanked: keys must not reach the home or
-             * settings screen while the sleep screen is up. */
-            if (just_pressed && !s_display_blanked)
+             * settings screen while the sleep screen is up. Same for the USB
+             * MSC modal — the SD-backed apps it's covering no longer exist. */
+            if (just_pressed && !s_display_blanked
+#if defined(CONFIG_AKIRA_USB_MSC)
+                && !g_msc_modal_active
+#endif
+            )
             {
                 static const char *const btn_names[] = {
                     [AKIRA_BTN_HOME] = "HOME",
@@ -655,6 +720,9 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 #ifdef CONFIG_AKIRA_SD_HOTPLUG
                 && !g_sd_popup_active
 #endif
+#if defined(CONFIG_AKIRA_USB_MSC)
+                && !g_msc_modal_active
+#endif
             )
             {
                 home_screen_tick();
@@ -677,6 +745,12 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 {
                     settings_screen_update();
                 }
+#if defined(CONFIG_AKIRA_USB_MSC)
+                else if (g_msc_modal_active)
+                {
+                    /* Static overlay — nothing to refresh */
+                }
+#endif
                 else
                 {
                     home_screen_update_status();
@@ -939,7 +1013,12 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                                 }
                             }
 #endif
-                            home_screen_refresh();
+#if defined(CONFIG_AKIRA_USB_MSC)
+                            if (!g_msc_modal_active)
+#endif
+                            {
+                                home_screen_refresh();
+                            }
                         }
                     }
                 }
@@ -963,10 +1042,72 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 break;
 #endif
 
+#if defined(CONFIG_AKIRA_USB_MSC)
+            case CMD_USB_MSC_EVENT:
+                g_msc_modal_active = ev.msc.active;
+                if (ev.msc.active)
+                {
+                    if (!g_wasm_active)
+                    {
+                        usb_msc_modal_draw();
+                    }
+                }
+                else
+                {
+                    if (!g_wasm_active)
+                    {
+                        home_screen_refresh();
+                    }
+                }
+                break;
+
+            case CMD_USB_TRUST_EVENT:
+                g_msc_trust_pending = ev.trust.arm;
+                break;
+#endif
+
             default:
                 break;
             }
         }
+
+#if defined(CONFIG_AKIRA_USB_MSC)
+        /* Show the deferred USB trust prompt once we're actually sitting
+         * idle at HOME — never interrupts a running app, settings, the SD
+         * popup, or a blanked screen. */
+        if (g_msc_trust_pending && !g_wasm_active && !settings_screen_is_active()
+            && !s_display_blanked && !g_msc_modal_active
+#ifdef CONFIG_AKIRA_SD_HOTPLUG
+            && !g_sd_popup_active
+#endif
+            && usb_manager_get_mode() != USB_MODE_MSC)
+        {
+            g_msc_trust_pending = false;
+            akira_input_flush();
+
+            bool trusted = akira_ui_confirm_dialog(
+                "USB Storage",
+                "Trust this device? SD card will be shared with the host.");
+
+            if (trusted)
+            {
+                int ret = akira_usb_msc_enter();
+                if (ret != 0)
+                {
+                    LOG_WRN("USB MSC enter after trust prompt failed: %d", ret);
+                    home_screen_load(); /* dialog is gone, restore what's under it */
+                }
+                /* success: akira_usb_msc_enter() already queued
+                 * CMD_USB_MSC_EVENT, which draws the MSC modal over this
+                 * dialog on the next drain. */
+            }
+            else
+            {
+                home_screen_load();
+            }
+            s_prev_btns = akira_input_get_bitmask();
+        }
+#endif
     }
 }
 
@@ -998,11 +1139,41 @@ static void shell_sd_hotplug_cb(bool present, void *user_data)
 }
 #endif
 
+#if defined(CONFIG_AKIRA_USB_MSC)
+static void shell_usb_msc_cb(bool owns_sd, void *user_data)
+{
+    ARG_UNUSED(user_data);
+    akira_os_shell_notify_usb_msc(owns_sd);
+}
+
+/* VBUS attach/removal while USB mode is IDLE — fires on the USB stack
+ * thread, so just arm/disarm the trust prompt; shown by the shell thread
+ * once it's next at HOME (see the trust-pending check in the main loop). */
+static void shell_usb_event_cb(usb_manager_event_t event, void *user_data)
+{
+    ARG_UNUSED(user_data);
+    if (event == USB_EVENT_VBUS_ATTACH_IDLE)
+    {
+        shell_event_t ev = {.type = CMD_USB_TRUST_EVENT, .trust = {.arm = true}};
+        k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
+    }
+    else if (event == USB_EVENT_DISCONNECTED)
+    {
+        shell_event_t ev = {.type = CMD_USB_TRUST_EVENT, .trust = {.arm = false}};
+        k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
+    }
+}
+#endif
+
 static int shell_init(void)
 {
 #ifdef CONFIG_AKIRA_SD_HOTPLUG
     akira_sd_card_register_pre_insert_cb(shell_sd_pre_insert_cb, NULL);
     akira_sd_card_register_hotplug_cb(shell_sd_hotplug_cb, NULL);
+#endif
+#if defined(CONFIG_AKIRA_USB_MSC)
+    akira_usb_msc_register_state_cb(shell_usb_msc_cb, NULL);
+    usb_manager_register_callback(shell_usb_event_cb, NULL);
 #endif
 
     k_thread_create(&g_shell_thread,
