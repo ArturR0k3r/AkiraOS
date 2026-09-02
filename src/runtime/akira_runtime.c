@@ -875,6 +875,10 @@ int akira_runtime_start(int instance_id)
         return -ENOMEM;
     }
 
+    /* Name the thread after the app so `kernel thread list` identifies it —
+     * otherwise a hung app is an anonymous entry among the system threads. */
+    (void)k_thread_name_set(app->tid, app->name);
+
     /* Block until WAMR instantiation succeeds or fails.
      * Hard timeout guards against WAMR deadlock or OOM. */
     int sem_ret = k_sem_take(&app->sem_start, K_MSEC(CONFIG_AKIRA_WASM_START_TIMEOUT_MS));

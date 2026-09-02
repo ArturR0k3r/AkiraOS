@@ -45,6 +45,11 @@
 	// both fought the external pull-up and inverted the sense — so every
 	// button read as permanently pressed, flooding the input queue
 	// ("Event dropped, queue full") and making the OS shell navigate itself.
+	// B (SW3) and X (SW4) were missed by that pass and kept the inverted
+	// sense: they read as held while idle and released while pressed, which
+	// in the retro cores meant SELECT/START (GB, NES) and START/Pause (SMS)
+	// were permanently asserted.  R45/R46 are their 10k pull-ups; both
+	// switches short to GND exactly like the other seven.
 	//
 	// zephyr,code maps to AKIRA_BTN_* (src/api/akira_input_api.h):
 	//   1=HOME/OK 2=UP 3=DOWN 4=LEFT 5=RIGHT 6=A 7=Y 8=B 9=X
@@ -83,12 +88,12 @@
 			zephyr,code = <6>;
 		};
 		btn_b: btn_b {
-			gpios = <&gpio0 16 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 16 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BTN B (SW3)";
 			zephyr,code = <8>;
 		};
 		btn_x: btn_x {
-			gpios = <&gpio0 17 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 17 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BTN X (SW4)";
 			zephyr,code = <9>;
 		};

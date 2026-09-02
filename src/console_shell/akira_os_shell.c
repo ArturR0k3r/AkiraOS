@@ -252,7 +252,12 @@ static void sd_popup_tick_fn(void)
 /* IPC lifecycle listener thread                                       */
 /* ------------------------------------------------------------------ */
 
-#define LIFECYCLE_LISTENER_STACK 1024
+/* 2048, not 1024: this thread holds a CONFIG_AKIRA_IPC_MSG_MAX_SIZE (256 B)
+ * receive buffer as a stack local, on top of the akira_ipc_recv() call depth
+ * and Xtensa's windowed-ABI register spills.  `kernel thread list` measured it
+ * at 1024/1024 with zero unused bytes — no headroom for an interrupt taken at
+ * peak depth, and the overflow lands in whatever stack the linker placed next. */
+#define LIFECYCLE_LISTENER_STACK 2048
 #define LIFECYCLE_TOPIC "akira.lifecycle"
 #define LIFECYCLE_SUBSCRIBER "akira_os_shell"
 
