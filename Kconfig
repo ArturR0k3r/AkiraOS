@@ -1609,6 +1609,32 @@ config AKIRA_USB_MSC_SHIM_INIT_PRIORITY
 
 endmenu # USB Mass Storage
 
+# ---------------------------------------------------------------------------
+# USB-C VBUS sense (FUSB302)
+# ---------------------------------------------------------------------------
+menu "USB-C VBUS Sense (FUSB302)"
+
+config AKIRA_FUSB302_VBUS
+    bool "Poll the FUSB302 PD controller for VBUS presence"
+    default n
+    depends on I2C
+    help
+      The ESP32-S3 dwc2 driver never reports real VBUS attach/remove
+      events (VBUSVALID is hard-tied to a constant in the vendor quirk
+      init), so this polls the FUSB302's own VBUS comparator
+      (STATUS0.VBUSOK) over I2C instead — the real signal behind the USB
+      trust-prompt flow in the OS shell.
+
+config AKIRA_FUSB302_VBUS_INIT_PRIORITY
+    int "FUSB302 VBUS-sense SYS_INIT priority"
+    default 55
+    depends on AKIRA_FUSB302_VBUS
+    help
+      A plain literal — SYS_INIT's priority argument is token-pasted into
+      a linker section name, so it cannot be an arithmetic expression.
+
+endmenu # USB-C VBUS Sense (FUSB302)
+
 menu "App Manager"
 
 config AKIRA_APP_MANAGER

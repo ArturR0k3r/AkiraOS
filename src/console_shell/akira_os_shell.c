@@ -277,26 +277,23 @@ static void sd_popup_tick_fn(void)
 }
 
 #if defined(CONFIG_AKIRA_USB_MSC)
-/* USB MSC modal — plain notice, not a progress widget (nothing is "%
- * done" while the card is handed to the host). */
-#define MSC_MODAL_W 240
-#define MSC_MODAL_H 70
-#define MSC_MODAL_X ((SCR_W - MSC_MODAL_W) / 2)
-#define MSC_MODAL_Y ((SCR_H - MSC_MODAL_H) / 2)
+/* USB MSC lock screen — full-screen takeover like wait_screen, not a small
+ * popup: this state locks out the rest of the shell (see g_msc_modal_active
+ * gating home_screen_tick/input below), so it should look the part. */
+static void msc_center_text(int y, const char *s, uint16_t color)
+{
+    akira_display_text((SCR_W - (int)strlen(s) * 8) / 2, y, s, color);
+}
 
 static void usb_msc_modal_draw(void)
 {
-    int px = MSC_MODAL_X;
-    int py = MSC_MODAL_Y;
+    akira_display_rect(0, 0, SCR_W, SCR_H, C_BLACK);
 
-    akira_display_rect(px, py, MSC_MODAL_W, MSC_MODAL_H, C_BLACK);
-    akira_display_rect_outline(px, py, MSC_MODAL_W, MSC_MODAL_H, C_WHITE);
-    akira_display_rect_outline(px + 1, py + 1, MSC_MODAL_W - 2, MSC_MODAL_H - 2, C_WHITE);
-
-    akira_display_text(px + 8, py + 8, "USB Storage", C_WHITE);
-    akira_display_hline(px + 8, py + 20, MSC_MODAL_W - 16, C_WHITE);
-    akira_display_text(px + 8, py + 30, "Connected to host", C_WHITE);
-    akira_display_text(px + 8, py + 44, "Do not unplug", C_WHITE);
+    int cy = SCR_H / 2 - 24;
+    msc_center_text(cy, "USB Storage", C_WHITE);
+    akira_display_hline(SCR_W / 2 - 60, cy + 16, 120, C_WHITE);
+    msc_center_text(cy + 28, "Connected to host", C_WHITE);
+    msc_center_text(cy + 44, "Do not unplug", C_WHITE);
 
     akira_display_flush();
 }
@@ -1063,6 +1060,15 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 
             case CMD_USB_TRUST_EVENT:
                 g_msc_trust_pending = ev.trust.arm;
+                if (!ev.trust.arm && akira_usb_msc_owns_sd())
+                {
+                    /* Cable pulled while MSC is mounted — don't strand the
+                     * user on the lock screen with the SD card stuck
+                     * unavailable; hand it back safely. Runs on this
+                     * thread (ample stack, same as the confirm-then-enter
+                     * path above), not the FUSB302 poller's workqueue. */
+                    akira_usb_msc_exit();
+                }
                 break;
 #endif
 
@@ -1086,8 +1092,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             akira_input_flush();
 
             bool trusted = akira_ui_confirm_dialog(
-                "USB Storage",
-                "Trust this device? SD card will be shared with the host.");
+                "USB", "Share SD card with host?");
 
             if (trusted)
             {

@@ -357,21 +357,23 @@ static void confirm_render(int bx, int by, int bw, int bh,
              capability_name ? capability_name : "?");
     akira_display_text(cx - text_w(cap) / 2, by + 64, cap, AKIRA_UI_PAPER);
 
-    /* cancel = plain text (focus ring when selected); confirm = filled card. */
+    /* Both buttons use the same selected/unselected language: filled +
+     * inverted text when selected, outline-only when not — a hardcoded
+     * fill or a bare outline alone doesn't reliably show which is chosen. */
     int btn_y = by + bh - 44;
     const char *cancel = "cancel";
-    int cxl = bx + bw / 4 - text_w(cancel) / 2;
-    if (sel == 0) {
-        akira_display_rounded_rect(cxl - 10, btn_y - 4, text_w(cancel) + 20, 28, 8,
-                                   AKIRA_UI_PAPER);
-    }
-    akira_display_text(cxl, btn_y + 5, cancel, AKIRA_UI_PAPER);
+    int clw = text_w(cancel) + 20;
+    int cxl = bx + bw / 4 - clw / 2;
+    akira_ui_dither_card(cxl, btn_y - 4, clw, 28, 8, /*selected=*/sel == 0,
+                         /*shadow=*/sel == 0 ? 3 : 0);
+    akira_display_text(cxl + (clw - text_w(cancel)) / 2, btn_y + 5, cancel,
+                       sel == 0 ? AKIRA_UI_INK : AKIRA_UI_PAPER);
 
     int cbx = bx + bw / 2 + 8, cbw = bw / 2 - 24, cbh = 28;
-    akira_ui_dither_card(cbx, btn_y, cbw, cbh, 8, /*selected=*/true,
+    akira_ui_dither_card(cbx, btn_y, cbw, cbh, 8, /*selected=*/sel == 1,
                          /*shadow=*/sel == 1 ? 3 : 0);
     akira_display_text(cbx + (cbw - text_w("confirm")) / 2, btn_y + 5, "confirm",
-                       AKIRA_UI_INK);
+                       sel == 1 ? AKIRA_UI_INK : AKIRA_UI_PAPER);
 
     akira_display_flush();
 }

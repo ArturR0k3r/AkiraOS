@@ -18,6 +18,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/usb/usbd.h>
 #include <zephyr/logging/log.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -180,6 +181,20 @@ int usb_manager_activate(enum usb_mode want);
  * @brief Get the currently active USB personality.
  */
 enum usb_mode usb_manager_get_mode(void);
+
+/**
+ * @brief Report a VBUS presence change detected by hardware the on-chip
+ * dwc2 controller can't see itself.
+ *
+ * This SoC's dwc2 driver never sets caps.can_detect_vbus (VBUSVALID is
+ * hard-tied to a constant in udc_dwc2_vendor_quirks.h's ESP32 block), so
+ * USBD_MSG_VBUS_READY/REMOVED never fire in practice — an external sense
+ * path (e.g. the FUSB302 PD controller's own VBUS comparator) is the only
+ * way to know a cable was actually plugged in.
+ *
+ * @param present true = VBUS just appeared, false = VBUS just disappeared.
+ */
+void usb_manager_report_vbus_state(bool present);
 
 /**
  * @brief Register a mode's classes before the very first usbd_init(), and

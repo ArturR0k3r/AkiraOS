@@ -854,6 +854,11 @@ if(CONFIG_AKIRA_USB_MSC)
     target_sources(app PRIVATE src/storage/usb_msc.c)
 endif()
 
+# FUSB302 VBUS sense (USB trust-prompt trigger)
+if(CONFIG_AKIRA_FUSB302_VBUS)
+    target_sources(app PRIVATE src/drivers/usbc/fusb302_vbus.c)
+endif()
+
 
 # Storage drivers for app sources
 if(CONFIG_AKIRA_APP_SOURCE_SD)
