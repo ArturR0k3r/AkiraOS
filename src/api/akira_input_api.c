@@ -133,6 +133,11 @@ int akira_input_get_dial(void)
     return (int)(uint8_t)atomic_get(&g_dial_value);
 }
 
+void akira_input_flush(void)
+{
+    k_msgq_purge(&g_event_queue);
+}
+
 /* ── WASM native exports ─────────────────────────────────────────────────── */
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 

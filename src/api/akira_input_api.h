@@ -96,6 +96,20 @@ int akira_input_poll_event(akira_input_event_t *evt_out);
  */
 int akira_input_get_dial(void);
 
+/**
+ * @brief Discard every queued press/release edge.
+ *
+ * The edge queue only has a consumer while a WASM app owns the display —
+ * the OS shell itself works off akira_input_get_bitmask().  Without this the
+ * queue saturates within a few button presses while the launcher is up, every
+ * further edge logs an eviction warning, and the next app to start inherits a
+ * backlog of the launcher's keystrokes as its first input.
+ *
+ * Call it whenever input ownership changes hands, and periodically from
+ * whichever component owns input but does not poll events.
+ */
+void akira_input_flush(void);
+
 #else /* !CONFIG_AKIRA_INPUT_API — stubs for targets without gpio-keys (e.g. native_sim) */
 
 static inline void akira_input_init(void) {}
@@ -106,6 +120,7 @@ static inline int akira_input_poll_event(akira_input_event_t *evt_out)
     return -EAGAIN;
 }
 static inline int akira_input_get_dial(void) { return 0; }
+static inline void akira_input_flush(void) {}
 
 #endif /* CONFIG_AKIRA_INPUT_API */
 

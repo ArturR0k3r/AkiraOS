@@ -328,6 +328,9 @@ void akira_shell_set_wasm_launching(void)
     akira_display_clear(C_BLACK);
     akira_display_flush();
     g_wasm_active = true;
+    /* Hand the app an empty edge queue: the launcher's own keystrokes (the A
+     * press that started it, its release) are not input for the app. */
+    akira_input_flush();
     akira_display_release_to_wasm();
 }
 
@@ -600,6 +603,13 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 
         if (!g_wasm_active)
         {
+            /* Nothing consumes the edge queue while the shell owns input —
+             * the screens all work off just_pressed, derived from the bitmask.
+             * Drop whatever accumulated, or the 16-slot queue saturates after
+             * a handful of presses, every further edge logs an eviction
+             * warning, and the next app started inherits the backlog. */
+            akira_input_flush();
+
             /* s_prev_btns and just_pressed already computed at loop top.
              * Guard with !s_display_blanked: keys must not reach the home or
              * settings screen while the sleep screen is up. */
@@ -888,6 +898,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                     {
                         /* App just started — release display to it */
                         g_wasm_active = true;
+                        akira_input_flush();
                         akira_display_release_to_wasm();
                         LOG_INF("Display released to WASM app");
                     }

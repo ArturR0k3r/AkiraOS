@@ -71,6 +71,7 @@ typedef struct {
     /* Lifecycle: status replaces old bool running */
     uint8_t status;           /**< akira_app_status_t */
     int8_t exit_code;         /**< Last exit code from WASM main() */
+    bool stop_requested;      /**< akira_runtime_stop() asked WAMR to unwind this slot */
 
     /* Thread synchronization */
     k_tid_t tid;              /**< Thread ID (NULL if not running) */

@@ -718,6 +718,15 @@ static void wasm_app_thread_fn(void *p1, void *p2, void *p3)
             LOG_INF("Slot %d: no entry point — reactive module", slot);
             wasm_runtime_clear_exception(inst);
         }
+        else if (ex && app->stop_requested)
+        {
+            /* akira_runtime_stop() asked WAMR to unwind this app (HOME press,
+             * app switch, shutdown).  WAMR reports the unwind as the exception
+             * "terminated by user" — an orderly exit, not a fault: it is not a
+             * trap and must not be logged as an error. */
+            LOG_INF("Slot %d stopped on request (%s)", slot, ex);
+            wasm_runtime_clear_exception(inst);
+        }
         else if (ex)
         {
             LOG_ERR("WASM exception (slot %d): %s", slot, ex);
@@ -849,6 +858,7 @@ int akira_runtime_start(int instance_id)
     k_mutex_init(&app->exit_mutex);
     k_condvar_init(&app->cond_exit);
     app->exit_code = 0;
+    app->stop_requested = false;
 
     app->tid = k_thread_create(
         &g_app_threads[instance_id],
@@ -918,6 +928,9 @@ int akira_runtime_stop(int instance_id)
      * This causes wasm_runtime_call_wasm() to return with an exception. */
     if (app->instance)
     {
+        /* Set before terminate: the app thread reads it when it observes the
+         * resulting "terminated by user" exception. */
+        app->stop_requested = true;
         wasm_runtime_terminate(app->instance);
     }
 
