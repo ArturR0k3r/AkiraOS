@@ -69,12 +69,15 @@ struct usb_manager_context {
     bool initialized;
     struct callback_entry callbacks[USB_MANAGER_MAX_CALLBACKS];
     usb_manager_stats_t stats;
+    enum usb_mode mode;
+    struct k_mutex mode_mutex;
 };
 
 /* Global USB manager context */
 static struct usb_manager_context usb_mgr_ctx = {
     .state = USB_STATE_DISABLED,
     .initialized = false,
+    .mode = USB_MODE_IDLE,
 };
 
 /* USB device context
@@ -85,6 +88,39 @@ static struct usb_manager_context usb_mgr_ctx = {
 USBD_DEVICE_DEFINE(device_usbd,
                    DEVICE_DT_GET(DT_NODELABEL(zephyr_udc0)),
                    0x303A, 0x8363);
+
+USBD_DESC_LANG_DEFINE(device_lang);
+USBD_DESC_MANUFACTURER_DEFINE(device_mfr, "PenEngineering S.R.L");
+USBD_DESC_PRODUCT_DEFINE(device_product, "AkiraConsole");
+
+/* usbd_init() locks the class/descriptor set for the context's lifetime —
+ * usbd_shutdown() is the only way to reopen it (usbd_disable() alone does
+ * not), and shutdown wipes all descriptors. So switching USB personality
+ * means re-adding these before every usbd_init() call, not just the first. */
+static int usb_manager_add_descriptors(void)
+{
+    int ret;
+
+    ret = usbd_add_descriptor(usb_mgr_ctx.usbd_ctx, &device_lang);
+    if (ret) {
+        LOG_ERR("Failed to add language descriptor: %d", ret);
+        return ret;
+    }
+
+    ret = usbd_add_descriptor(usb_mgr_ctx.usbd_ctx, &device_mfr);
+    if (ret) {
+        LOG_ERR("Failed to add manufacturer descriptor: %d", ret);
+        return ret;
+    }
+
+    ret = usbd_add_descriptor(usb_mgr_ctx.usbd_ctx, &device_product);
+    if (ret) {
+        LOG_ERR("Failed to add product descriptor: %d", ret);
+        return ret;
+    }
+
+    return 0;
+}
 
 /**
  * @brief Notify all registered callbacks of an event
@@ -204,9 +240,127 @@ static void usb_manager_msg_cb(struct usbd_context *const ctx,
     }
 }
 
-USBD_DESC_LANG_DEFINE(device_lang); 
-USBD_DESC_MANUFACTURER_DEFINE(device_mfr, "PenEngineering S.R.L");
-USBD_DESC_PRODUCT_DEFINE(device_product, "AkiraConsole");
+#define USBD_MSC_CLASS_NAME "msc_0"
+#define USBD_HID_CLASS_NAME "hid_0"
+#define USBD_HID_FIDO_CLASS_NAME "hid_1"
+
+static int usb_manager_register_mode_classes(enum usb_mode mode)
+{
+    int ret = 0;
+
+    switch (mode) {
+    case USB_MODE_MSC:
+        ret = usbd_register_class(usb_mgr_ctx.usbd_ctx, USBD_MSC_CLASS_NAME,
+                                  USBD_SPEED_FS, 1);
+        break;
+    case USB_MODE_HID:
+        ret = usbd_register_class(usb_mgr_ctx.usbd_ctx, USBD_HID_CLASS_NAME,
+                                  USBD_SPEED_FS, 1);
+        if (ret == 0) {
+            ret = usbd_register_class(usb_mgr_ctx.usbd_ctx, USBD_HID_FIDO_CLASS_NAME,
+                                      USBD_SPEED_FS, 1);
+        }
+        break;
+    case USB_MODE_IDLE:
+    default:
+        break;
+    }
+
+    return ret;
+}
+
+int usb_manager_activate(enum usb_mode want)
+{
+    int ret;
+
+    k_mutex_lock(&usb_mgr_ctx.mode_mutex, K_FOREVER);
+
+    if (usb_mgr_ctx.mode == want) {
+        k_mutex_unlock(&usb_mgr_ctx.mode_mutex);
+        return 0;
+    }
+
+    if (want == USB_MODE_HID && usb_mgr_ctx.mode == USB_MODE_MSC) {
+        /* MSC mode means the device is under a full-lock waiting screen
+         * (see usb_msc.c) — nothing should be issuing a HID request while
+         * it's active. Kept as a defensive check, not a real contention
+         * path. */
+        k_mutex_unlock(&usb_mgr_ctx.mode_mutex);
+        return -EBUSY;
+    }
+
+    /* usbd_register_class()/usbd_unregister_class() are refused once
+     * usbd_init() has run, regardless of usbd_disable() — only
+     * usbd_shutdown() reopens class/descriptor composition. So a mode
+     * switch is a full teardown+rebuild, not a disable/re-register/enable
+     * cycle. */
+    ret = usbd_disable(usb_mgr_ctx.usbd_ctx);
+    if (ret != 0 && ret != -EALREADY) {
+        LOG_ERR("usb_manager_activate: usbd_disable failed: %d", ret);
+        k_mutex_unlock(&usb_mgr_ctx.mode_mutex);
+        return ret;
+    }
+
+    ret = usbd_shutdown(usb_mgr_ctx.usbd_ctx);
+    if (ret != 0) {
+        LOG_ERR("usb_manager_activate: usbd_shutdown failed: %d", ret);
+        k_mutex_unlock(&usb_mgr_ctx.mode_mutex);
+        return ret;
+    }
+
+    ret = usb_manager_add_descriptors();
+    if (ret != 0) {
+        k_mutex_unlock(&usb_mgr_ctx.mode_mutex);
+        return ret;
+    }
+
+    ret = usb_manager_register_mode_classes(want);
+    if (ret != 0) {
+        LOG_ERR("usb_manager_activate: failed to register mode %d classes: %d",
+                (int)want, ret);
+        k_mutex_unlock(&usb_mgr_ctx.mode_mutex);
+        return ret;
+    }
+
+    ret = usbd_init(usb_mgr_ctx.usbd_ctx);
+    if (ret != 0) {
+        LOG_ERR("usb_manager_activate: usbd_init failed: %d", ret);
+        k_mutex_unlock(&usb_mgr_ctx.mode_mutex);
+        return ret;
+    }
+
+    ret = usbd_enable(usb_mgr_ctx.usbd_ctx);
+    if (ret != 0 && ret != -EALREADY) {
+        LOG_ERR("usb_manager_activate: usbd_enable failed: %d", ret);
+        k_mutex_unlock(&usb_mgr_ctx.mode_mutex);
+        return ret;
+    }
+
+    usb_mgr_ctx.mode = want;
+    k_mutex_unlock(&usb_mgr_ctx.mode_mutex);
+
+    LOG_INF("USB mode switched to %d", (int)want);
+    return 0;
+}
+
+enum usb_mode usb_manager_get_mode(void)
+{
+    return usb_mgr_ctx.mode;
+}
+
+int usb_manager_register_initial_classes(enum usb_mode mode)
+{
+    int ret;
+
+    k_mutex_lock(&usb_mgr_ctx.mode_mutex, K_FOREVER);
+    ret = usb_manager_register_mode_classes(mode);
+    if (ret == 0) {
+        usb_mgr_ctx.mode = mode;
+    }
+    k_mutex_unlock(&usb_mgr_ctx.mode_mutex);
+
+    return ret;
+}
 
 static const uint8_t attributes = USB_SCD_SELF_POWERED | USB_SCD_REMOTE_WAKEUP;
 
@@ -238,7 +392,13 @@ int usb_manager_init(void)
         LOG_ERR("Failed to initialize mutex: %d", ret);
         return ret;
     }
-    
+
+    ret = k_mutex_init(&usb_mgr_ctx.mode_mutex);
+    if (ret != 0) {
+        LOG_ERR("Failed to initialize mode mutex: %d", ret);
+        return ret;
+    }
+
     k_mutex_lock(&usb_mgr_ctx.mutex, K_FOREVER);
     
     /* Clear callbacks */
@@ -256,23 +416,8 @@ int usb_manager_init(void)
     }
     LOG_INF("USB device context obtained");
     
-    ret = usbd_add_descriptor(usb_mgr_ctx.usbd_ctx, &device_lang);
-    if(ret){
-        LOG_ERR("Failed to add language descriptor: %d", ret);
-        k_mutex_unlock(&usb_mgr_ctx.mutex);
-        return ret;
-    }
-
-    ret = usbd_add_descriptor(usb_mgr_ctx.usbd_ctx, &device_mfr);
-    if(ret){
-        LOG_ERR("Failed to add manufacturer descriptor: %d", ret);
-        k_mutex_unlock(&usb_mgr_ctx.mutex);
-        return ret;
-    }
-    
-    ret = usbd_add_descriptor(usb_mgr_ctx.usbd_ctx, &device_product);
-    if(ret){
-        LOG_ERR("Failed to add product descriptor: %d", ret);
+    ret = usb_manager_add_descriptors();
+    if (ret != 0) {
         k_mutex_unlock(&usb_mgr_ctx.mutex);
         return ret;
     }

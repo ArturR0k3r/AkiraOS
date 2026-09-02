@@ -1571,6 +1571,44 @@ config AKIRA_SD_HOTPLUG_MAX_CBS
 
 endmenu # SD Card
 
+# ---------------------------------------------------------------------------
+# USB Mass Storage
+# ---------------------------------------------------------------------------
+menu "USB Mass Storage"
+
+config AKIRA_USB_MSC
+    bool "Enable USB Mass Storage (SD card) device"
+    default n
+    depends on AKIRA_SD_CARD
+    select USBD_MSC_CLASS
+    help
+      Exposes the SD card as a single USB MSC LUN to a host PC, gated by an
+      on-device trust prompt and mutually exclusive with USB HID (keyboard,
+      gamepad, FIDO2) — only one of the two can be registered on the USB
+      device stack at a time.
+
+config AKIRA_USB_MSC_WAIT_TIMEOUT_MS
+    int "Timeout waiting for the SD card to free up before entering MSC mode"
+    default 10000
+    depends on AKIRA_USB_MSC
+    help
+      If a BLE/mesh/HTTP transfer or an SD-XIP app load is in progress when
+      the user accepts the USB trust prompt, AkiraOS waits up to this long
+      for it to finish before giving up and returning to idle.
+
+config AKIRA_USB_MSC_SHIM_INIT_PRIORITY
+    int "USB MSC ownership-shim disk SYS_INIT priority"
+    default 39
+    depends on AKIRA_USB_MSC
+    help
+      Must run after AKIRA_SD_INIT_PRIORITY (default 38) so the real "SD"
+      disk is already registered when the shim wraps it. A plain literal —
+      SYS_INIT's priority argument is token-pasted into a linker section
+      name, so it cannot be an arithmetic expression like
+      "AKIRA_SD_INIT_PRIORITY + 1".
+
+endmenu # USB Mass Storage
+
 menu "App Manager"
 
 config AKIRA_APP_MANAGER

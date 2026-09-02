@@ -54,6 +54,13 @@ bool akira_sd_card_is_present(void);
 void akira_sd_card_deinit(void);
 void akira_sd_card_deinit_force(void);
 
+/**
+ * @brief Unmount the SD card for USB MSC — like akira_sd_card_deinit(), but
+ * leaves the physical disk powered (no DISK_IOCTL_CTRL_DEINIT), since the
+ * USB MSC shim disk needs it live to hand to the host.
+ */
+void akira_sd_card_release_for_usb_msc(void);
+
 /** Mark a long-running SD transfer as active, so power management does not deep-sleep mid-write. */
 void akira_sd_card_set_transfer_active(bool active);
 /** True while a long-running SD transfer is in flight. */
@@ -99,6 +106,7 @@ static inline void akira_sd_card_idle_remount(void)   {}
 static inline int  akira_sd_card_init(void)       { return -ENOTSUP; }
 static inline bool akira_sd_card_is_present(void) { return false; }
 static inline void akira_sd_card_deinit(void)      {}
+static inline void akira_sd_card_release_for_usb_msc(void) {}
 static inline void akira_sd_card_set_transfer_active(bool active) { (void)active; }
 static inline bool akira_sd_card_is_transfer_active(void) { return false; }
 static inline void akira_sd_card_hotplug_pause(void)  {}

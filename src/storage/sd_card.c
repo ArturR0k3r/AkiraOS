@@ -61,6 +61,13 @@ static struct fs_mount_t g_sd_mount = {
 
 #include <zephyr/drivers/gpio.h>
 
+#if defined(CONFIG_AKIRA_USB_MSC)
+#include "usb_msc.h"
+#define AKIRA_MSC_OWNS_SD() akira_usb_msc_owns_sd()
+#else
+#define AKIRA_MSC_OWNS_SD() (false)
+#endif
+
 #define SD_DET_NODE  DT_NODELABEL(tca6408)
 #define SD_DET_PIN   7   /* P7 = SD_DET, active-low = card present */
 
@@ -94,7 +101,7 @@ static void sd_event_work_fn(struct k_work *work)
     bool present = g_sd_event_present;
     g_event_pending = false;
 
-    if (present && !g_mounted) {
+    if (present && !g_mounted && !AKIRA_MSC_OWNS_SD()) {
         LOG_INF("SD hotplug: card inserted");
         if (g_pre_insert_cb) {
             g_pre_insert_cb(true, g_pre_insert_user);
@@ -376,6 +383,21 @@ void akira_sd_card_deinit(void)
     g_mounted = false;
     disk_access_ioctl(SD_DISK_NAME, DISK_IOCTL_CTRL_DEINIT, NULL);
     LOG_INF("SD card unmounted");
+}
+
+void akira_sd_card_release_for_usb_msc(void)
+{
+    if (!g_mounted) {
+        return;
+    }
+
+    int ret = fs_unmount(&g_sd_mount);
+    if (ret < 0) {
+        LOG_WRN("SD unmount (USB MSC) failed: %d", ret);
+    }
+
+    g_mounted = false;
+    LOG_INF("SD card released to USB MSC");
 }
 
 /* ------------------------------------------------------------------ */

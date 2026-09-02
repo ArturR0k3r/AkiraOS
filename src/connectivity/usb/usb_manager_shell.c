@@ -8,6 +8,10 @@
 #include <zephyr/kernel.h>
 #include <stdlib.h>
 
+#if defined(CONFIG_AKIRA_USB_MSC)
+#include "../../storage/usb_msc.h"
+#endif
+
 /* Shell callback handle for event monitoring */
 static int shell_callback_handle = -1;
 static const struct shell *shell_instance = NULL;
@@ -224,6 +228,63 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_usb_stats,
     SHELL_SUBCMD_SET_END
 );
 
+#if defined(CONFIG_AKIRA_USB_MSC)
+/**
+ * @brief Command: usb msc enter
+ */
+static int cmd_usb_msc_enter(const struct shell *sh, size_t argc, char **argv)
+{
+    int ret;
+
+    shell_print(sh, "Entering USB MSC mode (waits for SD if busy)...");
+
+    ret = akira_usb_msc_enter();
+    if (ret == 0) {
+        shell_print(sh, "USB MSC mode active — SD card handed to host");
+    } else if (ret == -ETIMEDOUT) {
+        shell_error(sh, "Timed out waiting for SD to free up");
+    } else if (ret == -ECANCELED) {
+        shell_error(sh, "Cancelled");
+    } else {
+        shell_error(sh, "Failed to enter USB MSC mode: %d", ret);
+    }
+
+    return ret;
+}
+
+/**
+ * @brief Command: usb msc exit
+ */
+static int cmd_usb_msc_exit(const struct shell *sh, size_t argc, char **argv)
+{
+    shell_print(sh, "Exiting USB MSC mode...");
+    akira_usb_msc_exit();
+    shell_print(sh, "USB MSC mode exited, SD card remounted");
+
+    return 0;
+}
+
+/**
+ * @brief Command: usb msc status
+ */
+static int cmd_usb_msc_status(const struct shell *sh, size_t argc, char **argv)
+{
+    shell_print(sh, "USB MSC Status:");
+    shell_print(sh, "  Mode: %d (0=IDLE, 1=MSC, 2=HID)", (int)usb_manager_get_mode());
+    shell_print(sh, "  SD owned by MSC: %s", akira_usb_msc_owns_sd() ? "Yes" : "No");
+
+    return 0;
+}
+
+/* Subcommand array for 'usb msc' */
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_usb_msc,
+    SHELL_CMD(enter, NULL, "Enter USB MSC mode (hand SD card to host)", cmd_usb_msc_enter),
+    SHELL_CMD(exit, NULL, "Exit USB MSC mode (reclaim SD card)", cmd_usb_msc_exit),
+    SHELL_CMD(status, NULL, "Show USB MSC/mode status", cmd_usb_msc_status),
+    SHELL_SUBCMD_SET_END
+);
+#endif /* CONFIG_AKIRA_USB_MSC */
+
 /* Main 'usb' command subcommands */
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_usb,
     SHELL_CMD(init, NULL, "Initialize USB manager", cmd_usb_init),
@@ -235,6 +296,9 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_usb,
     SHELL_CMD(stats, &sub_usb_stats, "Show USB statistics", cmd_usb_stats),
     SHELL_CMD(wakeup, NULL, "Trigger remote wakeup", cmd_usb_wakeup),
     SHELL_CMD(info, NULL, "Show USB manager information", cmd_usb_info),
+#if defined(CONFIG_AKIRA_USB_MSC)
+    SHELL_CMD(msc, &sub_usb_msc, "USB Mass Storage commands", NULL),
+#endif
     SHELL_SUBCMD_SET_END
 );
 
