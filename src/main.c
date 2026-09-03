@@ -29,6 +29,7 @@
 #endif
 #ifdef CONFIG_AKIRA_SD_CARD
 #include <connectivity/storage/sd_manager.h>
+#include <connectivity/storage/usb_storage.h>
 #endif
 #ifdef CONFIG_AKIRA_INPUT_API
 #include <api/akira_input_api.h>
@@ -287,6 +288,10 @@ int main(void)
 
 #ifdef CONFIG_AKIRA_SD_CARD
     sd_manager_init();
+#endif
+
+#ifdef CONFIG_AKIRA_APP_SOURCE_USB
+    usb_storage_init();
 #endif
 
 #ifdef CONFIG_AKIRA_INPUT_API

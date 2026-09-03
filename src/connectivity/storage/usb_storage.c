@@ -2,8 +2,11 @@
  * @file usb_storage.c
  * @brief USB Mass Storage Manager Implementation
  *
- * Stub implementation for USB storage app discovery.
- * Full implementation requires USB host mode support.
+ * Mounts a FAT filesystem on a USB flash drive connected while AkiraOS acts
+ * as USB host (subsys/usb/host/class/usbh_msc.c does the enumeration/SCSI
+ * work and registers a disk_access disk; this file just reacts to it).
+ * With CONFIG_USBH_MASS_STORAGE_CLASS off, behaves as a permanent no-op
+ * stub so builds without USB host support are unaffected.
  */
 
 #include "usb_storage.h"
@@ -16,6 +19,11 @@
 #include <zephyr/fs/fs.h>
 #include <string.h>
 
+#if defined(CONFIG_USBH_MASS_STORAGE_CLASS)
+#include <zephyr/usb/class/usbh_msc.h>
+#include <ff.h>
+#endif
+
 LOG_MODULE_REGISTER(usb_storage, CONFIG_AKIRA_LOG_LEVEL);
 
 #define APP_NAME_MAX 32
@@ -24,12 +32,76 @@ static usb_storage_state_t g_state = USB_STORAGE_DISCONNECTED;
 static usb_storage_event_cb_t g_event_cb = NULL;
 static void *g_event_user = NULL;
 
+static void notify_state_change(usb_storage_state_t new_state)
+{
+    if (g_state != new_state)
+    {
+        g_state = new_state;
+        if (g_event_cb)
+        {
+            g_event_cb(new_state, g_event_user);
+        }
+    }
+}
+
+#if defined(CONFIG_USBH_MASS_STORAGE_CLASS)
+
+static FATFS g_usb_fat_fs;
+static struct fs_mount_t g_usb_mount = {
+    .type = FS_FATFS,
+    .fs_data = &g_usb_fat_fs,
+    .mnt_point = USB_MOUNT_POINT,
+};
+
+static void usb_msc_event(bool connected, void *user_data)
+{
+    ARG_UNUSED(user_data);
+
+    if (connected)
+    {
+        notify_state_change(USB_STORAGE_CONNECTED);
+
+        int ret = fs_mount(&g_usb_mount);
+        if (ret < 0)
+        {
+            LOG_ERR("Failed to mount USB storage: %d", ret);
+            notify_state_change(USB_STORAGE_ERROR);
+            return;
+        }
+
+        LOG_INF("USB storage mounted at %s", USB_MOUNT_POINT);
+        notify_state_change(USB_STORAGE_MOUNTED);
+    }
+    else
+    {
+        if (g_state == USB_STORAGE_MOUNTED)
+        {
+            int ret = fs_unmount(&g_usb_mount);
+            if (ret < 0)
+            {
+                LOG_ERR("Failed to unmount USB storage: %d", ret);
+            }
+        }
+        notify_state_change(USB_STORAGE_DISCONNECTED);
+    }
+}
+
 int usb_storage_init(void)
 {
-    LOG_INF("USB Storage Manager initialized");
-    /* TODO: Register USB host events when available */
+    usbh_msc_register_callback(usb_msc_event, NULL);
+    LOG_INF("USB Storage Manager initialized (host MSC enabled)");
     return 0;
 }
+
+#else /* !CONFIG_USBH_MASS_STORAGE_CLASS */
+
+int usb_storage_init(void)
+{
+    LOG_INF("USB Storage Manager initialized (host MSC not built in)");
+    return 0;
+}
+
+#endif
 
 bool usb_storage_is_mounted(void)
 {
