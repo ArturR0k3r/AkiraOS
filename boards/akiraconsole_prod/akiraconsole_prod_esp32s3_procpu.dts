@@ -558,6 +558,10 @@
 // OTG host power: TCA6408 P0 (OTG_EN) enables TPS61023 5V boost (U9)
 // =============================================================================
 zephyr_udc0: &usb_otg { status = "okay"; };
+// Host role, same physical dwc2 core as zephyr_udc0 above — do not
+// usbh_enable() while the device-mode gadget is also enabled, they share
+// one register block (dual-role OTG, not simultaneous).
+zephyr_uhc0: &usb_otg { status = "okay"; };
 
 // =============================================================================
 // WiFi

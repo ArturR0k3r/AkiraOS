@@ -1610,6 +1610,25 @@ config AKIRA_USB_MSC_SHIM_INIT_PRIORITY
 endmenu # USB Mass Storage
 
 # ---------------------------------------------------------------------------
+# USB Mass Storage host (read a flash drive plugged into AkiraOS)
+# ---------------------------------------------------------------------------
+menu "USB Mass Storage Host"
+
+config AKIRA_USB_STORAGE_HOST
+    bool "Mount a USB flash drive plugged into AkiraOS (host mode)"
+    default y if USB_HOST_STACK
+    depends on USB_HOST_STACK
+    select USBH_MASS_STORAGE_CLASS
+    help
+      Opposite direction from AKIRA_USB_MSC: here AkiraOS is the USB host
+      and a flash drive is the connected device. Enables the Bulk-Only
+      Transport + SCSI host class driver (subsys/usb/host/class/usbh_msc.c)
+      and mounts the drive's FAT filesystem at USB_MOUNT_POINT so
+      usb_storage_scan_apps()/usb_storage_install_app() work.
+
+endmenu # USB Mass Storage Host
+
+# ---------------------------------------------------------------------------
 # USB-C VBUS sense (FUSB302)
 # ---------------------------------------------------------------------------
 menu "USB-C VBUS Sense (FUSB302)"
