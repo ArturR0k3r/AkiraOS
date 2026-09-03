@@ -69,6 +69,9 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 #if defined(CONFIG_AKIRA_USB_MSC)
 #include <storage/usb_msc.h>
 #endif
+#if defined(CONFIG_AKIRA_FUSB302_VBUS)
+#include <drivers/usbc/fusb302_vbus.h>
+#endif
 #if defined(CONFIG_BT)
 #include <connectivity/bluetooth/bt_manager.h>
 #endif
@@ -171,6 +174,9 @@ static bool g_msc_modal_active;
  * dialog and akira_usb_msc_enter() need display/input ownership, which only
  * the shell thread has, and must wait for HOME/idle if the user is mid-app. */
 static bool g_msc_trust_pending;
+#if defined(CONFIG_AKIRA_FUSB302_VBUS)
+static bool usb_trust_prompt_should_cancel(void);
+#endif
 #endif
 
 /* SD popup state */
@@ -1091,8 +1097,13 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             g_msc_trust_pending = false;
             akira_input_flush();
 
+#if defined(CONFIG_AKIRA_FUSB302_VBUS)
+            bool trusted = akira_ui_confirm_dialog_cancelable(
+                "USB", "Share SD card with host?", usb_trust_prompt_should_cancel);
+#else
             bool trusted = akira_ui_confirm_dialog(
                 "USB", "Share SD card with host?");
+#endif
 
             if (trusted)
             {
@@ -1168,6 +1179,17 @@ static void shell_usb_event_cb(usb_manager_event_t event, void *user_data)
         k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
     }
 }
+
+#if defined(CONFIG_AKIRA_FUSB302_VBUS)
+/* The confirm dialog below blocks the shell thread in its own input loop —
+ * it never drains g_shell_msgq, so a queued CMD_USB_TRUST_EVENT can't reach
+ * it while it's up. Poll the FUSB302's live reading directly instead of
+ * relying on that event. */
+static bool usb_trust_prompt_should_cancel(void)
+{
+    return !akira_fusb302_vbus_present();
+}
+#endif
 #endif
 
 static int shell_init(void)

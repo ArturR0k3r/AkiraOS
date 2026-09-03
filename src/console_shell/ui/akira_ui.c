@@ -378,7 +378,8 @@ static void confirm_render(int bx, int by, int bw, int bh,
     akira_display_flush();
 }
 
-bool akira_ui_confirm_dialog(const char *capability_name, const char *question)
+static bool confirm_dialog_loop(const char *capability_name, const char *question,
+                                bool (*should_cancel)(void))
 {
     int W, H;
     akira_display_get_size(&W, &H);
@@ -390,6 +391,9 @@ bool akira_ui_confirm_dialog(const char *capability_name, const char *question)
 
     uint32_t prev = akira_input_get_bitmask();
     while (true) {
+        if (should_cancel && should_cancel()) {
+            return false;
+        }
         k_sleep(K_MSEC(20));
         uint32_t now = akira_input_get_bitmask();
         uint32_t pressed = now & ~prev; /* rising edges only */
@@ -406,4 +410,15 @@ bool akira_ui_confirm_dialog(const char *capability_name, const char *question)
             return false;
         }
     }
+}
+
+bool akira_ui_confirm_dialog(const char *capability_name, const char *question)
+{
+    return confirm_dialog_loop(capability_name, question, NULL);
+}
+
+bool akira_ui_confirm_dialog_cancelable(const char *capability_name, const char *question,
+                                        bool (*should_cancel)(void))
+{
+    return confirm_dialog_loop(capability_name, question, should_cancel);
 }

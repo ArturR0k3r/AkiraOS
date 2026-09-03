@@ -128,4 +128,13 @@ void akira_ui_alert(const char *title, const char *subtitle);
  */
 bool akira_ui_confirm_dialog(const char *capability_name, const char *question);
 
+/**
+ * Same as akira_ui_confirm_dialog(), but polls should_cancel() every tick and
+ * returns false (cancel) the instant it does — for a decision whose premise
+ * can disappear while it's still on screen (e.g. cable pulled while a USB
+ * trust prompt is up and unanswered).
+ */
+bool akira_ui_confirm_dialog_cancelable(const char *capability_name, const char *question,
+                                        bool (*should_cancel)(void));
+
 #endif /* AKIRA_UI_H */
