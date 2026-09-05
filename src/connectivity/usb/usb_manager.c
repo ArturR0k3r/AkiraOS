@@ -77,9 +77,19 @@ static void usb_manager_set_state(usb_manager_state_t new_state)
     }
 }
 
+void usb_manager_report_vbus_state(bool present)
+{
+    if (present) {
+        LOG_INF("VBUS attached");
+    } else {
+        LOG_INF("VBUS removed");
+        usb_manager_notify_callbacks(USB_EVENT_DISCONNECTED);
+    }
+}
+
 /**
  * @brief USB device message callback
- * 
+ *
  * This is the main callback that handles all USB device events
  */
 static void usb_manager_msg_cb(struct usbd_context *const ctx,
@@ -134,18 +144,18 @@ static void usb_manager_msg_cb(struct usbd_context *const ctx,
             break;
         }
         k_mutex_unlock(&usb_mgr_ctx.mutex);
+        usb_manager_report_vbus_state(true);
         break;
-        
+
     case USBD_MSG_VBUS_REMOVED:
         if (!usbd_can_detect_vbus(usb_mgr_ctx.usbd_ctx)) {
             k_mutex_unlock(&usb_mgr_ctx.mutex);
             break;
         }
-        LOG_INF("VBUS removed");
         usb_manager_set_state(USB_STATE_INITIALIZED);
         usb_mgr_ctx.stats.error_count++;
         k_mutex_unlock(&usb_mgr_ctx.mutex);
-        usb_manager_notify_callbacks(USB_EVENT_DISCONNECTED);
+        usb_manager_report_vbus_state(false);
         break;
         
     case USBD_MSG_UDC_ERROR:
