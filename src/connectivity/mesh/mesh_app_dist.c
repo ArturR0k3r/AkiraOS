@@ -113,7 +113,7 @@ static struct {
         char     tmp_path[MESH_APP_TMP_PATH_MAX];
         uint8_t  received[MESH_APP_BITMAP_BYTES];
     } app_rx;
-} s_app_dist;
+} s_app_dist AKIRA_BULK_BSS;
 
 /* Single-slot wait for an app-distribution frame's real E2E ack (see
  * mesh_send_app_and_wait). Guarded implicitly by single-in-flight-transfer

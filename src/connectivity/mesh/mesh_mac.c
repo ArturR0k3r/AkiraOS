@@ -17,6 +17,7 @@
 #include <zephyr/random/random.h>
 #include <string.h>
 #include <errno.h>
+#include "lib/mem_helper.h"
 
 LOG_MODULE_REGISTER(akira_mesh_mac, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -28,10 +29,25 @@ struct mac_frame {
     int64_t  queued_at;     /* k_uptime_get() ms at mesh_mac_send() — diagnostic: isolates queue+CCA delay from airtime */
 };
 
-K_MSGQ_DEFINE(s_txq_critical, sizeof(struct mac_frame), CONFIG_AKIRA_MESH_MAC_TXQ_CRITICAL_LEN, 4);
-K_MSGQ_DEFINE(s_txq_high, sizeof(struct mac_frame), CONFIG_AKIRA_MESH_MAC_TXQ_HIGH_LEN, 4);
-K_MSGQ_DEFINE(s_txq_medium, sizeof(struct mac_frame), CONFIG_AKIRA_MESH_MAC_TXQ_MEDIUM_LEN, 4);
-K_MSGQ_DEFINE(s_txq_low, sizeof(struct mac_frame), CONFIG_AKIRA_MESH_MAC_TXQ_LOW_LEN, 4);
+/* K_MSGQ_DEFINE's backing buffer is internal-DRAM-only (__noinit). These 4
+ * lanes cost ~4-9 KB depending on queue depth, so the buffers are placed in
+ * PSRAM by hand instead — mac_frame is plain data, never touched by DMA or
+ * from an ISR, so .ext_ram.bss is safe here. k_msgq_init() runs in
+ * mesh_mac_init(), before s_mac.running is set — both threads gate on that
+ * flag before ever calling k_msgq_get/put, so there is no race. */
+static struct k_msgq s_txq_critical;
+static struct k_msgq s_txq_high;
+static struct k_msgq s_txq_medium;
+static struct k_msgq s_txq_low;
+
+static char AKIRA_BULK_BSS __aligned(4)
+    s_txq_critical_buf[CONFIG_AKIRA_MESH_MAC_TXQ_CRITICAL_LEN * sizeof(struct mac_frame)];
+static char AKIRA_BULK_BSS __aligned(4)
+    s_txq_high_buf[CONFIG_AKIRA_MESH_MAC_TXQ_HIGH_LEN * sizeof(struct mac_frame)];
+static char AKIRA_BULK_BSS __aligned(4)
+    s_txq_medium_buf[CONFIG_AKIRA_MESH_MAC_TXQ_MEDIUM_LEN * sizeof(struct mac_frame)];
+static char AKIRA_BULK_BSS __aligned(4)
+    s_txq_low_buf[CONFIG_AKIRA_MESH_MAC_TXQ_LOW_LEN * sizeof(struct mac_frame)];
 
 /* Priority order: index 0 is polled first every TX thread iteration. */
 static struct k_msgq * const s_txq_lanes[] = {
@@ -59,6 +75,14 @@ int mesh_mac_init(radio_handle_t *radio)
     if (!radio) {
         return -EINVAL;
     }
+    k_msgq_init(&s_txq_critical, s_txq_critical_buf, sizeof(struct mac_frame),
+                CONFIG_AKIRA_MESH_MAC_TXQ_CRITICAL_LEN);
+    k_msgq_init(&s_txq_high, s_txq_high_buf, sizeof(struct mac_frame),
+                CONFIG_AKIRA_MESH_MAC_TXQ_HIGH_LEN);
+    k_msgq_init(&s_txq_medium, s_txq_medium_buf, sizeof(struct mac_frame),
+                CONFIG_AKIRA_MESH_MAC_TXQ_MEDIUM_LEN);
+    k_msgq_init(&s_txq_low, s_txq_low_buf, sizeof(struct mac_frame),
+                CONFIG_AKIRA_MESH_MAC_TXQ_LOW_LEN);
     s_mac.radio = radio;
     s_mac.running = true;
     return 0;

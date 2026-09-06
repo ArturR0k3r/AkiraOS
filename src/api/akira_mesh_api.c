@@ -16,6 +16,7 @@
 #include <zephyr/sys/util.h>
 #include <string.h>
 #include <errno.h>
+#include "lib/mem_helper.h"
 
 LOG_MODULE_REGISTER(akira_mesh_api, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -29,8 +30,12 @@ struct mesh_api_rx_packet {
     uint16_t len;
 };
 
-K_MSGQ_DEFINE(s_mesh_api_rx_msgq, sizeof(struct mesh_api_rx_packet),
-              MESH_API_RX_QUEUE_DEPTH, 4);
+/* Backing buffer moved off internal DRAM (see mesh_mac.c's txq lanes for the
+ * same pattern) — plain data, no ISR/DMA access. k_msgq_init() runs in
+ * akira_native_mesh_init(), before the rx callback is registered. */
+static struct k_msgq s_mesh_api_rx_msgq;
+static char AKIRA_BULK_BSS __aligned(4)
+    s_mesh_api_rx_msgq_buf[MESH_API_RX_QUEUE_DEPTH * sizeof(struct mesh_api_rx_packet)];
 
 static void mesh_api_rx_cb(const uint8_t *src_id, const uint8_t *data,
                            size_t len, void *user_data)
@@ -98,6 +103,8 @@ int akira_native_mesh_init(wasm_exec_env_t exec_env, int32_t node_id,
         return ret;
     }
 
+    k_msgq_init(&s_mesh_api_rx_msgq, s_mesh_api_rx_msgq_buf,
+                sizeof(struct mesh_api_rx_packet), MESH_API_RX_QUEUE_DEPTH);
     akira_mesh_register_rx_callback(mesh_api_rx_cb, NULL);
     return 0;
 }

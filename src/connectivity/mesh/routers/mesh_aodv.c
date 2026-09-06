@@ -119,7 +119,7 @@ struct sign_pin {
     uint8_t sign_pub[MESH_CRYPTO_SIGN_PUB_LEN];
     bool    valid;
 };
-static struct sign_pin s_sign_pins[CONFIG_AKIRA_MESH_MAX_PINS];
+static struct sign_pin AKIRA_BULK_BSS s_sign_pins[CONFIG_AKIRA_MESH_MAX_PINS];
 static size_t s_sign_pin_evict_next;
 
 static bool pin_check_and_learn(const uint8_t *node_id, const uint8_t *sign_pub)
@@ -162,8 +162,8 @@ struct sign_pending {
     uint8_t  sig_buf[sizeof(struct mesh_header) + sizeof(struct aodv_rreq_sig)];
     size_t   sig_len;
 };
-static struct sign_pending s_pending_rreq[CONFIG_AKIRA_MESH_SIGN_PENDING_MAX];
-static struct sign_pending s_pending_rrep[CONFIG_AKIRA_MESH_SIGN_PENDING_MAX];
+static struct sign_pending AKIRA_BULK_BSS s_pending_rreq[CONFIG_AKIRA_MESH_SIGN_PENDING_MAX];
+static struct sign_pending AKIRA_BULK_BSS s_pending_rrep[CONFIG_AKIRA_MESH_SIGN_PENDING_MAX];
 
 /* Finds the (node_id, seq) slot, or allocates one (free slot, else evicts
  * the soonest-expiring — mirrors mesh_session_install's eviction). */
