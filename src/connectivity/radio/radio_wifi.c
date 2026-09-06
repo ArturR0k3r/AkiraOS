@@ -27,6 +27,7 @@
 #include <zephyr/net/dhcpv4_server.h>
 #include <string.h>
 #include <errno.h>
+#include "lib/mem_helper.h"
 
 LOG_MODULE_REGISTER(radio_wifi, LOG_LEVEL_INF);
 
@@ -76,7 +77,7 @@ struct wifi_radio_data {
     struct wifi_mesh_peer peers[WIFI_MESH_PEER_MAX];
 };
 
-static struct wifi_radio_data wifi_data;
+static struct wifi_radio_data wifi_data AKIRA_BULK_BSS;
 static radio_handle_t wifi_handle;
 static bool s_wifi_gateway;
 

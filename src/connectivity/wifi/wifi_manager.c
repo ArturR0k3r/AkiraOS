@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "../../settings/settings.h"
+#include "lib/mem_helper.h"
 
 LOG_MODULE_REGISTER(wifi_manager, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -39,7 +40,7 @@ static struct {
     wifi_mgr_scan_result_t scan_results[WIFI_MGR_MAX_SCAN_RESULTS];
     size_t              scan_count;
     bool                scanning;
-} mgr;
+} mgr AKIRA_BULK_BSS;
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 

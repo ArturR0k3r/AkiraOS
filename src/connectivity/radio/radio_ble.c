@@ -16,6 +16,7 @@
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/sys/util.h>
 #include <string.h>
+#include "lib/mem_helper.h"
 
 LOG_MODULE_REGISTER(radio_ble, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -57,8 +58,15 @@ struct ble_rx_msg {
 };
 /* mesh_rx_thread can't always drain between scan callback events under
  * app-distribute burst traffic (retransmit + RREQ/RREP + chunks); a
- * shallow queue silently drops frames, including live chunks. */
-K_MSGQ_DEFINE(ble_rx_msgq, sizeof(struct ble_rx_msg), 16, 4);
+ * shallow queue silently drops frames, including live chunks.
+ *
+ * Backing buffer moved off internal DRAM (same pattern as mesh_mac.c's txq
+ * lanes) — plain data, never touched by DMA/ISR. k_msgq_init() runs in
+ * ble_radio_init(), before any put/get can happen. */
+#define BLE_RX_MSGQ_DEPTH 16
+static struct k_msgq ble_rx_msgq;
+static char AKIRA_BULK_BSS __aligned(4)
+    ble_rx_msgq_buf[BLE_RX_MSGQ_DEPTH * sizeof(struct ble_rx_msg)];
 
 static bool ble_adv_ad_cb(struct bt_data *data, void *user_data)
 {
@@ -122,7 +130,10 @@ static int ble_radio_init(radio_handle_t *handle)
         LOG_WRN("BLE radio already initialized");
         return 0;
     }
-    
+
+    k_msgq_init(&ble_rx_msgq, ble_rx_msgq_buf, sizeof(struct ble_rx_msg),
+                BLE_RX_MSGQ_DEPTH);
+
     /* Enable Bluetooth (if not already enabled) */
     int ret = bt_enable(NULL);
     if (ret && ret != -EALREADY) {
