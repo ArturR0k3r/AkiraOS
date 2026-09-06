@@ -9,6 +9,7 @@
 #include <zephyr/net/socket.h>
 #include <string.h>
 #include <stdio.h>
+#include "lib/mem_helper.h"
 
 LOG_MODULE_REGISTER(http_server, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -57,7 +58,7 @@ static struct
     bool running;
 
     struct k_mutex mutex;
-} http_srv;
+} http_srv AKIRA_BULK_BSS;
 
 /* Thread */
 static K_THREAD_STACK_DEFINE(server_stack, SERVER_THREAD_STACK_SIZE);

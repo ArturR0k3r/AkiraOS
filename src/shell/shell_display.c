@@ -7,6 +7,7 @@
  */
 
 #include "shell_display.h"
+#include "lib/mem_helper.h"
 #include "../drivers/display/display_ili9341.h"
 #include "../drivers/display/fonts.h"
 #include <zephyr/kernel.h>
@@ -54,7 +55,7 @@ static struct {
     uint8_t cursor_pos;                               // Cursor position in input
     bool initialized;
     bool enabled;
-} shell_display = {
+} shell_display AKIRA_BULK_BSS = {
     .initialized = false,
     .enabled = false,
 };

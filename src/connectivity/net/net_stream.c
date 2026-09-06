@@ -105,7 +105,7 @@ struct net_stream_ctx {
  * Global state
  * ======================================================================= */
 
-static struct net_stream_ctx g_streams[CONFIG_AKIRA_NET_MAX_STREAMS];
+static struct net_stream_ctx AKIRA_BULK_BSS g_streams[CONFIG_AKIRA_NET_MAX_STREAMS];
 static struct k_mutex g_mutex;
 static bool g_initialized;
 

@@ -49,7 +49,7 @@ LOG_MODULE_REGISTER(akira_runtime, CONFIG_AKIRA_LOG_LEVEL);
 /* Chunked loading configuration */
 #define CHUNK_BUFFER_SIZE (16 * 1024) /* 16KB chunks for WASM loading */
 
-akira_managed_app_t g_apps[AKIRA_MAX_WASM_INSTANCES];
+akira_managed_app_t AKIRA_BULK_BSS g_apps[AKIRA_MAX_WASM_INSTANCES];
 
 /* Zephyr thread pool — one stack + control block per slot.
  *

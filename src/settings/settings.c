@@ -16,6 +16,7 @@
 #include <mbedtls/platform.h>
 #include <zephyr/random/random.h>
 #endif
+#include "lib/mem_helper.h"
 
 LOG_MODULE_REGISTER(akira_settings, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -271,7 +272,7 @@ static struct
     bool initialized;
 
     struct k_work_q work_queue;
-} storage = {
+} storage AKIRA_BULK_BSS = {
     .initialized = false};
 
 /* Compact NVS entries: reads all valid entries, rewrites them sequentially

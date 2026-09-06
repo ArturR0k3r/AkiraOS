@@ -2665,7 +2665,7 @@ static int cmd_mesh_sendu_burst(const struct shell *sh, size_t argc, char **argv
     uint32_t count = (uint32_t)strtoul(argv[2], NULL, 10);
     size_t size = (size_t)strtoul(argv[3], NULL, 10);
 
-    static uint8_t burst_buf[256];
+    static uint8_t AKIRA_BULK_BSS burst_buf[256];
     if (count == 0 || size == 0 || size > sizeof(burst_buf)) {
         shell_error(sh, "count must be >0, size must be 1..%zu", sizeof(burst_buf));
         return -EINVAL;
@@ -2785,7 +2785,7 @@ static int cmd_mesh_sendstream(const struct shell *sh, size_t argc, char **argv)
     dest[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
     size_t size = (size_t)strtoul(argv[2], NULL, 10);
 
-    static uint8_t stream_buf[4096];
+    static uint8_t AKIRA_BULK_BSS stream_buf[4096];
     if (size == 0 || size > sizeof(stream_buf)) {
         shell_error(sh, "size must be 1..%zu", sizeof(stream_buf));
         return -EINVAL;

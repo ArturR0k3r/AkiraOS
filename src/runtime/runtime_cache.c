@@ -11,6 +11,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
+#include "lib/mem_helper.h"
 
 LOG_MODULE_REGISTER(runtime_cache, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -20,7 +21,7 @@ static struct {
     module_cache_entry_t entries[CONFIG_AKIRA_MODULE_CACHE_SIZE];
     module_cache_stats_t stats;
     bool initialized;
-} g_cache = {0};
+} g_cache AKIRA_BULK_BSS = {0};
 
 static K_MUTEX_DEFINE(g_cache_mutex);
 

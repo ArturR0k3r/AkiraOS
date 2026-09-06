@@ -78,6 +78,7 @@ LOG_MODULE_REGISTER(akira_power_manager, CONFIG_AKIRA_LOG_LEVEL);
  * Vadc_mv * CONFIG_AKIRA_BATTERY_ADC_VDIV_MUL / 1000 = Vbat_mv */
 #include <zephyr/drivers/adc.h>
 #endif
+#include "lib/mem_helper.h"
 
 #define MAX_CONTAINERS 16
 
@@ -118,7 +119,7 @@ static struct {
     struct adc_channel_cfg adc_ch_cfg;
     int16_t adc_buf;
 #endif
-} g_pm = {0};
+} g_pm AKIRA_BULK_BSS = {0};
 
 /* ---------- helpers ---------- */
 

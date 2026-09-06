@@ -18,6 +18,7 @@ LOG_MODULE_REGISTER(akira_timer, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/init.h>
 #include <errno.h>
 #include <string.h>
+#include "lib/mem_helper.h"
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 
@@ -37,7 +38,7 @@ struct akira_timer_slot {
     const void *owner;      /* wasm_module_inst_t of creator */
 };
 
-static struct akira_timer_slot s_pool[CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES];
+static struct akira_timer_slot AKIRA_BULK_BSS s_pool[CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES];
 static K_MUTEX_DEFINE(s_pool_lock);
 
 int akira_timer_init(void)
