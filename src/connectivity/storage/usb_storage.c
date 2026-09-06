@@ -46,7 +46,7 @@ static void notify_state_change(usb_storage_state_t new_state)
 
 #if defined(CONFIG_USBH_MASS_STORAGE_CLASS)
 
-static FATFS g_usb_fat_fs;
+static FATFS g_usb_fat_fs AKIRA_BULK_BSS;
 static struct fs_mount_t g_usb_mount = {
     .type = FS_FATFS,
     .fs_data = &g_usb_fat_fs,

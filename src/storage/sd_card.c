@@ -33,6 +33,7 @@ LOG_MODULE_REGISTER(akira_sd_card, CONFIG_AKIRA_LOG_LEVEL);
 #if defined(CONFIG_AKIRA_SD_XIP) && defined(CONFIG_AKIRA_APP_MANAGER)
 #include <runtime/app_manager/app_manager.h>
 #endif
+#include "lib/mem_helper.h"
 
 /* Disk name must match `disk-name` in the DTS mmc{} node */
 #define SD_DISK_NAME   "SD"
@@ -46,7 +47,7 @@ LOG_MODULE_REGISTER(akira_sd_card, CONFIG_AKIRA_LOG_LEVEL);
 static bool  g_mounted;
 static volatile bool g_transfer_active;
 static int   g_transfer_insomnia_handle = -1; /* -1 = no lock held */
-static FATFS g_fat_fs;
+static FATFS g_fat_fs AKIRA_BULK_BSS;
 
 static struct fs_mount_t g_sd_mount = {
     .type      = FS_FATFS,

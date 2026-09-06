@@ -19,6 +19,7 @@
 #if defined(CONFIG_AKIRA_USB_MSC)
 #include <storage/usb_msc.h>
 #endif
+#include "lib/mem_helper.h"
 
 LOG_MODULE_REGISTER(sd_manager, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -31,7 +32,7 @@ static void *g_event_user = NULL;
 static K_MUTEX_DEFINE(g_sd_mutex);
 
 /* FAT FS mount structure */
-static FATFS g_fat_fs;
+static FATFS g_fat_fs AKIRA_BULK_BSS;
 static struct fs_mount_t g_mount = {
     .type = FS_FATFS,
     .fs_data = &g_fat_fs,

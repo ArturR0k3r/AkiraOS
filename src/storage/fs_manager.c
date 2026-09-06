@@ -57,7 +57,7 @@ typedef struct
     bool in_use;
 } ram_file_t;
 
-static ram_file_t ram_files[RAM_FILE_MAX_COUNT];
+static ram_file_t AKIRA_BULK_BSS ram_files[RAM_FILE_MAX_COUNT];
 static K_MUTEX_DEFINE(ram_mutex);
 
 /* RAM file operations */
