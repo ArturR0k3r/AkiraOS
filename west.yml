@@ -11,7 +11,7 @@ manifest:
     # AkiraPlatform (optional enterprise features)
     # Add via build.sh --platform flag to include in compilation
     #- name: akira-platform
-    #  url: https://git.penengineering.io/akira/akira-platform
+    #  url: https://github.com/PenEngineering/AkiraPlatform
     #  revision: main
     #  path: akira-platform
       
