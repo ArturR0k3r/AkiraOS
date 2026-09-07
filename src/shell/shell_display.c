@@ -55,10 +55,7 @@ static struct {
     uint8_t cursor_pos;                               // Cursor position in input
     bool initialized;
     bool enabled;
-} shell_display AKIRA_BULK_BSS = {
-    .initialized = false,
-    .enabled = false,
-};
+} shell_display AKIRA_BULK_BSS;
 
 /* Forward declarations */
 static void render_status_bar(void);

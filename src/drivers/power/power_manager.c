@@ -119,7 +119,7 @@ static struct {
     struct adc_channel_cfg adc_ch_cfg;
     int16_t adc_buf;
 #endif
-} g_pm AKIRA_BULK_BSS = {0};
+} g_pm AKIRA_BULK_BSS;
 
 /* ---------- helpers ---------- */
 
@@ -724,7 +724,7 @@ static struct {
     uint32_t    hold_ms;     /* for renew() to re-arm deadline_ms */
     uint32_t    generation;
     bool        active;
-} g_insomnia[AKIRA_PM_INSOMNIA_SLOTS];
+} g_insomnia[AKIRA_PM_INSOMNIA_SLOTS] AKIRA_BULK_BSS;
 
 static struct k_spinlock g_insomnia_lock; /* not a mutex: ISR/workqueue-safe */
 

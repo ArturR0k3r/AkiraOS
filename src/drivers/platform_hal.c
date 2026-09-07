@@ -47,12 +47,13 @@ static uint32_t *shared_buttons = NULL;
  */
 #define AKIRA_FB_MAX_PIXELS (400 * 240)
 #define AKIRA_FB_NUM_BUFFERS 2
-#if defined(CONFIG_ESP_SPIRAM)
-__attribute__((section(".ext_ram.bss"), aligned(4))) static uint16_t hw_framebuffer[AKIRA_FB_NUM_BUFFERS][AKIRA_FB_MAX_PIXELS];
-#elif defined(CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM) && defined(CONFIG_MEMC)
+#if defined(CONFIG_ESP_SPIRAM) || \
+    (defined(CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM) && defined(CONFIG_MEMC))
+#define AKIRA_HAS_HW_FRAMEBUFFER 1
 __attribute__((section(".ext_ram.bss"), aligned(4))) static uint16_t hw_framebuffer[AKIRA_FB_NUM_BUFFERS][AKIRA_FB_MAX_PIXELS];
 #endif
-/* On targets without SPIRAM/MEMC, akira_framebuffer_get() returns NULL — no buffer needed. */
+/* On targets without SPIRAM/MEMC there is no buffer at all: akira_framebuffer_get()
+ * returns NULL and the present/flip path below is a no-op. */
 
 /* Double-buffer handoff to the display compositor thread. Multiple threads
  * call akira_display_flush() -> this function concurrently (akira_os_shell
@@ -64,7 +65,9 @@ __attribute__((section(".ext_ram.bss"), aligned(4))) static uint16_t hw_framebuf
  * fb_write_idx, which otherwise can permanently wedge a producer in
  * take(buffer_free) forever (the compositor only ever hands back one
  * credit per real frame it consumed). */
+#if defined(AKIRA_HAS_HW_FRAMEBUFFER)
 static uint8_t fb_write_idx;           /* buffer the app is currently drawing into */
+#endif
 static const uint16_t *fb_present_buf; /* buffer handed to the compositor */
 static struct k_sem fb_sem_frame_ready = Z_SEM_INITIALIZER(fb_sem_frame_ready, 0, 1);
 static struct k_sem fb_sem_buffer_free = Z_SEM_INITIALIZER(fb_sem_buffer_free, 1, 1);
@@ -72,6 +75,11 @@ K_MUTEX_DEFINE(fb_present_mutex);
 
 void akira_framebuffer_present(void)
 {
+#if !defined(AKIRA_HAS_HW_FRAMEBUFFER)
+    /* No framebuffer to hand over, and no compositor consuming one — giving
+     * frame_ready here would strand the next caller in take(buffer_free). */
+    return;
+#else
     k_mutex_lock(&fb_present_mutex, K_FOREVER);
     fb_present_buf = hw_framebuffer[fb_write_idx];
     k_sem_give(&fb_sem_frame_ready);
@@ -86,6 +94,7 @@ void akira_framebuffer_present(void)
     memcpy(hw_framebuffer[fb_write_idx], hw_framebuffer[presented_idx],
            sizeof(hw_framebuffer[0]));
     k_mutex_unlock(&fb_present_mutex);
+#endif
 }
 
 const uint16_t *akira_framebuffer_wait_present(void)
@@ -229,8 +238,7 @@ int akira_hal_init(void)
  */
 uint16_t *akira_framebuffer_get(void)
 {
-#if defined(CONFIG_ESP_SPIRAM) || \
-    (defined(CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM) && defined(CONFIG_MEMC))
+#if defined(AKIRA_HAS_HW_FRAMEBUFFER)
     return hw_framebuffer[fb_write_idx];
 #else
     LOG_WRN("akira_framebuffer_get: no SPIRAM framebuffer (need CONFIG_ESP_SPIRAM)");

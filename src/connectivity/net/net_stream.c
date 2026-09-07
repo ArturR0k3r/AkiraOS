@@ -117,7 +117,10 @@ K_MSGQ_DEFINE(g_net_evt_q,
 
 /* Poll thread */
 static void net_poll_thread_fn(void *a, void *b, void *c);
-K_THREAD_STACK_DEFINE(g_poll_stack, CONFIG_AKIRA_NET_POLL_STACK_SIZE);
+/* Stack in PSRAM: the poll thread only ever touches sockets, which is what
+ * the SoC linker script already does for the Zephyr net threads themselves
+ * under CONFIG_ESP32_WIFI_NET_ALLOC_SPIRAM. */
+AKIRA_BULK_STACK_DEFINE(g_poll_stack, CONFIG_AKIRA_NET_POLL_STACK_SIZE);
 static struct k_thread g_poll_thread;
 
 /* =========================================================================

@@ -272,8 +272,7 @@ static struct
     bool initialized;
 
     struct k_work_q work_queue;
-} storage AKIRA_BULK_BSS = {
-    .initialized = false};
+} storage AKIRA_BULK_BSS;
 
 /* Compact NVS entries: reads all valid entries, rewrites them sequentially
  * from SETTINGS_START_ID, and updates the counter.  Called at init when

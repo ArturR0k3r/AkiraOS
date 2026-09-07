@@ -24,6 +24,7 @@ LOG_MODULE_REGISTER(akira_hid_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <runtime/security.h>
 #include <zephyr/kernel.h>
 #include <string.h>
+#include <lib/mem_helper.h>
 
 #ifdef CONFIG_AKIRA_HID
 #include <connectivity/hid/hid_manager.h>
@@ -49,8 +50,14 @@ LOG_MODULE_REGISTER(akira_hid_api, CONFIG_AKIRA_LOG_LEVEL);
 struct hid_raw_pkt  { uint8_t data[USB_HID_RAW_PAYLOAD_SIZE];  uint8_t len; };
 struct hid_fido_pkt { uint8_t data[USB_HID_FIDO_PAYLOAD_SIZE]; uint8_t len; };
 
-K_MSGQ_DEFINE(hid_raw_msgq,  sizeof(struct hid_raw_pkt),  HID_RAW_QUEUE_DEPTH,  4);
-K_MSGQ_DEFINE(hid_fido_msgq, sizeof(struct hid_fido_pkt), HID_FIDO_QUEUE_DEPTH, 4);
+/* Ring buffers in PSRAM.  The report callbacks below are the only producers;
+ * they may run in interrupt context, which is fine — the one window where
+ * PSRAM is unreachable (cache off, during an internal-flash write) also has
+ * interrupts disabled, so no ISR can observe it. */
+AKIRA_BULK_MSGQ_DEFINE(hid_raw_msgq,  sizeof(struct hid_raw_pkt),
+                       HID_RAW_QUEUE_DEPTH,  4);
+AKIRA_BULK_MSGQ_DEFINE(hid_fido_msgq, sizeof(struct hid_fido_pkt),
+                       HID_FIDO_QUEUE_DEPTH, 4);
 
 static void hid_raw_isr_cb(const uint8_t *data, uint8_t len)
 {

@@ -33,6 +33,8 @@
 #include <drivers/power/power_manager.h>
 #endif
 
+#include "lib/mem_helper.h"
+
 #if defined(CONFIG_AKIRA_WASM_BLE)
 #include "ble_app_service.h"
 #endif
@@ -93,7 +95,10 @@ static struct
  * (CONFIG_AKIRA_BLE_EVENT_QUEUE_DEPTH in ble_app_service.c); scan reports
  * are lower-value than GATT events so a fixed constant is fine here. */
 #define BLE_SCAN_QUEUE_DEPTH 16
-K_MSGQ_DEFINE(g_scan_evt_q, sizeof(struct ble_scan_report), BLE_SCAN_QUEUE_DEPTH, 4);
+/* Ring buffer in PSRAM: ble_scan_report is plain data and the only producer
+ * is the scan callback, which the host runs on the BT RX thread. */
+AKIRA_BULK_MSGQ_DEFINE(g_scan_evt_q, sizeof(struct ble_scan_report),
+                       BLE_SCAN_QUEUE_DEPTH, 4);
 #endif
 
 /*===========================================================================*/

@@ -91,7 +91,9 @@ static bool                  g_event_pending;     /* guard against double-submit
 #define SD_EVENT_WQ_STACK  4192
 #define SD_EVENT_WQ_PRIO   11
 
-K_THREAD_STACK_DEFINE(g_sd_event_stack, SD_EVENT_WQ_STACK);
+/* Stack in PSRAM: this queue only mounts/unmounts the SD card over SPI and
+ * updates the in-RAM registry — the internal flash is never written from it. */
+AKIRA_BULK_STACK_DEFINE(g_sd_event_stack, SD_EVENT_WQ_STACK);
 static struct k_work_q  g_sd_event_wq;
 static struct k_work    g_sd_event_work;
 static bool             g_sd_event_present;

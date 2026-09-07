@@ -66,9 +66,10 @@ struct ble_service_slot {
 static struct ble_char_slot   AKIRA_BULK_BSS g_chars[CONFIG_AKIRA_BLE_MAX_CHARS];
 static struct ble_service_slot AKIRA_BULK_BSS g_svcs[CONFIG_AKIRA_BLE_MAX_SERVICES];
 
-/* Event queue */
-K_MSGQ_DEFINE(g_evt_q, sizeof(struct ble_event),
-	      CONFIG_AKIRA_BLE_EVENT_QUEUE_DEPTH, 4);
+/* Event queue — ring buffer in PSRAM; ble_event is plain data, and every
+ * producer is a GATT callback running on the BT RX thread, never an ISR. */
+AKIRA_BULK_MSGQ_DEFINE(g_evt_q, sizeof(struct ble_event),
+		       CONFIG_AKIRA_BLE_EVENT_QUEUE_DEPTH, 4);
 
 static struct k_mutex g_mutex;
 static bool g_initialized;

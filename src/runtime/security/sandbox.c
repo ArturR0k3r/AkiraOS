@@ -16,6 +16,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "runtime/security.h"
+#include "lib/mem_helper.h"
 #ifdef CONFIG_AKIRA_AUDIT_LOG_HMAC
 #include <akira_platform/audit_hmac.h>
 #endif
@@ -24,13 +25,16 @@ LOG_MODULE_REGISTER(akira_sandbox, CONFIG_AKIRA_LOG_LEVEL);
 
 /* ===== Audit Ring Buffer ===== */
 
+/* The entry array dominates this struct (~1.8 KB at the default log size) and
+ * is plain data touched only under g_audit_lock, so the whole record lives in
+ * PSRAM rather than internal DRAM. */
 static struct
 {
     audit_entry_t entries[CONFIG_AKIRA_AUDIT_LOG_SIZE];
     atomic_t write_idx;
     atomic_t count;
     bool initialized;
-} g_audit = {0};
+} g_audit AKIRA_BULK_BSS;
 
 static struct k_spinlock g_audit_lock;
 

@@ -544,9 +544,12 @@ static void rf_rx_daemon_fn(void *p1, void *p2, void *p3)
     }
 }
 
-K_THREAD_DEFINE(rf_rx_daemon, CONFIG_AKIRA_RF_DAEMON_STACK_SIZE,
-                rf_rx_daemon_fn, NULL, NULL, NULL,
-                CONFIG_AKIRA_RF_DAEMON_PRIORITY, 0, 0);
+/* Stack in PSRAM: the daemon only drives the radio over SPI and hands frames
+ * to s_rf_rx_msgq — it never reaches the internal-flash driver, which is the
+ * one thing a thread running off external RAM must not do. */
+AKIRA_BULK_THREAD_DEFINE(rf_rx_daemon, CONFIG_AKIRA_RF_DAEMON_STACK_SIZE,
+                         rf_rx_daemon_fn, NULL, NULL, NULL,
+                         CONFIG_AKIRA_RF_DAEMON_PRIORITY, 0, 0);
 
 /* Stateless raw capture: pause the daemon, take the chip, stream into buf.
  * The lock timeout exceeds the daemon's one in-flight 2 s recv so we never

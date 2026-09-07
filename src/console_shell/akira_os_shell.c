@@ -83,6 +83,7 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 #if defined(CONFIG_AKIRA_MODULE_RF)
 #include <api/akira_rf_api.h>
 #endif
+#include <lib/mem_helper.h>
 #if defined(CONFIG_AKIRA_WIFI_MANAGER)
 #include <connectivity/wifi/wifi_manager.h>
 #endif
@@ -153,10 +154,12 @@ typedef struct
 
 #define SHELL_EVENT_QUEUE_DEPTH 8
 
-K_MSGQ_DEFINE(g_shell_msgq,
-              sizeof(shell_event_t),
-              SHELL_EVENT_QUEUE_DEPTH,
-              4);
+/* Ring buffer in PSRAM — shell_event_t is plain data and every producer
+ * goes through k_msgq_put(..., K_NO_WAIT). */
+AKIRA_BULK_MSGQ_DEFINE(g_shell_msgq,
+                       sizeof(shell_event_t),
+                       SHELL_EVENT_QUEUE_DEPTH,
+                       4);
 
 /* ------------------------------------------------------------------ */
 /* Shell state                                                         */

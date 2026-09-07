@@ -21,7 +21,7 @@ static struct {
     module_cache_entry_t entries[CONFIG_AKIRA_MODULE_CACHE_SIZE];
     module_cache_stats_t stats;
     bool initialized;
-} g_cache AKIRA_BULK_BSS = {0};
+} g_cache AKIRA_BULK_BSS;
 
 static K_MUTEX_DEFINE(g_cache_mutex);
 

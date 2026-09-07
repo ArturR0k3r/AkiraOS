@@ -69,7 +69,9 @@ static void compositor_thread_fn(void *p1, void *p2, void *p3)
     }
 }
 
-K_THREAD_STACK_DEFINE(compositor_stack, CONFIG_AKIRA_DISPLAY_COMPOSITOR_STACK_SIZE);
+/* Stack in PSRAM: the compositor blocks on the framebuffer (itself PSRAM)
+ * and pushes it over SPI — it never reaches the internal-flash driver. */
+AKIRA_BULK_STACK_DEFINE(compositor_stack, CONFIG_AKIRA_DISPLAY_COMPOSITOR_STACK_SIZE);
 static struct k_thread compositor_tid;
 
 /**
@@ -199,7 +201,12 @@ int akira_display_hal_init(void)
                     compositor_thread_fn, NULL, NULL, NULL,
                     CONFIG_AKIRA_DISPLAY_COMPOSITOR_PRIORITY,
                     0, K_FOREVER);
+#if defined(CONFIG_SCHED_CPU_MASK)
+    /* Only linked in with CONFIG_SCHED_CPU_MASK; on a single-core (or
+     * unpinned) board the scheduler places the thread and the overlap this
+     * buys is simply not available. */
     k_thread_cpu_pin(&compositor_tid, COMPOSITOR_CORE_ID);
+#endif
     k_thread_start(&compositor_tid);
 
     return 0;

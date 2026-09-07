@@ -146,12 +146,14 @@
 // =============================================================================
 // Flash partition layout — 16MB
 //
-//   0x000000–0x3FFFFF  MCUboot + slot0 + slot1 (partitions_0x0_amp.dtsi)
+//   0x000000–0x3FFFFF  MCUboot + slot0 + slot1
+//                      (boards/akiraconsole_prod/akiraconsole_prod_partitions_16M.dtsi)
 //   0x400000–0x407FFF  NVS settings 32KB   ← BT bonds, Wi-Fi credentials
 //   0x408000–0x487FFF  LittleFS 512KB       ← app filesystem
 //
-// Partitions start at 0x400000 so OTA (slot1 at 0x170000–0x2BFFFF) never
-// overwrites user data.
+// Partitions start at 0x400000 so OTA (slot1 at 0x210000–0x3FFFFF) never
+// overwrites user data. The slots are sized to end exactly at 0x400000, so
+// growing them means moving these — and orphaning existing user data.
 // =============================================================================
 &flash0 {
 	partitions {

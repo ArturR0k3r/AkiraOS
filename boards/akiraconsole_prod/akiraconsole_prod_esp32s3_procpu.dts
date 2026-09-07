@@ -8,7 +8,9 @@
 #include <zephyr/dt-bindings/i2c/i2c.h>
 #include <zephyr/dt-bindings/mipi_dbi/mipi_dbi.h>
 #include <zephyr/dt-bindings/pwm/pwm.h>
-#include <espressif/partitions_0x0_amp.dtsi>
+/* 16 MB partition table: 1984 KB per image slot, sized to end exactly where
+ * the overlay's user partitions begin. Replaces the stock 4 MB table. */
+#include "akiraconsole_prod_partitions_16M.dtsi"
 #include "akiraconsole_prod-pinctrl.dtsi"
 
 / {
