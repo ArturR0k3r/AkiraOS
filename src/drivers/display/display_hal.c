@@ -69,9 +69,7 @@ static void compositor_thread_fn(void *p1, void *p2, void *p3)
     }
 }
 
-/* Stack in PSRAM: the compositor blocks on the framebuffer (itself PSRAM)
- * and pushes it over SPI — it never reaches the internal-flash driver. */
-AKIRA_BULK_STACK_DEFINE(compositor_stack, CONFIG_AKIRA_DISPLAY_COMPOSITOR_STACK_SIZE);
+K_THREAD_STACK_DEFINE(compositor_stack, CONFIG_AKIRA_DISPLAY_COMPOSITOR_STACK_SIZE);
 static struct k_thread compositor_tid;
 
 /**

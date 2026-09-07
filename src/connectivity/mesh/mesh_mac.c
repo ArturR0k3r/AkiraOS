@@ -282,11 +282,9 @@ static void mesh_mac_tx_thread_fn(void *a, void *b, void *c)
     }
 }
 
-/* Stack in PSRAM — same reasoning as the TX lane buffers above: nothing in
- * the MAC or the layers it dispatches into writes internal flash. */
-AKIRA_BULK_THREAD_DEFINE(mesh_mac_tx_thread, CONFIG_AKIRA_MESH_RX_STACK_SIZE,
-                         mesh_mac_tx_thread_fn, NULL, NULL, NULL,
-                         CONFIG_AKIRA_MESH_TX_PRIORITY, 0, 0);
+K_THREAD_DEFINE(mesh_mac_tx_thread, CONFIG_AKIRA_MESH_RX_STACK_SIZE,
+                mesh_mac_tx_thread_fn, NULL, NULL, NULL,
+                CONFIG_AKIRA_MESH_TX_PRIORITY, 0, 0);
 
 static void mesh_mac_rx_thread_fn(void *a, void *b, void *c)
 {
@@ -332,6 +330,6 @@ static void mesh_mac_rx_thread_fn(void *a, void *b, void *c)
     }
 }
 
-AKIRA_BULK_THREAD_DEFINE(mesh_mac_rx_thread, CONFIG_AKIRA_MESH_RX_STACK_SIZE,
-                         mesh_mac_rx_thread_fn, NULL, NULL, NULL,
-                         CONFIG_AKIRA_MESH_RX_PRIORITY, 0, 0);
+K_THREAD_DEFINE(mesh_mac_rx_thread, CONFIG_AKIRA_MESH_RX_STACK_SIZE,
+                mesh_mac_rx_thread_fn, NULL, NULL, NULL,
+                CONFIG_AKIRA_MESH_RX_PRIORITY, 0, 0);

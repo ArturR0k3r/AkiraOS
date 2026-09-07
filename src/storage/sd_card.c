@@ -87,13 +87,14 @@ static const struct device  *g_tca_dev;
 static int                   g_last_det  = -1;    /* -1 = unknown */
 static bool                  g_event_pending;     /* guard against double-submit */
 
-/* Dedicated work queue — fs_unmount + registry ops need ~3KB stack */
-#define SD_EVENT_WQ_STACK  4192
+/* Dedicated work queue — fs_unmount + registry ops need ~3KB stack.
+ * `kernel thread stacks` measured only 324 B peak, but no card was inserted or
+ * removed during that run, so the reading is near bare thread entry: keep the
+ * ~3 KB the path actually needs rather than trusting it. */
+#define SD_EVENT_WQ_STACK  3072
 #define SD_EVENT_WQ_PRIO   11
 
-/* Stack in PSRAM: this queue only mounts/unmounts the SD card over SPI and
- * updates the in-RAM registry — the internal flash is never written from it. */
-AKIRA_BULK_STACK_DEFINE(g_sd_event_stack, SD_EVENT_WQ_STACK);
+K_THREAD_STACK_DEFINE(g_sd_event_stack, SD_EVENT_WQ_STACK);
 static struct k_work_q  g_sd_event_wq;
 static struct k_work    g_sd_event_work;
 static bool             g_sd_event_present;

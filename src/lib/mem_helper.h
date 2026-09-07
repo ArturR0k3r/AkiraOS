@@ -63,6 +63,16 @@ void *akira_malloc_buffer_ex(size_t size, mem_source_t *source);
  * normal BSS — the Kconfig defaults for those boards must be small enough
  * to fit in internal DRAM.
  *
+ * NEVER use this (or any PSRAM section) for a thread stack.  PSRAM sits on
+ * SPI0 alongside the flash, so a flash write/erase — the LittleFS garbage
+ * collector inside lfs_file_open, for one — disables the SPI0 cache and the
+ * CPU can no longer read its own stack frames: hard fault or dead freeze.
+ * The Zephyr port makes this worse than it sounds under CONFIG_SMP, because
+ * spi_flash_disable_interrupts_caches_and_other_cpu() only locks interrupts
+ * on the calling core and never stalls the other one, so any thread on the
+ * other core is exposed too, not just the one doing the flash access.  See
+ * the thread-pool comment in src/runtime/akira_runtime.c.
+ *
  * Give the variable no initializer, not even `= {0}`: .ext_ram.bss lives in a
  * NOLOAD output section, so an explicit initializer only turns the section
  * PROGBITS (which then collides with the next uninitialized variable placed
@@ -80,63 +90,6 @@ void *akira_malloc_buffer_ex(size_t size, mem_source_t *source);
 #else
 #define AKIRA_BULK_BSS  /**< no-op on non-PSRAM targets */
 #endif
-
-/**
- * @brief Place a variable in external-RAM noinit
- *
- * Same idea as AKIRA_BULK_BSS, but lands in .ext_ram_noinit — the PSRAM
- * region the boot code does *not* zero.  Use it for memory whose contents
- * are meaningless before first use (thread stacks); AKIRA_BULK_BSS stays
- * the right choice for anything that must read back as zero.
- */
-#if defined(CONFIG_AKIRA_PSRAM)
-#define AKIRA_BULK_NOINIT __attribute__((section(".ext_ram_noinit.akira")))
-#else
-#define AKIRA_BULK_NOINIT  /**< no-op on non-PSRAM targets */
-#endif
-
-/**
- * @brief K_THREAD_STACK_DEFINE that puts the stack in PSRAM
- *
- * A thread stack in external RAM is only safe when the thread itself never
- * performs an internal-flash operation: esp_flash write/erase (and the NVS /
- * littlefs / settings paths that reach it) run with the cache off, which
- * makes PSRAM — including that thread's own stack — unreadable for the
- * duration.  Interrupts are disabled and the second CPU is halted across
- * that window, so a thread that only does sockets, SPI or radio work is
- * never scheduled while the cache is down.
- *
- * The same trade-off is already made one level down: with
- * CONFIG_ESP32_WIFI_NET_ALLOC_SPIRAM=y the SoC linker script puts every
- * libsubsys__net*.a / libdrivers__wifi.a stack in this region.
- *
- * @param sym  Thread stack symbol name
- * @param size Size of the stack memory region
- */
-#if !defined(CONFIG_AKIRA_PSRAM)
-#define AKIRA_BULK_STACK_DEFINE(sym, size) K_THREAD_STACK_DEFINE(sym, size)
-#elif defined(CONFIG_USERSPACE)
-#define AKIRA_BULK_STACK_DEFINE(sym, size) \
-	Z_THREAD_STACK_DEFINE_IN(sym, size, AKIRA_BULK_NOINIT)
-#else
-/* Without CONFIG_USERSPACE, Zephyr aliases K_THREAD_STACK_DEFINE onto the
- * kernel-stack macros, and the Z_THREAD_STACK_* helpers are not defined. */
-#define AKIRA_BULK_STACK_DEFINE(sym, size) \
-	Z_KERNEL_STACK_DEFINE_IN(sym, size, AKIRA_BULK_NOINIT)
-#endif
-
-/**
- * @brief K_THREAD_DEFINE with its stack in PSRAM
- *
- * Identical to K_THREAD_DEFINE — same static thread object, same automatic
- * start at boot — except the stack is placed by AKIRA_BULK_STACK_DEFINE.
- * The same "no internal-flash access from this thread" rule applies.
- */
-#define AKIRA_BULK_THREAD_DEFINE(name, stack_size, entry, p1, p2, p3,	\
-				 prio, options, delay)			\
-	AKIRA_BULK_STACK_DEFINE(_k_thread_stack_##name, stack_size);	\
-	Z_THREAD_COMMON_DEFINE(name, stack_size, entry, p1, p2, p3,	\
-			       prio, options, delay)
 
 /**
  * @brief K_MSGQ_DEFINE with its ring buffer in PSRAM
