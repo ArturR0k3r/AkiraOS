@@ -120,6 +120,14 @@ static void sd_event_work_fn(struct k_work *work)
                 }
             }
         }
+    } else if (!present && AKIRA_MSC_OWNS_SD()) {
+        /* g_mounted is already false for the whole MSC session (the card was
+         * released, not unmounted-because-gone), so the plain g_mounted
+         * branch below never fires here — a physical pull mid-session would
+         * otherwise go undetected and the shim would keep forwarding reads
+         * to a dead disk. Force the session closed instead. */
+        LOG_INF("SD hotplug: card removed during USB MSC session");
+        akira_usb_msc_exit();
     } else if (!present && g_mounted) {
         LOG_INF("SD hotplug: card removed");
         akira_sd_card_deinit_force();
@@ -163,6 +171,15 @@ static void poll_work_fn(struct k_work *work)
 reschedule:
     k_work_reschedule(k_work_delayable_from_work(work),
                       K_MSEC(CONFIG_AKIRA_SD_HOTPLUG_POLL_MS));
+}
+
+/* True if the last GPIO poll saw the card physically inserted, independent
+ * of g_mounted — the USB MSC shim needs this because g_mounted goes false
+ * for the whole MSC session, so it can't tell "released to host" from
+ * "physically gone" on its own. */
+bool akira_sd_card_is_physically_present(void)
+{
+    return g_last_det == 1;
 }
 
 void akira_sd_card_hotplug_pause(void)

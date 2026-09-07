@@ -84,6 +84,13 @@ static int shim_status(struct disk_info *disk)
     if (!g_msc_owns_sd) {
         return DISK_STATUS_UNINIT;
     }
+    /* The real disk's status() only discovers a physical pull on a failed
+     * transaction (SDMMC timeout, ~600ms) — the TCA6408 detect pin knows
+     * immediately, so check it first and skip straight to NOMEDIA instead
+     * of paying that timeout on every host poll. */
+    if (!akira_sd_card_is_physically_present()) {
+        return DISK_STATUS_NOMEDIA;
+    }
     return disk_access_status(AKIRA_MSC_REAL_SD_DISK_NAME);
 }
 
@@ -91,6 +98,9 @@ static int shim_read(struct disk_info *disk, uint8_t *data_buf,
                      uint32_t start_sector, uint32_t num_sector)
 {
     ARG_UNUSED(disk);
+    if (!akira_sd_card_is_physically_present()) {
+        return -ENODEV;
+    }
     return disk_access_read(AKIRA_MSC_REAL_SD_DISK_NAME, data_buf,
                             start_sector, num_sector);
 }
@@ -99,6 +109,9 @@ static int shim_write(struct disk_info *disk, const uint8_t *data_buf,
                       uint32_t start_sector, uint32_t num_sector)
 {
     ARG_UNUSED(disk);
+    if (!akira_sd_card_is_physically_present()) {
+        return -ENODEV;
+    }
     return disk_access_write(AKIRA_MSC_REAL_SD_DISK_NAME, data_buf,
                              start_sector, num_sector);
 }

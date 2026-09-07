@@ -68,6 +68,12 @@ bool akira_sd_card_is_transfer_active(void);
 
 #ifdef CONFIG_AKIRA_SD_HOTPLUG
 typedef void (*akira_sd_hotplug_cb_t)(bool present, void *user_data);
+
+/** True if the card-detect GPIO last read "inserted" — independent of
+ *  akira_sd_card_is_present(), which tracks AkiraOS's own mount state and
+ *  goes false for the whole duration of a USB MSC session. */
+bool akira_sd_card_is_physically_present(void);
+
 int  akira_sd_card_register_hotplug_cb(akira_sd_hotplug_cb_t cb, void *user_data);
 void akira_sd_card_unregister_hotplug_cb(akira_sd_hotplug_cb_t cb);
 /* Fires before akira_sd_card_init() — use for UI loading indicators. */
@@ -94,6 +100,7 @@ bool akira_sd_card_idle_unmount(void);
 /** Re-mount a card unmounted by akira_sd_card_idle_unmount(). No-op otherwise. */
 void akira_sd_card_idle_remount(void);
 #else
+static inline bool akira_sd_card_is_physically_present(void) { return true; }
 static inline void akira_sd_card_hotplug_pause(void)  {}
 static inline void akira_sd_card_hotplug_resume(void) {}
 static inline bool akira_sd_card_idle_unmount(void)   { return false; }
@@ -109,6 +116,7 @@ static inline void akira_sd_card_deinit(void)      {}
 static inline void akira_sd_card_release_for_usb_msc(void) {}
 static inline void akira_sd_card_set_transfer_active(bool active) { (void)active; }
 static inline bool akira_sd_card_is_transfer_active(void) { return false; }
+static inline bool akira_sd_card_is_physically_present(void) { return false; }
 static inline void akira_sd_card_hotplug_pause(void)  {}
 static inline void akira_sd_card_hotplug_resume(void) {}
 static inline bool akira_sd_card_idle_unmount(void)   { return false; }
