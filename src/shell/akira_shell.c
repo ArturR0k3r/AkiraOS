@@ -422,11 +422,6 @@ static const struct gpio_dt_spec button_specs[] = {
     /* Add more buttons as defined in overlay */
 };
 
-/* Work queue for periodic tasks */
-static struct k_work_q shell_workq;
-static K_THREAD_STACK_DEFINE(shell_workq_stack, 1024); /* Reduced to save memory */
-static struct k_work_delayable stats_update_work;
-
 /* Helper functions */
 static inline uint8_t rotation_to_index(uint16_t degrees)
 {
@@ -555,29 +550,6 @@ static void update_system_stats(void)
     shell_state.last_stats_update = k_uptime_get();
 }
 
-/* Work handler for periodic stats update */
-static void stats_update_work_handler(struct k_work *work)
-{
-    update_system_stats();
-
-    /* Reschedule for next update */
-    k_work_reschedule_for_queue(&shell_workq, &stats_update_work, K_SECONDS(30));
-}
-
-/* Status bar update work */
-static void status_bar_update_work_handler(struct k_work *work)
-{
-    if (shell_display_enabled && shell_display_is_enabled())
-    {
-        shell_display_update_status();
-    }
-
-    /* Reschedule for next update */
-    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-    k_work_reschedule_for_queue(&shell_workq, dwork, K_SECONDS(1));
-}
-static K_WORK_DELAYABLE_DEFINE(status_bar_work, status_bar_update_work_handler);
-
 /* Public API Implementation */
 int akira_shell_init(void)
 {
@@ -588,16 +560,6 @@ int akira_shell_init(void)
         LOG_ERR("GPIO initialization failed: %d", ret);
         return ret;
     }
-
-    /* Initialize work queue with smaller stack */
-    k_work_queue_init(&shell_workq);
-    k_work_queue_start(&shell_workq, shell_workq_stack,
-                       K_THREAD_STACK_SIZEOF(shell_workq_stack),
-                       K_PRIO_COOP(8), NULL);
-
-    /* Initialize periodic stats update */
-    k_work_init_delayable(&stats_update_work, stats_update_work_handler);
-    k_work_schedule_for_queue(&shell_workq, &stats_update_work, K_SECONDS(5));
 
     /* Initialize cached stats */
     update_system_stats();
@@ -613,9 +575,6 @@ int akira_shell_init(void)
         }
         else
         {
-            /* Start status bar updates */
-            k_work_schedule_for_queue(&shell_workq, &status_bar_work, K_SECONDS(1));
-
             /* Welcome message */
             shell_display_print("", SHELL_TEXT_NORMAL);
             shell_display_print("=== AkiraOS Shell ===", SHELL_TEXT_PROMPT);
