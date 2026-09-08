@@ -249,8 +249,6 @@ static K_SEM_DEFINE(storage_ready_sem, 0, 1);
  * SPI0 bus that PSRAM shares.  See akira_settings_get_generation(). */
 atomic_t akira_settings_generation = ATOMIC_INIT(0);
 
-K_THREAD_STACK_DEFINE(work_stack, 2048);
-
 struct akira_setting_work
 {
     struct k_work work;
@@ -270,8 +268,6 @@ static struct
 {
     struct nvs_fs nvs;
     bool initialized;
-
-    struct k_work_q work_queue;
 } storage AKIRA_BULK_BSS;
 
 /* Compact NVS entries: reads all valid entries, rewrites them sequentially
@@ -782,7 +778,7 @@ static int submit_settings_work(struct akira_setting_work *work)
     }
 
     k_work_init(&work->work, setting_work_handler);
-    k_work_submit_to_queue(&storage.work_queue, &work->work);
+    k_work_submit(&work->work);
 
     return 0;
 }
@@ -809,14 +805,6 @@ int akira_settings_init(void)
 
     if (!ret)
     {
-        k_work_queue_init(&storage.work_queue);
-
-        k_work_queue_start(&storage.work_queue,
-                           work_stack,
-                           K_THREAD_STACK_SIZEOF(work_stack),
-                           K_PRIO_PREEMPT(7),
-                           NULL);
-
         storage.initialized = true;
         k_sem_give(&storage_ready_sem);
         LOG_INF("Storage initialized to FLASH");
