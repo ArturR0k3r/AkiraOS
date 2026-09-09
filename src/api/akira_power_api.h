@@ -51,11 +51,12 @@ int akira_native_power_get_battery_level(wasm_exec_env_t exec_env);
  * @brief Read full battery status into caller-provided buffer.
  *
  * The buffer receives a packed structure:
- *   [0]   uint8  level_percent
- *   [1]   uint8  flags  (bit0=charging, bit1=low_battery)
- *   [2-3] pad
- *   [4-7] int32  voltage_mv
- *   [8-11] int32 current_ma
+ *   [0]     uint8  level_percent
+ *   [1]     uint8  flags  (bit0=charging, bit1=low_battery)
+ *   [2-3]   pad
+ *   [4-7]   int32  voltage_mv
+ *   [8-11]  int32  current_ma
+ *   [12-15] int32  temperature_c (INT32_MIN if the gauge doesn't report it)
  *
  * WASM signature: (*~)i  (buf ptr + len, returns 0 or negative errno)
  */

@@ -457,7 +457,7 @@ static int battery_status_read(akira_battery_status_t *status)
 
 #ifdef CONFIG_FUEL_GAUGE
     if (g_pm.fuel_gauge) {
-        union fuel_gauge_prop_val soc, volt, curr;
+        union fuel_gauge_prop_val soc, volt, curr, temp;
         bool ok = true;
 
         ok &= (fuel_gauge_get_prop(g_pm.fuel_gauge,
@@ -476,6 +476,11 @@ static int battery_status_read(akira_battery_status_t *status)
              * BQ28Z610 reports charge current as negative. */
             status->charging      = (status->current_ma < 0);
             status->low_battery   = (status->level_percent < CONFIG_AKIRA_BATTERY_LOW_THRESHOLD);
+            /* Temperature is best-effort: not every fuel gauge implements
+             * it, so it doesn't gate the rest of the status read. */
+            status->temperature_c = (fuel_gauge_get_prop(g_pm.fuel_gauge,
+                    FUEL_GAUGE_TEMPERATURE, &temp) == 0)
+                ? ((int32_t)temp.temperature / 10 - 273) : INT32_MIN;
             return 0;
         }
         LOG_WRN("Fuel gauge full-status read incomplete");
@@ -498,6 +503,7 @@ static int battery_status_read(akira_battery_status_t *status)
              * shunt orientation; INA219 Zephyr driver reports signed amps). */
             status->charging      = (status->current_ma < -10);
             status->low_battery   = (status->level_percent < CONFIG_AKIRA_BATTERY_LOW_THRESHOLD);
+            status->temperature_c = INT32_MIN; /* INA219 has no temperature sense */
             return 0;
         }
         LOG_WRN("INA219 full-status fetch failed: %d", ret);
@@ -523,6 +529,7 @@ static int battery_status_read(akira_battery_status_t *status)
             status->current_ma    = 0;     /* ADC gives voltage only */
             status->charging      = false; /* indeterminate without current */
             status->low_battery   = (status->level_percent < CONFIG_AKIRA_BATTERY_LOW_THRESHOLD);
+            status->temperature_c = INT32_MIN; /* ADC gives voltage only */
             return 0;
         }
         LOG_WRN("ADC battery full-read failed: %d", ret);

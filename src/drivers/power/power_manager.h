@@ -55,11 +55,12 @@ typedef enum {
  * floating-point in WASM-facing code paths.
  */
 typedef struct {
-    uint8_t  level_percent; /**< State of charge 0-100 %.                 */
-    int32_t  voltage_mv;    /**< Bus / pack voltage in millivolts.         */
-    int32_t  current_ma;    /**< Charge(+) / discharge(-) current in mA.  */
-    bool     charging;      /**< True when an external charger is active.  */
-    bool     low_battery;   /**< True when SoC < CONFIG_AKIRA_BATTERY_LOW_THRESHOLD. */
+    uint8_t  level_percent;  /**< State of charge 0-100 %.                 */
+    int32_t  voltage_mv;     /**< Bus / pack voltage in millivolts.         */
+    int32_t  current_ma;     /**< Charge(+) / discharge(-) current in mA.  */
+    bool     charging;       /**< True when an external charger is active.  */
+    bool     low_battery;    /**< True when SoC < CONFIG_AKIRA_BATTERY_LOW_THRESHOLD. */
+    int32_t  temperature_c;  /**< Battery temperature in whole degrees C, INT32_MIN if unavailable. */
 } akira_battery_status_t;
 
 /**

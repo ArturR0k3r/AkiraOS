@@ -23,7 +23,7 @@ LOG_MODULE_REGISTER(akira_power_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <string.h>
 
 /* Packed battery-status buffer layout (12 bytes total). */
-#define BATT_BUF_MIN_LEN 12
+#define BATT_BUF_MIN_LEN 16
 
 /* flags byte bit definitions */
 #define BATT_FLAG_CHARGING     BIT(0)
@@ -85,6 +85,11 @@ int akira_native_power_get_battery_status(wasm_exec_env_t exec_env,
     buf[9]  = (uint8_t)((s.current_ma >>  8) & 0xFF);
     buf[10] = (uint8_t)((s.current_ma >> 16) & 0xFF);
     buf[11] = (uint8_t)((s.current_ma >> 24) & 0xFF);
+    /* int32 temperature_c at offset 12 (INT32_MIN if unavailable) */
+    buf[12] = (uint8_t)(s.temperature_c & 0xFF);
+    buf[13] = (uint8_t)((s.temperature_c >>  8) & 0xFF);
+    buf[14] = (uint8_t)((s.temperature_c >> 16) & 0xFF);
+    buf[15] = (uint8_t)((s.temperature_c >> 24) & 0xFF);
 
     return 0;
 }
