@@ -835,8 +835,20 @@ int net_stream_close(int handle)
 		return -EINVAL;
 	}
 
-	k_mutex_lock(&g_mutex, K_FOREVER);
 	struct net_stream_ctx *ctx = &g_streams[handle];
+
+	/* Cancel (or wait out) any in-flight async connect before tearing down
+	 * this slot. Without this, a connect_work_fn() still resolving DNS or
+	 * inside zsock_connect() when the caller gives up can complete later
+	 * and mutate a slot net_stream_open() has since handed to a new
+	 * caller — writing to the new caller's ctx->fd == -1 (EBADF) or, worse,
+	 * a freshly reused fd. Must be called before taking g_mutex: the work
+	 * handler itself locks g_mutex on completion, so holding it here would
+	 * deadlock against an in-progress run. */
+	struct k_work_sync sync;
+	k_work_cancel_sync(&ctx->connect_work, &sync);
+
+	k_mutex_lock(&g_mutex, K_FOREVER);
 
 	if (!ctx->used) {
 		k_mutex_unlock(&g_mutex);
