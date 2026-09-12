@@ -45,6 +45,7 @@ LOG_MODULE_REGISTER(akira_net_stream, CONFIG_AKIRA_LOG_LEVEL);
 #define NET_TLS_CA_SEC_TAG_GTS_R4   1
 #define NET_TLS_CA_SEC_TAG_ISRG_X2  2
 #define NET_TLS_CA_SEC_TAG_GTS_R1   3
+#define NET_TLS_CA_SEC_TAG_USERTRUST_ECC 4
 #endif
 
 /* =========================================================================
@@ -306,7 +307,7 @@ static void connect_work_fn(struct k_work *work)
 #ifdef CONFIG_AKIRA_WASM_NET_TLS
 	if (ctx->type == NET_TYPE_TLS) {
 		sec_tag_t sec_tag_list[] = { NET_TLS_CA_SEC_TAG_GTS_R4, NET_TLS_CA_SEC_TAG_ISRG_X2,
-					     NET_TLS_CA_SEC_TAG_GTS_R1 };
+					     NET_TLS_CA_SEC_TAG_GTS_R1, NET_TLS_CA_SEC_TAG_USERTRUST_ECC };
 		int peer_verify = TLS_PEER_VERIFY_REQUIRED;
 		int r1 = zsock_setsockopt(ctx->fd, SOL_TLS, TLS_SEC_TAG_LIST,
 					   sec_tag_list, sizeof(sec_tag_list));
@@ -619,6 +620,16 @@ int net_stream_init(void)
 
 	if (cred_ret < 0 && cred_ret != -EEXIST) {
 		LOG_ERR("Failed to register TLS CA credential (GTS R1): %d", cred_ret);
+		return cred_ret;
+	}
+
+	cred_ret = tls_credential_add(NET_TLS_CA_SEC_TAG_USERTRUST_ECC,
+				       TLS_CREDENTIAL_CA_CERTIFICATE,
+				       net_tls_ca_cert_usertrust_ecc,
+				       sizeof(net_tls_ca_cert_usertrust_ecc));
+
+	if (cred_ret < 0 && cred_ret != -EEXIST) {
+		LOG_ERR("Failed to register TLS CA credential (USERTrust ECC): %d", cred_ret);
 		return cred_ret;
 	}
 #endif
