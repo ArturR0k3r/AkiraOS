@@ -415,10 +415,13 @@ void akira_shell_abort_wasm_launch(void)
 /* Shell main thread                                                   */
 /* ------------------------------------------------------------------ */
 
-/* 8192 -> 6144 to reclaim SRAM for the BT controller heap, then -> 5632 from
- * a hardware `kernel thread stacks` reading: 3988 B peak over a session that
- * launched several apps and ran an install. */
-#define SHELL_THREAD_STACK_SIZE 5632
+/* akiraplay_screen.c runs TLS (catalog_https_get for the catalogue fetch and
+ * app download) directly on this thread, which overflows a stack sized only
+ * for UI rendering and file I/O. Zephyr's interactive console
+ * (CONFIG_SHELL_STACK_SIZE) needed the same 3072->8192 bump for the same
+ * reason: mbedTLS's handshake and close_notify are stack-hungry with
+ * software ECDHE (P256M off). */
+#define SHELL_THREAD_STACK_SIZE 8192
 #define SHELL_THREAD_PRIORITY 10 /* above WASM apps (14), below sys work */
 
 static K_THREAD_STACK_DEFINE(g_shell_stack, SHELL_THREAD_STACK_SIZE);
