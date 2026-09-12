@@ -2164,6 +2164,41 @@ static int cmd_net_tls_test(const struct shell *sh, size_t argc, char **argv)
 }
 
 SHELL_CMD_REGISTER(net_tls_test, NULL, "Test TLS connect <host> [port]", cmd_net_tls_test);
+
+#include "console_shell/catalog_net.h"
+
+/**
+ * @brief Diagnostic shell command: fetch the app catalogue over TLS via
+ * catalog_net.c's synchronous wrapper. AkiraPlay (akiraplay_screen.c) is the
+ * real on-device browse UI; this stays as a quick host-side connectivity
+ * check independent of button input.
+ */
+static int cmd_catalog_test(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    static uint8_t body[4096];
+    /* CONFIG_NET_SOCKETS_CONNECT_TIMEOUT=15000 bounds the underlying TLS
+     * handshake (see boards/akiraconsole_prod_esp32s3_procpu.conf); this
+     * app-level budget must clear that with real margin or the poll loop
+     * can close the socket moments before the handshake actually finishes. */
+    int n = catalog_https_get("console.app.akiraos.dev", 443,
+        "/catalog/catalogue.json",
+        body, sizeof(body), 25000);
+
+    if (n < 0)
+    {
+        shell_print(sh, "catalog fetch failed: %d", n);
+        return 0;
+    }
+
+    shell_print(sh, "catalog fetch OK: %d bytes", n);
+    shell_print(sh, "first 200 bytes:");
+    shell_print(sh, "%.*s", n < 200 ? n : 200, body);
+    return 0;
+}
+SHELL_CMD_REGISTER(catalog_test, NULL, "TEST-ONLY: fetch catalogue.json over TLS", cmd_catalog_test);
 #endif
 
 SHELL_STATIC_SUBCMD_SET_CREATE(ram_cmds,

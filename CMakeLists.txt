@@ -884,6 +884,8 @@ if(CONFIG_AKIRA_OS_SHELL)
         src/console_shell/home_screen.c
         src/console_shell/shell_theme.c
         src/console_shell/sd_install_screen.c
+        src/console_shell/catalog_net.c
+        src/console_shell/catalogue_parser.c
         src/console_shell/install_progress_screen.c
         src/console_shell/settings_screen.c
         src/console_shell/settings/display_screen.c
