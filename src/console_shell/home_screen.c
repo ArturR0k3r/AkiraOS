@@ -198,6 +198,24 @@ static const uint32_t ICON_GAMES[ICON_H] = {
     0b00000000000000000000000000000000u,
     0b00000000000000000000000000000000u,
 };
+static const uint32_t ICON_STORE[ICON_H] = {
+    0b00000000111100000000000000000000u,
+    0b00000001000010000000000000000000u,
+    0b00000001000010000000000000000000u,
+    0b00011111111111111000000000000000u,
+    0b00010000000000001000000000000000u,
+    0b00010000000000001000000000000000u,
+    0b00010001111110001000000000000000u,
+    0b00010000000000001000000000000000u,
+    0b00010000000000001000000000000000u,
+    0b00010000000000001000000000000000u,
+    0b00010000000000001000000000000000u,
+    0b00011111111111111000000000000000u,
+    0b00000000000000000000000000000000u,
+    0b00000000000000000000000000000000u,
+    0b00000000000000000000000000000000u,
+    0b00000000000000000000000000000000u,
+};
 static const uint32_t ICON_SETTINGS[ICON_H] = {
     0b00000001110000000000000000000000u,
     0b00000001110000000000000000000000u,
@@ -326,12 +344,22 @@ typedef struct
 static void action_settings(void);
 static void action_sdcard(void);
 static void action_sysinfo(void);
+#if defined(CONFIG_AKIRA_WIFI_MANAGER)
+static void action_akiraplay(void);
+#endif
 
+#if defined(CONFIG_AKIRA_WIFI_MANAGER)
+#define BUILTIN_COUNT 4
+#else
 #define BUILTIN_COUNT 3
+#endif
 static const ui_tile_t BUILTINS[BUILTIN_COUNT] = {
     {TILE_BUILTIN, "SETTINGS", ICON_SETTINGS, 0, action_settings},
     {TILE_BUILTIN, "SD CARD", ICON_SDCARD, 0, action_sdcard},
     {TILE_BUILTIN, "SYS INFO", ICON_INFO, 0, action_sysinfo},
+#if defined(CONFIG_AKIRA_WIFI_MANAGER)
+    {TILE_BUILTIN, "AKIRA PLAY", ICON_STORE, 0, action_akiraplay},
+#endif
 };
 
 #define MAX_ALL_TILES (CONFIG_AKIRA_APP_MAX_INSTALLED + BUILTIN_COUNT)
@@ -1081,6 +1109,14 @@ static void action_sdcard(void)
     extern void sd_install_screen_load(void);
     sd_install_screen_load();
 }
+
+#if defined(CONFIG_AKIRA_WIFI_MANAGER)
+static void action_akiraplay(void)
+{
+    extern void akiraplay_screen_load(void);
+    akiraplay_screen_load();
+}
+#endif
 
 static void action_sysinfo(void)
 {

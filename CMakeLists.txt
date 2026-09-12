@@ -209,7 +209,7 @@ if(CONFIG_AKIRA_WASM_RUNTIME)
     # NOTE: akira_log_module and akira_time_module register to separate namespaces
     # ("akira_log", "akira_time") for WASM apps using named imports.
     # Their akira_register_*_module() functions must be called in akira_runtime_init()
-    # before wasm_runtime_full_init(). 
+    # before wasm_runtime_full_init().
     target_sources(app PRIVATE
         src/runtime/modules/akira_log_module.c
         src/runtime/modules/akira_time_module.c
@@ -242,7 +242,7 @@ target_sources(app PRIVATE
 
 # Display shell commands (only if display is available)
 if(CONFIG_DISPLAY)
-    target_sources(app PRIVATE 
+    target_sources(app PRIVATE
     src/shell/shell_display_cmds.c
     src/drivers/display/display_ili9341.c
     src/drivers/display/fonts.c
@@ -542,7 +542,7 @@ endif()
 
 # Hardware Display HAL (using Zephyr display subsystem)
 if(CONFIG_DISPLAY)
-    target_sources(app PRIVATE 
+    target_sources(app PRIVATE
         src/drivers/display/display_hal.c
     )
 endif()
@@ -629,7 +629,7 @@ endif()
 
 # Conditional OTA manager based on flash availability
 if(CONFIG_AKIRA_OTA AND CONFIG_FLASH_MAP AND CONFIG_BOOTLOADER_MCUBOOT)
-    target_sources(app PRIVATE 
+    target_sources(app PRIVATE
         src/connectivity/transport_interface.c
         src/connectivity/ota/ota_manager.c
     )
@@ -643,19 +643,19 @@ endif()
 # ===== OTA Transport Layer =====
 # Only add OTA transports when OTA management is available (i.e., flash + mcuboot)
 if(CONFIG_AKIRA_OTA AND CONFIG_FLASH_MAP AND CONFIG_BOOTLOADER_MCUBOOT)
-    
+
     if(CONFIG_AKIRA_OTA_HTTP)
         target_sources(app PRIVATE src/connectivity/ota/transports/ota_http.c)
     endif()
-    
+
     if(CONFIG_AKIRA_OTA_BLE)
         target_sources(app PRIVATE src/connectivity/ota/transports/ota_ble.c)
     endif()
-    
+
     if(CONFIG_AKIRA_OTA_USB)
         target_sources(app PRIVATE src/connectivity/ota/transports/ota_usb.c)
     endif()
-    
+
     if(CONFIG_AKIRA_OTA_CLOUD)
         target_sources(app PRIVATE src/connectivity/ota/transports/ota_cloud.c)
     endif()
@@ -668,7 +668,7 @@ endif()
 # HID Manager (when enabled)
 if(CONFIG_AKIRA_HID)
     target_sources(app PRIVATE src/connectivity/hid/hid_manager.c)
-    
+
     # HID Simulation (native_sim only)
     if(CONFIG_AKIRA_HID_SIM)
         target_sources(app PRIVATE src/connectivity/hid/hid_sim.c)
@@ -753,12 +753,12 @@ if(CONFIG_AKIRA_CLOUD_CLIENT)
         src/connectivity/cloud/cloud_protocol.c
         src/connectivity/cloud/cloud_client.c
     )
-    
+
     # App handler (WASM app download/update)
     if(CONFIG_AKIRA_CLOUD_APP_HANDLER)
         target_sources(app PRIVATE src/connectivity/cloud/cloud_app_handler.c)
     endif()
-    
+
     # OTA handler (firmware updates)
     if(CONFIG_AKIRA_CLOUD_OTA_HANDLER)
         target_sources(app PRIVATE src/connectivity/cloud/cloud_ota_handler.c)
@@ -777,17 +777,17 @@ if(CONFIG_AKIRA_RADIO_MANAGER)
     target_sources(app PRIVATE
         src/connectivity/radio/radio_manager.c
     )
-    
+
     # WiFi radio backend
     if(CONFIG_WIFI)
         target_sources(app PRIVATE src/connectivity/radio/radio_wifi.c)
     endif()
-    
+
     # BLE radio backend
     if(CONFIG_BT)
         target_sources(app PRIVATE src/connectivity/radio/radio_ble.c)
     endif()
-    
+
     # 802.15.4 radio backend
     if(CONFIG_NET_L2_IEEE802154)
         target_sources(app PRIVATE src/connectivity/radio/radio_802154.c)
@@ -896,9 +896,12 @@ if(CONFIG_AKIRA_OS_SHELL)
         src/console_shell/settings/apps_screen.c
         src/console_shell/settings/devmode_screen.c
     )
-    # WiFi settings screen depends on the WiFi manager (WIFI must be enabled).
+    # WiFi settings screen and AkiraPlay (app store) depend on the WiFi manager.
     if(CONFIG_AKIRA_WIFI_MANAGER)
-        target_sources(app PRIVATE src/console_shell/settings/wifi_screen.c)
+        target_sources(app PRIVATE
+            src/console_shell/settings/wifi_screen.c
+            src/console_shell/akiraplay_screen.c
+        )
     endif()
     target_include_directories(app PRIVATE src/console_shell)
 endif()
