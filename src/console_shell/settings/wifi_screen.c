@@ -115,8 +115,8 @@ static const char *const KB_ROWS_LOWER[4] = {"1234567890","qwertyuiop","asdfghjk
 static const char *const KB_ROWS_UPPER[4] = {"!@#$%^&*()","QWERTYUIOP","ASDFGHJKL","ZXCVBNM"};
 static const int KB_ROW_LEN[5] = {10,10,9,7,1}; /* row 4 = space bar, 1 "column" */
 
-#define KB_MARGIN_X 8
-#define KB_CELL_W   38
+#define KB_MARGIN_X 10
+#define KB_CELL_W   30
 #define KB_ROW_H    30
 #define KB_Y0       (LIST_Y + 22)
 
