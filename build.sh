@@ -371,7 +371,15 @@ build_application() {
         extra_cmake+=" -DEXTRA_ZEPHYR_MODULES=$platform_path"
         print_info "AkiraPlatform enabled: $platform_path"
     fi
-    
+
+    # Opt-in debug Kconfig fragment (e.g. boards/<board>.jtag.conf) — mirrors
+    # build_mcuboot()'s own overlay/conf lookup. Absent for every normal build.
+    local debug_conf="$SCRIPT_DIR/boards/${BOARD}.jtag.conf"
+    if [[ -f "$debug_conf" ]]; then
+        extra_cmake+=" -DEXTRA_CONF_FILE=$debug_conf"
+        print_info "Debug conf: $debug_conf"
+    fi
+
     if west build --pristine -b "$zephyr_board" AkiraOS -d "$build_dir" -- $extra_cmake; then
         print_success "AkiraOS build complete!"
         print_info "Binary: $build_dir/zephyr/zephyr.bin"
