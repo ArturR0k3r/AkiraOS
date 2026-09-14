@@ -354,7 +354,7 @@ build_application() {
     unset ZEPHYR_BASE
     
     # Build with optional AkiraPlatform modules
-    local extra_cmake="-DMODULE_EXT_ROOT=$WORKSPACE_ROOT/AkiraOS"
+    local extra_cmake=""
     if [[ "$ENABLE_PLATFORM" == true ]]; then
         # Look for akira-platform in workspace (post-west-update) or parent dir
         local platform_path=""

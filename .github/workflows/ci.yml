@@ -127,8 +127,7 @@ jobs:
           docker exec \
             -e ZEPHYR_SDK_INSTALL_DIR=/opt/toolchains/zephyr-sdk-0.17.4 \
             -e ZEPHYR_TOOLCHAIN_VARIANT=zephyr \
-            -w /workspace/akira-os zephyr-ci west build -b ${{ matrix.board }} . --pristine \
-              -- -DMODULE_EXT_ROOT=/workspace/akira-os
+            -w /workspace/akira-os zephyr-ci west build -b ${{ matrix.board }} . --pristine
       
       - name: Cleanup container
         if: always()
@@ -264,6 +263,23 @@ jobs:
                 --coverage \
                 --coverage-tool gcovr \
                 --outdir twister-out \
+                -v
+            '
+
+      # Builds product firmware that consumes AkiraOS as a Zephyr module. Like
+      # the board matrix, this build allows compiler warnings: AkiraOS and WAMR
+      # sources still have some, and the unit tests above stay -Werror.
+      - name: Build out-of-tree product sample
+        run: |
+          docker exec \
+            -e ZEPHYR_SDK_INSTALL_DIR=/opt/toolchains/zephyr-sdk-0.17.4 \
+            -e ZEPHYR_TOOLCHAIN_VARIANT=zephyr \
+            -w /workspace zephyr-test bash -c '
+              west twister \
+                --testsuite-root samples/ \
+                --platform native_sim \
+                --disable-warnings-as-errors \
+                --outdir twister-samples \
                 -v
             '
 

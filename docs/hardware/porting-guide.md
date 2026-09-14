@@ -160,8 +160,7 @@ CONFIG_CLOCK_CONTROL=y
 ```bash
 cd ..
 unset ZEPHYR_BASE
-west build --pristine -b my_sensor_node/nrf54l15/cpuapp AkiraOS \
-  -d build -- -DMODULE_EXT_ROOT=AkiraOS
+west build --pristine -b my_sensor_node/nrf54l15/cpuapp AkiraOS -d build
 ```
 
 Expected: CMake configure succeeds and `build/zephyr/zephyr.elf` is produced.

@@ -89,6 +89,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `build`: Remove no-op `KCONFIG_WARN_UNDEF`/`KCONFIG_WERROR` CMake cache overrides (kconfiglib reads these from the environment).
 - `deprecate(lib)`: `parse_capabilities_mask()` in `simple_json.h`; use `manifest_parse_json()`.
 - `docs`: Product branches (KeyaPlatform, AkiraEar, Latch) are frozen; see CONTRIBUTING.
+- `build`!: **AkiraOS is a real Zephyr module.** Its options moved to `zephyr/Kconfig` behind `CONFIG_AKIRA_OS` (default `n`) and its sources to `zephyr/CMakeLists.txt` (`akira_wamr` and `akira_os_core` libraries plus an `akira_os` interface target). **Applications must set `CONFIG_AKIRA_OS=y`.** The repository root is now a thin reference app; the boot sequence is `akira_start()` (`src/akira_os.c`), so product firmware in its own repository can link `akira_os` and reuse it. MCUboot and other images that only use the module's boards are unaffected.
+- `build`!: WAMR and TFLite Micro are west projects under `modules/lib/` instead of git submodules; run `west update`. `-DMODULE_EXT_ROOT` is no longer needed. Existing `AkiraOS/modules/*` checkouts are ignored, not deleted.
+- `samples`: `out_of_tree_product` shows product firmware consuming AkiraOS as a module; CI builds it on native_sim.
 
 ---
 

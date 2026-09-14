@@ -1,11 +1,14 @@
 cmake_minimum_required(VERSION 3.20)
 
-# ── AkiraOS board/DTS/Kconfig roots ─────────────────────────────────────
-# Must be set BEFORE find_package(Zephyr) so the AKIRA_* Kconfig symbols
-# and the akiraconsole board definition are available during configuration.
+# ── AkiraOS board/DTS roots ─────────────────────────────────────────────
+# Must be set BEFORE find_package(Zephyr) so the akiraconsole board
+# definition is available. AKIRA_* Kconfig symbols come from the akira-os
+# module (zephyr/Kconfig).
 list(APPEND BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR}/../..)
 list(APPEND DTS_ROOT   ${CMAKE_CURRENT_LIST_DIR}/../..)
-set(KCONFIG_ROOT       ${CMAKE_CURRENT_LIST_DIR}/../../Kconfig)
+# The bench compiles its own subset of AkiraOS sources, so the module must
+# not also build the full AkiraOS libraries into this image.
+set(AKIRA_OS_BUILD_LIBRARIES OFF)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(akiraclaw_bench VERSION 1.0.0 LANGUAGES C CXX)
@@ -35,11 +38,11 @@ target_include_directories(app PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/../../src/runtime
     ${CMAKE_CURRENT_LIST_DIR}/../../src/runtime/security
     # TFLM headers
-    ${CMAKE_CURRENT_LIST_DIR}/../../modules/tflite-micro
-    ${CMAKE_CURRENT_LIST_DIR}/../../modules/tflite-micro/third_party_static/flatbuffers/include
-    ${CMAKE_CURRENT_LIST_DIR}/../../modules/tflite-micro/third_party_static/gemmlowp
+    ${ZEPHYR_TFLITE_MICRO_MODULE_DIR}
+    ${ZEPHYR_TFLITE_MICRO_MODULE_DIR}/third_party_static/flatbuffers/include
+    ${ZEPHYR_TFLITE_MICRO_MODULE_DIR}/third_party_static/gemmlowp
     # WAMR headers
-    ${CMAKE_CURRENT_LIST_DIR}/../../modules/wasm-micro-runtime/core/iwasm/include
+    ${ZEPHYR_WASM_MICRO_RUNTIME_MODULE_DIR}/core/iwasm/include
     # hello_world_float model byte array
     ${CMAKE_CURRENT_LIST_DIR}/../../AkiraSDK/wasm_apps/aiinfer_test
 )
@@ -47,7 +50,7 @@ target_include_directories(app PRIVATE
 # ── Mirror main CMakeLists: add AkiraOS TFLM submodule when AIINFER=y ───
 if(CONFIG_AKIRA_AIINFER)
     enable_language(CXX)
-    set(TFLM_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/../../modules/tflite-micro")
+    set(TFLM_ROOT_DIR ${ZEPHYR_TFLITE_MICRO_MODULE_DIR})
     if(CONFIG_AKIRA_TFLITE_MICRO AND EXISTS "${TFLM_ROOT_DIR}/CMakeLists.txt")
         add_subdirectory(${TFLM_ROOT_DIR} tflm_build EXCLUDE_FROM_ALL)
     endif()
@@ -65,7 +68,7 @@ endif()
 
 # ── WAMR build (mirroring main CMakeLists, simplified for bench) ────────
 if(CONFIG_AKIRA_WASM_RUNTIME)
-    set(WAMR_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/../../modules/wasm-micro-runtime")
+    set(WAMR_ROOT_DIR ${ZEPHYR_WASM_MICRO_RUNTIME_MODULE_DIR})
     set(WAMR_BUILD_PLATFORM  "zephyr")
     # Detect Xtensa toolchain (ESP32-S3 → XTENSA_32)
     string(TOLOWER "${CMAKE_C_COMPILER}" _bench_cc)

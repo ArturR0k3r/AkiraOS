@@ -1,11 +1,4 @@
-[submodule "modules/wasm-micro-runtime"]
-	path = modules/wasm-micro-runtime
-	url = https://github.com/ArturR0k3r/wasm-micro-runtime
-	branch = AkiraOS_Patch
 [submodule "AkiraSDK"]
 	path = AkiraSDK
 	url = https://github.com/ArturR0k3r/AkiraSDK
 	branch = v1.6.x
-[submodule "tflite-micro"]
-	path = modules/tflite-micro
-	url = https://github.com/zephyrproject-rtos/tflite-micro

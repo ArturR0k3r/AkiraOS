@@ -246,7 +246,8 @@ west blobs fetch hal_espressif  # If using ESP32
 ```bash
 cd ~/akira-workspace/AkiraOS
 git pull origin main
-git submodule update --recursive
+git submodule update --init AkiraSDK   # the SDK is a git submodule
+cd .. && west update                   # Zephyr, WAMR, TFLite Micro, other modules
 ```
 
 ### Update SDK (Rare)

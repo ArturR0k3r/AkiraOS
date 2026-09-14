@@ -1,8 +1,7 @@
-# AkiraOS west module manifest
+# AkiraOS Zephyr module manifest
 #
-# This file makes AkiraOS importable as a west module in third-party projects.
-#
-# Usage in a downstream west.yml:
+# Makes AkiraOS usable as a Zephyr module from product firmware in its own
+# repository. Usage in a downstream west.yml:
 #
 #   manifest:
 #     projects:
@@ -10,27 +9,27 @@
 #         url: https://github.com/ArturR0k3r/AkiraOS.git
 #         revision: v1.6.x      # pin a release tag once one is cut
 #         path: akira-os
+#         import: true          # also brings in Zephyr, WAMR and TFLite Micro
 #     self:
-#       path: my-app
+#       path: my-product
 #
-# After `west update`, the build system automatically:
-#   - Adds boards/ to the board search path  → west build -b akiraconsole_prod/...
-#   - Adds dts/   to the DTS bindings path   → AkiraOS DTS bindings available
+# In the product application:
+#   - prj.conf:        CONFIG_AKIRA_OS=y   (every CONFIG_AKIRA_* option depends on it)
+#   - CMakeLists.txt:  target_link_libraries(app PRIVATE akira_os)
+#   - main():          return akira_start();   (standard AkiraOS boot sequence)
 #
-# Not yet exported: the AkiraOS runtime sources and CONFIG_AKIRA_* Kconfig
-# symbols. CMakeLists.txt returns early for external applications, and the
-# Kconfig tree is only read when AkiraOS itself is the application.
-#
-# No -DMODULE_EXT_ROOT or -DBOARD_ROOT flags are needed in downstream projects.
-# The flags remain in this repo's own build tasks for self-contained builds.
+# The module also adds boards/ to the board search path and dts/ to the DTS
+# bindings path. samples/out_of_tree_product/ is a complete example.
 #
 # Requires: Zephyr ≥ 4.0 (module.yml settings: board_root / dts_root added in 3.7)
 
 name: akira-os
 
 build:
-  # cmake: root of the module — CMakeLists.txt at repo root is the entry point.
-  cmake: .
+  # zephyr/CMakeLists.txt builds the AkiraOS libraries when CONFIG_AKIRA_OS=y.
+  cmake: zephyr
+  # zephyr/Kconfig holds every AkiraOS option, gated by CONFIG_AKIRA_OS.
+  kconfig: zephyr/Kconfig
 
   settings:
     # board_root: registers boards/ so Zephyr finds akiraconsole_prod,
@@ -40,3 +39,7 @@ build:
     # dts_root: registers dts/ so Zephyr finds AkiraOS DTS bindings
     # (akira,ili9341 akira,pwm-dial etc.) when building downstream projects.
     dts_root: .
+
+    # module_ext_root: registers modules/modules.cmake, which provides Zephyr
+    # glue for the wasm-micro-runtime west project.
+    module_ext_root: .

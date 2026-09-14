@@ -6,6 +6,10 @@ cmake_minimum_required(VERSION 3.20.0)
 list(APPEND BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR}/..)
 list(APPEND DTS_ROOT   ${CMAKE_CURRENT_LIST_DIR}/..)
 
+# The suite compiles the sources under test directly (below), so the akira-os
+# module must not also build its libraries into this image.
+set(AKIRA_OS_BUILD_LIBRARIES OFF)
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(akiraos_tests)
 

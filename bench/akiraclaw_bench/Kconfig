@@ -1,5 +1,5 @@
-# Benchmark-specific Kconfig options (sourced automatically by Zephyr
-# via APPLICATION_SOURCE_DIR when KCONFIG_ROOT = AkiraOS/Kconfig).
+# Benchmark-specific Kconfig options. Zephyr uses this file as the
+# application Kconfig; AKIRA_* symbols come from the akira-os module.
 
 config BENCH_WASM_NOGUARD
 	bool "Use wasm_noguard binary for B1"
@@ -16,3 +16,5 @@ config AKIRA_PLATFORM_AUDIT_HMAC
 	  Enables the bench-local audit_hmac.c which implements
 	  akira_platform_audit_hmac_sign() using mbedTLS HMAC-SHA256 with a
 	  fixed 32-byte bench key.  Required by AKIRA_AUDIT_LOG_HMAC.
+
+source "Kconfig.zephyr"

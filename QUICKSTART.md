@@ -340,12 +340,14 @@ pip3 install pyelftools
 west update -v   # retry with verbose output
 ```
 
-### Build fails with submodule errors
+### Build fails because WAMR, TFLite Micro or AkiraSDK is missing
+
+WAMR and TFLite Micro are west projects; AkiraSDK is a git submodule:
 
 ```bash
-cd ~/akira-workspace/AkiraOS
-git submodule update --init --recursive --force
-git submodule status  # verify
+cd ~/akira-workspace
+west update wasm-micro-runtime tflite-micro
+cd AkiraOS && git submodule update --init AkiraSDK
 ```
 
 ### "ZEPHYR_BASE not set" error
