@@ -76,7 +76,9 @@ static void poll_work_fn(struct k_work *work)
 
     if (present != g_vbus_present) {
         g_vbus_present = present;
+#if defined(CONFIG_AKIRA_USB)
         usb_manager_report_vbus_state(present);
+#endif
     }
 
 reschedule:
