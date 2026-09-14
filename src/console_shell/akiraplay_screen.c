@@ -14,8 +14,10 @@ LOG_MODULE_REGISTER(akira_play_screen, CONFIG_AKIRA_LOG_LEVEL);
  *        akira_display_* calls, no LVGL).
  *
  * Flow: LOADING (fetch + parse catalogue.json) -> LIST (category tabs,
- * scrollable) -> DETAIL (A to install) -> back to LIST. ERROR on fetch
- * failure (no WiFi, timeout, bad JSON), with retry.
+ * X cycles a tag filter, Y opens on-screen search) -> DETAIL (thumbnail +
+ * tags, A to install) -> back to LIST. SEARCH is a D-pad letter grid that
+ * applies a substring filter on display_name. ERROR on fetch failure (no
+ * WiFi, timeout, bad JSON), with retry.
  */
 
 #include "akiraplay_screen.h"
@@ -43,14 +45,36 @@ LOG_MODULE_REGISTER(akira_play_screen, CONFIG_AKIRA_LOG_LEVEL);
 #define PLAY_FETCH_TIMEOUT_MS 15000
 #define PLAY_DOWNLOAD_TIMEOUT_MS 30000
 
+/* On-device thumbnail contract, matches AkiraConsoleApp's submit.ts/
+ * SubmitApp.tsx: fixed 96x64 1bpp bitmap, MSB-first, rows byte-aligned
+ * (96/8=12 B/row exactly, no padding). Kept 1-bit to match this UI kit's
+ * dither-only palette and to keep the download tiny (768 B vs a full-color
+ * image) — decoded to RGB565 only transiently, for the single blit call. */
+#define THUMB_W 96
+#define THUMB_H 64
+#define THUMB_ROW_BYTES (THUMB_W / 8)
+#define THUMB_PACKED_BYTES (THUMB_ROW_BYTES * THUMB_H)
+
 static uint8_t g_json_buf[PLAY_JSON_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
 static uint8_t g_pkg_buf[PLAY_PKG_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
 static catalogue_entry_t g_entries[CATALOGUE_MAX_APPS] __attribute__((section(".ext_ram.bss")));
+static uint8_t g_thumb_packed[THUMB_PACKED_BYTES] __attribute__((section(".ext_ram.bss")));
+static uint16_t g_thumb_rgb[THUMB_W * THUMB_H] __attribute__((section(".ext_ram.bss")));
+
+/* ensure_thumbnail()'s scratch — static rather than local: it's reached via
+ * handle_list()->redraw()->draw_detail()->ensure_thumbnail(), one call frame
+ * deeper than the fetch_catalogue()/do_install() paths to the same
+ * stack-hungry TLS send/close code, on this 8192-byte UI thread
+ * stack (SHELL_THREAD_STACK_SIZE) — every extra byte of on-stack locals at
+ * this depth narrows an already-tight budget. */
+static char g_thumb_url_host[128] __attribute__((section(".ext_ram.bss")));
+static char g_thumb_url_path[256] __attribute__((section(".ext_ram.bss")));
 
 typedef enum {
     PLAY_LOADING = 0,
     PLAY_LIST,
     PLAY_DETAIL,
+    PLAY_SEARCH,
     PLAY_ERROR,
 } play_state_t;
 
@@ -62,24 +86,75 @@ static int g_filtered[CATALOGUE_MAX_APPS]; /* indices into g_entries */
 static int g_filtered_count;
 static int g_sel, g_scroll;
 static int g_tab;
+static int g_tag_filter = -1; /* -1 = all tags, else bit index into tag_mask */
+static char g_search_query[CATALOGUE_NAME_LEN];
 static int g_detail_idx; /* index into g_entries for the open detail page */
 static char g_error_msg[64];
+
+static bool g_thumb_valid;
+static int g_thumb_idx = -1; /* g_entries index the loaded thumbnail belongs to */
 
 #define TAB_COUNT 4
 static const char *TAB_KEYS[TAB_COUNT]   = { "", "console_apps", "retro", "generic" };
 static const char *TAB_LABELS[TAB_COUNT] = { "All", "Apps", "Retro", "Other" };
 
+/* On-screen search keyboard: D-pad grid, no dedicated space/done cells —
+ * those are covered by the physical X (backspace) / Y (clear) / B (apply)
+ * buttons instead, so the grid only needs to hold letters. */
+#define KB_COLS 7
+#define KB_ROWS 4
+static const char KB_LAYOUT[KB_ROWS][KB_COLS] = {
+    { 'A', 'B', 'C', 'D', 'E', 'F', 'G' },
+    { 'H', 'I', 'J', 'K', 'L', 'M', 'N' },
+    { 'O', 'P', 'Q', 'R', 'S', 'T', 'U' },
+    { 'V', 'W', 'X', 'Y', 'Z', '_', '_' }, /* '_' = unused cell */
+};
+static int g_kb_row, g_kb_col;
+
 /* ------------------------------------------------------------------ */
 /* Filtering                                                           */
 /* ------------------------------------------------------------------ */
+static bool str_ci_contains(const char *hay, const char *needle)
+{
+    size_t hn = strlen(hay), nn = strlen(needle);
+    if (nn == 0) {
+        return true;
+    }
+    if (nn > hn) {
+        return false;
+    }
+    for (size_t i = 0; i + nn <= hn; i++) {
+        size_t j = 0;
+        for (; j < nn; j++) {
+            char a = hay[i + j], b = needle[j];
+            if (a >= 'A' && a <= 'Z') a += 32;
+            if (b >= 'A' && b <= 'Z') b += 32;
+            if (a != b) {
+                break;
+            }
+        }
+        if (j == nn) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void rebuild_filter(void)
 {
     const char *key = TAB_KEYS[g_tab];
     g_filtered_count = 0;
     for (int i = 0; i < g_count; i++) {
-        if (key[0] == '\0' || strcmp(g_entries[i].category, key) == 0) {
-            g_filtered[g_filtered_count++] = i;
+        if (key[0] != '\0' && strcmp(g_entries[i].category, key) != 0) {
+            continue;
         }
+        if (g_tag_filter >= 0 && !(g_entries[i].tag_mask & (1u << g_tag_filter))) {
+            continue;
+        }
+        if (g_search_query[0] != '\0' && !str_ci_contains(g_entries[i].display_name, g_search_query)) {
+            continue;
+        }
+        g_filtered[g_filtered_count++] = i;
     }
     g_sel = 0;
     g_scroll = 0;
@@ -164,7 +239,56 @@ static int fetch_catalogue(void)
     if (g_count < 0) {
         return g_count;
     }
+    g_thumb_idx = -1; /* g_entries was just overwritten, drop the stale cache */
+    g_thumb_valid = false;
     return 0;
+}
+
+/* Fetches and decodes the thumbnail for g_entries[idx] on first access, then
+ * caches by index — draw_detail() calls this every redraw but the network
+ * round trip (on the already-open keep-alive session) only happens once per
+ * catalogue load per app. */
+static void ensure_thumbnail(int idx)
+{
+    if (g_thumb_idx == idx) {
+        return;
+    }
+    g_thumb_idx = idx;
+    g_thumb_valid = false;
+
+    const catalogue_entry_t *e = &g_entries[idx];
+    if (e->thumbnail_url[0] == '\0') {
+        return;
+    }
+
+    if (split_https_url(e->thumbnail_url, g_thumb_url_host, sizeof(g_thumb_url_host),
+                        g_thumb_url_path, sizeof(g_thumb_url_path)) < 0) {
+        return;
+    }
+    /* g_thumb_url_host unused past this point — thumbnail_url is always
+     * same-origin as PLAY_HOST */
+
+    int handle = catalog_session_ensure();
+    if (handle < 0) {
+        return;
+    }
+
+    int n = catalog_https_get_on(handle, PLAY_HOST, g_thumb_url_path, g_thumb_packed,
+                                 sizeof(g_thumb_packed), PLAY_FETCH_TIMEOUT_MS);
+    if (n != (int)sizeof(g_thumb_packed)) {
+        return; /* wrong size — corrupt or mismatched contract, skip silently */
+    }
+
+    for (int y = 0; y < THUMB_H; y++) {
+        for (int x = 0; x < THUMB_W; x++) {
+            uint8_t byte = g_thumb_packed[y * THUMB_ROW_BYTES + (x >> 3)];
+            bool bit = (byte >> (7 - (x & 7))) & 1;
+            /* bit=1 is PAPER (dark/foreground) — SS_C_WHITE is that role's
+             * RGB565 value despite the name (see settings_shared.h). */
+            g_thumb_rgb[y * THUMB_W + x] = bit ? SS_C_WHITE : SS_C_BLACK;
+        }
+    }
+    g_thumb_valid = true;
 }
 
 static void set_error_from_errno(int err)
@@ -237,8 +361,17 @@ static void draw_list(void)
 {
     akira_display_clear(SS_C_BLACK);
 
-    char title[32];
-    snprintf(title, sizeof(title), "PLAY: %s", TAB_LABELS[g_tab]);
+    char title[48];
+    if (g_tag_filter >= 0 && g_search_query[0]) {
+        snprintf(title, sizeof(title), "PLAY:%s|%s|\"%s\"",
+                TAB_LABELS[g_tab], catalogue_tag_name(g_tag_filter), g_search_query);
+    } else if (g_tag_filter >= 0) {
+        snprintf(title, sizeof(title), "PLAY:%s|%s", TAB_LABELS[g_tab], catalogue_tag_name(g_tag_filter));
+    } else if (g_search_query[0]) {
+        snprintf(title, sizeof(title), "PLAY:%s|\"%s\"", TAB_LABELS[g_tab], g_search_query);
+    } else {
+        snprintf(title, sizeof(title), "PLAY: %s", TAB_LABELS[g_tab]);
+    }
     ss_draw_header(title);
 
     int top_y = SS_CONT_Y + 16;
@@ -265,7 +398,7 @@ static void draw_list(void)
         }
     }
 
-    ss_draw_ribbon("[A] View  <> Tab", "[B] Back");
+    ss_draw_ribbon("[A] View <>Cat  X Tag", "[B] Back  Y Find");
     akira_display_flush();
 }
 
@@ -277,7 +410,13 @@ static void draw_detail(void)
     ss_draw_header("APP DETAIL");
     akira_display_rect(0, SS_CONT_Y, SS_SCR_W, SS_RIB_Y - SS_CONT_Y, SS_C_BLACK);
 
-    char lines[4][48];
+    int thumb_x = (SS_SCR_W - THUMB_W) / 2;
+    int thumb_y = SS_CONT_Y + 4;
+
+    /* Static, not a local — draw_detail() sits directly above
+     * ensure_thumbnail()'s TLS call below on this thread's 8192-byte stack;
+     * see g_thumb_url_host's comment. */
+    static char lines[4][48];
     snprintf(lines[0], sizeof(lines[0]), "%s", e->display_name);
     snprintf(lines[1], sizeof(lines[1]), "Version: %s", e->version);
     snprintf(lines[2], sizeof(lines[2]), "Category: %s", e->category);
@@ -289,15 +428,86 @@ static void draw_detail(void)
 
     bool installed = (app_manager_get_state(e->name) != APP_STATE_NEW);
 
-    int sy = SS_CONT_Y + 20;
+    int sy = thumb_y + THUMB_H + 8;
     for (int i = 0; i < 4; i++) {
-        akira_display_text(20, sy + i * 20, lines[i], SS_C_WHITE);
-    }
-    if (installed) {
-        akira_display_text(20, sy + 4 * 20 + 6, "Already installed", SS_C_GRAY);
+        akira_display_text(20, sy + i * 16, lines[i], SS_C_WHITE);
     }
 
+    /* Tag badges, wrapping to a second row; capped at 6 to keep a bounded
+     * worst-case height (this area only has ~40px before the ribbon). */
+    int tag_x = 20, tag_y = sy + 4 * 16 + 4;
+    int shown = 0;
+    for (int i = 0; i < CATALOGUE_TAG_COUNT && shown < 6; i++) {
+        if (!(e->tag_mask & (1u << i))) {
+            continue;
+        }
+        const char *name = catalogue_tag_name(i);
+        int w = (int)strlen(name) * 8 + 10;
+        if (tag_x + w > SS_SCR_W - 10) {
+            tag_x = 20;
+            tag_y += 20;
+        }
+        akira_ui_tag(tag_x, tag_y, name, false);
+        tag_x += w + 4;
+        shown++;
+    }
+
+    if (installed) {
+        akira_display_text(20, tag_y + 22, "Already installed", SS_C_GRAY);
+    }
+
+    /* Show everything above immediately — ensure_thumbnail() below is a
+     * blocking network call that can take up to ~15-30s on a cold session
+     * (fresh TLS handshake + GET). Drawing it before this point left the
+     * screen showing the stale previous frame for that whole window with no
+     * feedback at all, indistinguishable from a freeze. */
+    akira_display_rect_outline(thumb_x, thumb_y, THUMB_W, THUMB_H, SS_C_GRAY);
+    akira_display_text(thumb_x + 18, thumb_y + THUMB_H / 2 - 6, "Loading...", SS_C_GRAY);
     ss_draw_ribbon("[A] Install", "[B] Back");
+    akira_display_flush();
+
+    ensure_thumbnail(g_detail_idx);
+
+    if (g_thumb_valid) {
+        akira_display_bitmap(thumb_x, thumb_y, THUMB_W, THUMB_H, g_thumb_rgb);
+    } else {
+        akira_display_rect_outline(thumb_x, thumb_y, THUMB_W, THUMB_H, SS_C_GRAY);
+        akira_display_text(thumb_x + 14, thumb_y + THUMB_H / 2 - 6, "No preview", SS_C_GRAY);
+    }
+    akira_display_flush();
+}
+
+static void draw_search(void)
+{
+    akira_display_clear(SS_C_BLACK);
+    ss_draw_header("SEARCH APPS");
+    akira_display_rect(0, SS_CONT_Y, SS_SCR_W, SS_RIB_Y - SS_CONT_Y, SS_C_BLACK);
+
+    char q[40];
+    snprintf(q, sizeof(q), "> %s_", g_search_query);
+    akira_display_text(20, SS_CONT_Y + 8, q, SS_C_WHITE);
+
+    const int cell_w = 34, cell_h = 24, pad = 4;
+    int grid_x = (SS_SCR_W - KB_COLS * cell_w) / 2;
+    int grid_y = SS_CONT_Y + 34;
+
+    for (int r = 0; r < KB_ROWS; r++) {
+        for (int c = 0; c < KB_COLS; c++) {
+            char ch = KB_LAYOUT[r][c];
+            if (ch == '_') {
+                continue;
+            }
+            int cx = grid_x + c * cell_w;
+            int cy = grid_y + r * cell_h;
+            bool hi = (r == g_kb_row && c == g_kb_col);
+            akira_ui_dither_card(cx, cy, cell_w - pad, cell_h - pad, 4, hi, 2);
+            char s[2] = { ch, '\0' };
+            akira_display_text(cx + (cell_w - pad) / 2 - 4, cy + (cell_h - pad) / 2 - 6,
+                               s, hi ? SS_C_BLACK : SS_C_WHITE);
+        }
+    }
+
+    ss_draw_ribbon("[A] Add  X Del", "[B] Search  Y Clr");
     akira_display_flush();
 }
 
@@ -307,6 +517,7 @@ static void redraw(void)
     case PLAY_LOADING: draw_loading(); break;
     case PLAY_LIST:    draw_list();    break;
     case PLAY_DETAIL:  draw_detail();  break;
+    case PLAY_SEARCH:  draw_search();  break;
     case PLAY_ERROR:   draw_error();   break;
     }
 }
@@ -440,10 +651,29 @@ static void handle_list(uint32_t just)
         }
     }
     if (just & (BIT(AKIRA_BTN_LEFT) | BIT(AKIRA_BTN_RIGHT))) {
+        printk("AKPLAY: tab switch start, g_tab=%d filtered=%d sel=%d scroll=%d\n",
+               g_tab, g_filtered_count, g_sel, g_scroll);
         g_tab = (just & BIT(AKIRA_BTN_LEFT))
             ? (g_tab - 1 + TAB_COUNT) % TAB_COUNT
             : (g_tab + 1) % TAB_COUNT;
+        printk("AKPLAY: new g_tab=%d, calling rebuild_filter\n", g_tab);
         rebuild_filter();
+        printk("AKPLAY: rebuild_filter done, filtered=%d, calling redraw\n", g_filtered_count);
+        redraw();
+        printk("AKPLAY: redraw done\n");
+    }
+    if (just & BIT(AKIRA_BTN_X)) {
+        g_tag_filter++;
+        if (g_tag_filter >= CATALOGUE_TAG_COUNT) {
+            g_tag_filter = -1;
+        }
+        rebuild_filter();
+        redraw();
+    }
+    if (just & BIT(AKIRA_BTN_Y)) {
+        g_kb_row = 0;
+        g_kb_col = 0;
+        g_state = PLAY_SEARCH;
         redraw();
     }
     if ((just & BIT(AKIRA_BTN_A)) && g_filtered_count > 0) {
@@ -469,6 +699,55 @@ static void handle_detail(uint32_t just)
     if (just & BIT(AKIRA_BTN_B)) {
         g_state = PLAY_LIST;
         redraw();
+    }
+}
+
+static void handle_search(uint32_t just)
+{
+    if (just & BIT(AKIRA_BTN_UP) && g_kb_row > 0) {
+        g_kb_row--;
+        redraw();
+    }
+    if (just & BIT(AKIRA_BTN_DOWN) && g_kb_row < KB_ROWS - 1) {
+        g_kb_row++;
+        redraw();
+    }
+    if (just & BIT(AKIRA_BTN_LEFT) && g_kb_col > 0) {
+        g_kb_col--;
+        redraw();
+    }
+    if (just & BIT(AKIRA_BTN_RIGHT) && g_kb_col < KB_COLS - 1) {
+        g_kb_col++;
+        redraw();
+    }
+    if (just & BIT(AKIRA_BTN_A)) {
+        char c = KB_LAYOUT[g_kb_row][g_kb_col];
+        size_t len = strlen(g_search_query);
+        if (c != '_' && len + 1 < sizeof(g_search_query)) {
+            g_search_query[len] = c;
+            g_search_query[len + 1] = '\0';
+        }
+        redraw();
+    }
+    if (just & BIT(AKIRA_BTN_X)) {
+        size_t len = strlen(g_search_query);
+        if (len > 0) {
+            g_search_query[len - 1] = '\0';
+        }
+        redraw();
+    }
+    if (just & BIT(AKIRA_BTN_Y)) {
+        g_search_query[0] = '\0';
+        redraw();
+    }
+    if (just & BIT(AKIRA_BTN_B)) {
+        rebuild_filter();
+        g_state = PLAY_LIST;
+        redraw();
+    }
+    if (just & BIT(AKIRA_BTN_HOME)) {
+        g_active = false;
+        home_screen_load();
     }
 }
 
@@ -501,6 +780,8 @@ void akiraplay_screen_load(void)
 {
     g_active = true;
     g_state = PLAY_LOADING;
+    g_tag_filter = -1;
+    g_search_query[0] = '\0';
     redraw();
 
     int ret = fetch_catalogue();
@@ -527,6 +808,7 @@ void akiraplay_screen_load(void)
         switch (g_state) {
         case PLAY_LIST:   handle_list(just);   break;
         case PLAY_DETAIL: handle_detail(just); break;
+        case PLAY_SEARCH: handle_search(just); break;
         case PLAY_ERROR:  handle_error(just);  break;
         default: break;
         }
