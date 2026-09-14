@@ -8,6 +8,20 @@
 #include <stdlib.h>
 #include <errno.h>
 
+static const char *const TAG_NAMES[CATALOGUE_TAG_COUNT] = {
+    "NES", "SNES", "SMS", "GENESIS", "GB", "GBA",
+    "ARCADE", "RPG", "PLATFORMER", "PUZZLE", "DUNGEON", "SHOOTER",
+    "ADVENTURE", "STRATEGY", "UTILITY",
+};
+
+const char *catalogue_tag_name(int i)
+{
+    if (i < 0 || i >= CATALOGUE_TAG_COUNT) {
+        return "";
+    }
+    return TAG_NAMES[i];
+}
+
 static const char *skip_ws(const char *p, const char *end)
 {
     while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) {
@@ -115,6 +129,63 @@ static int find_number_field(const char *obj, const char *obj_end,
     return -ENOENT;
 }
 
+/* Finds "tags": [...] within one object's bytes and ORs together the bitmask
+ * bit for each recognized tag name found. Unrecognized tags are ignored, not
+ * an error — matches this file's schema-check-is-separate philosophy. */
+static void find_tag_mask_field(const char *obj, const char *obj_end,
+                                 const char *key, uint32_t *out_mask)
+{
+    size_t key_len = strlen(key);
+    const char *p = obj;
+
+    while (p < obj_end) {
+        const char *quote = memchr(p, '"', (size_t)(obj_end - p));
+        if (!quote) {
+            return;
+        }
+        char found_key[64];
+        const char *after_key = parse_string(quote, obj_end, found_key, sizeof(found_key));
+        if (!after_key) {
+            return;
+        }
+        p = skip_ws(after_key, obj_end);
+        if (p >= obj_end || *p != ':') {
+            p = after_key;
+            continue;
+        }
+        p = skip_ws(p + 1, obj_end);
+        if (strncmp(found_key, key, key_len) == 0 && found_key[key_len] == '\0') {
+            if (p >= obj_end || *p != '[') {
+                return; /* value isn't an array */
+            }
+            p++;
+            while (p < obj_end) {
+                p = skip_ws(p, obj_end);
+                if (p >= obj_end || *p == ']') {
+                    return;
+                }
+                char tag[24];
+                const char *after_tag = parse_string(p, obj_end, tag, sizeof(tag));
+                if (!after_tag) {
+                    return;
+                }
+                for (int i = 0; i < CATALOGUE_TAG_COUNT; i++) {
+                    if (strcmp(tag, TAG_NAMES[i]) == 0) {
+                        *out_mask |= (1u << i);
+                        break;
+                    }
+                }
+                p = skip_ws(after_tag, obj_end);
+                if (p < obj_end && *p == ',') {
+                    p++;
+                }
+            }
+            return;
+        }
+        p = after_key;
+    }
+}
+
 /* Finds the matching closing brace for an object starting at *p (which must
  * point at '{'). Returns pointer just past the matching '}', or NULL if the
  * braces never balance before end. Ignores braces inside string values. */
@@ -203,6 +274,9 @@ int catalogue_parse(const char *json, size_t json_len,
                 strncpy(entry.display_name, entry.name, sizeof(entry.display_name) - 1);
             }
             find_number_field(obj_start, obj_end, "size_bytes", &entry.size_bytes);
+            find_tag_mask_field(obj_start, obj_end, "tags", &entry.tag_mask);
+            find_string_field(obj_start, obj_end, "thumbnail_url",
+                               entry.thumbnail_url, sizeof(entry.thumbnail_url));
             out[count++] = entry;
         }
         /* else: skip this entry silently, matches CI's schema-check-is-separate

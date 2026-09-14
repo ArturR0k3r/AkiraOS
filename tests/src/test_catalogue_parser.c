@@ -84,3 +84,36 @@ ZTEST(catalogue_parser, test_malformed_entry_is_skipped_not_fatal)
     zassert_true(n >= 1, "at least the well-formed first entry must parse");
     zassert_str_equal(entries[0].name, "a", "first entry still parses despite a later malformed one");
 }
+
+ZTEST(catalogue_parser, test_parses_tags_and_thumbnail)
+{
+    const char *json =
+        "{\"apps\":["
+        "{\"name\":\"tetris\",\"version\":\"1.0.0\",\"download_url\":\"http://x/t\","
+        "\"tags\":[\"NES\",\"PUZZLE\",\"UNKNOWN_TAG\"],"
+        "\"thumbnail_url\":\"https://console.app.akiraos.dev/catalog/thumbnails/retro-tetris.bin\"}"
+        "]}";
+    catalogue_entry_t entries[8];
+    int n = catalogue_parse(json, strlen(json), entries, 8);
+
+    zassert_equal(n, 1, "single app parses");
+    zassert_equal(entries[0].tag_mask, CATALOGUE_TAG_NES | CATALOGUE_TAG_PUZZLE,
+        "unrecognized tag is ignored, recognized tags set their bit");
+    zassert_str_equal(entries[0].thumbnail_url,
+        "https://console.app.akiraos.dev/catalog/thumbnails/retro-tetris.bin",
+        "thumbnail_url parsed");
+}
+
+ZTEST(catalogue_parser, test_missing_tags_and_thumbnail_default_empty)
+{
+    const char *json =
+        "{\"apps\":["
+        "{\"name\":\"a\",\"version\":\"1.0.0\",\"download_url\":\"http://x/a\"}"
+        "]}";
+    catalogue_entry_t entries[8];
+    int n = catalogue_parse(json, strlen(json), entries, 8);
+
+    zassert_equal(n, 1, "single app parses");
+    zassert_equal(entries[0].tag_mask, 0, "no tags key -> empty mask");
+    zassert_str_equal(entries[0].thumbnail_url, "", "no thumbnail_url key -> empty string");
+}
