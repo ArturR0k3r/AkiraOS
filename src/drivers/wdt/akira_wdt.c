@@ -76,7 +76,7 @@ bool akira_wdt_is_active(void)
 
 int akira_wdt_init(void)
 {
-    s_wdt_dev = DEVICE_DT_GET_ANY(zephyr_watchdog);
+    s_wdt_dev = DEVICE_DT_GET_ANY(espressif_esp32_watchdog);
     if (!s_wdt_dev || !device_is_ready(s_wdt_dev)) {
         LOG_WRN("WDT device not ready — watchdog disabled");
         return -ENODEV;
