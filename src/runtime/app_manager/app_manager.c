@@ -941,8 +941,10 @@ int app_manager_list(app_info_t *out_list, int max_count)
             if (g_registry[i].container_id >= 0) {
                 akira_runtime_get_commands_json(g_registry[i].container_id,
                         out_list[count].commands_json, sizeof(out_list[count].commands_json));
+                out_list[count].cap_mask = akira_runtime_get_cap_mask(g_registry[i].container_id);
             } else {
                 strncpy(out_list[count].commands_json, "[]", sizeof(out_list[count].commands_json));
+                out_list[count].cap_mask = 0;
             }
             count++;
         }
@@ -966,8 +968,10 @@ int app_manager_list(app_info_t *out_list, int max_count)
             if (g_transient_apps[i].container_id >= 0) {
                 akira_runtime_get_commands_json(g_transient_apps[i].container_id,
                         out_list[count].commands_json, sizeof(out_list[count].commands_json));
+                out_list[count].cap_mask = akira_runtime_get_cap_mask(g_transient_apps[i].container_id);
             } else {
                 strncpy(out_list[count].commands_json, "[]", sizeof(out_list[count].commands_json));
+                out_list[count].cap_mask = 0;
             }
             count++;
         }
@@ -976,6 +980,32 @@ int app_manager_list(app_info_t *out_list, int max_count)
 
     k_mutex_unlock(&g_registry_mutex);
     return count;
+}
+
+app_info_t *app_manager_list_alloc(int *out_count)
+{
+    if (!out_count)
+    {
+        return NULL;
+    }
+
+    app_info_t *list = akira_malloc_buffer(sizeof(app_info_t) * APP_MANAGER_LIST_CAPACITY);
+    if (!list)
+    {
+        *out_count = -ENOMEM;
+        return NULL;
+    }
+
+    int count = app_manager_list(list, APP_MANAGER_LIST_CAPACITY);
+    if (count < 0)
+    {
+        akira_free_buffer(list);
+        *out_count = count;
+        return NULL;
+    }
+
+    *out_count = count;
+    return list;
 }
 
 int app_manager_get_info(const char *name, app_info_t *out_info)
@@ -1008,8 +1038,10 @@ int app_manager_get_info(const char *name, app_info_t *out_info)
     if (app->container_id >= 0) {
         akira_runtime_get_commands_json(app->container_id, out_info->commands_json,
                 sizeof(out_info->commands_json));
+        out_info->cap_mask = akira_runtime_get_cap_mask(app->container_id);
     } else {
         strncpy(out_info->commands_json, "[]", sizeof(out_info->commands_json));
+        out_info->cap_mask = 0;
     }
 
     k_mutex_unlock(&g_registry_mutex);
@@ -1334,8 +1366,9 @@ int app_manifest_parse(const char *json, size_t json_len, app_manifest_t *out_ma
     if (simple_json_get_int(json, json_len, "heap_kb", &tmp) == 0) out_manifest->heap_kb = (uint16_t)tmp;
     if (simple_json_get_int(json, json_len, "stack_kb", &tmp) == 0) out_manifest->stack_kb = (uint16_t)tmp;
 
-    /* Parse permissions/capabilities using the dedicated parser */
-    out_manifest->permissions = (uint16_t)parse_capabilities_mask(json, json_len);
+    /* Capabilities are not parsed here. When the app is loaded, the runtime
+     * derives the enforced 64-bit mask from this same JSON (manifest_parser.c);
+     * the legacy 16-bit `permissions` field stays 0. */
 
 
     LOG_DBG("Parsed manifest: name=%s, version=%s, heap=%dKB, stack=%dKB",

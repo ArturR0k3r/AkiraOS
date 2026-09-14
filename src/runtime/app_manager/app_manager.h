@@ -23,6 +23,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "runtime/manifest_parser.h"
+#include <lib/mem_helper.h> /* akira_free_buffer() for app_manager_list_alloc() */
 
 #ifdef __cplusplus
 extern "C"
@@ -97,6 +98,8 @@ extern "C"
 
     /**
      * @brief App permissions (bitmask)
+     * @deprecated Never enforced. Capabilities are the 64-bit AKIRA_CAP_*
+     *             mask in runtime/security.h.
      */
     typedef enum
     {
@@ -134,6 +137,8 @@ extern "C"
         uint16_t heap_kb;
         uint16_t stack_kb;
         app_restart_config_t restart;
+        /** @deprecated Always 0 since 1.6.4. The runtime grants the 64-bit
+         *  mask parsed by manifest_parser.c; see akira_runtime_get_cap_mask(). */
         uint16_t permissions;
     } app_manifest_t;
 
@@ -150,6 +155,8 @@ extern "C"
         uint32_t size;
         uint16_t heap_kb;
         uint16_t stack_kb;
+        /** @deprecated Always 0. Kept so the on-flash registry layout
+         *  (REGISTRY_VERSION 1) stays compatible; use app_info_t.cap_mask. */
         uint16_t permissions;
         app_restart_config_t restart;
         uint8_t crash_count;
@@ -178,6 +185,7 @@ extern "C"
         bool has_update;
         char available_version[APP_VERSION_MAX_LEN];
         char commands_json[MANIFEST_COMMANDS_JSON_MAX_LEN]; /**< raw "commands" array from manifest */
+        uint64_t cap_mask; /**< Granted AKIRA_CAP_* mask while loaded, 0 otherwise */
     } app_info_t;
 
     /**
@@ -307,6 +315,25 @@ extern "C"
      * @return Number of apps, negative on error
      */
     int app_manager_list(app_info_t *out_list, int max_count);
+
+    /** Entries app_manager_list() can return: installed apps plus SD-XIP apps. */
+#if defined(CONFIG_AKIRA_SD_XIP)
+#define APP_MANAGER_LIST_CAPACITY (CONFIG_AKIRA_APP_MAX_INSTALLED + CONFIG_AKIRA_APP_MAX_RUNNING)
+#else
+#define APP_MANAGER_LIST_CAPACITY CONFIG_AKIRA_APP_MAX_INSTALLED
+#endif
+
+    /**
+     * @brief List all apps into a heap buffer
+     *
+     * app_info_t is about 600 bytes (it carries the manifest commands JSON),
+     * so a full listing is larger than most thread stacks. Use this instead of
+     * a stack array. The buffer prefers PSRAM; free it with akira_free_buffer().
+     *
+     * @param out_count Number of entries on success, negative errno on failure
+     * @return Buffer of APP_MANAGER_LIST_CAPACITY entries, or NULL on failure
+     */
+    app_info_t *app_manager_list_alloc(int *out_count);
 
     /**
      * @brief Get app info by name

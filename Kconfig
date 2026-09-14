@@ -1943,6 +1943,18 @@ config AKIRA_REQUIRE_SIGNED_APPS
       mask on an unverified build. Leave n for development builds that
       intentionally run unsigned apps.
 
+config AKIRA_RELEASE_BUILD
+    bool "Release build: fail on development-only security settings"
+    default n
+    help
+      Mark this image as a release (production) build. Configuration then
+      fails if a development-only security setting is still active:
+      unauthenticated or example-token HTTP uploads, the direct WASM upload
+      endpoint, unsigned or unverified WASM apps, and MCUboot images that are
+      unsigned or signed with one of MCUboot's public development keys.
+      With n, the same findings are printed as a single warning.
+      The checks live in cmake/akira_release_checks.cmake.
+
 config AKIRA_UNSIGNED_APP_CAP_MASK
     hex "Capability allow-mask for unsigned/unattested apps"
     default 0xFFFFFFFFFFFFFFFF

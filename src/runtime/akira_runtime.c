@@ -336,6 +336,15 @@ uint32_t akira_runtime_get_memory_quota(int instance_id)
     return g_apps[instance_id].memory_quota;
 }
 
+uint64_t akira_runtime_get_cap_mask(int instance_id)
+{
+    if (!slot_valid(instance_id))
+    {
+        return 0;
+    }
+    return g_apps[instance_id].cap_mask;
+}
+
 int akira_runtime_get_commands_json(int instance_id, char *buf, size_t buf_len)
 {
     if (!slot_valid(instance_id) || !buf || buf_len == 0)

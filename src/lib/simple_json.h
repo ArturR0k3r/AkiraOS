@@ -20,10 +20,14 @@
 extern "C" {
 #endif
 
-/* Parse a JSON document and extract capability bitmask.
- * Returns a uint32_t mask where bits are as per akira cap mapping.
- * The function is forgiving for whitespace and simple JSON strings.
+/* Parse a JSON document and extract a legacy capability bitmask.
+ *
+ * @deprecated since 1.6.4; removal no sooner than two minor releases later.
+ * Maps only four capability strings, and its bit numbers do not match
+ * AKIRA_CAP_* in runtime/security.h. Use manifest_parse_json() from
+ * runtime/manifest_parser.h, which returns the 64-bit mask the runtime enforces.
  */
+__attribute__((deprecated("use manifest_parse_json() from runtime/manifest_parser.h")))
 uint32_t parse_capabilities_mask(const char *json, size_t json_len);
 
 /* Lightweight helpers for simple manifest parsing */

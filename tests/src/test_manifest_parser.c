@@ -216,4 +216,22 @@ ZTEST(manifest_parser, test_wasm_no_manifest_section)
                   "expected -ENOENT for missing section, got %d", rc);
 }
 
+ZTEST(manifest_parser, test_high_capability_bits)
+{
+    /* Capabilities above bit 31 must survive parsing; a 16- or 32-bit mask
+     * anywhere on the path would silently drop them. */
+    const char *json =
+        "{\"name\":\"hibits\",\"version\":\"1.0.0\","
+        "\"memory_quota\":65536,"
+        "\"capabilities\":[\"ai.infer\",\"mqtt\",\"sync\"]}";
+
+    akira_manifest_t m;
+    int rc = manifest_parse_json(json, strlen(json), &m);
+
+    zassert_equal(rc, 0, "parse should succeed, got %d", rc);
+    zassert_true(m.cap_mask & AKIRA_CAP_AIINFER, "ai.infer (bit 32) missing");
+    zassert_true(m.cap_mask & AKIRA_CAP_MQTT, "mqtt (bit 35) missing");
+    zassert_true(m.cap_mask & AKIRA_CAP_SYNC, "sync (bit 39) missing");
+}
+
 ZTEST_SUITE(manifest_parser, NULL, NULL, NULL, NULL, NULL);

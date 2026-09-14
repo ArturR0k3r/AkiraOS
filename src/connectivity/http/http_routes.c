@@ -198,9 +198,9 @@ static int route_apps_list(const http_request_t *req, http_response_t *res,
                            void *user_data)
 {
 #ifdef CONFIG_AKIRA_APP_MANAGER
-    app_info_t apps[16];
-    int count = app_manager_list(apps, ARRAY_SIZE(apps));
-    if (count < 0)
+    int count;
+    app_info_t *apps = app_manager_list_alloc(&count);
+    if (!apps)
     {
         count = 0;
     }
@@ -238,6 +238,7 @@ static int route_apps_list(const http_request_t *req, http_response_t *res,
                         apps[i].id, apps[i].name, apps[i].version,
                         state_str, apps[i].size, apps[i].crash_count);
     }
+    akira_free_buffer(apps);
     snprintf(s_route_buf + pos, sizeof(s_route_buf) - pos, "]");
 #else
     strncpy(s_route_buf, "[]", sizeof(s_route_buf));

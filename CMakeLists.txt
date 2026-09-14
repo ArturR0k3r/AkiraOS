@@ -2,10 +2,6 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
-# Force disable Kconfig warnings
-set(KCONFIG_WARN_UNDEF OFF CACHE BOOL "Disable Kconfig warnings" FORCE)
-set(KCONFIG_WERROR OFF CACHE BOOL "Disable Kconfig warnings as errors" FORCE)
-
 # Set custom board root - MUST be before find_package(Zephyr)
 # BOARD_ROOT should point to directory that CONTAINS a 'boards' subdirectory
 list(APPEND BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR})
@@ -64,7 +60,14 @@ if(DEFINED BOARD)
 endif()
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(akira_os VERSION 1.6.4)
+# The version is owned by the top-level VERSION file, which Zephyr parses into
+# APP_VERSION_* during find_package(Zephyr). Module builds of other images
+# (e.g. MCUboot) may have no VERSION file, so fall back to an unversioned project.
+if(NOT "${APP_VERSION_MAJOR}" STREQUAL "")
+  project(akira_os VERSION ${APP_VERSION_MAJOR}.${APP_VERSION_MINOR}.${APP_PATCHLEVEL})
+else()
+  project(akira_os)
+endif()
 
 # When this repository is present as a west module, MCUboot bootloader builds
 # also evaluate this CMakeLists. In that context (CONFIG_MCUBOOT=y), pulling
@@ -83,6 +86,9 @@ if(NOT "${APPLICATION_SOURCE_DIR}" STREQUAL "${CMAKE_CURRENT_LIST_DIR}")
     message(STATUS "AkiraOS module: external app '${APPLICATION_SOURCE_DIR}' detected, skipping AkiraOS sources")
     return()
 endif()
+
+# Warn (development) or fail (CONFIG_AKIRA_RELEASE_BUILD=y) on insecure settings.
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/akira_release_checks.cmake)
 
 
 
@@ -874,10 +880,9 @@ target_include_directories(app PRIVATE
 # endif()
 
 # Compile definitions
+# AKIRA_VERSION_* are not defined here: src/akira.h derives them from the
+# VERSION file via Zephyr's generated <zephyr/app_version.h>.
 target_compile_definitions(app PRIVATE
-    AKIRA_VERSION_MAJOR=1
-    AKIRA_VERSION_MINOR=6
-    AKIRA_VERSION_PATCH=2
     # Match MPU thread pool to MAX_CONTAINERS to save 8 KB of static DRAM
     BH_ZEPHYR_MPU_STACK_COUNT=${CONFIG_MAX_CONTAINERS}
 )

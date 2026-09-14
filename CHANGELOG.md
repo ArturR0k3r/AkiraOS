@@ -67,6 +67,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `feat(board)`: esp32s3_super_mini — 2 MB Quad PSRAM + WiFi, LEDC PWM, and WASM BLE RGB controller.
 - `feat(shell)`: `bt gatt` command to dump registered GATT services.
 - `feat(bench)`: `akiraclaw_bench` hardware benchmark suite.
+- `feat(security)`: `CONFIG_AKIRA_RELEASE_BUILD` fails configuration on development-only security settings: HTTP no-auth, empty or example upload token, the direct upload endpoint, unsigned apps, and unsigned or dev-key-signed MCUboot images. Development builds print the same findings as one warning.
 
 ### Fixed / Security
 - `fix(ble)`: Require an encrypted link for privileged management writes; make WASM app GATT services discoverable.
@@ -76,11 +77,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `fix(fs)`: Fail loud instead of diverting persistent writes to RAM.
 - `fix(akiraconsole_prod)`: Fit `dram0.bss` and right-size the BT system heap to restore BLE.
 - `fix(boards)`: Restore builds for rpi_pico(2), nucleo_h743zi, xiao_esp32c6.
+- `fix(version)`: Firmware reported 1.6.2 instead of `VERSION`. CMake compile definitions overrode `AKIRA_VERSION_*`, and `akira.h` probed `<app_version.h>` rather than Zephyr's `<zephyr/app_version.h>`. OTA version reporting and anti-rollback now use the real version.
+- `fix(app_manager)`: Stop filling the 16-bit `permissions` field from a 4-string parser whose bits did not match `AKIRA_CAP_*` (enforcement already used the 64-bit runtime mask). `akira caps` now shows the granted 64-bit mask instead of `heap_kb`; lifecycle APIs no longer truncate the mask to 32 bits.
+- `fix(stack)`: App listings put `app_info_t` arrays (608 B per entry) on thread stacks smaller than the array: shell app list, `akira apps`/`akira caps`/memory report (4096 B shell stack), HID get-apps (4096 B system workqueue), the HTTP apps route (6144 B), and the WASM `app_list` API (8192 B app stack). They now use the new `app_manager_list_alloc()`, which heap-allocates (PSRAM first) and also returns SD-XIP apps that the fixed 8-entry HID list dropped.
 
 ### Changed
 - `fix(version)`: Derive `AKIRA_VERSION_*` from the `VERSION` file.
 - `ci`: Codecov no-regression coverage gate.
 - `refactor(ui)`: Remove the unused stub UI framework.
+- `ci`: Pin the Zephyr CI container to `ci:v0.28.6` by digest.
+- `build`: Remove no-op `KCONFIG_WARN_UNDEF`/`KCONFIG_WERROR` CMake cache overrides (kconfiglib reads these from the environment).
+- `deprecate(lib)`: `parse_capabilities_mask()` in `simple_json.h`; use `manifest_parse_json()`.
+- `docs`: Product branches (KeyaPlatform, AkiraEar, Latch) are frozen; see CONTRIBUTING.
 
 ---
 

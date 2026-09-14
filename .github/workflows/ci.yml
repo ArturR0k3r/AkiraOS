@@ -4,12 +4,12 @@ on:
   push:
   pull_request:
 
-# Single source of truth for the build container. Pin to an immutable digest for
-# reproducible builds — resolve the digest with:
-#   docker buildx imagetools inspect ghcr.io/zephyrproject-rtos/ci:latest
-# then replace the ":latest" tag below with "@sha256:<digest>".
+# Single source of truth for the build container, pinned by tag and digest so
+# builds are reproducible. v0.28.6 is the image series Zephyr v4.3.0 uses in its
+# own CI. To update, resolve the new digest with:
+#   docker buildx imagetools inspect ghcr.io/zephyrproject-rtos/ci:<tag>
 env:
-  ZEPHYR_CI_IMAGE: ghcr.io/zephyrproject-rtos/ci:latest
+  ZEPHYR_CI_IMAGE: ghcr.io/zephyrproject-rtos/ci:v0.28.6@sha256:427a55fe95911ea97aa99fa0aedce95cb5550cbdd74f3525d23e35b2221f2335
 
 jobs:
   build:

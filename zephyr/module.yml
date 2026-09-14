@@ -8,16 +8,18 @@
 #     projects:
 #       - name: akira-os
 #         url: https://github.com/ArturR0k3r/AkiraOS.git
-#         revision: v1.5.4
+#         revision: v1.6.x      # pin a release tag once one is cut
 #         path: akira-os
 #     self:
 #       path: my-app
 #
 # After `west update`, the build system automatically:
-#   - Sources AkiraOS CMakeLists.txt as a Zephyr module (adds all sources)
-#   - Sources Kconfig for AkiraOS symbols (CONFIG_AKIRA_*, CONFIG_WAMR_*)
 #   - Adds boards/ to the board search path  → west build -b akiraconsole_prod/...
 #   - Adds dts/   to the DTS bindings path   → AkiraOS DTS bindings available
+#
+# Not yet exported: the AkiraOS runtime sources and CONFIG_AKIRA_* Kconfig
+# symbols. CMakeLists.txt returns early for external applications, and the
+# Kconfig tree is only read when AkiraOS itself is the application.
 #
 # No -DMODULE_EXT_ROOT or -DBOARD_ROOT flags are needed in downstream projects.
 # The flags remain in this repo's own build tasks for self-contained builds.
