@@ -644,6 +644,20 @@ int net_stream_init(void)
 			CONFIG_AKIRA_WASM_APP_PRIORITY, 0, K_NO_WAIT);
 	k_thread_name_set(&g_poll_thread, "akira_net_poll");
 
+	/* Under SMP, this thread's zsock_recv()/zsock_poll() calls (and
+	 * connect_work_fn below, on k_sys_work_q) drop straight into the
+	 * WiFi blob's send/recv path via net_if_try_queue_tx() — CONFIG_NET_TC_TX_COUNT=0
+	 * means there's no TX thread for net_tc.c's own core0 pin to apply to,
+	 * so without this, TLS traffic runs on whichever core the scheduler
+	 * picks. The WiFi blob is closed-source and, per its own Kconfig help
+	 * text, expects every WiFi-facing thread pinned to core0 like the RX
+	 * thread already is (net_tc.c). Confirmed root cause of SMP-only TLS
+	 * fetch failures — see the debugging note captured on this bug. */
+#if defined(CONFIG_SCHED_CPU_MASK) && defined(CONFIG_SMP)
+	k_thread_cpu_pin(&g_poll_thread, 0);
+	k_thread_cpu_pin(&k_sys_work_q.thread, 0);
+#endif
+
 	g_initialized = true;
 	LOG_INF("Net stream subsystem initialised (max_streams=%d)",
 		CONFIG_AKIRA_NET_MAX_STREAMS);
