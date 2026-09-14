@@ -23,7 +23,8 @@ You will receive an acknowledgement within **48 hours** and a status update with
 
 | Version | Supported |
 |---------|-----------|
-| v1.5.x (current) | Yes — security patches actively backported |
+| v1.6.x (development, untagged) | Yes — fixes land here first |
+| v1.5.x (current release) | Yes — security patches actively backported |
 | v1.4.x | Yes — critical patches only |
 | v1.3.x and earlier | No — please upgrade |
 
@@ -74,11 +75,11 @@ Known limitations are documented in [docs/architecture/security.md](docs/archite
 
 ## Compliance Documentation
 
-| Document | Description |
-|----------|-------------|
-| [PSA Certified Level 1 Gap Analysis](docs/compliance/psa-gap-analysis.md) | Self-certification questionnaire mapping and remaining gaps |
-| [IEC 62443-4-2 SL 1 Mapping](docs/compliance/iec-62443-4-2-mapping.md) | IACS component security requirement → AkiraOS feature mapping |
-| [SBOM (CycloneDX 1.4)](docs/compliance/sbom-cyclonedx.md) | Software Bill of Materials — generate via `./build.sh -s` → `build/sbom.cdx.json` |
+| Document | Status | Description |
+|----------|--------|-------------|
+| [SBOM (CycloneDX 1.4)](docs/compliance/sbom-cyclonedx.md) | Available | Software Bill of Materials — generate via `./build.sh -s` → `build/sbom.cdx.json` |
+| PSA Certified Level 1 Gap Analysis | Planned | Self-certification questionnaire mapping and remaining gaps — not yet written |
+| IEC 62443-4-2 SL 1 Mapping | Planned | IACS component security requirement → AkiraOS feature mapping — not yet written |
 
 The SBOM is regenerated on every release build and published as a GitHub release asset (EU Cyber Resilience Act 2027 requirement).
 

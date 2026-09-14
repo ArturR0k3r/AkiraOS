@@ -1,3 +1,10 @@
+---
+layout: default
+title: Building WASM Apps
+parent: Development
+nav_order: 1
+---
+
 # Building WASM Applications
 
 Complete guide to developing WebAssembly applications for AkiraOS.
@@ -38,7 +45,7 @@ AkiraSDK/python/runtime/micropython.wasm
 
 or set the environment variable `MICROPYTHON_WASM=/path/to/micropython.wasm`.
 
-See [AkiraSDK/python/runtime/README.md](../../AkiraSDK/python/runtime/README.md).
+See [AkiraSDK/python/runtime/README.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/python/runtime/README.md).
 
 
 ## Build Process
@@ -93,7 +100,7 @@ $WASI_SDK_PATH/bin/clang \
 
 ## Rust Apps
 
-Full guide: [AkiraSDK/docs/RUST_GUIDE.md](../../AkiraSDK/docs/RUST_GUIDE.md)
+Full guide: [AkiraSDK/docs/RUST_GUIDE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/RUST_GUIDE.md)
 
 ### Project structure
 
@@ -165,7 +172,7 @@ strip = true
 
 ## Python Apps (MicroPython)
 
-Full guide: [AkiraSDK/docs/PYTHON_GUIDE.md](../../AkiraSDK/docs/PYTHON_GUIDE.md)
+Full guide: [AkiraSDK/docs/PYTHON_GUIDE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/PYTHON_GUIDE.md)
 
 ### Architecture
 
@@ -434,9 +441,13 @@ AkiraOS:~$ app stop myapp
 ## Related Documentation
 
 - [First App Tutorial](../getting-started/first-app.md)
-- [SDK API Reference](../../AkiraSDK/docs/API_REFERENCE.md)
-- [Rust App Guide](../../AkiraSDK/docs/RUST_GUIDE.md)
-- [Python App Guide](../../AkiraSDK/docs/PYTHON_GUIDE.md)
+- [SDK API Reference](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md)
+- [Rust App Guide](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/RUST_GUIDE.md)
+- [Python App Guide](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/PYTHON_GUIDE.md)
 - [Manifest Format](../api-reference/manifest-format.md)
 - [Best Practices](best-practices.md)
 - [Advanced Sample Apps](advanced-apps.md)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

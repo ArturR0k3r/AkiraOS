@@ -55,10 +55,14 @@ Additional resources for AkiraOS developers.
 
 ## Contributing
 
-See [CONTRIBUTING.md](../../CONTRIBUTING.md) for how to contribute to AkiraOS.
+See [CONTRIBUTING.md](https://github.com/ArturR0k3r/AkiraOS/blob/main/CONTRIBUTING.md) for how to contribute to AkiraOS.
 
 ---
 
 ## License
 
-AkiraOS is licensed under [Apache 2.0](../../LICENSE).
+AkiraOS is licensed under [Apache 2.0](https://github.com/ArturR0k3r/AkiraOS/blob/main/LICENSE).
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

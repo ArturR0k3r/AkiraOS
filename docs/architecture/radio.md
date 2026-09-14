@@ -1,3 +1,10 @@
+---
+layout: default
+title: Radio Abstraction Layer
+parent: Architecture
+nav_order: 6
+---
+
 # Radio Abstraction Layer
 
 ```
@@ -58,3 +65,7 @@ radio_handle_t *h = radio_manager_get_by_caps(RADIO_CAP_MOD_LORA | RADIO_CAP_BAN
 When `CONFIG_AKIRA_RF_RX_DAEMON=y`, `radio_manager` spawns a background thread that polls the active handle and enqueues packets. Callers drain via `radio_manager_recv_pop()` / `akira_rf_recv_pop()`.
 
 Daemon uses `K_NO_WAIT` on the handle lock — skips poll cycle if TX in progress.
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

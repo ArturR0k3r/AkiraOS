@@ -1,3 +1,10 @@
+---
+layout: default
+title: Error Codes
+parent: API Reference
+nav_order: 3
+---
+
 # Error Codes Reference
 
 Standard error codes returned by AkiraOS native APIs.
@@ -477,3 +484,7 @@ if (ret == -EPERM) {
 - [Manifest Format](manifest-format.md) - Capability configuration
 - [Troubleshooting Guide](../getting-started/troubleshooting.md) - Common issues
 - [Security Model](../architecture/security.md) - Permission system
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

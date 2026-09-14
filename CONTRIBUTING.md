@@ -305,4 +305,4 @@ We're particularly looking for contributions in:
 
 ## 📄 License
 
-By contributing to AkiraOS, you agree that your contributions will be licensed under the same [GNU General Public License v3.0](LICENSE) that covers the project.
+By contributing to AkiraOS, you agree that your contributions will be licensed under the same [Apache License 2.0](LICENSE) that covers the project.

@@ -1,10 +1,17 @@
+---
+layout: default
+title: Native API
+parent: API Reference
+nav_order: 1
+---
+
 # Native API Reference
 
 Complete reference for all AkiraOS native functions callable from WASM.
 
 > **Note:** This is a custom API, **not WASI**. It's designed specifically for embedded systems and real-time constraints.
 > 
-> For the full, up-to-date function list with examples, see the canonical **[AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.5.x/docs/API_REFERENCE.md)**.  
+> For the full, up-to-date function list with examples, see the canonical **[AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md)**.  
 > Use `#include "akira_api.h"` from `AkiraSDK/include/` — it declares all exports, color constants, and `SENSOR_CHAN_*` defines.
 
 ## Import Declaration
@@ -107,13 +114,19 @@ Flush framebuffer to physical display. An auto-flush fires 50 ms after the last 
 extern int display_flush(void);
 ```
 
-> Full display API (20+ functions: `display_line`, `display_circle`, `display_bitmap`, `display_progress_bar`, `display_rounded_rect`, etc.) — see [AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.5.x/docs/API_REFERENCE.md#display-api).
+> Full display API (20+ functions: `display_line`, `display_circle`, `display_bitmap`, `display_progress_bar`, `display_rounded_rect`, etc.) — see [AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#display-api).
 
 ---
 
 ## Input Functions
 
-> `input_read_buttons`, `input_read_touch`, and `input_read_analog` are not registered native exports in the current runtime (`src/api/akira_export_api.c`). Check [AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.5.x/docs/API_REFERENCE.md) for the current input API.
+> **There is no button input native API.** The runtime registers no `input_*` symbol.
+> `AKIRA_CAP_INPUT_READ` (bit 1) and `AKIRA_CAP_INPUT_WRITE` (bit 2) remain defined and
+> reserved, but nothing consumes them today.
+>
+> Apps that need button state should use the LVGL input path
+> (`CONFIG_AKIRA_LVGL_INPUT_ZEPHYR`), which bridges Zephyr input events — gpio-keys, D-pad,
+> gamepad and touch — into the display driver.
 
 ---
 
@@ -183,7 +196,7 @@ extern int sensor_list(uint32_t *buffer, uint32_t max_count);
 > **Work In Progress:** The RF module is implemented but still under active development. Use with caution in production environments.
 
 > **Available only when `CONFIG_AKIRA_RF_FRAMEWORK=y`.**  
-> See [AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.5.x/docs/API_REFERENCE.md#rf-api) for full RF reference.
+> See [AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#rf-api) for full RF reference.
 
 ### `rf_send(data, length)`
 
@@ -446,6 +459,443 @@ for (int i = 0; i < 1000; i++) {
 
 ---
 
+## Complete Symbol Index
+
+Every native symbol the runtime registers into the WASM `env` module, generated from
+[`src/api/akira_export_api.c`](https://github.com/ArturR0k3r/AkiraOS/blob/main/src/api/akira_export_api.c).
+**201 symbols across 30 subsystems.** The sections above document the most commonly used
+ones in prose; this index is the authoritative, exhaustive list.
+
+A symbol is only present in a build when its gating Kconfig option is enabled, and calling
+it still requires the listed capability in the app manifest.
+
+Signature notation follows WAMR: `i32`/`i64`/`f32`/`f64` are value types, `string` is a
+NUL-terminated string in linear memory, `ptr` is a linear-memory pointer, and `len` is the
+buffer length that pairs with the preceding `ptr`.
+
+### Core
+
+Gated by `CONFIG_AKIRA_WASM_API`. Capability: none.
+
+| Symbol | Signature |
+|--------|-----------|
+| `delay` | `(i32) -> i32` |
+| `printf_native` | `(string) -> i32` |
+
+### Display
+
+Gated by `CONFIG_DISPLAY`. Capability: `display.write`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `display_bitmap` | `(i32, i32, i32, i32, ptr, len) -> i32` |
+| `display_bitmap_transparent` | `(i32, i32, i32, i32, ptr, len, i32) -> i32` |
+| `display_circle` | `(i32, i32, i32, i32) -> i32` |
+| `display_circle_fill` | `(i32, i32, i32, i32) -> i32` |
+| `display_clear` | `(i32) -> i32` |
+| `display_flush` | `() -> i32` |
+| `display_get_size` | `(ptr, ptr) -> i32` |
+| `display_hline` | `(i32, i32, i32, i32) -> i32` |
+| `display_line` | `(i32, i32, i32, i32, i32) -> i32` |
+| `display_number` | `(i32, i32, i32, i32) -> i32` |
+| `display_pixel` | `(i32, i32, i32) -> i32` |
+| `display_progress_bar` | `(i32, i32, i32, i32, i32, i32, i32, i32) -> i32` |
+| `display_raw_write` | `(i32, i32, i32, i32, ptr, len) -> i32` |
+| `display_rect` | `(i32, i32, i32, i32, i32) -> i32` |
+| `display_rect_outline` | `(i32, i32, i32, i32, i32) -> i32` |
+| `display_rounded_rect` | `(i32, i32, i32, i32, i32, i32) -> i32` |
+| `display_rounded_rect_fill` | `(i32, i32, i32, i32, i32, i32) -> i32` |
+| `display_text` | `(i32, i32, string, i32) -> i32` |
+| `display_text_large` | `(i32, i32, string, i32) -> i32` |
+| `display_triangle` | `(i32, i32, i32, i32, i32, i32, i32) -> i32` |
+| `display_triangle_fill` | `(i32, i32, i32, i32, i32, i32, i32) -> i32` |
+| `display_vline` | `(i32, i32, i32, i32) -> i32` |
+
+### GPIO
+
+Gated by `CONFIG_GPIO`. Capability: `gpio.read` / `gpio.write`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `gpio_configure` | `(i32, i32) -> i32` |
+| `gpio_read` | `(i32) -> i32` |
+| `gpio_write` | `(i32, i32) -> i32` |
+
+### RF / Radio
+
+Gated by `CONFIG_AKIRA_MODULE_RF`. Capability: `rf.transceive`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `rf_get_rssi` | `() -> i32` |
+| `rf_raw_capture` | `(i32, i32, i32, i32) -> i32` |
+| `rf_raw_replay` | `(i32, i32, i32, i32) -> i32` |
+| `rf_receive` | `(i32, i32, i32) -> i32` |
+| `rf_recv_pop` | `(i32, i32, i32) -> i32` |
+| `rf_select` | `(i32) -> i32` |
+| `rf_send` | `(i32, i32) -> i32` |
+| `rf_set_bandwidth` | `(i32) -> i32` |
+| `rf_set_coding_rate` | `(i32) -> i32` |
+| `rf_set_frequency` | `(i32) -> i32` |
+| `rf_set_modulation` | `(i32) -> i32` |
+| `rf_set_power` | `(i32) -> i32` |
+| `rf_set_spreading_factor` | `(i32) -> i32` |
+
+### WiFi (raw 802.11)
+
+Gated by `CONFIG_WIFI`. Capability: `wifi.inject`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `wifi_deauth` | `(ptr, ptr, i32, i32, i32) -> i32` |
+| `wifi_scan_aps` | `(ptr, len) -> i32` |
+| `wifi_scan_rssi` | `(i32, i32) -> i32` |
+
+### Sensors
+
+Gated by `CONFIG_SENSOR`. Capability: `sensor.read`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `sensor_read` | `(i32) -> i32` |
+
+### Memory
+
+Gated by `CONFIG_AKIRA_WASM_MEMORY`. Capability: `memory`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `mem_alloc` | `(i32) -> i32` |
+| `mem_free` | `(i32) -> void` |
+
+### BLE (app GATT service)
+
+Gated by `CONFIG_AKIRA_WASM_BLE`. Capability: `ble`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `ble_add_service` | `(i32) -> i32` |
+| `ble_advertise` | `() -> i32` |
+| `ble_char_create` | `(string, i32, i32) -> i32` |
+| `ble_char_read` | `(i32, i32, i32) -> i32` |
+| `ble_char_write` | `(i32, i32, i32) -> i32` |
+| `ble_deinit` | `() -> i32` |
+| `ble_event_pop` | `(i32, i32) -> i32` |
+| `ble_init` | `() -> i32` |
+| `ble_is_connected` | `() -> i32` |
+| `ble_service_add_char` | `(i32, i32) -> i32` |
+| `ble_service_create` | `(string) -> i32` |
+| `ble_set_advertised_service` | `(i32) -> i32` |
+| `ble_set_local_name` | `(string) -> i32` |
+| `ble_stop_advertise` | `() -> i32` |
+
+### HID
+
+Gated by `CONFIG_AKIRA_WASM_HID`. Capability: `hid`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `hid_action_register` | `(string, i32, i32) -> i32` |
+| `hid_action_trigger` | `(string) -> i32` |
+| `hid_consumer_send` | `(i32) -> i32` |
+| `hid_disable` | `() -> i32` |
+| `hid_enable` | `() -> i32` |
+| `hid_fido_recv` | `(i32, i32) -> i32` |
+| `hid_fido_send` | `(i32, i32) -> i32` |
+| `hid_gamepad_press` | `(i32) -> i32` |
+| `hid_gamepad_release` | `(i32) -> i32` |
+| `hid_gamepad_reset` | `() -> i32` |
+| `hid_gamepad_set_axis` | `(i32, i32) -> i32` |
+| `hid_gamepad_set_dpad` | `(i32) -> i32` |
+| `hid_init` | `(i32, i32) -> i32` |
+| `hid_is_connected` | `() -> i32` |
+| `hid_key_press` | `(i32) -> i32` |
+| `hid_key_release` | `(i32) -> i32` |
+| `hid_key_release_all` | `() -> i32` |
+| `hid_mouse_btn_press` | `(i32) -> i32` |
+| `hid_mouse_btn_release` | `(i32) -> i32` |
+| `hid_mouse_move` | `(i32, i32) -> i32` |
+| `hid_mouse_scroll` | `(i32) -> i32` |
+| `hid_raw_recv` | `(i32, i32) -> i32` |
+| `hid_send_raw_report` | `(i32, i32, i32) -> i32` |
+| `hid_set_device_types` | `(i32) -> i32` |
+| `hid_set_modifiers` | `(i32) -> i32` |
+| `hid_set_transport` | `(i32) -> i32` |
+| `hid_type_string` | `(string) -> i32` |
+
+### App lifecycle
+
+Gated by `CONFIG_AKIRA_WASM_LIFECYCLE`. Capability: `app.control` / `app.info` / `app.switch`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `app_check_update` | `(i32, i32) -> i32` |
+| `app_get_self_name` | `(i32, i32) -> i32` |
+| `app_get_status` | `(string) -> i32` |
+| `app_list` | `(i32, i32) -> i32` |
+| `app_request_update` | `() -> i32` |
+| `app_start` | `(string) -> i32` |
+| `app_stop` | `(string) -> i32` |
+| `app_switch` | `(string) -> i32` |
+
+### IPC (message bus)
+
+Gated by `CONFIG_AKIRA_WASM_IPC`. Capability: `ipc`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `msg_pending` | `(string) -> i32` |
+| `msg_publish` | `(string, i32, i32) -> i32` |
+| `msg_recv` | `(string, i32, i32, i32) -> i32` |
+| `msg_subscribe` | `(string) -> i32` |
+| `msg_try_recv` | `(string, i32, i32) -> i32` |
+| `msg_unsubscribe` | `(string) -> i32` |
+
+### Timers
+
+Gated by `CONFIG_AKIRA_WASM_TIMER`. Capability: `timer`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `timer_create` | `() -> i32` |
+| `timer_elapsed` | `(i32) -> i32` |
+| `timer_free` | `(i32) -> i32` |
+| `timer_start` | `(i32) -> i32` |
+| `timer_stop` | `(i32) -> i32` |
+
+### UART
+
+Gated by `CONFIG_AKIRA_WASM_UART`. Capability: `uart`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `uart_close` | `(i32) -> i32` |
+| `uart_open` | `(i32, i32) -> i32` |
+| `uart_read` | `(i32, ptr, len) -> i32` |
+| `uart_write` | `(i32, ptr, len) -> i32` |
+
+### I2C
+
+Gated by `CONFIG_AKIRA_WASM_I2C`. Capability: `i2c`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `i2c_read_reg` | `(i32, i32, i32, ptr, len) -> i32` |
+| `i2c_write_reg` | `(i32, i32, i32, ptr, len) -> i32` |
+
+### PWM
+
+Gated by `CONFIG_AKIRA_WASM_PWM`. Capability: `pwm`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `pwm_disable` | `(i32) -> i32` |
+| `pwm_set` | `(i32, i32, i32) -> i32` |
+
+### ADC
+
+Gated by `CONFIG_AKIRA_WASM_ADC`. Capability: `adc`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `adc_read` | `(i32) -> i32` |
+| `adc_read_mv` | `(i32) -> i32` |
+
+### Watchdog
+
+Gated by `CONFIG_AKIRA_WASM_WDT`. Capability: `wdt`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `wdt_pet` | `() -> i32` |
+
+### Storage (app sandbox)
+
+Gated by `CONFIG_AKIRA_WASM_STORAGE`. Capability: `storage.read` / `storage.write`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `storage_close` | `(i32) -> void` |
+| `storage_delete` | `(string) -> i32` |
+| `storage_list` | `(string, ptr, len) -> i32` |
+| `storage_open` | `(string, i32) -> i32` |
+| `storage_read` | `(i32, ptr, len) -> i32` |
+| `storage_write` | `(i32, ptr, len) -> i32` |
+
+### Network sockets
+
+Gated by `CONFIG_AKIRA_WASM_NET`. Capability: `network.*`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `net_bind` | `(i32, i32) -> i32` |
+| `net_close` | `(i32) -> i32` |
+| `net_connect` | `(i32, string, i32) -> i32` |
+| `net_event_pop` | `(i32, i32) -> i32` |
+| `net_get_ip` | `(i32, i32) -> i32` |
+| `net_listen` | `(i32, i32) -> i32` |
+| `net_open` | `(i32) -> i32` |
+| `net_rx_bind` | `(i32, i32, i32) -> i32` |
+| `net_tx_bind` | `(i32, i32, i32) -> i32` |
+| `net_tx_flush` | `(i32) -> i32` |
+
+### System / SD
+
+Gated by `CONFIG_AKIRA_SYSTEM_API`. Capability: `app.control`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `app_install_from_sd` | `(string) -> i32` |
+| `sd_scan_wasm` | `(ptr, len) -> i32` |
+
+### Power
+
+Gated by `CONFIG_AKIRA_WASM_POWER`. Capability: `power.read` / `power.control`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `power_get_battery_level` | `() -> i32` |
+| `power_get_battery_status` | `(ptr, len) -> i32` |
+| `power_get_mode` | `() -> i32` |
+| `power_set_low_power` | `(i32) -> i32` |
+| `power_set_mode` | `(i32) -> i32` |
+| `power_wake_on_gpio` | `(i32, i32) -> i32` |
+| `power_wake_on_timer` | `(i32) -> i32` |
+
+### Settings
+
+Gated by `CONFIG_AKIRA_WASM_SETTINGS`. Capability: `settings.*`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `settings_delete` | `(string) -> i32` |
+| `settings_get` | `(string, i32, i32) -> i32` |
+| `settings_set` | `(string, string) -> i32` |
+
+### Filesystem
+
+Gated by `CONFIG_AKIRA_WASM_FS`. Capability: `fs.read` / `fs.write`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `fs_close` | `(i32) -> i32` |
+| `fs_mkdir` | `(string) -> i32` |
+| `fs_open` | `(string, i32) -> i32` |
+| `fs_read` | `(i32, ptr, len) -> i32` |
+| `fs_readdir` | `(string, ptr, len) -> i32` |
+| `fs_seek` | `(i32, i32, i32) -> i32` |
+| `fs_stat` | `(string, ptr) -> i32` |
+| `fs_tell` | `(i32) -> i32` |
+| `fs_unlink` | `(string) -> i32` |
+| `fs_write` | `(i32, ptr, len) -> i32` |
+
+### Crypto
+
+Gated by `CONFIG_AKIRA_WASM_CRYPTO`. Capability: `crypto`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `crypto_aes256_ctr` | `(ptr, ptr, i32, ptr, len, ptr) -> i32` |
+| `crypto_aes256_decrypt` | `(ptr, ptr, i32, ptr, len, ptr) -> i32` |
+| `crypto_aes256_encrypt` | `(ptr, ptr, i32, ptr, len, ptr) -> i32` |
+| `crypto_ed25519_keygen` | `(ptr, ptr) -> i32` |
+| `crypto_ed25519_sign` | `(ptr, ptr, len, ptr) -> i32` |
+| `crypto_hmac_sha256` | `(ptr, len, ptr, len, ptr) -> i32` |
+| `crypto_random` | `(ptr, len) -> i32` |
+| `crypto_sha256` | `(ptr, len, ptr) -> i32` |
+
+### RTC
+
+Gated by `CONFIG_AKIRA_WASM_RTC`. Capability: `rtc.read` / `rtc.write`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `rtc_alarm_fired` | `() -> i32` |
+| `rtc_get_unix_time` | `() -> i32` |
+| `rtc_get_uptime_ms` | `() -> i32` |
+| `rtc_set_alarm` | `(i32) -> i32` |
+| `rtc_set_unix_time` | `(i32) -> i32` |
+
+### OTA
+
+Gated by `CONFIG_AKIRA_WASM_OTA`. Capability: `ota.trigger`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `ota_check` | `(string) -> i32` |
+| `ota_confirm` | `() -> i32` |
+| `ota_fetch_and_apply` | `(string) -> i32` |
+| `ota_get_state` | `() -> i32` |
+| `ota_rollback` | `() -> i32` |
+
+### Edge AI inference
+
+Gated by `CONFIG_AKIRA_WASM_AIINFER`. Capability: `ai.infer`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `aiinfer_load` | `(ptr, len) -> i32` |
+| `aiinfer_run` | `(i32, ptr, len, ptr, len) -> i32` |
+| `aiinfer_unload` | `(i32) -> void` |
+
+### Matter
+
+Gated by `CONFIG_AKIRA_WASM_MATTER`. Capability: `matter`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `matter_cmd_poll` | `(ptr, ptr, ptr, ptr, len, i32) -> i32` |
+| `matter_commission` | `(string, ptr, len) -> i32` |
+| `matter_endpoint_add` | `(i32, ptr, len) -> i32` |
+| `matter_get_pairing` | `(ptr, len, ptr, len) -> i32` |
+| `matter_open_pairing` | `(i32) -> i32` |
+| `matter_poll` | `(ptr, len, ptr, i32, ptr, len, i32, i32) -> i32` |
+| `matter_report_attr` | `(i32, i32, i32, ptr, len) -> i32` |
+| `matter_send` | `(ptr, len, ptr, len, i32) -> i32` |
+| `matter_subscribe` | `(ptr, len, i32) -> i32` |
+
+### MQTT / Home Assistant
+
+Gated by `CONFIG_AKIRA_WASM_MQTT`. Capability: `mqtt`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `ha_light_poll` | `(string, ptr, ptr, ptr, ptr, ptr, i32) -> i32` |
+| `ha_light_register` | `(string, string) -> i32` |
+| `ha_light_report` | `(string, i32, i32, i32, i32, i32) -> i32` |
+| `mqtt_connected` | `() -> i32` |
+| `mqtt_poll` | `(ptr, len, ptr, len, i32) -> i32` |
+| `mqtt_publish` | `(string, ptr, len, i32, i32) -> i32` |
+| `mqtt_subscribe` | `(string) -> i32` |
+
+### AkiraMesh
+
+Gated by `CONFIG_AKIRA_WASM_MESH`. Capability: `mesh`.
+
+| Symbol | Signature |
+|--------|-----------|
+| `mesh_broadcast` | `(ptr, len, i32) -> i32` |
+| `mesh_distribute_app` | `(ptr, string, ptr, len) -> i32` |
+| `mesh_get_nodes` | `(ptr, i32) -> i32` |
+| `mesh_get_stats` | `(ptr) -> i32` |
+| `mesh_init` | `(i32, string, i32, i32) -> i32` |
+| `mesh_recv_pop` | `(ptr, ptr, len, i32) -> i32` |
+| `mesh_send` | `(ptr, ptr, len) -> i32` |
+| `mesh_start` | `() -> i32` |
+| `mesh_stop` | `() -> i32` |
+
+### Not available
+
+These are declared in headers or gated by Kconfig but register **no** native symbol:
+
+| Name | Status |
+|------|--------|
+| `input_*` | No button input API exists. Nothing is registered and nothing is declared in `include/akira_native_api.h`. Use `CONFIG_AKIRA_LVGL_INPUT_ZEPHYR` instead. |
+| `sync_*` | AkiraSync is not compiled — `src/connectivity/sync/` is not referenced by `CMakeLists.txt`. `AKIRA_CAP_SYNC` is reserved. |
+| `crypto_ed25519_verify` | Does not exist. Only `crypto_ed25519_keygen()` and `crypto_ed25519_sign()` are exported. |
+
+---
+
 ## Related Documentation
 
 - [SDK API Reference](../development/sdk-api-reference.md) - High-level SDK functions with examples
@@ -454,3 +904,7 @@ for (int i = 0; i < 1000; i++) {
 - [Manifest Format](manifest-format.md) - Capability declarations
 - [Security Model](../architecture/security.md) - Permission system
 - [Building Apps](../development/building-apps.md) - WASM compilation
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

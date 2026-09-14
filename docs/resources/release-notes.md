@@ -8,6 +8,100 @@ permalink: /resources/release-notes
 
 # Release Notes
 
+> Release history. `CHANGELOG.md` at the repository root is the authoritative,
+> commit-level record; this page summarises each release.
+
+## v1.6.4 — Unreleased
+
+**Status:** development series on the `v1.6.x` branch. `VERSION` tracks 1.6.4, but
+**no 1.6.x git tag exists yet** — the newest tag is `v1.5.8`.
+
+The 1.6 series is a connectivity build-out plus a production-readiness pass that
+deliberately *removed* overclaims: entry points that were advertised but incomplete now
+return `-ENOSYS`/`-ENOTSUP` instead of reporting fake success.
+
+### Implemented (previously stubbed)
+- **HTTP**: RFC 6455 WebSocket server (handshake, frame encode/decode, ping/pong/close) and
+  static file serving with path-traversal protection (`CONFIG_AKIRA_HTTP_STATIC_FILES`).
+- **CoAP**: DNS resolution, Content-Format parsing, and RFC 7959 Block2 GET / Block1 PUT.
+- **OTA**: real HTTP(S) manifest fetch and firmware download with SHA-256 verification and
+  anti-rollback.
+- **Radio**: 802.15.4 raw receive via promiscuous mode with real per-frame LQI/RSSI.
+- **Display**: LVGL input driven by real Zephyr input events (gpio-keys / D-pad / gamepad /
+  touch) via `CONFIG_AKIRA_LVGL_INPUT_ZEPHYR`.
+- **Sensors**: BME280 register writes over I2C (was `-ENOTSUP`).
+- **Cloud**: real battery, CPU and memory telemetry replacing hardcoded values.
+
+### Added
+- **AkiraMesh**: AODV routing, end-to-end crypto, generic BLE transport, and a `mesh_*` WASM
+  native API (`AKIRA_CAP_MESH`, bit 38).
+- **MQTT / Home Assistant**: `mqtt_*` and `ha_light_*` natives with HA discovery
+  (`AKIRA_CAP_MQTT`, bit 35). Requires `CONFIG_AKIRA_WASM_MQTT=y` or app imports fail to link.
+- **BLE companion service** (`CONFIG_AKIRA_BT_COMPANION`) and an app command bridge.
+- **BLE observer**: passive scan plus spam/spoof modes (`AKIRA_CAP_BLE_SCAN` bit 36,
+  `AKIRA_CAP_BLE_SPAM` bit 37).
+- **NXP SE050 secure element** driver (`CONFIG_AKIRA_SE050`, T=1'oI2C + SE05x APDU).
+- **HID**: gamepad mode with an Xbox-model-1708-compatible wire format.
+- **SD hotplug** via the `akira,sd-detect` devicetree node.
+- **RF**: CC1121 OOK + raw capture/replay, LR2021 LoRa/FSK runtime selection.
+
+### Security & hardening
+- Fail-closed app verification (`CONFIG_AKIRA_REQUIRE_SIGNED_APPS`) and Dilithium-2 PQC
+  verification path.
+- Capability mask clamping for unsigned apps (`CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK`); fixed
+  wildcard grants silently dropping bits above 35.
+- Per-device AES-256 settings key derived from the hardware unique ID
+  (`CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY`).
+- OTA images verified by SHA-256 against authenticated metadata before being marked bootable.
+- **Relicensed from GPL-3.0 to Apache-2.0**, with a CI SPDX/copyleft gate and a `NOTICE` file.
+
+### Still stubbed
+USB-host mass-storage mount, the Matter non-accessory path (needs the CHIP SDK), Thread
+(needs OpenThread), and mesh WASM app distribution return `-ENOSYS`. **AkiraSync** has
+Kconfig options and a reserved capability bit (39) but is not compiled into the firmware.
+
+---
+
+## v1.5.8
+
+**Released:** 2026-05-29 · tag `v1.5.8"C1ph3r"`
+
+- USB CDC serial interface and a BLE companion service for host pairing.
+- BQ28Z610 fuel gauge driver with a `ti,bq28z610` DTS binding.
+- WASM thread stacks pre-allocated via `SYS_INIT` to avoid runtime heap fragmentation.
+- `nucleo_l476rg` board support.
+- Watchdog hardening, HTTP upload auth, signing enforcement; legacy local web UI dropped.
+- Fixed missing `NETWORK`/`SETTINGS` capability lookup entries, SD hot-plug reinit, and the
+  deprecated `wdt_enable()` call (Zephyr 4.3 uses `wdt_setup()`).
+
+See the [full v1.5.8 release notes](../release/v1.5.8.md).
+
+---
+
+## v1.5.6 — "C1PH3R"
+
+**Released:** 2026-05-14
+
+- WASM native APIs for Filesystem, Crypto and RTC, capability-gated in the sandbox.
+- OTA delta update engine, boot guard with automatic rollback, and the OTA WASM native API.
+- `akira` shell command tree, structured telemetry sink, and a panic handler with NVS crash storage.
+- New capability bits 26–31: `FS_READ`/`FS_WRITE`, `CRYPTO`, `RTC_READ`/`RTC_WRITE`, `OTA_TRIGGER`.
+- SD card hot-plug now works when the card was absent at boot.
+
+---
+
+## v1.5.4
+
+**Released:** 2026-04-29
+
+- API stability annotations (`@stability`, `@since`) on every public header, plus a formal
+  2-release deprecation policy.
+- Cooperative scheduling model and watchdog contract documented.
+- Full ztest suite (54 tests) covering security, OTA, app lifecycle and the manifest parser,
+  with GitHub Actions CI and Codecov coverage.
+
+---
+
 ## v1.4.9 — "Gl1tch"
 
 **Released:** March 2026
@@ -209,3 +303,7 @@ Legacy OCRE-based release. Superseded by v1.4.9.
 ## v1.2.3
 
 Initial public release with OCRE runtime, basic BLE, WiFi OTA, and LittleFS storage.
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

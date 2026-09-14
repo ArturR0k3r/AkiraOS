@@ -1,3 +1,10 @@
+---
+layout: default
+title: Home Assistant over MQTT
+parent: Development
+nav_order: 8
+---
+
 # Home Assistant over MQTT
 
 AkiraOS can expose its hardware to **Home Assistant** over MQTT, using HA's
@@ -100,3 +107,7 @@ first connect. Plaintext (1883) needs no cert.
   the command parser on `native_sim` (no broker needed).
 - End-to-end: point `mqtt set` at a Mosquitto broker, `mqtt connect`, run
   `ha_rgb`, and toggle the light from Home Assistant.
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

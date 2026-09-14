@@ -2283,26 +2283,6 @@ config AKIRA_HID_MAX_ACTIONS
       hid_action_register() / hid_action_trigger().
       Each entry uses ~34 bytes of SRAM.
 
-config AKIRA_INPUT_API
-    bool "Enable AkiraConsole button input native API"
-    default n
-    depends on INPUT
-    help
-      Registers an INPUT_CALLBACK_DEFINE handler that maintains an atomic
-      bitmask of currently held buttons and a 16-entry ring buffer of
-      press/release edge events from the gpio-keys DTS node.
-      Required for CONFIG_AKIRA_WASM_INPUT.
-
-config AKIRA_WASM_INPUT
-    bool "Export button Input API to WASM"
-    default n
-    depends on AKIRA_WASM_API && AKIRA_INPUT_API
-    help
-      Export input_get_buttons() and input_poll_event() to WASM applications.
-      input_get_buttons() returns a uint32 bitmask of currently held buttons
-      (bit N = 1 << zephyr,code).  input_poll_event() drains one edge event
-      from the ring buffer.  Requires "input.read" capability in the manifest.
-
 config AKIRA_SYSTEM_API
     bool "Enable privileged system-level native API"
     default n

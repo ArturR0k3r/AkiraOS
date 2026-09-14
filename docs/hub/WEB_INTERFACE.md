@@ -1,7 +1,16 @@
+---
+layout: default
+title: Web Interface
+parent: Architecture
+nav_order: 13
+---
+
 # AkiraOS Web Interface Specification
 
 > **Audience**: Web team building the hosted management UI (e.g. `lab.akiraos.io`).  
-> **Status**: Draft v1.0 — covers USB Web Serial transport + existing WiFi REST API.
+> **Status**: **Specification draft**, not a description of shipped behaviour. Covers the
+> USB Web Serial transport and the WiFi REST API as designed on 2026-04-07; verify endpoints
+> against `src/connectivity/http/` before relying on them.
 
 ---
 
@@ -267,12 +276,14 @@ TXT:      fw=1.4.8  api=v1
 
 - **USB**: The Web Serial API requires explicit user permission; access is not
   granted silently.  The JSON-RPC handler rejects lines longer than 1 024 bytes.
-  Shell command execution via `/api/cmd` is gated by
-  `CONFIG_AKIRA_SHELL_WEB_CMD_ENABLE` (default `y`).
+  Direct WASM app upload via `POST /api/apps/install` is gated by
+  `CONFIG_AKIRA_HTTP_DEV_UPLOAD` (default `y`; disable in production builds).
 
-- **WiFi**: No authentication is required on the local REST API (same as
-  Flipper's local web UI).  For production deployments on shared networks,
-  enable `CONFIG_AKIRA_HTTP_AUTH` to add a Bearer token.
+- **WiFi**: By default no authentication is required on the local REST API
+  (`CONFIG_AKIRA_HTTP_NO_AUTH` is `y`, same as Flipper's local web UI).  For
+  production deployments on shared networks, set `CONFIG_AKIRA_HTTP_NO_AUTH=n`
+  and provide a token via `CONFIG_AKIRA_HTTP_UPLOAD_TOKEN`; clients then send
+  `Authorization: Bearer <token>`.
 
 - **OTA and app uploads**: App packages are verified against the Ed25519
   signature before installation even when transferred via USB or WiFi — the
@@ -292,3 +303,7 @@ For the initial `lab.akiraos.io` USB feature the web team must implement:
 - [ ] OTA firmware upload (same chunked protocol as app install but targeting `/api/ota/upload`)
 - [ ] Graceful fallback to WiFi HTTP when USB not available
 - [ ] Unsolicited `log` event handler → append to terminal pane
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

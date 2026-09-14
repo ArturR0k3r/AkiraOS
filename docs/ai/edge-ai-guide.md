@@ -1,3 +1,10 @@
+---
+layout: default
+title: Edge AI Guide (AkiraClaw)
+parent: Development
+nav_order: 9
+---
+
 # AkiraClaw — Edge AI Developer Guide
 
 AkiraClaw is the on-device ML inference subsystem for AkiraOS.  It exposes a
@@ -170,7 +177,7 @@ CONFIG_AKIRA_AIINFER_ARENA_KB=128
 
 ## Keyword Spotting Reference App
 
-`AkiraSDK/wasm_apps/console_apps/kws_demo/` is the canonical AkiraClaw demo.
+`AkiraSDK/wasm_apps/test/kws_demo/` is the canonical AkiraClaw demo.
 
 It detects the "hey akira" wake word and calls `app_switch("shell")`:
 
@@ -187,7 +194,7 @@ Pipeline:
 Build and deploy:
 
 ```sh
-cd AkiraSDK/wasm_apps/console_apps/kws_demo
+cd AkiraSDK/wasm_apps/test/kws_demo
 
 # Provide a DS-CNN KWS model quantized to INT8 (Google Speech Commands dataset)
 make pack MODEL=/path/to/ds_cnn_kws_int8.tflite
@@ -219,3 +226,7 @@ See `docs/ai/security-model.md` (TODO) for the full threat model.  Key points:
 - **Side-channel leakage**: timing side-channels on inference output are the
   app developer's responsibility.  For medical/industrial use, consider adding
   random delay jitter around `aiinfer_run` calls.
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

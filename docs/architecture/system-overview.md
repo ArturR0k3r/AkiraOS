@@ -43,11 +43,11 @@ AkiraOS is a high-performance embedded operating system combining **Zephyr RTOS*
 - **Max Concurrent:** 2 running app instances (default via `CONFIG_AKIRA_APP_MAX_RUNNING`)
 - **Max Installed:** 8 apps locally stored (default via `CONFIG_AKIRA_APP_MAX_INSTALLED`)
 - **Languages:** C, Rust, AssemblyScript (compiled to WASM)
-- **Native APIs:** 18 modules providing hardware and system access - see [AkiraSDK API Reference](../../AkiraSDK/docs/API_REFERENCE.md) for complete API documentation covering BLE, Display, GPIO, HID, I2C, IPC, Lifecycle, Memory, Net (sockets), Power, PWM, RF, Sensors, Storage, Timer, UART, and common utilities
+- **Native APIs:** 18 modules providing hardware and system access - see [AkiraSDK API Reference](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md) for complete API documentation covering BLE, Display, GPIO, HID, I2C, IPC, Lifecycle, Memory, Net (sockets), Power, PWM, RF, Sensors, Storage, Timer, UART, and common utilities
 
 ### Additional System Frameworks
 - **Settings System (NVS):** Binary non-volatile key-value registry storing system configurations (`settings.c`), optionally encrypted. The storage backend is selectable at runtime: internal flash NVS (`CONFIG_AKIRA_SETTINGS_STORAGE_TYPE_FLASH`), SD card (`CONFIG_AKIRA_SETTINGS_STORAGE_TYPE_SD`), or auto-detected (`CONFIG_AKIRA_SETTINGS_STORAGE_TYPE_AUTO`). Values persist across reboots and can be queried via the shell (`settings get <key>`, `settings set <key> <value>`).
-- **Native UI Framework:** Lightweight widget-based embedded windowing system (`ui_framework.c`) handling screens, rendering dirty-states, and widgets. **This is a native C-only framework and is not exported to WASM.** WASM applications interact with the display exclusively through the [Display API](../../AkiraSDK/docs/API_REFERENCE.md#display-api).
+- **Native UI Framework:** Lightweight widget-based embedded windowing system (`ui_framework.c`) handling screens, rendering dirty-states, and widgets. **This is a native C-only framework and is not exported to WASM.** WASM applications interact with the display exclusively through the [Display API](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#display-api).
 - **Interactive Shell (CLI):** Advanced UART debugging console (`akira_shell.c`) with namespaces for Network, Storage, RF, and direct Display testing.
 - **Driver Registry:** Dynamic driver registration system (`driver_registry.c`) enabling type-based driver lookup and hot-plugging of hardware components.
 - **Error Codes System:** Standardized error code framework (`error_codes.h`) with errno conventions and domain-specific codes (AKIRA_ERR_BASE=1000) for consistent error handling across APIs.
@@ -236,3 +236,7 @@ Applications read and write these entries via the shell commands (`wifi set`, `w
 - [Runtime Architecture](runtime.md)
 - [Security Model](security.md)
 - [Data Flow](data-flow.md)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

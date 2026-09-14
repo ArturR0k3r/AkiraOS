@@ -1,7 +1,17 @@
+---
+layout: default
+title: Phone Companion App
+parent: Architecture
+nav_order: 12
+---
+
 # AkiraApp Phone Companion Integration Specification
 
 > **Audience**: Mobile team building the AkiraApp companion application.  
-> **Status**: Draft v1.0 — Bluetooth LE companion service (OS side shipped in AkiraOS 1.5.0).
+> **Status**: **Specification draft**, not a description of shipped behaviour. The real
+> companion service (`src/connectivity/bluetooth/companion_service.c`,
+> `CONFIG_AKIRA_BT_COMPANION`, default `n`) was reworked after this document was written
+> (2026-04-07) and has diverged from it. Treat the code as authoritative.
 
 ---
 
@@ -458,3 +468,7 @@ For the initial AkiraApp release the mobile team must implement:
 - [ ] Settings editor — `settings.list`, edit, `settings.set`
 - [ ] Shell terminal screen — `shell.exec`, display output
 - [ ] File browser — `files.list`, download (`files.read`), delete (`files.delete`)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

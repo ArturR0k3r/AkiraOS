@@ -185,7 +185,7 @@ ${BOLD}EXAMPLES:${NC}
         Remove all build directories
 
 ${BOLD}FLASH ADDRESSES (ESP32):${NC}
-    MCUboot:     0x1000
+    MCUboot:     0x0 (0x1000 on the classic ESP32)
     Application: 0x20000
 
 EOF
@@ -433,6 +433,8 @@ get_esptool_chip() {
         esp32s3) echo "esp32s3" ;;
         esp32)   echo "esp32" ;;
         esp32c3) echo "esp32c3" ;;
+        esp32c6) echo "esp32c6" ;;
+        esp32h2) echo "esp32h2" ;;
         *)       echo "" ;;
     esac
 }
@@ -653,14 +655,32 @@ flash_board() {
         nrf*)
             flash_nordic
             ;;
-        stm32)
+        stm32*)
             flash_stm32
+            ;;
+        rp2040|rp2350)
+            # The RP2 boot ROM enumerates as USB mass storage; Zephyr emits a
+            # UF2 that is flashed by copying it onto that drive.
+            local uf2="$(get_build_dir)/zephyr/zephyr.uf2"
+            print_error "Automatic flashing is not supported for $chip."
+            echo ""
+            print_info "Hold BOOTSEL while plugging the board in, then copy the UF2:"
+            if [[ -f "$uf2" ]]; then
+                echo "    cp $uf2 /media/\$USER/RPI-RP2/"
+            else
+                echo "    cp <build-dir>/zephyr/zephyr.uf2 /media/\$USER/RPI-RP2/"
+                print_warning "UF2 not found at $uf2 - build first."
+            fi
+            echo ""
+            print_info "Or with a debug probe: picotool load -x <build-dir>/zephyr/zephyr.elf"
+            exit 1
             ;;
         native)
             print_warning "Cannot flash native_sim - use run instead"
             ;;
         *)
             print_error "Flashing not supported for chip: $chip"
+            print_info "Build the image, then flash it with your vendor tool."
             exit 1
             ;;
     esac

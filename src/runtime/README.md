@@ -186,7 +186,6 @@ AkiraRuntime provides its own native function interface—distinct from standard
 **Registered Functions:**
 - `akira_native_display_clear()`
 - `akira_native_display_pixel()`
-- `akira_native_input_read_buttons()`
 - `akira_native_rf_send()`
 - `akira_native_sensor_read()`
 - `akira_native_log()`

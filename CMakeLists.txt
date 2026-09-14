@@ -64,7 +64,7 @@ if(DEFINED BOARD)
 endif()
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(akira_os VERSION 1.6.2)
+project(akira_os VERSION 1.6.4)
 
 # When this repository is present as a west module, MCUboot bootloader builds
 # also evaluate this CMakeLists. In that context (CONFIG_MCUBOOT=y), pulling
@@ -385,10 +385,6 @@ endif()
 
 if(CONFIG_AKIRA_WASM_HID)
     target_sources(app PRIVATE src/api/akira_hid_api.c)
-endif()
-
-if(CONFIG_AKIRA_INPUT_API)
-    target_sources(app PRIVATE src/api/akira_input_api.c)
 endif()
 
 if(CONFIG_AKIRA_SYSTEM_API)

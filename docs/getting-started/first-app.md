@@ -35,7 +35,7 @@ The `AkiraSDK/` submodule contains ready-to-build sample apps in `AkiraSDK/wasm_
 ### Step 1: Create your project
 
 ```bash
-cp -r ~/akira-workspace/AkiraOS/AkiraSDK/wasm_apps/hello_world ~/my_hello_world
+cp -r ~/akira-workspace/AkiraOS/AkiraSDK/wasm_apps/generic/hello_world ~/my_hello_world
 cd ~/my_hello_world
 ```
 
@@ -229,7 +229,11 @@ AkiraOS:~$ fs ls /apps
 
 ## Related Documentation
 
-- [SDK API Reference](../../AkiraSDK/docs/API_REFERENCE.md) — every function with examples
-- [Best Practices](../../AkiraSDK/docs/BEST_PRACTICES.md) — main loop patterns, memory, display
+- [SDK API Reference](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md) — every function with examples
+- [Best Practices](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/BEST_PRACTICES.md) — main loop patterns, memory, display
 - [Manifest Format](../api-reference/manifest-format.md) — capability specification
 - [Building Apps](../development/building-apps.md) — AOT compilation and advanced topics
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

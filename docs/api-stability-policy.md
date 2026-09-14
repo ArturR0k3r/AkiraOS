@@ -1,3 +1,10 @@
+---
+layout: default
+title: API Stability Policy
+parent: API Reference
+nav_order: 4
+---
+
 # AkiraOS API Stability Policy
 
 Every public header in AkiraOS carries two Doxygen tags that declare its
@@ -89,7 +96,7 @@ became available (patch is omitted because patch releases never add APIs).
 
 ---
 
-## Current API Surface (v1.5.6)
+## Current API Surface (v1.6.4)
 
 | Header | Stability | Since |
 |--------|-----------|-------|
@@ -167,4 +174,4 @@ int legacy_battery_read(void);
 
 ---
 
-*Last updated: 2026-05-14 (AkiraOS v1.5.6)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

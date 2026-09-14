@@ -181,7 +181,7 @@ Flash and connect a serial terminal at 115200 8N1.  Expected banner:
 
 ```
 *** Booting Zephyr OS build v4.3.0 ***
-AkiraOS v1.5.4 — Hardened Runtime
+AkiraOS v1.6.4
 AkiraOS:~$
 ```
 
@@ -311,7 +311,7 @@ slot1: empty   (0x120000 – 0x21FFFF)
 ### Platform HAL extension
 
 If your SoC is not in the existing list, add a detection block to
-[`src/drivers/platform_hal.h`](../../src/drivers/platform_hal.h):
+[`src/drivers/platform_hal.h`](https://github.com/ArturR0k3r/AkiraOS/blob/main/src/drivers/platform_hal.h):
 
 ```c
 #elif defined(CONFIG_SOC_MY_SOC)
@@ -350,7 +350,7 @@ WASM apps retrieve the driver by name via `akira_sensor_read()` in AkiraSDK.
 ### PSRAM configuration
 
 PSRAM is required to run more than 2 WASM apps concurrently (see
-[min-hw-requirements.md](min-hw-requirements.md)).
+the minimum hardware requirements in [the docs home](../index.md)).
 
 ESP32-S3 with OPI PSRAM (N8R8 / N16R8 module):
 
@@ -430,4 +430,8 @@ Enable AOT for production to eliminate interpreter overhead:
 - [AkiraSDK API Reference](../api-reference/)
 - [Zephyr Board Porting Guide](https://docs.zephyrproject.org/latest/hardware/porting/board_porting.html)
 - [Zephyr Device Tree Overview](https://docs.zephyrproject.org/latest/build/dts/index.html)
-- [Template BSP scaffold](../../boards/template/) — start here
+- [Template BSP scaffold](https://github.com/ArturR0k3r/AkiraOS/tree/main/boards/template) — start here
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

@@ -11,7 +11,7 @@ permalink: /api-reference
 Complete reference for AkiraOS WASM application APIs.
 
 > **Canonical reference:** The full, up-to-date API is documented in the AkiraSDK repository.  
-> See [AkiraSDK/docs/API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.5.x/docs/API_REFERENCE.md) for function signatures, constants, and examples.  
+> See [AkiraSDK/docs/API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md) for function signatures, constants, and examples.  
 > For most apps, use `#include "akira_api.h"` (from `AkiraSDK/include/`) which provides all imports.
 
 ## Available APIs
@@ -29,7 +29,7 @@ There are **two API layers** in AkiraOS:
 
 2. **SDK Wrapper API**: High-level convenience library (`AkiraSDK/include/akira_api.h`)
    - Provides `printf()`, color constants, `SENSOR_CHAN_*` defines, and thin wrappers
-   - See [AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.5.x/docs/API_REFERENCE.md)
+   - See [AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md)
 
 **Most developers use the SDK API** (via `#include "akira_api.h"`), which automatically handles native imports.
 
@@ -91,7 +91,7 @@ extern int delay(uint32_t microseconds);
 
 ## Display API
 
-> Full display API (20+ functions) documented in [AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.5.x/docs/API_REFERENCE.md#display-api).
+> Full display API (20+ functions) documented in [AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#display-api).
 
 ### `display_clear`
 Clear the entire screen to a specific color.
@@ -196,7 +196,7 @@ extern int sensor_read(int32_t channel);
 
 > **Work In Progress:** The RF module is implemented but still under active development. Use with caution in production environments.
 
-> See [AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.5.x/docs/API_REFERENCE.md#rf-api) for full RF and network API.
+> See [AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#rf-api) for full RF and network API.
 
 ### `rf_send`
 Send data via RF interface.
@@ -217,7 +217,7 @@ extern int rf_send(const uint8_t *data, uint32_t len);
 
 ## Net API
 
-> Socket-style network API. See [AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.5.x/docs/API_REFERENCE.md#network-api) for full reference.
+> Socket-style network API. See [AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#network-api) for full reference.
 
 **Available when `CONFIG_AKIRA_WASM_NET=y`:** `net_open`, `net_connect`, `net_bind`, `net_listen`, `net_close`, `net_tx_bind`, `net_rx_bind`, `net_tx_flush`, `net_event_pop`.
 
@@ -348,3 +348,7 @@ When registering native functions in WAMR, these signatures are used:
 - [Building Apps](../development/building-apps.md) - WASM compilation
 - [First App Tutorial](../getting-started/first-app.md) - Hello World
 - [Security Model](../architecture/security.md) - Capability system
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

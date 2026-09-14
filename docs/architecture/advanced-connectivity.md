@@ -1,6 +1,23 @@
+---
+layout: default
+title: Advanced Connectivity
+parent: Architecture
+nav_order: 5
+---
+
 # Advanced Connectivity Layer
 
-> **Status:** Matter, Thread, and AkiraMesh are implemented but under active development, use with caution. They require additional west.yml modules and are not enabled in the default `prj.conf`. Standard WiFi and BLE connectivity is documented in [Connectivity Layer](connectivity.md).
+> **Status (v1.6.4):**
+>
+> | Protocol | Status | Notes |
+> |----------|--------|-------|
+> | **AkiraMesh** | Implemented | AODV routing, E2E crypto, BLE + 802.15.4 transports, `mesh_*` WASM API. `CONFIG_AKIRA_MESH` is `n` by default. Mesh *app distribution* returns `-ENOSYS`. |
+> | **Matter** | Partial | The accessory / device-as-endpoint path works over the co-processor IPC bridge. The non-accessory path returns `-ENOSYS` — it needs the CHIP SDK, which is not vendored. |
+> | **Thread** | Stubbed (`-ENOSYS`) | Requires OpenThread, which is not integrated. |
+> | **AkiraSync** | Planned | `CONFIG_AKIRA_SYNC_*` and capability bit 39 exist, but `src/connectivity/sync/` is not compiled and registers no natives. |
+>
+> These require additional `west.yml` modules and are not enabled in the default `prj.conf`.
+> Standard WiFi and BLE connectivity is documented in [Connectivity Layer](connectivity.md).
 
 Hardware-agnostic implementation of Matter, Thread, and AkiraMesh protocols for AkiraOS.
 
@@ -341,3 +358,7 @@ radio stats ble  # Check TX packets
 
 Copyright (c) 2026 PenEngineering S.R.L
 SPDX-License-Identifier: Apache-2.0
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

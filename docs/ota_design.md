@@ -1,6 +1,13 @@
+---
+layout: default
+title: OTA Design
+parent: Architecture
+nav_order: 10
+---
+
 # AkiraOS OTA Update System — Design Document
 
-**Version:** 1.6 (draft)  
+**Version:** 1.6.4  
 **Status:** Approved for implementation  
 **Scope:** Track A — OTA with atomic rollback and delta updates
 
@@ -18,7 +25,7 @@
 
 ---
 
-## 2. Current State (v1.5.4)
+## 2. Current State (v1.6.4)
 
 `src/connectivity/ota/ota_manager.c/h` already provides:
 - MCUboot `boot_request_upgrade()` / `boot_write_img_confirmed()` wrappers
@@ -251,3 +258,7 @@ baseline cost is ~2.2 KB flash / ~128 B RAM for boot guard + API.
 - Multi-image updates (MCUboot multi-image is possible but adds complexity)
 - BLE OTA transport (already exists via `ota_ble_transport` in v1.5.x)
 - A/B app bundle updates (WASM `.wasm` file updates handled separately)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

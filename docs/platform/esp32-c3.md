@@ -1,3 +1,10 @@
+---
+layout: default
+title: ESP32-C3
+parent: Platform Support
+nav_order: 2
+---
+
 # ESP32-C3 Platform Guide
 
 **Board Target:** `esp32c3_devkitm`
@@ -30,3 +37,7 @@ west build -p -b esp32c3_devkitm AkiraOS -d build
 # Flash via USB UART
 west flash
 ```
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

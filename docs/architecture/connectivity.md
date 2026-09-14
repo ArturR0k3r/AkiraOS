@@ -1,3 +1,10 @@
+---
+layout: default
+title: Connectivity Layer
+parent: Architecture
+nav_order: 4
+---
+
 # Connectivity Layer
 
 Modular connectivity subsystem for WiFi, Bluetooth, USB, and OTA operations with a pluggable transport interface.
@@ -438,7 +445,7 @@ A WASM application creates custom GATT services by following this sequence:
 6. **Runtime I/O** — Handle connection events, read/write characteristic values, and send notifications during app execution
 7. **Cleanup** — Release the BLE radio when the app terminates or switches modes
 
-For the complete WASM API with function signatures, event types, and working examples, see [BLE API](../../AkiraSDK/docs/API_REFERENCE.md#ble-api) in the AkiraSDK documentation.
+For the complete WASM API with function signatures, event types, and working examples, see [BLE API](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#ble-api) in the AkiraSDK documentation.
 
 ---
 
@@ -446,7 +453,7 @@ For the complete WASM API with function signatures, event types, and working exa
 
 The CoAP client (`src/connectivity/client/coap_client.c`) is a native-side protocol implementation designed for IoT cloud integration and LwM2M targets. It supports Confirmable (CON) and Non-Confirmable (NON) message types, block transfer for large payloads, and CoAP Observe for server-push notifications.
 
-> **Note:** CoAP is a native-C facility used by system services and the Cloud Client wrapper. WASM apps use the [Network API](../../AkiraSDK/docs/API_REFERENCE.md#network-api) for TCP/UDP. If you need CoAP from a WASM app, connect over a raw UDP socket.
+> **Note:** CoAP is a native-C facility used by system services and the Cloud Client wrapper. WASM apps use the [Network API](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#network-api) for TCP/UDP. If you need CoAP from a WASM app, connect over a raw UDP socket.
 
 **Supported Methods:** `GET`, `POST`, `PUT`, `DELETE`
 
@@ -634,7 +641,7 @@ Low-latency mesh networking for inter-device communication. Foundation implement
 
 Native-side SD card manager for mounting external storage and discovering WASM applications from SD media.
 
-> **Note:** This is a native-C system service used by the Shell and Runtime. WASM apps access SD card files through the standard [Storage API](../../AkiraSDK/docs/API_REFERENCE.md#storage-api), which transparently resolves to SD card when mounted (`/SD:`) or falls back to internal LittleFS.
+> **Note:** This is a native-C system service used by the Shell and Runtime. WASM apps access SD card files through the standard [Storage API](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#storage-api), which transparently resolves to SD card when mounted (`/SD:`) or falls back to internal LittleFS.
 
 **Mount Points:**
 - `/SD:` (FATFS) when `CONFIG_AKIRA_SD_CARD=y`
@@ -730,9 +737,9 @@ For detailed end-to-end data flow diagrams showing how connectivity components i
 ```
 CONFIG_AKIRA_HTTP_SERVER=y
 CONFIG_AKIRA_HTTP_PORT=80
-CONFIG_AKIRA_OTA_MANAGER=y
-CONFIG_AKIRA_BT_MANAGER=y
-CONFIG_AKIRA_HID_MANAGER=y
+CONFIG_AKIRA_OTA=y
+CONFIG_AKIRA_BT_COMPANION=y
+CONFIG_AKIRA_HID=y
 ```
 
 ## Design Principles
@@ -785,3 +792,7 @@ typedef struct ota_transport {
 - [Runtime Architecture](runtime.md)
 - [Data Flow](data-flow.md)
 - [OTA Updates Guide](../development/ota-updates.md)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

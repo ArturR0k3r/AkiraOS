@@ -202,3 +202,7 @@ WASM Code → WAMR Import → Native Bridge → Inline Cap Check → HAL Functio
 - [API Reference](../api-reference) - Developer APIs
 - [Platform Guides](../platform) - Board-specific docs
 - [Development](../development) - Build & debug
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

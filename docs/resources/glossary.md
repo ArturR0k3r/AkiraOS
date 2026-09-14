@@ -1,3 +1,10 @@
+---
+layout: default
+title: Glossary
+parent: Resources
+nav_order: 2
+---
+
 # Glossary
 
 ## AkiraOS Terms
@@ -83,3 +90,7 @@ System on Chip - integrated circuit with CPU, memory, peripherals.
 
 **UART**  
 Universal Asynchronous Receiver-Transmitter - serial communication protocol.
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

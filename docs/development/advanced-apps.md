@@ -1,3 +1,10 @@
+---
+layout: default
+title: Advanced Sample Apps
+parent: Development
+nav_order: 6
+---
+
 # Advanced Sample Applications
 
 AkiraOS's `AkiraSDK/wasm_apps/` folder contains advanced sample applications functioning as reference architecture for deeply embedded mathematical interfaces, high-speed input logic, networking, and HID routing. These examples demonstrate best practices for WASM app development on resource-constrained devices.
@@ -307,3 +314,7 @@ if (g.piece_moved || g.board_changed) {
 ```
 
 Additional sample apps available in `AkiraSDK/wasm_apps/`: `ble_led`, `compass`, `display_test`, `gpio`, `imu_timer_test`, `net_server`, `storage_test`. Refer to each app's `main.c` for implementation details and required capabilities.
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

@@ -1,3 +1,10 @@
+---
+layout: default
+title: Security Model
+parent: Architecture
+nav_order: 3
+---
+
 # Security Model
 
 AkiraOS implements a **multi-layered security architecture** combining WASM sandboxing with custom capability-based access control.
@@ -25,8 +32,8 @@ AkiraOS implements a **multi-layered security architecture** combining WASM sand
 
 **Purpose:** Fine-grained permission control for native API access.
 
-**Capability Bits (36 total, 64-bit mask).** These are generated from
-`src/runtime/security.h` — keep the two in sync:
+**Capability Bits (40 total, bits 0–39, 64-bit mask).** These mirror
+`src/runtime/security.h` (`AKIRA_CAP_MAX_BIT` = 39) — keep the two in sync:
 ```c
 // Hardware access (bits 0-4)
 #define AKIRA_CAP_DISPLAY_WRITE  (1ULL << 0)   // Screen rendering
@@ -69,13 +76,23 @@ AkiraOS implements a **multi-layered security architecture** combining WASM sand
 #define AKIRA_CAP_RTC_READ       (1ULL << 29)  // RTC read
 #define AKIRA_CAP_RTC_WRITE      (1ULL << 30)  // RTC write / alarm
 
-// Elevated & connectivity (bits 31-35)
+// Elevated & connectivity (bits 31-39)
 #define AKIRA_CAP_OTA_TRIGGER    (1ULL << 31)  // Trigger OTA (ELEVATED)
 #define AKIRA_CAP_AIINFER        (1ULL << 32)  // TFLite Micro inference
-#define AKIRA_CAP_MATTER         (1ULL << 33)  // Matter/Thread IPC bridge
+#define AKIRA_CAP_MATTER         (1ULL << 33)  // Matter/Thread IPC bridge (ELEVATED)
 #define AKIRA_CAP_WIFI_INJECT    (1ULL << 34)  // 802.11 frame injection (ELEVATED)
-#define AKIRA_CAP_MQTT           (1ULL << 35)  // MQTT + Home Assistant
+#define AKIRA_CAP_MQTT           (1ULL << 35)  // MQTT + Home Assistant (ELEVATED)
+#define AKIRA_CAP_BLE_SCAN       (1ULL << 36)  // BLE observer / passive scan
+#define AKIRA_CAP_BLE_SPAM       (1ULL << 37)  // BLE advertisement spam/spoof (ELEVATED)
+#define AKIRA_CAP_MESH           (1ULL << 38)  // AkiraMesh transport (ELEVATED)
+#define AKIRA_CAP_SYNC           (1ULL << 39)  // AkiraSync ordering (see note below)
+
+#define AKIRA_CAP_MAX_BIT        39
 ```
+
+> **AkiraSync is not built yet.** `AKIRA_CAP_SYNC` and the `CONFIG_AKIRA_SYNC*` options
+> exist, but `src/connectivity/sync/` is not referenced by `CMakeLists.txt` and no
+> `sync_*` native is registered. Treat bit 39 as reserved.
 
 **Elevated Privilege Capabilities:**
 The following capabilities grant significant system control and should **not** be granted to untrusted apps:
@@ -84,6 +101,13 @@ The following capabilities grant significant system control and should **not** b
 - `AKIRA_CAP_POWER_CTRL` - Can modify power state
 - `AKIRA_CAP_OTA_TRIGGER` - Can trigger a firmware update
 - `AKIRA_CAP_WIFI_INJECT` - Can inject raw 802.11 management frames (deauth/disassoc)
+- `AKIRA_CAP_BLE_SPAM` - Can broadcast spoofed BLE advertisements
+- `AKIRA_CAP_MESH` - Can join and relay traffic on the AkiraMesh network
+- `AKIRA_CAP_RF_TRANSCEIVE`, `AKIRA_CAP_BLE`, `AKIRA_CAP_NETWORK`, `AKIRA_CAP_STORAGE_WRITE`,
+  `AKIRA_CAP_FS_WRITE`, `AKIRA_CAP_SETTINGS`, `AKIRA_CAP_CRYPTO`, `AKIRA_CAP_MATTER`,
+  `AKIRA_CAP_MQTT`, `AKIRA_CAP_WDT`
+
+The authoritative set is the `AKIRA_CAP_PRIVILEGED` mask in `src/runtime/security.h`.
 
 **Enforcement:**
 ```c
@@ -251,7 +275,7 @@ Supported capability strings (30+ mappings):
 
 | Threat | Status |
 |--------|--------|
-| **Physical access attacks** | Hardware-dependent (no secure element) |
+| **Physical access attacks** | NXP SE050 secure element where fitted (`CONFIG_AKIRA_SE050`); otherwise hardware-dependent |
 | **Side-channel attacks** | Not mitigated (timing, power analysis) |
 | **Bootloader exploits** | Depends on MCUboot security |
 | **WiFi/BLE stack bugs** | Depends on Zephyr security |
@@ -303,7 +327,7 @@ Supported capability strings (30+ mappings):
 1. **Request Minimal Capabilities** - Only request what you need
 2. **Validate Input** - Check all native API return values
 3. **Handle Quota Limits** - Gracefully handle malloc failures
-4. **No Secrets in Code** - Use secure storage APIs (future)
+4. **No Secrets in Code** - Use the settings API with `CONFIG_AKIRA_SETTINGS_ENCRYPTION=y`; with `CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY` the AES-256 key is derived from the hardware unique ID
 5. **Audit Dependencies** - Review third-party WASM libraries
 
 ### For System Administrators
@@ -312,15 +336,20 @@ Supported capability strings (30+ mappings):
 2. **Monitor Resource Usage** - Track memory consumption
 3. **Update Firmware** - Apply OTA updates for security patches
 4. **Limit Network Exposure** - Firewall HTTP/BLE if not needed
-5. **Verify Signatures** - Only install signed apps (future)
+5. **Verify Signatures** - Only install signed apps; set `CONFIG_AKIRA_REQUIRE_SIGNED_APPS=y` to fail closed on unsigned or unverifiable apps
 
 ## Known Limitations
 
-1. **Limited Storage Isolation** - Per-app directories enforced, but no encryption
+1. **Limited Storage Isolation** - Per-app directories are enforced. Settings encryption is
+   available but off by default (`CONFIG_AKIRA_SETTINGS_ENCRYPTION`, `default n`); app data
+   directories themselves are not encrypted.
 2. **Coarse Capabilities** - All sensors share `AKIRA_CAP_SENSOR_READ`
 3. **No Network Isolation** - Apps share network stack
 4. **Shared Address Space** - All apps run in same kernel context
-5. **No Hardware Security Module** - No TPM/secure element integration
+5. **Secure element is board-dependent** - An NXP SE050 driver ships in-tree
+   (`src/drivers/secure_element/`, `CONFIG_AKIRA_SE050`, enabled by default when the
+   `nxp,se050` DT node is present), but boards without the part fall back to software
+   crypto and have no hardware root of trust.
 
 
 ## Related Documentation
@@ -329,3 +358,7 @@ Supported capability strings (30+ mappings):
 - [Runtime Architecture](runtime.md)
 - [Manifest Format](../api-reference/manifest-format.md)
 - [OTA Updates](../development/ota-updates.md)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

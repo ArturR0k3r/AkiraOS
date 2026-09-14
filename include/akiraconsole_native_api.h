@@ -23,14 +23,13 @@
 /**
  * @defgroup akiraconsole_btns AkiraConsole Button IDs
  *
- * Numeric button IDs passed to input_button_pressed() and returned as
- * bit positions in the bitmask from input_read_buttons().
+ * Numeric button IDs for the AkiraConsole. These match the `zephyr,code`
+ * values in the board's gpio-keys devicetree node.
  *
- * Bit N of the bitmask is set when button N is pressed:
- * @code
- * int mask = input_read_buttons();
- * if (mask & (1 << AKIRA_BTN_A)) { ... }
- * @endcode
+ * There is no button input native API — the runtime registers no input_*
+ * symbol. These constants are kept for the LVGL input path
+ * (CONFIG_AKIRA_LVGL_INPUT_ZEPHYR) and for native code reading the input
+ * subsystem directly.
  * @{
  */
 #define AKIRA_BTN_POWER    0 /**< System power / ON-OFF button */
@@ -49,9 +48,9 @@
 #define AKIRA_BTN_COUNT 10
 
 /**
- * @brief Test whether a button is set in a bitmask returned by input_read_buttons().
+ * @brief Test whether a button is set in a button bitmask.
  *
- * @param mask  Bitmask from input_read_buttons()
+ * @param mask  Bitmask where bit N is set when button N is held
  * @param btn   Button ID (AKIRA_BTN_*)
  * @return Non-zero if button is pressed, 0 otherwise.
  */

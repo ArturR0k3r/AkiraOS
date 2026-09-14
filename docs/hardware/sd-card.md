@@ -175,3 +175,7 @@ Run `app scan sd` again; subsequent accesses are typically clean.
 | Mount point | `/SD:` |
 | Apps directory | `/SD:/apps/` |
 | Filesystem driver | FatFs (Elm ChaN) via `CONFIG_FAT_FILESYSTEM_ELM` |
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

@@ -1,7 +1,16 @@
+---
+layout: default
+title: AkiraHub Integration
+parent: Architecture
+nav_order: 11
+---
+
 # AkiraHub Integration Specification
 
 > **Audience**: Hub team building the cloud service / web app for AkiraConsole.  
-> **Status**: Draft v1.0 — implements the OS Shell install flow.
+> **Status**: **Specification draft**, not a description of shipped behaviour. The
+> firmware-side implementation has moved on since this was written (last substantive update
+> 2026-04-05); verify each endpoint against the code before relying on it.
 
 ---
 
@@ -311,3 +320,7 @@ For the initial AkiraConsole launch the Hub team must implement:
 - [ ] WebSocket `/ws/device/{token}` — `app.install` + `app.uninstall` push
 - [ ] mDNS `_akira._tcp.local` for local network discovery
 - [ ] Ed25519 key distribution via `/lfs/hub/trusted_keys.pem` in OTA bundles
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

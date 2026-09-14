@@ -81,3 +81,7 @@ graph LR
 - [API Reference](../api-reference) - WASM application APIs
 - [Platform Guides](../platform) - Board-specific setup
 - [Development Guide](../development) - Advanced topics
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

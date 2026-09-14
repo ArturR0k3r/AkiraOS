@@ -1,3 +1,10 @@
+---
+layout: default
+title: Performance
+parent: Resources
+nav_order: 3
+---
+
 # Performance Benchmarks
 
 Performance metrics for AkiraOS on ESP32-S3.
@@ -100,3 +107,7 @@ AkiraOS:~$ wasm status
 - [Architecture Overview](../architecture)
 - [Runtime Performance](../architecture/runtime.md)
 - [Data Flow](../architecture/data-flow.md)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

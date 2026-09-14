@@ -161,7 +161,7 @@ cd ~/akira-workspace/AkiraOS
 **Expected output:**
 ```
 *** Booting Zephyr OS build v4.3.0 ***
-[00:00:00.000] <inf> main: AkiraOS v1.5.4 starting...
+[00:00:00.000] <inf> main: AkiraOS v1.6.4 starting...
 [00:00:00.010] <inf> wasm: Runtime initialized
 AkiraOS:~$ 
 ```
@@ -336,3 +336,7 @@ west espmonitor                # Open serial console
 ./build.sh -b <board> -r all    # Build, flash, and monitor
 ./build.sh -h                   # Show help
 ```
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

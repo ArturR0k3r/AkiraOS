@@ -1,3 +1,10 @@
+---
+layout: default
+title: Native Simulation
+parent: Platform Support
+nav_order: 3
+---
+
 # Native Simulation Platform
 
 Run AkiraOS on your development PC for fast testing and debugging.
@@ -33,7 +40,7 @@ cd ../build/zephyr
 **Expected output:**
 ```
 *** Booting Zephyr OS build v4.3.0 ***
-[00:00:00.000] <inf> main: AkiraOS v1.5.4 starting...
+[00:00:00.000] <inf> main: AkiraOS v1.6.4 starting...
 [00:00:00.010] <inf> wasm: Runtime initialized
 AkiraOS:~$ 
 ```
@@ -90,7 +97,7 @@ ls /tmp/akiraos-fs/
 ls /tmp/akiraos-fs/apps/
 
 # Copy WASM apps from AkiraSDK sample apps
-cp AkiraSDK/wasm_apps/hello_world/hello_world.wasm /tmp/akiraos-fs/apps/
+cp AkiraSDK/wasm_apps/generic/hello_world/hello_world.wasm /tmp/akiraos-fs/apps/
 
 # In AkiraOS:
 AkiraOS:~$ fs ls /apps
@@ -230,3 +237,7 @@ Native sim runs much faster than embedded hardware:
 - [Platform Overview](index.md) - All platforms
 - [Installation Guide](../getting-started/installation.md) - Setup
 - [Development Guide](../development) - Advanced usage
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

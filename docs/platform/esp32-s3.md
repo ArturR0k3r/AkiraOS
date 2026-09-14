@@ -1,3 +1,10 @@
+---
+layout: default
+title: ESP32-S3
+parent: Platform Support
+nav_order: 1
+---
+
 # ESP32-S3 Platform Guide
 
 Complete setup and configuration guide for ESP32-S3 DevKitM.
@@ -249,7 +256,7 @@ CONFIG_PM_DEVICE=y
 
 ```bash
 CONFIG_LOG_DEFAULT_LEVEL=4  # DEBUG
-CONFIG_AKIRA_LOG_LEVEL_DBG=y
+CONFIG_AKIRA_LOG_LEVEL=4   # 0=OFF 1=ERR 2=WRN 3=INF 4=DBG
 ```
 
 ### JTAG Debugging
@@ -345,3 +352,7 @@ CONFIG_SPIRAM_SPEED_80M=y  # or 120M if stable
 - [Installation Guide](../getting-started/installation.md) - Environment setup
 - [Hardware Specs](../hardware) - Custom hardware designs
 - [Troubleshooting](../getting-started/troubleshooting.md) - Common issues
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

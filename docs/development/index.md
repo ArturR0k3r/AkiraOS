@@ -26,7 +26,7 @@ Advanced topics for AkiraOS WASM app development.
 - [Build Options Reference](../reference/build-options.md) — Kconfig options for AkiraOS
 
 ### Contributing
-See [CONTRIBUTING.md](../../CONTRIBUTING.md) for contribution guidelines.
+See [CONTRIBUTING.md](https://github.com/ArturR0k3r/AkiraOS/blob/main/CONTRIBUTING.md) for contribution guidelines.
 
 ## Quick Links
 
@@ -49,3 +49,7 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for contribution guidelines.
 - [Architecture](../architecture) - System design
 - [API Reference](../api-reference) - Low-level native APIs
 - [Troubleshooting](../getting-started/troubleshooting.md) - Build and flash issues
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

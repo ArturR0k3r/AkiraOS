@@ -1,3 +1,10 @@
+---
+layout: default
+title: Matter/Thread Spike (ESP32-C6)
+parent: Platform Support
+nav_order: 6
+---
+
 # Matter/Thread Feasibility Spike — ESP32-C6
 
 **Duration:** 2 weeks
@@ -196,6 +203,10 @@ Connect the co-processor:
 ## Conditions to Extend to Full Matter
 
 - ESP32-H2 firmware flashed with `esp-matter` + the AkiraOS co-processor
-  companion firmware (TBD: `tools/matter-coproc/`)
+  companion firmware (`tools/matter-coproc-mock/`)
 - Matter commissioner integration tested with Apple Home / Google Home
 - OTA update path for the co-processor firmware (via `akira-hub` catalogue)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

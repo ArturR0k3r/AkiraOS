@@ -129,7 +129,7 @@ Install the [AkiraSDK toolchain](AkiraSDK/README.md) (clang/wasi-sdk used as a c
 
 ```bash
 # Build your first app
-cd AkiraSDK/wasm_apps/hello_world
+cd AkiraSDK/wasm_apps/generic/hello_world
 ../../build_wasm_app.sh -o hello_world.wasm main.c
 
 # Deploy to a running device over WiFi — no reflash needed.
@@ -162,10 +162,11 @@ Full API reference → [docs.akiraos.dev/api-reference](https://docs.akiraos.dev
 | Platform | Status | Architecture | Tier | Notes |
 |----------|--------|-------------|------|-------|
 | **AkiraConsole** | ✅ Supported | Xtensa LX7 | Tier 1 | ESP32-S3 · Custom HW |
-| ESP32 | ✅ Supported | Xtensa LX7 / RISC-V | Tier 1 | -S3 (LX7) · -H2 · -C6 (RISC-V) |
+| ESP32 | ✅ Supported | Xtensa LX7 / RISC-V | Tier 1 | -S3 (LX7) · -C3 · -C6 · -H2 (RISC-V). C6/H2 build but `build.sh` cannot flash them yet. |
 | native\_sim | ✅ Supported | Host (x86\_64) | Tier 1 | Fast iteration, no hardware needed |
 | nRF54L15 | ✅ Supported | ARM Cortex-M33 | Tier 2 | BLE 5.4 · Nordic |
-| STM32 | ✅ Supported | ARM Cortex-M | Tier 2 | B-U585I-IOT02A · STEVAL-STWINBX1 · Nucleo-H743ZI |
+| STM32 | ✅ Supported | ARM Cortex-M | Tier 2 | B-U585I-IOT02A · STEVAL-STWINBX1 · Nucleo-L476RG. Nucleo-H743ZI builds but `build.sh` cannot flash it. |
+| RP2040 / RP2350 | 🧪 Experimental | ARM Cortex-M0+/M33 | Tier 3 | Raspberry Pi Pico / Pico 2. Build only — flash the UF2 manually. |
 
 
 **Recommended:** ESP32-S3 DevKitM — or [AkiraConsole V3](https://akiraos.dev/akiraconsole) (coming to CrowdSupply).
@@ -190,7 +191,7 @@ The reference hardware platform for AkiraOS.
 
 ---
 
-## What's in v1.5.x
+## What's in v1.6.x
 
 125 commits · 350 files · ~40,600 lines of changes
 

@@ -1,8 +1,15 @@
+---
+layout: default
+title: SBOM (CycloneDX)
+parent: Resources
+nav_order: 4
+---
+
 # SBOM — CycloneDX 1.4
 
 **Standard:** CycloneDX v1.4
 **Format:** CycloneDX JSON
-**Product:** AkiraOS v1.5
+**Product:** AkiraOS v1.6.4
 **Requirement:** EU Cyber Resilience Act 2027
 
 ---
@@ -68,3 +75,7 @@ dependency-check --format JSON --scan build/ --out dep-check-report/
 | New `EXTRA_ZEPHYR_MODULES` added | Add component to `generate_sbom()` in `build.sh` |
 | CVE published against a component | Run `grype sbom:build/sbom.cdx.json`; assess severity |
 | Firmware release | Sign and publish as release asset |
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

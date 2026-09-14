@@ -1,3 +1,10 @@
+---
+layout: default
+title: Data Flow
+parent: Architecture
+nav_order: 9
+---
+
 # Data Flow Architecture
 
 End-to-end data flow diagrams showing how information moves through AkiraOS subsystems.
@@ -327,3 +334,7 @@ graph TB
 - [Connectivity Layer](connectivity.md)
 - [Runtime Architecture](runtime.md)
 - [Performance Benchmarks](../resources/performance.md)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

@@ -1,3 +1,10 @@
+---
+layout: default
+title: AkiraRuntime
+parent: Architecture
+nav_order: 2
+---
+
 # AkiraRuntime Architecture
 
 **Custom WebAssembly runtime for embedded systems.**
@@ -496,3 +503,7 @@ stateDiagram-v2
 - [Security Model](security.md)
 - [Native API Reference](../api-reference/native-api.md)
 - [Building WASM Apps](../development/building-apps.md)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

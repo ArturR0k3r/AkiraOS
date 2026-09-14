@@ -1,6 +1,13 @@
+---
+layout: default
+title: SDK Troubleshooting
+parent: Development
+nav_order: 5
+---
+
 # Akira SDK Troubleshooting
 
-> **The canonical Troubleshooting guide lives in the [AkiraSDK submodule](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.5.x/docs/TROUBLESHOOTING.md).**
+> **The canonical Troubleshooting guide lives in the [AkiraSDK submodule](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/TROUBLESHOOTING.md).**
 >
 > To avoid duplicating content that evolves with the SDK, this guide is maintained in AkiraSDK. Refer to it directly — the local copy in the submodule is always in sync.
 
@@ -8,7 +15,7 @@
 
 | Location | Path |
 |----------|------|
-| **Online (canonical)** | [github.com/ArturR0k3r/AkiraSDK — TROUBLESHOOTING.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.5.x/docs/TROUBLESHOOTING.md) |
+| **Online (canonical)** | [github.com/ArturR0k3r/AkiraSDK — TROUBLESHOOTING.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/TROUBLESHOOTING.md) |
 | **Local submodule** | `AkiraSDK/docs/TROUBLESHOOTING.md` |
 
 ## Topics Covered
@@ -37,3 +44,7 @@ For issues related to the AkiraOS firmware itself (build failures, flash errors,
 - [SDK API Reference](sdk-api-reference.md) — Complete function reference
 - [Best Practices](best-practices.md) — Patterns for reliable apps
 - [Building WASM Apps](building-apps.md) — Build toolchain and workflow
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

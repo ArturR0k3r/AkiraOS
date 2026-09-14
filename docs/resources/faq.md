@@ -1,3 +1,10 @@
+---
+layout: default
+title: FAQ
+parent: Resources
+nav_order: 1
+---
+
 # Frequently Asked Questions
 
 ## General
@@ -6,10 +13,10 @@
 A: AkiraOS is an embedded operating system combining Zephyr RTOS with WebAssembly for secure, dynamic application execution on resource-constrained devices.
 
 **Q: What platforms are supported?**  
-A: ESP32-S3 (primary), nRF54L15, STM32 (experimental), and native simulation.
+A: 17 build targets. ESP32-S3 is the primary platform; ESP32/-C3/-C6/-H2, nRF54L15 and STM32 are supported; RP2040/RP2350 are experimental; native_sim is for host-side testing. Run `./build.sh -h` for the current list, or see [Platform Support](../platform/index.md).
 
 **Q: Is AkiraOS production-ready?**  
-A: Yes, v1.5.4 is stable for production use on ESP32-S3.
+A: The 1.5.x series is the newest tagged release and is stable for production use on ESP32-S3. The 1.6.x series is in development and not yet tagged.
 
 ---
 
@@ -83,10 +90,14 @@ See [Troubleshooting Guide](../getting-started/troubleshooting.md) for more.
 ## Community
 
 **Q: How do I contribute?**  
-A: See [CONTRIBUTING.md](../../CONTRIBUTING.md).
+A: See [CONTRIBUTING.md](https://github.com/ArturR0k3r/AkiraOS/blob/main/CONTRIBUTING.md).
 
 **Q: Where can I get help?**  
 A: GitHub Discussions, Issues, or Zephyr Discord.
 
 **Q: Is there commercial support?**  
 A: Contact the project maintainers for commercial inquiries.
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

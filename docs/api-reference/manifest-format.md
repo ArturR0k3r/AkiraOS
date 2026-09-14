@@ -1,3 +1,10 @@
+---
+layout: default
+title: Manifest Format
+parent: API Reference
+nav_order: 2
+---
+
 # Manifest Format Specification
 
 App manifest defines metadata, capabilities, and resource requirements for WASM applications.
@@ -118,6 +125,32 @@ Array of permission strings.
 | `input.write` | Inject synthetic input events |
 | `adc` | `adc_read()`, `adc_read_mv()` |
 | `wdt` | `wdt_pet()` |
+| `settings.read` / `settings.write` / `settings.*` | `settings_get()`, `settings_set()`, `settings_delete()` |
+| `fs.read` | `fs_open()` (read), `fs_read()`, `fs_stat()`, `fs_readdir()`, `fs_seek()`, `fs_tell()` |
+| `fs.write` | `fs_open()` (write), `fs_write()`, `fs_unlink()`, `fs_mkdir()` |
+| `crypto` | `crypto_sha256()`, `crypto_aes256_*()`, `crypto_hmac_sha256()`, `crypto_random()`, `crypto_ed25519_keygen()`, `crypto_ed25519_sign()` |
+| `rtc.read` | `rtc_get_unix_time()`, `rtc_get_uptime_ms()`, `rtc_alarm_fired()` |
+| `rtc.write` | `rtc_set_unix_time()`, `rtc_set_alarm()` |
+| `ota.trigger` | `ota_check()`, `ota_fetch_and_apply()`, `ota_get_state()`, `ota_confirm()`, `ota_rollback()` |
+| `ai.infer` | `aiinfer_load()`, `aiinfer_run()`, `aiinfer_unload()` |
+| `matter` / `matter.*` | All `matter_*()` functions |
+| `wifi.inject` | `wifi_deauth()` and raw 802.11 management-frame injection |
+| `mqtt` / `mqtt.*` | `mqtt_*()` and `ha_light_*()` Home Assistant helpers |
+| `ble.scan` | BLE observer / passive scanning |
+| `ble.spam` | BLE advertisement spam and spoofing |
+| `mesh` / `mesh.*` | All `mesh_*()` AkiraMesh functions |
+| `sync` / `sync.*` | Reserved for AkiraSync — **not yet built**, see note below |
+
+> **`sync` is reserved.** `AKIRA_CAP_SYNC` (bit 39) is defined and the capability string
+> parses, but AkiraSync is not compiled into the firmware and registers no natives.
+> Declaring it grants nothing today.
+
+**Wildcards and aliases:** `display.*`, `input.*`, `sensor.*`, `rf.*`, `network.*`,
+`storage.*`, `gpio.*`, `power.*`, `fs.*`, `rtc.*`, `settings.*`, `matter.*`, `mqtt.*`,
+`mesh.*`, `sync.*`, plus the composites `bt.*` (BLE | HID | BLE_SCAN | BLE_SPAM) and
+`hw.*` (TIMER | UART | I2C | PWM). `bt.shell` is a legacy alias for `ble`.
+`"*"` grants every defined capability (bits 0–39) and is clamped for unsigned apps by
+`CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK`.
 
 `printf()` and `delay()` are always available and require no capability declaration.
 
@@ -424,3 +457,7 @@ wat2wasm app.wat -o app.wasm
 - [Security Model](../architecture/security.md) - Capability enforcement
 - [Building Apps](../development/building-apps.md) - WASM compilation
 - [First App Tutorial](../getting-started/first-app.md) - Example workflow
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*

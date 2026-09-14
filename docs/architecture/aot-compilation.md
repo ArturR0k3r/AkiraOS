@@ -1,3 +1,10 @@
+---
+layout: default
+title: AOT Compilation
+parent: Architecture
+nav_order: 7
+---
+
 # AOT Compilation Architecture
 
 **Ahead-of-Time compilation for high-performance WebAssembly execution.**
@@ -339,3 +346,7 @@ deploy: app.wasm app_esp32s3.aot
 ---
 
 See [Building Apps Guide](../development/building-apps.md) for the complete build workflow.
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
