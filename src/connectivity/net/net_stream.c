@@ -373,6 +373,16 @@ static void connect_work_fn(struct k_work *work)
 	ctx->state = NET_STATE_CONNECTED;
 	k_mutex_unlock(&g_mutex);
 
+	/* zsock_send() in ring_drain_tx() is a plain blocking call with no
+	 * per-call timeout of its own — every other wait in this file (connect,
+	 * response collection) is bounded by an explicit deadline loop, but a
+	 * stalled TCP/TLS send has nothing stopping it from blocking forever.
+	 * That hangs whichever thread hits it (the poll thread drains TX on
+	 * every cycle, same as an explicit net_stream_tx_flush() caller) with no
+	 * recovery — SO_SNDTIMEO turns that into a bounded, reportable error. */
+	struct zsock_timeval snd_tv = { .tv_sec = 10, .tv_usec = 0 };
+	zsock_setsockopt(ctx->fd, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
+
 	LOG_INF("stream %d: connected to \"%s\":%u", h, ctx->host, ctx->port);
 
 	struct net_event evt = {
