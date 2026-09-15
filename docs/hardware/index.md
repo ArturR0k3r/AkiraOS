@@ -63,45 +63,13 @@ AkiraOS can run on custom hardware. OEM porting resources:
 
 ### Using AkiraOS as a west module
 
-Product firmware can live in its own repository and use AkiraOS as a Zephyr
-module, without forking:
+Product firmware lives in its own repository and uses AkiraOS as a Zephyr
+module — no fork. Pin an AkiraOS tag in your `west.yml`, pick a service profile,
+add your board, and register capabilities, native APIs and hooks from your own
+code. See the full walkthrough:
 
-```yaml
-# your-product/west.yml
-manifest:
-  projects:
-    - name: akira-os
-      url: https://github.com/ArturR0k3r/AkiraOS.git
-      revision: v1.6.x      # pin a release tag once one is cut
-      path: akira-os
-      import: true          # also brings in Zephyr, WAMR and TFLite Micro
-  self:
-    path: your-product
-```
-
-In the product application, enable AkiraOS and link its interface target:
-
-```cmake
-# your-product/CMakeLists.txt
-cmake_minimum_required(VERSION 3.20.0)
-find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(your_product)
-
-target_sources(app PRIVATE src/main.c)
-target_link_libraries(app PRIVATE akira_os)   # AkiraOS include paths
-```
-
-```kconfig
-# your-product/prj.conf
-CONFIG_AKIRA_OS=y   # every CONFIG_AKIRA_* option depends on this
-```
-
-`main()` can return `akira_start()` to run the standard AkiraOS boot sequence.
-Board definitions and DTS bindings from `akira-os/boards` are found
-automatically. The [out-of-tree product sample](https://github.com/ArturR0k3r/AkiraOS/tree/v1.6.x/samples/out_of_tree_product)
-is a complete example that CI builds on every change.
-
----
+- [**Using AkiraOS as a west module**](west-module.md) — new product repo to a
+  booting image, profiles, custom boards, and the extension points.
 
 ## Schematics & Design Files
 
