@@ -137,7 +137,7 @@ extern "C"
         uint16_t heap_kb;
         uint16_t stack_kb;
         app_restart_config_t restart;
-        /** @deprecated Always 0 since 1.6.4. The runtime grants the 64-bit
+        /** @deprecated Always 0 since 1.6.5. The runtime grants the 64-bit
          *  mask parsed by manifest_parser.c; see akira_runtime_get_cap_mask(). */
         uint16_t permissions;
     } app_manifest_t;

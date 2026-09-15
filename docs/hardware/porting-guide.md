@@ -180,7 +180,7 @@ Flash and connect a serial terminal at 115200 8N1.  Expected banner:
 
 ```
 *** Booting Zephyr OS build v4.3.0 ***
-AkiraOS v1.6.4
+AkiraOS v1.6.5
 AkiraOS:~$
 ```
 
@@ -481,4 +481,4 @@ specifics when porting your own board:
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

@@ -9,7 +9,7 @@ nav_order: 4
 
 **Standard:** CycloneDX v1.4
 **Format:** CycloneDX JSON
-**Product:** AkiraOS v1.6.4
+**Product:** AkiraOS v1.6.5
 **Requirement:** EU Cyber Resilience Act 2027
 
 ---
@@ -78,4 +78,4 @@ dependency-check --format JSON --scan build/ --out dep-check-report/
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

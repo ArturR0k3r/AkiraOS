@@ -22,7 +22,7 @@ extern "C" {
 
 /* Parse a JSON document and extract a legacy capability bitmask.
  *
- * @deprecated since 1.6.4; removal no sooner than two minor releases later.
+ * @deprecated since 1.6.5; removal no sooner than two minor releases later.
  * Maps only four capability strings, and its bit numbers do not match
  * AKIRA_CAP_* in runtime/security.h. Use manifest_parse_json() from
  * runtime/manifest_parser.h, which returns the 64-bit mask the runtime enforces.

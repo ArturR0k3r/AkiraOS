@@ -31,7 +31,7 @@ extern "C"
 
 /* The firmware version is owned by the top-level VERSION file; Zephyr
  * generates <zephyr/app_version.h> from it. Derive from those macros so there
- * is a single source of truth. (Until 1.6.4 this probed <app_version.h>, which
+ * is a single source of truth. (Until 1.6.5 this probed <app_version.h>, which
  * Zephyr no longer generates, so the stale fallback literals were compiled in
  * and firmware reported 1.6.2.) The 0.0.0 fallback only applies to TUs built
  * without a VERSION file, such as the unit tests, and is deliberately obvious. */

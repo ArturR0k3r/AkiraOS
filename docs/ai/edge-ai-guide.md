@@ -229,4 +229,4 @@ See `docs/ai/security-model.md` (TODO) for the full threat model.  Key points:
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

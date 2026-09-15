@@ -7,9 +7,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [1.6.4] — Unreleased
+## [1.6.5] — Unreleased
 
-> Development series on the `v1.6.x` branch. `VERSION` tracks 1.6.4; this section
+> Development series on the `v1.6.x` branch. `VERSION` tracks 1.6.5; this section
 > is backfilled from the commits since 1.5.8 plus the production-readiness
 > hardening pass, and is not yet tagged/released.
 
@@ -49,8 +49,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `feat(settings)`: Derive a per-device AES-256 key from the hardware unique ID
   (`CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY`, fail-closed) instead of a shared
   compile-time key.
-- `fix(license)`: Relicense first-party USB CDC serial + BLE companion service
-  from GPL-3.0 to Apache-2.0; add a CI SPDX/copyleft gate and a `NOTICE` file.
+- `fix(license)`: Relicense first-party USB CDC serial, the FUSB302 VBUS-sense
+  driver, and the BLE companion service from GPL-3.0 to Apache-2.0; add a CI
+  SPDX/copyleft gate and a `NOTICE` file.
 - `docs`: Correct README secure-boot/OTA claims to the real (in-progress) status.
 - `ci`: Version-consistency gate, expanded board matrix, pinned container image.
 - Advertised-but-incomplete entry points now return `-ENOSYS`/`-ENOTSUP` instead
@@ -96,7 +97,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `feat(extensibility)`!: **capability registry.** Capabilities are now registry entries (`AKIRA_CAPABILITY_DEFINE`, `include/akira_capability.h`); core bit numbers 0–47 are frozen, products define their own in bits 48–63 with build-time collision detection. `akira_capability_str_to_mask()` reproduces every previous string exactly; `"*"` and the sanitize path use the registry's known mask, so unassigned bits are never granted. The runtime refuses to start on a colliding registry. Also fixes the external-manifest merge that bypassed the capability clamp, and three AES native signatures (`(**i*~*)i` → 5 params).
 - `feat(extensibility)`: **native API registry.** WASM natives are registered with `AKIRA_NATIVE_API_DEFINE()` (`include/akira_native_registry.h`) next to the functions they export, instead of one central `#ifdef` array; products add natives the same way. A native defined twice stops the runtime. The tables moved to ROM and are copied to PSRAM at start-up, saving ~2 KB DRAM on akiraconsole_prod.
 - `feat(extensibility)`: **system hooks.** `AKIRA_HOOK_DEFINE()` (`include/akira_hooks.h`) delivers boot, app-lifecycle, connectivity and OTA events, so product firmware extends AkiraOS without editing the boot sequence. The legacy `akira_on_app_*` weak hooks still fire, through a compatibility shim.
-- `security`!: On a hardened board (`CONFIG_AKIRA_REQUIRE_SIGNED_APPS=y` with a narrowed `CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK`), a signed app must **embed** its manifest in the WASM binary (AkiraSDK `embed_manifest.py`) for its capabilities to be granted; a sidecar/package-only manifest is now clamped like any unattested request, because it is re-read from the filesystem at start and is not covered by the app signature. Default builds (`REQUIRE_SIGNED_APPS=n`, all-ones unsigned mask) are unaffected. This also removes the pre-1.6.4 unclamped `|=` merge of sidecar capabilities, an escalation path.
+- `security`!: On a hardened board (`CONFIG_AKIRA_REQUIRE_SIGNED_APPS=y` with a narrowed `CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK`), a signed app must **embed** its manifest in the WASM binary (AkiraSDK `embed_manifest.py`) for its capabilities to be granted; a sidecar/package-only manifest is now clamped like any unattested request, because it is re-read from the filesystem at start and is not covered by the app signature. Default builds (`REQUIRE_SIGNED_APPS=n`, all-ones unsigned mask) are unaffected. This also removes the pre-1.6.5 unclamped `|=` merge of sidecar capabilities, an escalation path.
 - `feat(security)`: **versioned WASM ABI.** Firmware exports `AKIRA_WASM_ABI_VERSION` (`include/akira_abi.h`); an app's `"abi"` manifest key is checked at install and load — a major mismatch is refused, a newer minor warns, a missing stamp is treated as legacy 1.x. `min_akiraos_version` is now enforced. akpkg manifests ≥ 4096 B are rejected. CI check `scripts/check_wasm_abi.py` fails on new drift between the firmware natives and the SDK header.
 - `build`: split the per-board snippet into `akira-board` (hardware/SoC/storage) and `akira-reference` (the reference firmware's service selection). A product now pairs `akira-board` with a service profile (`akira-profile-*`), so any profile builds on any board; the reference firmware applies both and its `.config` is byte-identical on all 17 boards. Residual: on upstream devkits the WiFi driver is Zephyr-defined and not auto-enabled by a profile.
 - `build`: per-board AkiraOS setup (flash layout, storage nodes, tuning) and the display panel moved from the reference app's `boards/` into module snippets (`snippets/akira-board`, `snippets/akira-display-*`); products apply them with `AKIRA_SNIPPETS`/`west build -S`. `.config` and devicetree are byte-for-byte identical for all 17 boards (`scripts/check_board_snippet.sh`).

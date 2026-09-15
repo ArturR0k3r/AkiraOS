@@ -40,7 +40,7 @@ cd ../build/zephyr
 **Expected output:**
 ```
 *** Booting Zephyr OS build v4.3.0 ***
-[00:00:00.000] <inf> main: AkiraOS v1.6.4 starting...
+[00:00:00.000] <inf> main: AkiraOS v1.6.5 starting...
 [00:00:00.010] <inf> wasm: Runtime initialized
 AkiraOS:~$ 
 ```
@@ -240,4 +240,4 @@ Native sim runs much faster than embedded hardware:
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

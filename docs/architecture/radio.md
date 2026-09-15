@@ -68,4 +68,4 @@ Daemon uses `K_NO_WAIT` on the handle lock — skips poll cycle if TX in progres
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

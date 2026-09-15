@@ -19,7 +19,7 @@ firmware, WASM ABI and SDK versions work together.
 | Maintenance | `v1.5.x` | the previous production line | critical + security fixes only |
 | Deprecated | `v1.4.x` and older, `v1.3.x-deprecated` | — | none |
 
-A **product pins an AkiraOS tag** in its `west.yml` (`revision: v1.6.4`), never a
+A **product pins an AkiraOS tag** in its `west.yml` (`revision: v1.6.5`), never a
 moving branch, so its build is reproducible. Upgrade deliberately: bump the tag,
 `west update`, rebuild, re-test, read the [CHANGELOG](https://github.com/ArturR0k3r/AkiraOS/blob/main/CHANGELOG.md)
 for `!`-marked breaking changes.
@@ -35,7 +35,7 @@ next minor. Until the first LTS is cut, treat `v1.6.x` as current-only.
 
 Three versions move at their own pace and must stay compatible:
 
-- **AkiraOS firmware version** (`VERSION`, e.g. 1.6.4) — the module release a
+- **AkiraOS firmware version** (`VERSION`, e.g. 1.6.5) — the module release a
   product pins.
 - **WASM ABI version** (`include/akira_abi.h`, e.g. 1.0) — the native import
   interface apps are built against. Bumps **major** on a breaking import change,

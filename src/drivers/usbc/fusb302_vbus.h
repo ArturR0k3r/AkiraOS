@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2026 AkiraOS Contributors
- * SPDX-License-Identifier: GPL-3.0-only
+ * SPDX-License-Identifier: Apache-2.0
  */
 #ifndef AKIRA_DRIVERS_USBC_FUSB302_VBUS_H_
 #define AKIRA_DRIVERS_USBC_FUSB302_VBUS_H_

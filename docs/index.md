@@ -176,7 +176,7 @@ Additional learning materials and references.
 - [FAQ](resources/faq.md) — Frequently asked questions
 - [Glossary](resources/glossary.md) — Technical terms
 - [Performance](resources/performance.md) — Benchmarks
-- [Release Notes](resources/release-notes.md) — Release history through v1.6.4
+- [Release Notes](resources/release-notes.md) — Release history through v1.6.5
 - [Support & Compatibility](resources/support-policy.md) — Release channels, LTS, version matrix
 - [SBOM (CycloneDX)](compliance/sbom-cyclonedx.md) — Software Bill of Materials
 
@@ -242,4 +242,4 @@ Third-party components: Zephyr RTOS, WASM Micro Runtime (WAMR), MCUboot, ESP-IDF
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

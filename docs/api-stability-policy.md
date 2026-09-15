@@ -96,7 +96,7 @@ became available (patch is omitted because patch releases never add APIs).
 
 ---
 
-## Current API Surface (v1.6.4)
+## Current API Surface (v1.6.5)
 
 | Header | Stability | Since |
 |--------|-----------|-------|
@@ -205,4 +205,4 @@ int legacy_battery_read(void);
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*
