@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# West manifest for a product built on AkiraOS. `west init -m <this-repo>` then
+# `west update` fetches AkiraOS and, through its import, Zephyr, WAMR and TFLite
+# Micro. Pin `revision` to an AkiraOS release tag for a reproducible product.
+manifest:
+  remotes:
+    - name: akira
+      url-base: https://github.com/ArturR0k3r
+  projects:
+    - name: akira-os
+      remote: akira
+      revision: v1.6.x          # pin a release tag for production
+      path: akira-os
+      import: true              # brings in zephyr + wasm-micro-runtime + tflite-micro
+  self:
+    path: product

@@ -9,10 +9,10 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
-# AkiraOS board setup (flash layout, LittleFS/NVS nodes, board tuning) for the
-# selected board, from the akira-os module's akira-board snippet. Snippets passed
-# with `west build -S` are applied after it.
-set(AKIRA_SNIPPETS akira-board)
+# AkiraOS services (akira-profile-minimal) and per-board setup (akira-board),
+# both from the akira-os module. Listed profile-first so a board conf can
+# override a profile default; snippets passed with `west build -S` come after.
+set(AKIRA_SNIPPETS akira-profile-minimal akira-board)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(akira_out_of_tree_product)

@@ -269,7 +269,7 @@ jobs:
       # Builds product firmware that consumes AkiraOS as a Zephyr module. Like
       # the board matrix, this build allows compiler warnings: AkiraOS and WAMR
       # sources still have some, and the unit tests above stay -Werror.
-      - name: Build out-of-tree product sample
+      - name: Build out-of-tree product sample and template
         run: |
           docker exec \
             -e ZEPHYR_SDK_INSTALL_DIR=/opt/toolchains/zephyr-sdk-0.17.4 \
@@ -277,6 +277,7 @@ jobs:
             -w /workspace zephyr-test bash -c '
               west twister \
                 --testsuite-root samples/ \
+                --testsuite-root templates/ \
                 --platform native_sim \
                 --disable-warnings-as-errors \
                 --outdir twister-samples \
