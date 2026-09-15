@@ -12,6 +12,7 @@ manifest:
       remote: akira
       revision: v1.6.x          # pin a release tag for production
       path: akira-os
-      import: true              # brings in zephyr + wasm-micro-runtime + tflite-micro
+      import: true
+      west-commands: scripts/west-commands.yml   # `west akira` release helpers              # brings in zephyr + wasm-micro-runtime + tflite-micro
   self:
     path: product

@@ -35,6 +35,11 @@ Already familiar? Jump to:
 - [SDK API Reference](development/sdk-api-reference.md) — Full Akira SDK function reference
 - [Platform Guides](platform) — Board-specific setup
 
+**Building your own hardware product on AkiraOS?** Start with
+[AkiraOS as a west module](hardware/west-module.md) — consume the core as a
+Zephyr module, add your board and vendor APIs without forking, then
+[sign and release](development/signing-and-release.md) it.
+
 ---
 
 ## What is AkiraOS?
@@ -151,6 +156,19 @@ Custom hardware designs and schematics.
 
 ---
 
+### Build a Product on AkiraOS
+
+For **hardware makers** shipping their own product: consume AkiraOS as a Zephyr
+module in your own repository, add a board and vendor extensions without forking
+the core, then sign and cut a release.
+
+- [AkiraOS as a west module](hardware/west-module.md) — product repo layout, pinning a tag, extension points (native APIs, capabilities, hooks, profiles)
+- [Porting Guide](hardware/porting-guide.md) — bring up a new board, with per-SoC notes (ESP32, nRF, STM32, RP2040)
+- [Signing & Release](development/signing-and-release.md) — `west akira` keys, image/app signing, SBOM, and the release workflow
+- [Support & Compatibility](resources/support-policy.md) — release channels, LTS, and the firmware ↔ WASM ABI ↔ SDK matrix
+
+---
+
 ### [Resources](resources)
 
 Additional learning materials and references.
@@ -159,6 +177,7 @@ Additional learning materials and references.
 - [Glossary](resources/glossary.md) — Technical terms
 - [Performance](resources/performance.md) — Benchmarks
 - [Release Notes](resources/release-notes.md) — Release history through v1.6.4
+- [Support & Compatibility](resources/support-policy.md) — Release channels, LTS, version matrix
 - [SBOM (CycloneDX)](compliance/sbom-cyclonedx.md) — Software Bill of Materials
 
 ---

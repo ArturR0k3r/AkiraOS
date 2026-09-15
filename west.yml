@@ -30,5 +30,6 @@ manifest:
       
   self:
     path: akira-os
+    west-commands: scripts/west-commands.yml
 
 

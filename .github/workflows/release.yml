@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Cut a signed release when a version tag is pushed. Signs with the product
+# MCUboot key from the MCUBOOT_KEY_PEM secret (unsigned if absent — dev only),
+# writes a CycloneDX SBOM and SHA256SUMS, and uploads them to the GitHub release.
+name: release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    container: ghcr.io/zephyrproject-rtos/ci:v0.28.6@sha256:427a55fe95911ea97aa99fa0aedce95cb5550cbdd74f3525d23e35b2221f2335
+    strategy:
+      matrix:
+        board: [akiraconsole_prod/esp32s3/procpu]
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: akira-os }
+      - name: West workspace
+        run: |
+          cd akira-os && west init -l . && west update && west zephyr-export
+          west blobs fetch hal_espressif
+      - name: Provision signing key
+        env:
+          MCUBOOT_KEY_PEM: ${{ secrets.MCUBOOT_KEY_PEM }}
+        run: printf '%s' "$MCUBOOT_KEY_PEM" > akira-os/mcuboot-signing.pem
+      - name: Build + sign + SBOM + checksums
+        env:
+          BOARD: ${{ matrix.board }}
+        run: |
+          cd akira-os
+          KEY=""; [ -s mcuboot-signing.pem ] && KEY="-k mcuboot-signing.pem"
+          [ -z "$KEY" ] && echo "::warning::MCUBOOT_KEY_PEM not set — shipping an UNSIGNED image"
+          west akira release -b "$BOARD" -s . -o dist $KEY
+          rm -f mcuboot-signing.pem
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            akira-os/dist/*.bin
+            akira-os/dist/sbom.cdx.json
+            akira-os/dist/SHA256SUMS

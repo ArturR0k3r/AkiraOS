@@ -68,6 +68,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `feat(shell)`: `bt gatt` command to dump registered GATT services.
 - `feat(bench)`: `akiraclaw_bench` hardware benchmark suite.
 - `feat(security)`: `CONFIG_AKIRA_RELEASE_BUILD` fails configuration on development-only security settings: HTTP no-auth, empty or example upload token, the direct upload endpoint, unsigned apps, and unsigned or dev-key-signed MCUboot images. Development builds print the same findings as one warning.
+- `feat(release)`: `west akira` command group (`keygen`, `sbom`, `sign`, `pack`, `release`) for product firmware — generate product signing keys (kept out of git via a written `.gitignore`), emit a CycloneDX 1.4 SBOM from the west manifest, sign the MCUboot image, forward app packaging to `akira-cli`, and assemble a `dist/` release (signed image + ELF + SBOM + `SHA256SUMS`). Registered through `west-commands` on the akira-os project so downstream products inherit it. A tag-triggered `.github/workflows/release.yml` builds, signs with the `MCUBOOT_KEY_PEM` secret, and uploads the artifacts to the GitHub release.
 
 ### Fixed / Security
 - `fix(ble)`: Require an encrypted link for privileged management writes; make WASM app GATT services discoverable.
@@ -100,6 +101,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `build`: split the per-board snippet into `akira-board` (hardware/SoC/storage) and `akira-reference` (the reference firmware's service selection). A product now pairs `akira-board` with a service profile (`akira-profile-*`), so any profile builds on any board; the reference firmware applies both and its `.config` is byte-identical on all 17 boards. Residual: on upstream devkits the WiFi driver is Zephyr-defined and not auto-enabled by a profile.
 - `build`: per-board AkiraOS setup (flash layout, storage nodes, tuning) and the display panel moved from the reference app's `boards/` into module snippets (`snippets/akira-board`, `snippets/akira-display-*`); products apply them with `AKIRA_SNIPPETS`/`west build -S`. `.config` and devicetree are byte-for-byte identical for all 17 boards (`scripts/check_board_snippet.sh`).
 - `build`: `build.sh` no longer copies MCUboot linker patches into the Zephyr tree for ESP32-C6/H2; it passes `CONFIG_CUSTOM_LINKER_SCRIPT` instead, so the Zephyr checkout is never modified.
+- `docs`: maker-facing signing/release guide, a support & compatibility policy (release channels, LTS, and the firmware ↔ WASM-ABI ↔ SDK matrix), and per-SoC porting notes (ESP32-S3/C3/C6/H2, Nordic nRF54L15, STM32 H7/L4/U5, RP2040/RP2350).
 
 ---
 
