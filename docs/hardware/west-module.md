@@ -137,12 +137,13 @@ applied after yours and override them:
 west build -b <board> widget-fw -S rtt-console
 ```
 
-{: .warning }
-On boards whose AkiraOS setup enables networking or other services, the slim
-`akira-profile-minimal` is not enough on its own — pair the board with a
-matching profile (e.g. `akira-profile-connected`). If Kconfig aborts with
-"unsatisfied dependencies", the profile and the board disagree about a service;
-choose a profile that matches the board's hardware.
+`akira-board` carries only board *hardware* (buses, PSRAM, SoC, storage); the
+services come from the profile. So any profile combines with any board — a
+minimal product builds even on a connectivity board. One gap remains on
+**upstream** devkits (esp32s3_devkitm, nrf54l15dk, …): their WiFi *driver*
+(`WIFI_ESP32`) is defined in Zephyr, so `akira-profile-connected` brings up the
+IP stack but not the radio driver — add the board's WiFi lines in your product,
+or use an AkiraOS custom board where the driver is part of the board.
 
 ## 4. Adding a custom board
 

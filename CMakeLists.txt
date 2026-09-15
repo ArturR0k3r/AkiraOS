@@ -23,11 +23,11 @@ list(APPEND DTS_ROOT ${CMAKE_CURRENT_LIST_DIR})
 # inside the workspace, where west already provides akira-os.
 list(APPEND EXTRA_ZEPHYR_MODULES ${CMAKE_CURRENT_LIST_DIR})
 
-# Per-board AkiraOS setup (flash layout, LittleFS/NVS nodes, board tuning) and
-# the reference display panel come from snippets in the akira-os module
-# (snippets/). They are applied before snippets passed with `west build -S`,
-# which therefore override them. Products set AKIRA_SNIPPETS the same way.
-set(AKIRA_SNIPPETS akira-board)
+# The reference firmware applies the board's hardware setup (akira-board) plus
+# its full service selection (akira-reference); products instead pair akira-board
+# with a service profile (akira-profile-*). Snippets passed with `west build -S`
+# are applied after these and override them.
+set(AKIRA_SNIPPETS akira-board akira-reference)
 set(_akira_board "${BOARD}")
 if(NOT _akira_board)
   set(_akira_board "$ENV{BOARD}")
