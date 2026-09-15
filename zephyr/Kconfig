@@ -373,6 +373,7 @@ config AKIRA_RF_FRAMEWORK
     bool "802.11 raw management-frame RF framework (scan/inject)"
     default n
     depends on AKIRA_WASM_API && WIFI
+    depends on AKIRA_MODULE_RF
     help
       Build the raw 802.11 management-frame paths (WiFi scan and deauth/
       disassoc injection) exported to WASM via the RF API. Elevated and
@@ -2174,6 +2175,17 @@ config AKIRA_WASM_API
     help
       Enable registration of native APIs for WASM applications.
       This allows WASM apps to call native platform functions.
+
+config AKIRA_NATIVE_REGISTRY_MAX_SYMBOLS
+    int "Native functions the registry can hold without PSRAM"
+    default 256
+    depends on AKIRA_WASM_API && !AKIRA_PSRAM
+    help
+      WAMR sorts every registered native table in place and keeps the pointer,
+      so the native API registry copies all AKIRA_NATIVE_API_DEFINE() tables into
+      writable memory at start-up. Boards with PSRAM use a PSRAM allocation;
+      boards without it use a static array of this many entries (16 bytes each
+      on 32-bit targets). Raise it if the log reports the pool is full.
 
 config AKIRA_WASM_PYTHON
     bool "Enable MicroPython WASM app support"

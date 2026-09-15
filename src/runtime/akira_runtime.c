@@ -9,6 +9,7 @@
 
 #include "akira_runtime.h"
 #include "manifest_parser.h"
+#include "akira_abi_check.h"
 #include "runtime_cache.h"
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
@@ -26,8 +27,7 @@
 #include "akira_api.h"
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
-#include <modules/akira_log_module.h>
-#include <modules/akira_time_module.h>
+#include <akira_native_registry.h>
 #endif
 
 #ifdef CONFIG_AKIRA_WASM_IPC
@@ -367,6 +367,16 @@ int akira_runtime_init(void)
 
     LOG_INF("Initializing Akira unified runtime v2...");
 
+    /* Refuse to run apps against a capability registry with colliding names or
+     * bits: capability checks would silently grant or deny the wrong thing. */
+    int registry_ret = akira_capability_registry_validate();
+    if (registry_ret < 0)
+    {
+        LOG_ERR("Capability registry is invalid (%d); see errors above", registry_ret);
+        atomic_set(&g_runtime_initialized, 0);
+        return registry_ret;
+    }
+
     /* Initialize performance & security subsystems */
     module_cache_init();
     instance_map_init();
@@ -411,20 +421,14 @@ int akira_runtime_init(void)
     }
 
 #ifdef CONFIG_AKIRA_WASM_API
-    if (!akira_register_native_apis())
+    /* Register every AKIRA_NATIVE_API_DEFINE() table ("env", "akira_log",
+     * "akira_time", product natives) with WAMR. A native defined twice stops
+     * the runtime: WAMR would silently let one definition shadow the other. */
+    int natives_ret = akira_native_registry_register_all();
+    if (natives_ret < 0)
     {
-        LOG_ERR("Failed to register native APIs");
-        return -EIO;
-    }
-    /* Register modular namespace APIs ("akira_log", "akira_time") for
-     * WASM apps that use named imports instead of the flat "env" namespace. */
-    if (akira_register_log_module() < 0)
-    {
-        LOG_WRN("Failed to register akira_log module — log native APIs unavailable");
-    }
-    if (akira_register_time_module() < 0)
-    {
-        LOG_WRN("Failed to register akira_time module — time native APIs unavailable");
+        LOG_ERR("Failed to register native APIs (%d)", natives_ret);
+        return natives_ret;
     }
 #else
     LOG_WRN("Native API registration not included - no APIs enabled (CONFIG_AKIRA_WASM_API not set)");
@@ -452,7 +456,8 @@ int akira_runtime_init(void)
  * The WASM binary is processed in 16KB chunks, with the chunk buffer
  * allocated from PSRAM when available to minimize SRAM pressure.
  */
-int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
+static int load_wasm_ex(const uint8_t *buffer, uint32_t size,
+                        const char *manifest_json, size_t manifest_len)
 {
     if (!atomic_get(&g_runtime_initialized))
     {
@@ -499,16 +504,41 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
         return integrity_ret;
     }
 
-    /* ===== Step 2: Parse manifest from WASM custom section ===== */
+    /* ===== Step 2: Parse manifest =====
+     * The manifest embedded in the binary wins. A JSON manifest supplied next to
+     * the binary (sidecar file, package) is used only when the binary has none;
+     * the two are never merged. */
     int64_t load_start_ms = k_uptime_get();
 
     akira_manifest_t manifest;
+    bool manifest_from_binary = false;
     manifest_init_defaults(&manifest);
-    int manifest_ret = manifest_parse_wasm_section(buffer, size, &manifest);
-    if (manifest_ret == 0)
+    if (manifest_parse_wasm_section(buffer, size, &manifest) == 0)
     {
+        manifest_from_binary = true;
         LOG_INF("Found embedded manifest: cap_mask=0x%016llx, memory_quota=%u",
                 (unsigned long long)manifest.cap_mask, manifest.memory_quota);
+    }
+    else if (manifest_json && manifest_len > 0)
+    {
+        manifest_init_defaults(&manifest);
+        if (manifest_parse_json(manifest_json, manifest_len, &manifest) == 0)
+        {
+            LOG_INF("Using supplied manifest: cap_mask=0x%016llx, memory_quota=%u",
+                    (unsigned long long)manifest.cap_mask, manifest.memory_quota);
+        }
+    }
+
+    /* ===== Step 3: ABI / minimum-version gate =====
+     * The choke point every install and load path reaches. app_manager also gates
+     * before writing to flash, but SD-XIP, cloud and streaming loads come here
+     * directly, so re-check to refuse an app built for an incompatible ABI or a
+     * newer AkiraOS (also catches an app installed before a firmware downgrade). */
+    int abi_ret = akira_abi_check_default(&manifest);
+    if (abi_ret < 0)
+    {
+        g_apps[slot].used = false; /* release reserved slot */
+        return abi_ret;
     }
 
     /* ===== Step 4: Load WASM module ===== */
@@ -620,28 +650,27 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
     g_apps[slot].exit_code = 0;
     g_apps[slot].tid = NULL;
     /* The manifest is NOT cryptographically bound to a trusted signer unless a
-     * real platform verifier is linked (CONFIG_AKIRA_REQUIRE_SIGNED_APPS). If we
-     * reach this point with REQUIRE_SIGNED_APPS=y, the app passed the fail-closed
-     * allowlist/signature gate above and is attested; otherwise treat the
-     * requested capabilities as untrusted and clamp them. Never grant an app the
-     * raw manifest mask verbatim — that let an app self-assert "*" → all caps. */
-    bool app_attested = IS_ENABLED(CONFIG_AKIRA_REQUIRE_SIGNED_APPS);
+     * real platform verifier is linked (CONFIG_AKIRA_REQUIRE_SIGNED_APPS), and a
+     * JSON manifest supplied next to the binary is never covered by that gate.
+     * Clamp the requested capabilities once, here; never grant an app the raw
+     * manifest mask verbatim — that let an app self-assert "*" → all caps. */
     uint64_t requested_mask = manifest.valid ? manifest.cap_mask : 0;
-    g_apps[slot].cap_mask =
-        akira_capability_sanitize_app_mask(requested_mask, app_attested);
+    uint64_t unattested_privileged = 0;
+    g_apps[slot].cap_mask = akira_capability_grant(requested_mask, manifest_from_binary,
+                                                   &unattested_privileged);
 
-    if (!app_attested && (g_apps[slot].cap_mask & AKIRA_CAP_PRIVILEGED)) {
+    if (unattested_privileged) {
         /* An unsigned app was granted world-affecting capabilities. This is
          * allowed (default dev posture) but must be visible in the audit log. */
         LOG_WRN("Unattested app granted privileged caps: 0x%016llx",
-                (unsigned long long)(g_apps[slot].cap_mask & AKIRA_CAP_PRIVILEGED));
+                (unsigned long long)unattested_privileged);
         sandbox_audit_log(AUDIT_EVENT_SIGNATURE_FAIL, "unsigned_privileged",
                           (uint32_t)(g_apps[slot].cap_mask & 0xFFFFFFFFu));
     }
     if (g_apps[slot].cap_mask != requested_mask) {
-        LOG_INF("Capability mask sanitized: requested=0x%016llx granted=0x%016llx (attested=%d)",
+        LOG_INF("Capability mask sanitized: requested=0x%016llx granted=0x%016llx (from_binary=%d)",
                 (unsigned long long)requested_mask,
-                (unsigned long long)g_apps[slot].cap_mask, app_attested);
+                (unsigned long long)g_apps[slot].cap_mask, manifest_from_binary);
     }
     g_apps[slot].memory_quota = manifest.valid ? manifest.memory_quota : 0;
     strncpy(g_apps[slot].commands_json, manifest.commands_json,
@@ -668,8 +697,15 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
 #else
     (void)buffer;
     (void)size;
+    (void)manifest_json;
+    (void)manifest_len;
     return -ENOTSUP; /* WASM runtime not available */
 #endif
+}
+
+int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
+{
+    return load_wasm_ex(buffer, size, NULL, 0);
 }
 
 /* ===== Thread-per-app implementation ===== */
@@ -1043,11 +1079,6 @@ int akira_runtime_install_with_manifest(const char *name, const void *binary, si
     if (!name || !binary || size == 0)
         return -EINVAL;
 
-    /* Parse manifest with fallback: WASM section first, then JSON */
-    akira_manifest_t manifest;
-    manifest_parse_with_fallback((const uint8_t *)binary, size,
-                                 manifest_json, manifest_size, &manifest);
-
     /* Save manifest if provided (for external tools/debugging) */
     if (manifest_json && manifest_size > 0)
     {
@@ -1071,29 +1102,13 @@ int akira_runtime_install_with_manifest(const char *name, const void *binary, si
         }
     }
 
-    /* Load into runtime memory - this will also parse embedded manifest */
-    int id = akira_runtime_load_wasm((const uint8_t *)binary, (uint32_t)size);
+    /* Load into runtime memory. The embedded manifest wins; manifest_json is
+     * used only when the binary has none, and capabilities, quota and commands
+     * all come from that one manifest (see load_wasm_ex). */
+    int id = load_wasm_ex((const uint8_t *)binary, (uint32_t)size,
+                          manifest_json, manifest_size);
     if (id < 0)
         return id;
-
-    /* Override with external manifest if it has more capabilities */
-    if (manifest.valid && manifest.cap_mask != 0)
-    {
-        g_apps[id].cap_mask |= manifest.cap_mask;
-        if (manifest.memory_quota > 0)
-        {
-            g_apps[id].memory_quota = manifest.memory_quota;
-        }
-        LOG_INF("App %s: merged manifest cap_mask=0x%016llx, memory_quota=%u",
-                name, (unsigned long long)g_apps[id].cap_mask, g_apps[id].memory_quota);
-    }
-
-    if (manifest.valid)
-    {
-        strncpy(g_apps[id].commands_json, manifest.commands_json,
-                sizeof(g_apps[id].commands_json) - 1);
-        g_apps[id].commands_json[sizeof(g_apps[id].commands_json) - 1] = '\0';
-    }
 
     /* Store friendly name */
     strncpy(g_apps[id].name, name, sizeof(g_apps[id].name) - 1);

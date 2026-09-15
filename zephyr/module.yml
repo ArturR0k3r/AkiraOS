@@ -43,3 +43,7 @@ build:
     # module_ext_root: registers modules/modules.cmake, which provides Zephyr
     # glue for the wasm-micro-runtime west project.
     module_ext_root: .
+
+    # snippet_root: registers snippets/, which holds per-board AkiraOS setup
+    # (akira-board) and display panel choices (akira-display-*).
+    snippet_root: .

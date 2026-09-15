@@ -16,6 +16,7 @@
 #include <zephyr/logging/log.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <errno.h>
 #include <stdint.h>
 #include "runtime/security.h"
@@ -241,6 +242,35 @@ int manifest_parse_json(const char *json, size_t json_len, akira_manifest_t *man
             p = json_parse_int(p, end, &manifest->memory_quota);
             if (!p)
                 return -EINVAL;
+        }
+        else if (strcmp(key, "abi") == 0)
+        {
+            /* "MAJOR.MINOR": the AkiraOS WASM import ABI the app was built for. */
+            char abi[16];
+            p = json_parse_string(p, end, abi, sizeof(abi));
+            if (!p)
+                return -EINVAL;
+            unsigned int mj = 0, mn = 0;
+            if (sscanf(abi, "%u.%u", &mj, &mn) >= 1) {
+                manifest->has_abi = true;
+                manifest->abi_major = (uint8_t)mj;
+                manifest->abi_minor = (uint8_t)mn;
+            }
+        }
+        else if (strcmp(key, "min_akiraos_version") == 0)
+        {
+            /* "MAJOR.MINOR.PATCH": lowest AkiraOS version the app supports. */
+            char ver[16];
+            p = json_parse_string(p, end, ver, sizeof(ver));
+            if (!p)
+                return -EINVAL;
+            unsigned int a = 0, b = 0, c = 0;
+            if (sscanf(ver, "%u.%u.%u", &a, &b, &c) >= 1) {
+                manifest->has_min_os = true;
+                manifest->min_os[0] = (uint16_t)a;
+                manifest->min_os[1] = (uint16_t)b;
+                manifest->min_os[2] = (uint16_t)c;
+            }
         }
         else if (strcmp(key, "capabilities") == 0)
         {

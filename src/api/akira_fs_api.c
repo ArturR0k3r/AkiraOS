@@ -113,7 +113,7 @@ static int resolve_path(wasm_exec_env_t exec_env,
 int akira_native_fs_open(wasm_exec_env_t exec_env,
                          const char *path, int32_t flags)
 {
-    uint32_t cap = (flags & AKIRA_FS_O_WRITE) ? AKIRA_CAP_FS_WRITE
+    uint64_t cap = (flags & AKIRA_FS_O_WRITE) ? AKIRA_CAP_FS_WRITE
                                               : AKIRA_CAP_FS_READ;
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, cap, -EPERM);
     if (!path) {
@@ -400,3 +400,26 @@ int akira_native_fs_readdir(wasm_exec_env_t exec_env,
 }
 
 #endif /* CONFIG_AKIRA_WASM_FS */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_FS))
+#include <akira_native_registry.h>
+
+/* fs.*: POSIX-like sandbox filesystem (seek/tell/stat/mkdir/readdir) */
+static const NativeSymbol akira_fs_natives[] = {
+    {"fs_open",    (void *)akira_native_fs_open,    "($i)i",   NULL},
+    {"fs_close",   (void *)akira_native_fs_close,   "(i)i",    NULL},
+    {"fs_read",    (void *)akira_native_fs_read,    "(i*~)i",  NULL},
+    {"fs_write",   (void *)akira_native_fs_write,   "(i*~)i",  NULL},
+    {"fs_seek",    (void *)akira_native_fs_seek,    "(iii)i",  NULL},
+    {"fs_tell",    (void *)akira_native_fs_tell,    "(i)i",    NULL},
+    {"fs_stat",    (void *)akira_native_fs_stat,    "($*)i",   NULL},
+    {"fs_unlink",  (void *)akira_native_fs_unlink,  "($)i",    NULL},
+    {"fs_mkdir",   (void *)akira_native_fs_mkdir,   "($)i",    NULL},
+    {"fs_readdir", (void *)akira_native_fs_readdir, "($*~)i",  NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_fs_api, "env", akira_fs_natives);
+#endif

@@ -108,3 +108,23 @@ int akira_native_ha_light_poll(wasm_exec_env_t exec_env, const char *object_id,
     }
     return ha_light_poll(object_id, on, brightness, r, g, b, timeout_ms);
 }
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_MQTT))
+#include <akira_native_registry.h>
+
+/* mqtt: MQTT client + Home Assistant discovery */
+static const NativeSymbol akira_mqtt_natives[] = {
+    {"mqtt_publish",       (void *)akira_native_mqtt_publish,       "($*~ii)i",  NULL},
+    {"mqtt_subscribe",     (void *)akira_native_mqtt_subscribe,     "($)i",      NULL},
+    {"mqtt_poll",          (void *)akira_native_mqtt_poll,          "(*~*~i)i",  NULL},
+    {"mqtt_connected",     (void *)akira_native_mqtt_connected,     "()i",       NULL},
+    {"ha_light_register",  (void *)akira_native_ha_light_register,  "($$)i",     NULL},
+    {"ha_light_report",    (void *)akira_native_ha_light_report,    "($iiiii)i", NULL},
+    {"ha_light_poll",      (void *)akira_native_ha_light_poll,      "($*****i)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_mqtt_api, "env", akira_mqtt_natives);
+#endif

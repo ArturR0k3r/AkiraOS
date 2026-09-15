@@ -1,8 +1,8 @@
 /*
  * Sharp LS027B7DH01 Memory LCD overlay for AkiraConsole Production ESP32-S3.
  *
- * Applied automatically by CMakeLists.txt when CONFIG_AKIRA_SHARP_DISPLAY=y
- * is set in boards/akiraconsole_prod_esp32s3_procpu.conf.
+ * Applied by the akira-display-sharp snippet. The AkiraOS reference firmware
+ * applies it for akiraconsole_prod; products choose a panel snippet themselves.
  *
  * Hardware (Sharp LS027B7DH01 400x240 Memory LCD on J4):
  *   SCS  = GPIO10 = SPI2 cs-gpios[1] (ACTIVE_HIGH — Sharp polarity)

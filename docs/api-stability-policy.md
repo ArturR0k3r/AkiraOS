@@ -157,6 +157,37 @@ became available (patch is omitted because patch releases never add APIs).
 | All drivers/display/* headers | experimental | 1.4 |
 | All drivers/sensors/* (except button) | experimental | 1.4 |
 
+## WASM import ABI
+
+The functions and signatures a WASM app imports from AkiraOS (the "env" module
+and `akira_log` / `akira_time`, declared in `AkiraSDK/include/akira_api.h`) are a
+versioned interface, separate from the firmware version because the SDK ships
+separately (`include/akira_abi.h`):
+
+- **MAJOR** increments when an import is removed, renamed, or its signature
+  changes. Apps built for an older major are refused at load.
+- **MINOR** increments when an import is added. Older apps keep working; a newer
+  app's calls to functions this firmware lacks trap at call time.
+
+Apps declare the ABI they target with the manifest `abi` key. CI
+(`scripts/check_wasm_abi.py`) fails when the firmware's exported natives and the
+SDK header drift apart outside the recorded allowlist.
+
+## Frozen capability bit numbers
+
+Core capability bit numbers (`AKIRA_CAP_*`, bits 0–47 in `runtime/security.h`)
+are **frozen**: they appear in raw form in configuration
+(`CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK`), audit logs and the cloud protocol. A new
+core capability takes the next free bit and is never renumbered. Product
+capabilities use bits 48–63 (`AKIRA_CAPABILITY_DEFINE`).
+
+## Module extension APIs
+
+`include/akira_capability.h`, `include/akira_native_registry.h`,
+`include/akira_hooks.h` and `include/akira_abi.h` are the interfaces product
+firmware builds against. They are **experimental** in 1.6: they may change in a
+minor release while the maker workflow settles, then move to stable.
+
 ---
 
 ## Deprecation Example Workflow

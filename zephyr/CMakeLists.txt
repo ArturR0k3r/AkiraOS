@@ -19,6 +19,14 @@ endif()
 get_filename_component(AKIRA_OS_DIR ${CMAKE_CURRENT_LIST_DIR}/.. ABSOLUTE)
 set(WAMR_ROOT_DIR ${ZEPHYR_WASM_MICRO_RUNTIME_MODULE_DIR})
 
+# Snippets the application requires (AKIRA_SNIPPETS, applied by
+# modules/modules.cmake) must still be in effect, e.g. after a sysbuild
+# image-specific SNIPPET replaced the list.
+if(DEFINED AKIRA_SNIPPETS)
+    include(${AKIRA_OS_DIR}/cmake/akira_snippets.cmake)
+    akira_check_snippets(${AKIRA_SNIPPETS})
+endif()
+
 # Include paths for AkiraOS sources and for applications that use AkiraOS.
 add_library(akira_os INTERFACE)
 
@@ -55,6 +63,14 @@ cmake_language(DEFER DIRECTORY ${CMAKE_SOURCE_DIR} CALL akira_os_link_zephyr_int
 
 # Warn (development) or fail (CONFIG_AKIRA_RELEASE_BUILD=y) on insecure settings.
 include(${AKIRA_OS_DIR}/cmake/akira_release_checks.cmake)
+
+# Registries filled with AKIRA_CAPABILITY_DEFINE(), AKIRA_NATIVE_API_DEFINE() and
+# AKIRA_HOOK_DEFINE(). Registered before the AKIRA_OS_BUILD_LIBRARIES check so
+# applications that compile AkiraOS sources themselves (tests/) link them too.
+zephyr_linker_sources(SECTIONS ${CMAKE_CURRENT_LIST_DIR}/linker/akira_sections.ld)
+foreach(registry akira_capability akira_native_api akira_hook)
+    zephyr_iterable_section(NAME ${registry} KVMA RAM_REGION GROUP RODATA_REGION)
+endforeach()
 
 # Applications that compile a hand-picked subset of AkiraOS sources themselves
 # (tests/, bench/) set AKIRA_OS_BUILD_LIBRARIES to OFF before find_package(Zephyr).
@@ -191,12 +207,15 @@ zephyr_library_link_libraries(akira_os)
 
 target_include_directories(akira_os INTERFACE ${AKIRA_OS_DIR}/include/modules/)
 
+if(CONFIG_AKIRA_WASM_RUNTIME AND CONFIG_AKIRA_WASM_API)
+    # Registers every AKIRA_NATIVE_API_DEFINE() table with WAMR after
+    # wasm_runtime_full_init() (see akira_runtime_init()).
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/runtime/akira_native_registry.c)
+endif()
+
 if(CONFIG_AKIRA_WASM_RUNTIME)
-    # Modular WASM API layer
-    # NOTE: akira_log_module and akira_time_module register to separate namespaces
-    # ("akira_log", "akira_time") for WASM apps using named imports.
-    # Their akira_register_*_module() functions must be called in akira_runtime_init()
-    # before wasm_runtime_full_init().
+    # Modular WASM API layer: akira_log_module and akira_time_module export the
+    # "akira_log" and "akira_time" import namespaces through the native registry.
     zephyr_library_sources(
         ${AKIRA_OS_DIR}/src/runtime/modules/akira_log_module.c
         ${AKIRA_OS_DIR}/src/runtime/modules/akira_time_module.c
@@ -276,6 +295,8 @@ zephyr_library_sources(
 
 zephyr_library_sources(
     ${AKIRA_OS_DIR}/src/runtime/akira_runtime.c
+    ${AKIRA_OS_DIR}/src/runtime/akira_hooks.c
+    ${AKIRA_OS_DIR}/src/runtime/akira_abi_check.c
     ${AKIRA_OS_DIR}/src/runtime/security.c
     ${AKIRA_OS_DIR}/src/runtime/manifest_parser.c
     ${AKIRA_OS_DIR}/src/runtime/app_loader/app_loader.c

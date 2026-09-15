@@ -1,8 +1,7 @@
 /*
  * ILI9341 overlay for AkiraConsole Production ESP32-S3.
  *
- * Applied automatically by CMakeLists.txt when CONFIG_AKIRA_ILI9341_DRIVER=y
- * is set in boards/akiraconsole_prod_esp32s3_procpu.conf.
+ * Applied by the akira-display-ili9341 snippet (west build -S akira-display-ili9341).
  *
  * Overrides the default zephyr,display (ST7789V) with the akira,ili9341 node
  * and explicitly disables the ST7789V and MIPI-DBI nodes so no stray driver

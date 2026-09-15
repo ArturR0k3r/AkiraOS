@@ -36,3 +36,16 @@ int akira_native_wdt_pet(wasm_exec_env_t exec_env)
 }
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_WDT))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_wdt_natives[] = {
+    {"wdt_pet", (void *)akira_native_wdt_pet, "()i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_wdt_api, "env", akira_wdt_natives);
+#endif

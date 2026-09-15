@@ -903,3 +903,47 @@ int akira_native_rf_raw_replay(wasm_exec_env_t exec_env,
 }
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_AKIRA_MODULE_RF) && defined(CONFIG_AKIRA_RADIO_MANAGER))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_rf_natives[] = {
+    {"rf_set_frequency",       (void *)akira_native_rf_set_frequency,       "(i)i",    NULL},
+    {"rf_set_power",           (void *)akira_native_rf_set_power,           "(i)i",    NULL},
+    {"rf_get_rssi",            (void *)akira_native_rf_get_rssi,            "()i",     NULL},
+    {"rf_send",                (void *)akira_native_rf_send,                "(ii)i",   NULL},
+    {"rf_select",              (void *)akira_native_rf_select,              "(i)i",    NULL},
+    {"rf_recv_pop",            (void *)akira_native_rf_recv_pop,            "(iii)i",  NULL},
+    {"rf_receive",             (void *)akira_native_rf_receive,             "(iii)i",  NULL},
+    {"rf_set_modulation",      (void *)akira_native_rf_set_modulation,      "(i)i",    NULL},
+    {"rf_set_spreading_factor",(void *)akira_native_rf_set_spreading_factor,"(i)i",    NULL},
+    {"rf_set_bandwidth",       (void *)akira_native_rf_set_bandwidth,       "(i)i",    NULL},
+    {"rf_set_coding_rate",     (void *)akira_native_rf_set_coding_rate,     "(i)i",    NULL},
+    /* Raw OOK/ASK signal capture and replay (CC1101 / CC1121) */
+    {"rf_raw_capture",         (void *)akira_native_rf_raw_capture,         "(iiii)i",  NULL},
+    {"rf_raw_replay",          (void *)akira_native_rf_raw_replay,          "(iiii)i",  NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_rf_api, "env", akira_rf_natives);
+#endif
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_rf_wifi_natives[] = {
+    /* Passive 802.11 spectrum scan — per-channel max RSSI */
+    {"wifi_scan_rssi", (void *)akira_native_wifi_scan_rssi, "(ii)i",      NULL},
+    /* Passive 802.11 AP scan — full SSID/BSSID/channel/RSSI/security records */
+    {"wifi_scan_aps",  (void *)akira_native_wifi_scan_aps,  "(*~)i",      NULL},
+    /* 802.11 deauth frame injector — requires wifi.inject capability */
+    {"wifi_deauth",    (void *)akira_native_wifi_deauth,    "(**iii)i",   NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_rf_wifi_api, "env", akira_rf_wifi_natives);
+#endif

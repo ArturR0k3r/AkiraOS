@@ -804,3 +804,21 @@ int akira_native_ota_rollback(wasm_exec_env_t exec_env)
 }
 
 #endif /* CONFIG_AKIRA_WASM_OTA */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_OTA))
+#include <akira_native_registry.h>
+
+/* ota.*: check / fetch-apply / state / confirm / rollback */
+static const NativeSymbol akira_ota_natives[] = {
+    {"ota_check",            (void *)akira_native_ota_check,            "($)i", NULL},
+    {"ota_fetch_and_apply",  (void *)akira_native_ota_fetch_and_apply,  "($)i", NULL},
+    {"ota_get_state",        (void *)akira_native_ota_get_state,        "()i",  NULL},
+    {"ota_confirm",          (void *)akira_native_ota_confirm,          "()i",  NULL},
+    {"ota_rollback",         (void *)akira_native_ota_rollback,         "()i",  NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_ota_api, "env", akira_ota_natives);
+#endif

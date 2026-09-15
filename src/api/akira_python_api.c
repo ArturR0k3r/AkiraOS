@@ -106,32 +106,28 @@ static int py_fd_read(wasm_exec_env_t exec_env, int fd,
 
 /* ── Registration ────────────────────────────────────────────────────────── */
 
+#ifdef CONFIG_AKIRA_WASM_API
+#include <akira_native_registry.h>
+
+static const NativeSymbol python_env_natives[] = {
+    {"setjmp",  (void *)py_setjmp,  "(*)i", NULL},
+    {"longjmp", (void *)py_longjmp, "(*i)",  NULL},
+};
+AKIRA_NATIVE_API_DEFINE(akira_python_env_api, "env", python_env_natives);
+
+static const NativeSymbol python_wasi_natives[] = {
+    {"fd_write", (void *)py_fd_write, "(i*i*)i", NULL},
+    {"fd_close", (void *)py_fd_close, "(i)i",    NULL},
+    {"fd_sync",  (void *)py_fd_sync,  "(i)i",    NULL},
+    {"fd_seek",  (void *)py_fd_seek,  "(iIi*)i", NULL},
+    {"fd_read",  (void *)py_fd_read,  "(i*i*)i", NULL},
+};
+AKIRA_NATIVE_API_DEFINE(akira_python_wasi_api, "wasi_snapshot_preview1", python_wasi_natives);
+#endif
+
+/* Deprecated since 1.6: the runtime registers these tables through the native
+ * API registry. Kept so existing callers keep linking. */
 bool akira_python_register_natives(void)
 {
-    static NativeSymbol env_syms[] = {
-        {"setjmp",  (void *)py_setjmp,  "(*)i", NULL},
-        {"longjmp", (void *)py_longjmp, "(*i)",  NULL},
-    };
-
-    static NativeSymbol wasi_syms[] = {
-        {"fd_write", (void *)py_fd_write, "(i*i*)i", NULL},
-        {"fd_close", (void *)py_fd_close, "(i)i",    NULL},
-        {"fd_sync",  (void *)py_fd_sync,  "(i)i",    NULL},
-        {"fd_seek",  (void *)py_fd_seek,  "(iIi*)i", NULL},
-        {"fd_read",  (void *)py_fd_read,  "(i*i*)i", NULL},
-    };
-
-    if (!wasm_runtime_register_natives("env", env_syms,
-                                       sizeof(env_syms) / sizeof(NativeSymbol))) {
-        LOG_ERR("Failed to register Python env natives");
-        return false;
-    }
-
-    if (!wasm_runtime_register_natives("wasi_snapshot_preview1", wasi_syms,
-                                       sizeof(wasi_syms) / sizeof(NativeSymbol))) {
-        LOG_ERR("Failed to register Python WASI natives");
-        return false;
-    }
-
     return true;
 }

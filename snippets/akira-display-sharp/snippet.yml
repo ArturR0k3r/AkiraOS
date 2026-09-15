@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Sharp LS027B7DH01 memory LCD on AkiraConsole Production. Apply after
+# akira-board; the AkiraOS reference firmware applies it for akiraconsole_prod.
+name: akira-display-sharp
+boards:
+  akiraconsole_prod/esp32s3/procpu:
+    append:
+      EXTRA_CONF_FILE: boards/akiraconsole_prod_esp32s3_procpu.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/akiraconsole_prod_esp32s3_procpu.overlay

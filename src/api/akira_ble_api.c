@@ -322,3 +322,29 @@ int akira_native_ble_event_pop(wasm_exec_env_t e, uint32_t p, uint32_t l)
 { (void)e; (void)p; (void)l; return -ENOTSUP; }
 
 #endif /* CONFIG_AKIRA_WASM_BLE */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_BLE))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_ble_natives[] = {
+    {"ble_init", (void *)akira_native_ble_init, "()i", NULL},
+    {"ble_deinit", (void *)akira_native_ble_deinit, "()i", NULL},
+    {"ble_set_local_name", (void *)akira_native_ble_set_local_name, "($)i", NULL},
+    {"ble_service_create", (void *)akira_native_ble_service_create, "($)i", NULL},
+    {"ble_char_create", (void *)akira_native_ble_char_create, "($ii)i", NULL},
+    {"ble_service_add_char", (void *)akira_native_ble_service_add_char, "(ii)i", NULL},
+    {"ble_add_service", (void *)akira_native_ble_add_service, "(i)i", NULL},
+    {"ble_set_advertised_service", (void *)akira_native_ble_set_advertised_service, "(i)i", NULL},
+    {"ble_advertise", (void *)akira_native_ble_advertise, "()i", NULL},
+    {"ble_stop_advertise", (void *)akira_native_ble_stop_advertise, "()i", NULL},
+    {"ble_is_connected", (void *)akira_native_ble_is_connected, "()i", NULL},
+    {"ble_char_write", (void *)akira_native_ble_char_write, "(iii)i", NULL},
+    {"ble_char_read", (void *)akira_native_ble_char_read, "(iii)i", NULL},
+    {"ble_event_pop", (void *)akira_native_ble_event_pop, "(ii)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_ble_api, "env", akira_ble_natives);
+#endif

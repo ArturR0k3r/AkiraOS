@@ -352,3 +352,25 @@ int akira_native_app_request_update(wasm_exec_env_t exec_env)
     return -ENOTSUP;
 #endif
 }
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_LIFECYCLE))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_lifecycle_natives[] = {
+    {"app_get_status", (void *)akira_native_app_get_status, "($)i", NULL},
+    {"app_list", (void *)akira_native_app_list, "(ii)i", NULL},
+    {"app_get_self_name", (void *)akira_native_app_get_self_name, "(ii)i", NULL},
+    /* Write-control — requires AKIRA_CAP_APP_CONTROL */
+    {"app_start", (void *)akira_native_app_start, "($)i", NULL},
+    {"app_stop", (void *)akira_native_app_stop, "($)i", NULL},
+    /* Lightweight handoff — requires AKIRA_CAP_APP_SWITCH or APP_CONTROL */
+    {"app_switch", (void *)akira_native_app_switch, "($)i", NULL},
+    {"app_check_update", (void *)akira_native_app_check_update, "(ii)i", NULL},
+    {"app_request_update", (void *)akira_native_app_request_update, "()i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_lifecycle_api, "env", akira_lifecycle_natives);
+#endif

@@ -10,6 +10,7 @@
 
 #include <zephyr/kernel.h>
 #include "akira.h"
+#include <akira_hooks.h>
 #include <zephyr/logging/log.h>
 #include <drivers/platform_hal.h>
 #include <api/akira_display_api.h>
@@ -215,6 +216,9 @@ int akira_start(void)
 
     /* Settings auto-initialized via SYS_INIT (see settings.c) */
 
+    struct akira_hook_event boot_evt = { .type = AKIRA_HOOK_BOOT_PRE_RUNTIME };
+    akira_hooks_emit(&boot_evt);
+
     /* Initialize runtime */
     if (akira_runtime_init() < 0)
     {
@@ -274,6 +278,8 @@ int akira_start(void)
 #endif
 
     LOG_INF("AkiraOS init complete");
+    boot_evt.type = AKIRA_HOOK_BOOT_READY;
+    akira_hooks_emit(&boot_evt);
     /* Idle loop */
     while (1)
     {

@@ -35,6 +35,7 @@ target_include_directories(app PRIVATE
 target_sources(app PRIVATE
     # Sources under test
     ${AKIRA_SRC}/runtime/manifest_parser.c
+    ${AKIRA_SRC}/runtime/akira_abi_check.c
     ${AKIRA_SRC}/runtime/security.c
     ${AKIRA_SRC}/runtime/security/app_signing_v2.c
     ${AKIRA_SRC}/runtime/security/sandbox.c

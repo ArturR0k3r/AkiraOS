@@ -24,3 +24,17 @@ int akira_native_delay(wasm_exec_env_t exec_env, uint32_t microseconds)
 }
 
 #endif
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_API))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_common_natives[] = {
+    {"printf_native", (void *)akira_native_printf, "($)i", NULL},
+    {"delay", (void *)akira_native_delay, "(i)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_common_api, "env", akira_common_natives);
+#endif

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# ILI9341 240x320 TFT through AkiraOS's direct-SPI driver, replacing the board's
+# default ST7789V panel. Apply after akira-board.
+name: akira-display-ili9341
+append:
+  EXTRA_CONF_FILE: ili9341.conf
+boards:
+  akiraconsole/esp32s3/procpu:
+    append:
+      EXTRA_DTC_OVERLAY_FILE: boards/akiraconsole_esp32s3_procpu.overlay
+  akiraconsole_prod/esp32s3/procpu:
+    append:
+      EXTRA_DTC_OVERLAY_FILE: boards/akiraconsole_prod_esp32s3_procpu.overlay

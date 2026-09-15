@@ -18,7 +18,7 @@
 #   -h, --help      Show this help message
 #
 # Boards:
-#   Automatically discovered from boards/*.conf metadata.
+#   Automatically discovered from snippets/akira-board/boards/*.conf metadata.
 #   Each .conf file declares: BOARD_ZEPHYR, BOARD_CHIP, BOARD_DESC (and optionally BOARD_ALIAS).
 #   Run ./build.sh -h to see all available boards.
 #
@@ -68,16 +68,17 @@ BOLD=$'\033[1m'
 NC=$'\033[0m'
 
 # =============================================================================
-# Board Discovery (auto-loaded from boards/*.conf metadata)
+# Board Discovery (auto-loaded from snippets/akira-board/boards/*.conf metadata)
 # =============================================================================
 declare -A BOARD_MAP=()
 declare -A BOARD_CHIP=()
 declare -A BOARD_DESC=()
 declare -A BOARD_ALIASES=()  # primary_id -> space-separated short aliases
+declare -A BOARD_ID=()       # board id or alias -> primary id (conf file name)
 declare -a BOARD_PRIMARY=()  # ordered list of primary board IDs for display
 
 load_boards() {
-    local boards_dir="$SCRIPT_DIR/boards"
+    local boards_dir="$SCRIPT_DIR/snippets/akira-board/boards"
     local conf board_id zephyr chip desc aliases
     for conf in "$boards_dir"/*.conf; do
         [[ -f "$conf" ]] || continue
@@ -90,6 +91,7 @@ load_boards() {
         BOARD_MAP["$board_id"]="$zephyr"
         BOARD_CHIP["$board_id"]="$chip"
         BOARD_DESC["$board_id"]="${desc:-$board_id}"
+        BOARD_ID["$board_id"]="$board_id"
         BOARD_PRIMARY+=("$board_id")
         if [[ -n "$aliases" ]]; then
             BOARD_ALIASES["$board_id"]="$aliases"
@@ -97,6 +99,7 @@ load_boards() {
                 BOARD_MAP["$alias"]="$zephyr"
                 BOARD_CHIP["$alias"]="$chip"
                 BOARD_DESC["$alias"]="${desc:-$board_id}"
+                BOARD_ID["$alias"]="$board_id"
             done
         fi
     done
@@ -264,6 +267,7 @@ clean_build() {
 
 build_mcuboot() {
     local zephyr_board="${BOARD_MAP[$BOARD]}"
+    local board_id="${BOARD_ID[$BOARD]:-$BOARD}"
     local build_dir=$(get_mcuboot_build_dir)
 
     print_step "Building MCUboot bootloader..."
@@ -275,63 +279,49 @@ build_mcuboot() {
     # EXTRA_DTC_OVERLAY_FILE mirrors what sysbuild does automatically — it
     # ensures MCUboot's compiled-in partition layout matches the app's layout.
     local extra_cmake="-DBOARD_ROOT=$SCRIPT_DIR -DDTS_ROOT=$SCRIPT_DIR"
-    # Prefer a board-specific MCUboot overlay (${BOARD}.mcuboot.overlay) when
-    # present; otherwise fall back to the application overlay (${BOARD}.overlay).
-    local mcuboot_overlay="$SCRIPT_DIR/boards/${BOARD}.mcuboot.overlay"
-    local board_overlay="$SCRIPT_DIR/boards/${BOARD}.overlay"
+    # Prefer a board-specific MCUboot overlay (boards/<id>.mcuboot.overlay) when
+    # present; otherwise fall back to the board's AkiraOS overlay in the
+    # akira-board snippet, which defines the partition layout the app uses.
+    local mcuboot_overlay="$SCRIPT_DIR/boards/${board_id}.mcuboot.overlay"
+    local board_overlay="$SCRIPT_DIR/snippets/akira-board/boards/${board_id}.overlay"
     if [[ -f "$mcuboot_overlay" ]]; then
         extra_cmake+=" -DEXTRA_DTC_OVERLAY_FILE=$mcuboot_overlay"
         print_info "MCUboot overlay: $mcuboot_overlay"
     elif [[ -f "$board_overlay" ]]; then
         extra_cmake+=" -DEXTRA_DTC_OVERLAY_FILE=$board_overlay"
         print_info "MCUboot overlay: $board_overlay"
+    else
+        print_warning "No MCUboot or board overlay for ${board_id}: MCUboot uses the board's default partitions"
     fi
 
     # Pass board-specific MCUboot Kconfig overrides when present.
     # These live in AkiraOS/boards/<board>.mcuboot.conf so the mcuboot repo
     # stays at its upstream manifest-rev without local commits.
-    local mcuboot_conf="$SCRIPT_DIR/boards/${BOARD}.mcuboot.conf"
+    local mcuboot_conf="$SCRIPT_DIR/boards/${board_id}.mcuboot.conf"
     if [[ -f "$mcuboot_conf" ]]; then
         extra_cmake+=" -DEXTRA_CONF_FILE=$mcuboot_conf"
         print_info "MCUboot conf: $mcuboot_conf"
     fi
 
-    # Some ESP32 SoCs require a patched MCUboot linker script to avoid IRAM
-    # overflow (ESP32-C6) or RISC-V RVC relocation errors (ESP32-H2).  Zephyr's
-    # SOC_LINKER_SCRIPT cmake variable is forced via CACHE INTERNAL and cannot
-    # be overridden from the command line, so we temporarily replace the file in
-    # the Zephyr source tree and restore it via git after the build.
-    local _linker_patched_soc=""
-    _apply_mcuboot_linker_patch() {
-        local soc="$1"
-        local akira_ld="$SCRIPT_DIR/zephyr/soc/espressif/${soc}/mcuboot.ld"
-        local zephyr_ld="$WORKSPACE_ROOT/zephyr/soc/espressif/${soc}/mcuboot.ld"
-        if [[ -f "$akira_ld" && -f "$zephyr_ld" ]]; then
-            cp "$akira_ld" "$zephyr_ld"
-            _linker_patched_soc="$soc"
-            print_info "Applied MCUboot linker patch for $soc"
-        fi
-    }
-    _restore_mcuboot_linker_patch() {
-        if [[ -n "$_linker_patched_soc" ]]; then
-            git -C "$WORKSPACE_ROOT/zephyr" checkout -- \
-                "soc/espressif/${_linker_patched_soc}/mcuboot.ld" 2>/dev/null || true
-            print_info "Restored MCUboot linker for ${_linker_patched_soc}"
-        fi
-    }
-
+    # ESP32-C6 and ESP32-H2 MCUboot images need AkiraOS's patched linker scripts
+    # (IRAM overflow on C6, RISC-V RVC relocation errors on H2). Zephyr gives a
+    # custom linker script precedence over the SoC script, so point at the patched
+    # copy directly; the Zephyr tree is never modified.
+    local mcuboot_ld=""
     case "$zephyr_board" in
-        *esp32c6*) _apply_mcuboot_linker_patch "esp32c6" ;;
-        *esp32h2*) _apply_mcuboot_linker_patch "esp32h2" ;;
+        *esp32c6*) mcuboot_ld="$SCRIPT_DIR/zephyr/soc/espressif/esp32c6/mcuboot.ld" ;;
+        *esp32h2*) mcuboot_ld="$SCRIPT_DIR/zephyr/soc/espressif/esp32h2/mcuboot.ld" ;;
     esac
+    if [[ -n "$mcuboot_ld" && -f "$mcuboot_ld" ]]; then
+        extra_cmake+=" -DCONFIG_HAVE_CUSTOM_LINKER_SCRIPT=y -DCONFIG_CUSTOM_LINKER_SCRIPT=\"$mcuboot_ld\""
+        print_info "MCUboot linker script: $mcuboot_ld"
+    fi
 
     cd "$WORKSPACE_ROOT"
 
     local build_rc=0
     west build --pristine -b "$zephyr_board" bootloader/mcuboot/boot/zephyr -d "$build_dir" \
         -- $extra_cmake || build_rc=$?
-
-    _restore_mcuboot_linker_patch
 
     if [[ $build_rc -eq 0 ]]; then
         print_success "MCUboot build complete!"

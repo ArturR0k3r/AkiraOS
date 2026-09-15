@@ -6,6 +6,8 @@ tests:
     build_only: true
     platform_allow:
       - native_sim
+      - esp32s3_devkitm/esp32s3/procpu
     integration_platforms:
       - native_sim
+      - esp32s3_devkitm/esp32s3/procpu
     tags: akiraos module

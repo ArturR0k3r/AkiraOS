@@ -153,3 +153,17 @@ int akira_native_i2c_read_reg(wasm_exec_env_t exec_env,
 }
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_I2C))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_i2c_natives[] = {
+    {"i2c_write_reg", (void *)akira_native_i2c_write_reg, "(iii*~)i", NULL},
+    {"i2c_read_reg", (void *)akira_native_i2c_read_reg, "(iii*~)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_i2c_api, "env", akira_i2c_natives);
+#endif

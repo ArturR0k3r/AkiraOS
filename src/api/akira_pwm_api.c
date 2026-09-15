@@ -126,3 +126,17 @@ int akira_native_pwm_disable(wasm_exec_env_t exec_env, int32_t channel)
 }
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_PWM))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_pwm_natives[] = {
+    {"pwm_set", (void *)akira_native_pwm_set, "(iii)i", NULL},
+    {"pwm_disable", (void *)akira_native_pwm_disable, "(i)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_pwm_api, "env", akira_pwm_natives);
+#endif

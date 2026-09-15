@@ -147,3 +147,16 @@ int akira_native_sensor_read(wasm_exec_env_t exec_env, int32_t channel)
 }
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_SENSOR))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_sensor_natives[] = {
+    {"sensor_read", (void *)akira_native_sensor_read, "(i)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_sensor_api, "env", akira_sensor_natives);
+#endif

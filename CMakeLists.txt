@@ -23,53 +23,17 @@ list(APPEND DTS_ROOT ${CMAKE_CURRENT_LIST_DIR})
 # inside the workspace, where west already provides akira-os.
 list(APPEND EXTRA_ZEPHYR_MODULES ${CMAKE_CURRENT_LIST_DIR})
 
-# ---------------------------------------------------------------------------
-# Auto-append display panel overlay based on board .conf.
-#
-# Recognised selectors:
-#   CONFIG_AKIRA_ILI9341_DRIVER=y
-#       → appends boards/<base>/<safe>_ili9341.overlay
-#   CONFIG_LS0XX=y  or  CONFIG_AKIRA_SHARP_DISPLAY=y
-#       → appends boards/<base>/<safe>_sharp.overlay
-# ST7789V: no overlay needed — DTS nodes already active by default.
-# ---------------------------------------------------------------------------
-if(DEFINED BOARD)
-  string(REPLACE "/" "_" _akira_board_safe "${BOARD}")
-  string(REPLACE "/" ";" _akira_board_parts "${BOARD}")
-  list(GET _akira_board_parts 0 _akira_board_base)
-
-  set(_akira_bconf "${CMAKE_CURRENT_LIST_DIR}/boards/${_akira_board_safe}.conf")
-  if(NOT EXISTS "${_akira_bconf}")
-    set(_akira_bconf "${CMAKE_CURRENT_LIST_DIR}/boards/${_akira_board_base}.conf")
-  endif()
-
-  if(EXISTS "${_akira_bconf}")
-    file(READ "${_akira_bconf}" _akira_board_conf_text)
-    if(_akira_board_conf_text MATCHES
-       "(^|\n)[ \t]*CONFIG_AKIRA_ILI9341_DRIVER[ \t]*=[ \t]*y([ \t\n]|$)")
-      set(_akira_ili_overlay
-          "${CMAKE_CURRENT_LIST_DIR}/boards/${_akira_board_base}/${_akira_board_safe}_ili9341.overlay")
-      if(EXISTS "${_akira_ili_overlay}")
-        list(APPEND EXTRA_DTC_OVERLAY_FILE "${_akira_ili_overlay}")
-        message(STATUS "AkiraOS: ILI9341 overlay → ${_akira_ili_overlay}")
-      else()
-        message(WARNING
-          "AkiraOS: ILI9341 panel selected but overlay not found: ${_akira_ili_overlay}")
-      endif()
-    endif()
-    if(_akira_board_conf_text MATCHES
-       "(^|\n)[ \t]*CONFIG_(LS0XX|AKIRA_SHARP_DISPLAY)[ \t]*=[ \t]*y([ \t\n]|$)")
-      set(_akira_sharp_overlay
-          "${CMAKE_CURRENT_LIST_DIR}/boards/${_akira_board_base}/${_akira_board_safe}_sharp.overlay")
-      if(EXISTS "${_akira_sharp_overlay}")
-        list(APPEND EXTRA_DTC_OVERLAY_FILE "${_akira_sharp_overlay}")
-        message(STATUS "AkiraOS: Sharp overlay → ${_akira_sharp_overlay}")
-      else()
-        message(WARNING
-          "AkiraOS: Sharp panel selected but overlay not found: ${_akira_sharp_overlay}")
-      endif()
-    endif()
-  endif()
+# Per-board AkiraOS setup (flash layout, LittleFS/NVS nodes, board tuning) and
+# the reference display panel come from snippets in the akira-os module
+# (snippets/). They are applied before snippets passed with `west build -S`,
+# which therefore override them. Products set AKIRA_SNIPPETS the same way.
+set(AKIRA_SNIPPETS akira-board)
+set(_akira_board "${BOARD}")
+if(NOT _akira_board)
+  set(_akira_board "$ENV{BOARD}")
+endif()
+if(_akira_board MATCHES "^akiraconsole_prod(/|$)")
+  list(APPEND AKIRA_SNIPPETS akira-display-sharp)
 endif()
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
