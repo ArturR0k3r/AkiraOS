@@ -290,3 +290,27 @@ int akira_native_matter_get_pairing(wasm_exec_env_t exec_env,
     return MATTER_OK;
 }
 #endif /* CONFIG_AKIRA_MATTER_ACCESSORY */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_MATTER))
+#include <akira_native_registry.h>
+
+/* matter: Thread/Matter co-processor IPC bridge */
+static const NativeSymbol akira_matter_natives[] = {
+    {"matter_commission", (void *)akira_native_matter_commission, "($*~)i",    NULL},
+    {"matter_send",       (void *)akira_native_matter_send,       "(*~*~i)i",  NULL},
+    {"matter_subscribe",  (void *)akira_native_matter_subscribe,  "(*~i)i",    NULL},
+    {"matter_poll",       (void *)akira_native_matter_poll,       "(*~*i*~ii)i", NULL},
+#ifdef CONFIG_AKIRA_MATTER_ACCESSORY
+    {"matter_endpoint_add", (void *)akira_native_matter_endpoint_add, "(i*~)i",    NULL},
+    {"matter_report_attr",  (void *)akira_native_matter_report_attr,  "(iii*~)i",  NULL},
+    {"matter_cmd_poll",     (void *)akira_native_matter_cmd_poll,     "(****~i)i", NULL},
+    {"matter_open_pairing", (void *)akira_native_matter_open_pairing, "(i)i",      NULL},
+    {"matter_get_pairing",  (void *)akira_native_matter_get_pairing,  "(*~*~)i",   NULL},
+#endif
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_matter_api, "env", akira_matter_natives);
+#endif

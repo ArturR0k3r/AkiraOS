@@ -349,3 +349,25 @@ int akira_native_net_get_ip(wasm_exec_env_t e, uint32_t b, uint32_t l)
 }
 
 #endif /* CONFIG_AKIRA_WASM_NET */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_NET))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_net_natives[] = {
+    {"net_open", (void *)akira_native_net_open, "(i)i", NULL},
+    {"net_connect", (void *)akira_native_net_connect, "(i$i)i", NULL},
+    {"net_bind", (void *)akira_native_net_bind, "(ii)i", NULL},
+    {"net_listen", (void *)akira_native_net_listen, "(ii)i", NULL},
+    {"net_close", (void *)akira_native_net_close, "(i)i", NULL},
+    {"net_tx_bind", (void *)akira_native_net_tx_bind, "(iii)i", NULL},
+    {"net_rx_bind", (void *)akira_native_net_rx_bind, "(iii)i", NULL},
+    {"net_tx_flush", (void *)akira_native_net_tx_flush, "(i)i", NULL},
+    {"net_event_pop", (void *)akira_native_net_event_pop, "(ii)i", NULL},
+    {"net_get_ip", (void *)akira_native_net_get_ip, "(ii)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_net_api, "env", akira_net_natives);
+#endif

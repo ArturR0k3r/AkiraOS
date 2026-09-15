@@ -121,3 +121,8 @@ modules/wasm-micro-runtime
 
 tmp/
 flash.bin
+
+# Former git submodules, now west projects under ../modules/lib (see west.yml).
+# Ignored so existing local checkouts (such as a locally built wamrc) are kept.
+/modules/wasm-micro-runtime/
+/modules/tflite-micro/

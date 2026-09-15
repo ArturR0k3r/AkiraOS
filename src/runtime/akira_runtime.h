@@ -192,6 +192,14 @@ uint32_t akira_runtime_get_memory_used(int instance_id);
 uint32_t akira_runtime_get_memory_quota(int instance_id);
 
 /**
+ * @brief Get the capability mask granted to an app
+ *
+ * @param instance_id  App instance ID
+ * @return Granted AKIRA_CAP_* bitmask, or 0 if the slot is not loaded
+ */
+uint64_t akira_runtime_get_cap_mask(int instance_id);
+
+/**
  * @brief Get the raw "commands" JSON array from an app's manifest
  *
  * @param instance_id  App instance ID

@@ -7,7 +7,7 @@ nav_order: 7
 
 # OTA Updates Guide
 
-> **Status (v1.6.4):** Implemented. Images are verified by SHA-256 against authenticated
+> **Status (v1.6.5):** Implemented. Images are verified by SHA-256 against authenticated
 > metadata before being marked bootable (`CONFIG_AKIRA_OTA_REQUIRE_HASH`, default `y`), with
 > anti-rollback refusing non-newer versions. HTTP, BLE and USB transports are available;
 > `CONFIG_AKIRA_OTA_CLOUD` is still a stub. USB-host mass-storage mount returns `-ENOSYS`.
@@ -80,4 +80,4 @@ AkiraOS relies on **MCUboot** for secure boot and OTA updates using a dual-slot 
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

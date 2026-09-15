@@ -108,4 +108,4 @@ Zephyr's own commands (`log`, `kernel`, `device`, `flash`, `net`, …) are avail
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

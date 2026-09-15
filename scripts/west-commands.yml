@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# West extension commands provided by the akira-os module. A product repo makes
+# them available by adding `west-commands: scripts/west-commands.yml` to its
+# akira-os project entry in west.yml (the template and sample already do).
+west-commands:
+  - file: scripts/west_commands/akira.py
+    commands:
+      - name: akira
+        class: Akira
+        help: AkiraOS product release helpers (keygen, sbom, sign, pack, release)

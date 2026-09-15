@@ -95,3 +95,19 @@ int akira_native_settings_delete(wasm_exec_env_t exec_env, const char *key)
 }
 
 #endif /* CONFIG_AKIRA_WASM_SETTINGS */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_SETTINGS))
+#include <akira_native_registry.h>
+
+/* settings.*: persistent NVS key-value store */
+static const NativeSymbol akira_settings_natives[] = {
+    {"settings_get", (void *)akira_native_settings_get, "($ii)i", NULL},
+    {"settings_set", (void *)akira_native_settings_set, "($$)i", NULL},
+    {"settings_delete", (void *)akira_native_settings_delete, "($)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_settings_api, "env", akira_settings_natives);
+#endif

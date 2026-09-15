@@ -134,9 +134,9 @@ static void akira_shell_print_internal(const struct shell *sh, const char *text,
 /* App Manager Shell Commands */
 static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
 {
-    app_info_t apps[CONFIG_AKIRA_APP_MAX_INSTALLED];
-    int count = app_manager_list(apps, CONFIG_AKIRA_APP_MAX_INSTALLED);
-    if (count < 0)
+    int count;
+    app_info_t *apps = app_manager_list_alloc(&count);
+    if (!apps)
     {
         AKIRA_SHELL_ERROR(sh, "Failed to list apps");
         return count;
@@ -149,6 +149,7 @@ static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
                           apps[i].auto_restart ? " [auto-restart]" : "");
     }
     AKIRA_SHELL_PRINT(sh, "Total: %d", count);
+    akira_free_buffer(apps);
     return 0;
 }
 

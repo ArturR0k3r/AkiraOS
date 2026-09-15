@@ -92,6 +92,18 @@ We welcome various types of contributions:
 - Browse `help wanted` labels for areas needing assistance
 - Join discussions in [GitHub Discussions](https://github.com/ArturR0k3r/AkiraOS/discussions)
 
+### Product Branches
+
+Product firmware (KeyaPlatform, AkiraEar, Latch) has lived on long-lived
+branches that patch core files. Those branches are **frozen**: they get no
+merges from the active release branch, and new core work must not start on them.
+
+- Generic drivers and fixes found on a product branch come back to core as
+  normal pull requests against the active release branch.
+- New product work keeps product-only code behind its own Kconfig symbol and
+  out of shared core files, so it can move to its own repository once AkiraOS
+  can be consumed as a Zephyr module.
+
 ## 📝 Coding Standards
 
 ### C/C++ Code Style

@@ -7,7 +7,7 @@ nav_order: 10
 
 # AkiraOS OTA Update System — Design Document
 
-**Version:** 1.6.4  
+**Version:** 1.6.5  
 **Status:** Approved for implementation  
 **Scope:** Track A — OTA with atomic rollback and delta updates
 
@@ -25,7 +25,7 @@ nav_order: 10
 
 ---
 
-## 2. Current State (v1.6.4)
+## 2. Current State (v1.6.5)
 
 `src/connectivity/ota/ota_manager.c/h` already provides:
 - MCUboot `boot_request_upgrade()` / `boot_write_img_confirmed()` wrappers
@@ -261,4 +261,4 @@ baseline cost is ~2.2 KB flash / ~128 B RAM for boot guard + API.
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

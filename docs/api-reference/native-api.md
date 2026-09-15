@@ -907,4 +907,4 @@ These are declared in headers or gated by Kconfig but register **no** native sym
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

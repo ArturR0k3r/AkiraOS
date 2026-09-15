@@ -9,6 +9,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* Registry API (akira_capability_*). Included by relative path so code that
+ * only has the AkiraOS src/ include paths (e.g. AkiraPlatform) still builds. */
+#include "../../include/akira_capability.h"
+
 /* WAMR headers are optional; provide lightweight typedefs when WAMR is not enabled */
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
@@ -123,23 +127,23 @@ extern "C" {
  * Manifest string: "sync" */
 #define AKIRA_CAP_SYNC          (1ULL << 39)
 
-/* Highest capability bit currently defined (AKIRA_CAP_SYNC = bit 39).
- * Keep in sync when adding new AKIRA_CAP_* bits above. */
+/* Highest CORE capability bit currently defined (AKIRA_CAP_SYNC = bit 39).
+ * Core bit numbers are frozen; new core capabilities take the next free bit up
+ * to AKIRA_CAP_CORE_LAST_BIT and need a registry entry in security.c. Product
+ * capabilities live in bits 48-63 (AKIRA_CAPABILITY_DEFINE). */
 #define AKIRA_CAP_MAX_BIT       39
 
-/* Union of every capability bit the runtime actually understands. A manifest
- * wildcard ("*") is bounded to this — it can never grant undefined future bits
- * (which UINT64_MAX would have).
- *
- * Derived from AKIRA_CAP_MAX_BIT rather than from a named capability: the
- * previous ((AKIRA_CAP_MQTT << 1) - 1) form stopped at bit 35 and silently
- * dropped every bit added after it. */
+/* Union of the CORE capability bits defined in this header.
+ * Use akira_capability_known_mask() for the set the runtime grants: it also
+ * covers product capabilities and never includes unassigned bits. */
 #define AKIRA_CAP_ALL_KNOWN     ((AKIRA_CAP_MAX_BIT >= 63) ? UINT64_MAX \
                                  : ((1ULL << (AKIRA_CAP_MAX_BIT + 1)) - 1ULL))
 
-/* Capabilities that let an app affect the world outside the sandbox, persist
- * state, or attack the RF/network environment. Granting any of these to an
- * unattested (unsigned) app is security-sensitive and is audit-logged. */
+/* CORE capabilities that let an app affect the world outside the sandbox,
+ * persist state, or attack the RF/network environment. Granting any of these
+ * to an unattested (unsigned) app is security-sensitive and is audit-logged.
+ * The registry marks these entries privileged; akira_capability_privileged_mask()
+ * adds product capabilities flagged AKIRA_CAPABILITY_PRIVILEGED. */
 #define AKIRA_CAP_PRIVILEGED  ( \
         AKIRA_CAP_RF_TRANSCEIVE | AKIRA_CAP_BLE | AKIRA_CAP_NETWORK | \
         AKIRA_CAP_WIFI_INJECT | AKIRA_CAP_OTA_TRIGGER | AKIRA_CAP_HID | \
@@ -212,11 +216,10 @@ bool akira_security_check(uint64_t capability);
 /* Get the current app's capability mask from exec_env - for use with inline macros */
 uint64_t akira_security_get_cap_mask(wasm_exec_env_t exec_env);
 
-/* Capability string to mask helper (public so runtime can parse manifests).
- * This maps capability strings like "display.write" -> AKIRA_CAP_DISPLAY_WRITE
- */
-uint64_t akira_capability_str_to_mask(const char *cap);
-/* Mask to string helper for logging (returns first matching capability string) */
+/* Capability string to mask: declared in akira_capability.h (registry lookup). */
+
+/* Mask to string helper for logging: name of the lowest registered bit set, or
+ * "unknown". Prefer akira_capability_name(), which returns a const string. */
 char* akira_capability_mask_to_str(uint64_t cap);
 
 /* Runtime helpers used by security implementation */

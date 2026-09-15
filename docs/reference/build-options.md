@@ -95,6 +95,7 @@ Toggle these flags to export particular native APIs into the WASM sandboxes. If 
 | `CONFIG_AKIRA_SE050` | `y` if `nxp,se050` in DT | NXP SE050 secure element driver. |
 | `CONFIG_AKIRA_SE050_SCP03` | `n` | GlobalPlatform SCP03 authenticated/encrypted channel to the SE050. |
 | `CONFIG_AKIRA_BOOT_GUARD` | `n` | Software boot counter / rollback guard. |
+| `CONFIG_AKIRA_RELEASE_BUILD` | `n` | Fail the build while development-only security settings are active: HTTP no-auth, empty or example upload token, direct upload endpoint, unsigned apps, unsigned or dev-key MCUboot images. With `n` they are printed as a warning. |
 
 ### HTTP Server (1.6.x)
 
@@ -145,4 +146,4 @@ For detailed constraints (like SRAM/PSRAM boundaries), see the [Architecture Ove
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

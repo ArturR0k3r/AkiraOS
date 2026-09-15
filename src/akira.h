@@ -30,12 +30,15 @@ extern "C"
     /*===========================================================================*/
 
 /* The firmware version is owned by the top-level VERSION file; Zephyr
- * generates <app_version.h> from it. Derive from those macros so there is a
- * single source of truth (the previous hardcoded "1.5.8" had drifted from
- * VERSION's 1.6.2 and was being reported to clients as fw_version). Literals
- * are only a fallback for TUs built without the generated header. */
+ * generates <zephyr/app_version.h> from it. Derive from those macros so there
+ * is a single source of truth. (Until 1.6.5 this probed <app_version.h>, which
+ * Zephyr no longer generates, so the stale fallback literals were compiled in
+ * and firmware reported 1.6.2.) The 0.0.0 fallback only applies to TUs built
+ * without a VERSION file, such as the unit tests, and is deliberately obvious. */
 #if defined(__has_include)
-#  if __has_include(<app_version.h>)
+#  if __has_include(<zephyr/app_version.h>)
+#    include <zephyr/app_version.h>
+#  elif __has_include(<app_version.h>)
 #    include <app_version.h>
 #  endif
 #endif
@@ -44,28 +47,28 @@ extern "C"
 #  ifdef APP_VERSION_MAJOR
 #    define AKIRA_VERSION_MAJOR APP_VERSION_MAJOR
 #  else
-#    define AKIRA_VERSION_MAJOR 1
+#    define AKIRA_VERSION_MAJOR 0
 #  endif
 #endif
 #ifndef AKIRA_VERSION_MINOR
 #  ifdef APP_VERSION_MINOR
 #    define AKIRA_VERSION_MINOR APP_VERSION_MINOR
 #  else
-#    define AKIRA_VERSION_MINOR 6
+#    define AKIRA_VERSION_MINOR 0
 #  endif
 #endif
 #ifndef AKIRA_VERSION_PATCH
 #  ifdef APP_PATCHLEVEL
 #    define AKIRA_VERSION_PATCH APP_PATCHLEVEL
 #  else
-#    define AKIRA_VERSION_PATCH 2
+#    define AKIRA_VERSION_PATCH 0
 #  endif
 #endif
 #ifndef AKIRA_VERSION_STRING
 #  ifdef APP_VERSION_STRING
 #    define AKIRA_VERSION_STRING APP_VERSION_STRING
 #  else
-#    define AKIRA_VERSION_STRING "1.6.2"
+#    define AKIRA_VERSION_STRING "0.0.0"
 #  endif
 #endif
 #define AKIRA_CODENAME "C1PH3R"

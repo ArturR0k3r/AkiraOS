@@ -197,7 +197,7 @@ Expected boot output:
 
 ```
 *** Booting Zephyr OS build v4.3.0 ***
-[00:00:00.123] <inf> main: AkiraOS v1.6.4 starting...
+[00:00:00.123] <inf> main: AkiraOS v1.6.5 starting...
 [00:00:00.234] <inf> runtime: WAMR initialized
 [00:00:00.345] <inf> connectivity: WiFi stack ready
 [00:00:00.456] <inf> main: System initialized successfully
@@ -340,12 +340,14 @@ pip3 install pyelftools
 west update -v   # retry with verbose output
 ```
 
-### Build fails with submodule errors
+### Build fails because WAMR, TFLite Micro or AkiraSDK is missing
+
+WAMR and TFLite Micro are west projects; AkiraSDK is a git submodule:
 
 ```bash
-cd ~/akira-workspace/AkiraOS
-git submodule update --init --recursive --force
-git submodule status  # verify
+cd ~/akira-workspace
+west update wasm-micro-runtime tflite-micro
+cd AkiraOS && git submodule update --init AkiraSDK
 ```
 
 ### "ZEPHYR_BASE not set" error

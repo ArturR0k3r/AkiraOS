@@ -153,3 +153,24 @@ int akira_native_power_set_low_power(wasm_exec_env_t exec_env, int enable)
 }
 
 #endif /* CONFIG_AKIRA_WASM_POWER_CONTROL */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_POWER))
+#include <akira_native_registry.h>
+
+/* power.read: battery level/status, mode query */
+static const NativeSymbol akira_power_natives[] = {
+    {"power_get_mode", (void *)akira_native_power_get_mode, "()i", NULL},
+    {"power_get_battery_level", (void *)akira_native_power_get_battery_level, "()i", NULL},
+    {"power_get_battery_status", (void *)akira_native_power_get_battery_status, "(*~)i", NULL},
+    /* power.control: mode transitions and wake sources (elevated) */
+    {"power_set_mode", (void *)akira_native_power_set_mode, "(i)i", NULL},
+    {"power_wake_on_gpio", (void *)akira_native_power_wake_on_gpio, "(ii)i", NULL},
+    {"power_wake_on_timer", (void *)akira_native_power_wake_on_timer, "(i)i", NULL},
+    {"power_set_low_power", (void *)akira_native_power_set_low_power, "(i)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_power_api, "env", akira_power_natives);
+#endif

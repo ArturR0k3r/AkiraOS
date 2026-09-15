@@ -16,6 +16,9 @@
 #include <zephyr/logging/log.h>
 #include "../../akira.h"
 #include "../../akira_platform_stubs.h"
+#include <akira_hooks.h>
+#include "../akira_abi_check.h"
+#include "../manifest_parser.h"
 #include <zephyr/fs/fs.h>
 #include <zephyr/sys/crc.h>
 #include <string.h>
@@ -271,6 +274,20 @@ void app_manager_shutdown(void)
 
 /* ===== Installation ===== */
 
+/* Reject an app whose manifest asks for an incompatible WASM ABI or a newer
+ * AkiraOS than this firmware, before it is written to flash or replaces an
+ * installed app. The manifest embedded in the binary is authoritative; a JSON
+ * manifest (sidecar or package) is checked only when the binary has none. */
+static int abi_gate(const void *binary, size_t size, const char *json, size_t json_len)
+{
+    akira_manifest_t m;
+
+    if (manifest_parse_with_fallback((const uint8_t *)binary, size, json, json_len, &m) != 0) {
+        return 0; /* No manifest to check. */
+    }
+    return akira_abi_check_default(&m);
+}
+
 int app_manager_install(const char *name, const void *binary, size_t size,
                         const app_manifest_t *manifest, app_source_t source)
 {
@@ -297,6 +314,13 @@ int app_manager_install(const char *name, const void *binary, size_t size,
     {
         LOG_ERR("App too large: %zu > %dKB", size, CONFIG_AKIRA_APP_MAX_SIZE_KB);
         return -EFBIG;
+    }
+
+    /* Reject an incompatible embedded manifest before touching the registry. */
+    ret = abi_gate(binary, size, NULL, 0);
+    if (ret < 0)
+    {
+        return ret;
     }
 
     k_mutex_lock(&g_registry_mutex, K_FOREVER);
@@ -410,7 +434,8 @@ int app_manager_install(const char *name, const void *binary, size_t size,
     k_mutex_unlock(&g_registry_mutex);
 
     LOG_INF("Installed app: %s (ID: %d, size: %zu)", app_name, existing->id, size);
-    akira_on_app_installed(app_name, existing->id, existing->version);
+    akira_hooks_emit_app(AKIRA_HOOK_APP_INSTALLED, app_name, existing->id, -1,
+                         existing->version, 0);
     return existing->id;
 }
 
@@ -505,6 +530,12 @@ int app_manager_install_from_path(const char *path)
         json[mf_size] = '\0';
         if (app_manifest_parse(json, mf_size, &manifest) == 0)
         {
+            int gate = abi_gate(buffer, size, json, (size_t)mf_size);
+            if (gate < 0) {
+                akira_free_buffer(buffer);
+                akira_free_buffer(json);
+                return gate;
+            }
             int ret = app_manager_install(name, buffer, size, &manifest, source);
             akira_free_buffer(buffer);
             if (ret > 0) {
@@ -576,7 +607,7 @@ int app_manager_uninstall(const char *name)
     k_mutex_unlock(&g_registry_mutex);
 
     LOG_INF("Uninstalled app: %s", name);
-    akira_on_app_uninstalled(name);
+    akira_hooks_emit_app(AKIRA_HOOK_APP_UNINSTALLED, name, -1, -1, NULL, 0);
     return 0;
 }
 
@@ -743,7 +774,7 @@ int app_manager_start(const char *name)
     strncpy(lc_name, app->name, APP_NAME_MAX_LEN);
     k_mutex_unlock(&g_registry_mutex);
 
-    akira_on_app_started(lc_name, container_id);
+    akira_hooks_emit_app(AKIRA_HOOK_APP_STARTED, lc_name, -1, container_id, NULL, 0);
 
 #ifdef CONFIG_AKIRA_WASM_IPC
     {
@@ -941,8 +972,10 @@ int app_manager_list(app_info_t *out_list, int max_count)
             if (g_registry[i].container_id >= 0) {
                 akira_runtime_get_commands_json(g_registry[i].container_id,
                         out_list[count].commands_json, sizeof(out_list[count].commands_json));
+                out_list[count].cap_mask = akira_runtime_get_cap_mask(g_registry[i].container_id);
             } else {
                 strncpy(out_list[count].commands_json, "[]", sizeof(out_list[count].commands_json));
+                out_list[count].cap_mask = 0;
             }
             count++;
         }
@@ -966,8 +999,10 @@ int app_manager_list(app_info_t *out_list, int max_count)
             if (g_transient_apps[i].container_id >= 0) {
                 akira_runtime_get_commands_json(g_transient_apps[i].container_id,
                         out_list[count].commands_json, sizeof(out_list[count].commands_json));
+                out_list[count].cap_mask = akira_runtime_get_cap_mask(g_transient_apps[i].container_id);
             } else {
                 strncpy(out_list[count].commands_json, "[]", sizeof(out_list[count].commands_json));
+                out_list[count].cap_mask = 0;
             }
             count++;
         }
@@ -976,6 +1011,32 @@ int app_manager_list(app_info_t *out_list, int max_count)
 
     k_mutex_unlock(&g_registry_mutex);
     return count;
+}
+
+app_info_t *app_manager_list_alloc(int *out_count)
+{
+    if (!out_count)
+    {
+        return NULL;
+    }
+
+    app_info_t *list = akira_malloc_buffer(sizeof(app_info_t) * APP_MANAGER_LIST_CAPACITY);
+    if (!list)
+    {
+        *out_count = -ENOMEM;
+        return NULL;
+    }
+
+    int count = app_manager_list(list, APP_MANAGER_LIST_CAPACITY);
+    if (count < 0)
+    {
+        akira_free_buffer(list);
+        *out_count = count;
+        return NULL;
+    }
+
+    *out_count = count;
+    return list;
 }
 
 int app_manager_get_info(const char *name, app_info_t *out_info)
@@ -1008,8 +1069,10 @@ int app_manager_get_info(const char *name, app_info_t *out_info)
     if (app->container_id >= 0) {
         akira_runtime_get_commands_json(app->container_id, out_info->commands_json,
                 sizeof(out_info->commands_json));
+        out_info->cap_mask = akira_runtime_get_cap_mask(app->container_id);
     } else {
         strncpy(out_info->commands_json, "[]", sizeof(out_info->commands_json));
+        out_info->cap_mask = 0;
     }
 
     k_mutex_unlock(&g_registry_mutex);
@@ -1334,8 +1397,9 @@ int app_manifest_parse(const char *json, size_t json_len, app_manifest_t *out_ma
     if (simple_json_get_int(json, json_len, "heap_kb", &tmp) == 0) out_manifest->heap_kb = (uint16_t)tmp;
     if (simple_json_get_int(json, json_len, "stack_kb", &tmp) == 0) out_manifest->stack_kb = (uint16_t)tmp;
 
-    /* Parse permissions/capabilities using the dedicated parser */
-    out_manifest->permissions = (uint16_t)parse_capabilities_mask(json, json_len);
+    /* Capabilities are not parsed here. When the app is loaded, the runtime
+     * derives the enforced 64-bit mask from this same JSON (manifest_parser.c);
+     * the legacy 16-bit `permissions` field stays 0. */
 
 
     LOG_DBG("Parsed manifest: name=%s, version=%s, heap=%dKB, stack=%dKB",
@@ -1744,9 +1808,10 @@ static void app_manager_on_runtime_exit(int slot, int exit_code)
 
     k_mutex_unlock(&g_registry_mutex);
 
-    /* Notify platform overlay when an app exits abnormally */
-    if (exit_code != 0 && lc_name[0] != '\0') {
-        akira_on_app_crashed(lc_name, exit_code);
+    /* Emit a lifecycle event: a non-zero exit is a crash, zero is a clean stop. */
+    if (lc_name[0] != '\0') {
+        akira_hooks_emit_app(exit_code != 0 ? AKIRA_HOOK_APP_CRASHED : AKIRA_HOOK_APP_STOPPED,
+                             lc_name, -1, -1, NULL, exit_code);
     }
 
 #ifdef CONFIG_AKIRA_WASM_IPC
@@ -2022,12 +2087,23 @@ int app_manager_install_akpkg(char *name, size_t name_size,
     app_manifest_t manifest;
     bool has_manifest = false;
 
-    if (mfst_size > 0 && mfst_size < 4096u) {
+    if (mfst_size >= 4096u) {
+        LOG_ERR("akpkg manifest too large: %zu bytes", mfst_size);
+        akira_free_buffer(tar_buf);
+        return -EFBIG;
+    }
+    if (mfst_size > 0) {
         /* app_manifest_parse requires a null-terminated string. */
         char *json_copy = akira_malloc_buffer(mfst_size + 1u);
         if (json_copy) {
             memcpy(json_copy, mfst_ptr, mfst_size);
             json_copy[mfst_size] = '\0';
+            int gate = abi_gate(wasm_ptr, wasm_size, json_copy, mfst_size);
+            if (gate < 0) {
+                akira_free_buffer(json_copy);
+                akira_free_buffer(tar_buf);
+                return gate;
+            }
             if (app_manifest_parse(json_copy, mfst_size, &manifest) == 0) {
                 has_manifest = true;
                 /* Manifest name always takes precedence over the caller-supplied name.

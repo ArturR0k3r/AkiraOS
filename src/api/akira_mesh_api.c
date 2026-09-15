@@ -452,3 +452,24 @@ void akira_mesh_api_cleanup(void)
     }
     k_mutex_unlock(&s_lock);
 }
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_MESH))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_mesh_natives[] = {
+    {"mesh_init",           (void *)akira_native_mesh_init,           "(i$ii)i", NULL},
+    {"mesh_start",          (void *)akira_native_mesh_start,          "()i",     NULL},
+    {"mesh_stop",           (void *)akira_native_mesh_stop,           "()i",     NULL},
+    {"mesh_send",           (void *)akira_native_mesh_send,           "(**~)i",  NULL},
+    {"mesh_broadcast",      (void *)akira_native_mesh_broadcast,      "(*~i)i",  NULL},
+    {"mesh_recv_pop",       (void *)akira_native_mesh_recv_pop,       "(**~i)i", NULL},
+    {"mesh_get_nodes",      (void *)akira_native_mesh_get_nodes,      "(*i)i",   NULL},
+    {"mesh_get_stats",      (void *)akira_native_mesh_get_stats,      "(*)i",    NULL},
+    {"mesh_distribute_app", (void *)akira_native_mesh_distribute_app, "(*$*~)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_mesh_api, "env", akira_mesh_natives);
+#endif

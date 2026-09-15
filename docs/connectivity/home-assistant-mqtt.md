@@ -110,4 +110,4 @@ first connect. Plaintext (1883) needs no cert.
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

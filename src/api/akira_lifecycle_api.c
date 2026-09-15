@@ -105,7 +105,7 @@ static void ensure_switch_wq_init(void)
 int akira_native_app_get_status(wasm_exec_env_t exec_env, const char *name)
 {
     /* Read-only query: app.info is sufficient; app.control also accepted */
-    uint32_t mask = akira_security_get_cap_mask(exec_env);
+    uint64_t mask = akira_security_get_cap_mask(exec_env);
     if (!(mask & (AKIRA_CAP_APP_INFO | AKIRA_CAP_APP_CONTROL))) {
         AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_INFO, -EPERM);
     }
@@ -125,7 +125,7 @@ int akira_native_app_list(wasm_exec_env_t exec_env,
                           uint32_t buf_ptr, uint32_t buf_len)
 {
     /* Read-only query: app.info is sufficient; app.control also accepted */
-    uint32_t mask = akira_security_get_cap_mask(exec_env);
+    uint64_t mask = akira_security_get_cap_mask(exec_env);
     if (!(mask & (AKIRA_CAP_APP_INFO | AKIRA_CAP_APP_CONTROL))) {
         AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_INFO, -EPERM);
     }
@@ -145,11 +145,10 @@ int akira_native_app_list(wasm_exec_env_t exec_env,
     }
 
 #ifdef CONFIG_AKIRA_APP_MANAGER
-    /* Retrieve all apps into a local stack buffer — avoid PSRAM alloc here */
-#define LIST_MAX 16
-    app_info_t apps[LIST_MAX];
-    int count = app_manager_list(apps, LIST_MAX);
-    if (count < 0) {
+    /* Heap-allocated: a full app_info_t listing is larger than the app thread stack. */
+    int count;
+    app_info_t *apps = app_manager_list_alloc(&count);
+    if (!apps) {
         return count;
     }
 
@@ -164,6 +163,7 @@ int akira_native_app_list(wasm_exec_env_t exec_env,
         pos += n;
     }
     wasm_buf[pos] = '\0';
+    akira_free_buffer(apps);
     return count;
 #else
     (void)wasm_buf;
@@ -176,7 +176,7 @@ int akira_native_app_get_self_name(wasm_exec_env_t exec_env,
                                    uint32_t buf_ptr, uint32_t buf_len)
 {
     /* Self-name is identity-only: app.info suffices; app.control also accepted */
-    uint32_t mask = akira_security_get_cap_mask(exec_env);
+    uint64_t mask = akira_security_get_cap_mask(exec_env);
     if (!(mask & (AKIRA_CAP_APP_INFO | AKIRA_CAP_APP_CONTROL))) {
         AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_INFO, -EPERM);
     }
@@ -257,7 +257,7 @@ int akira_native_app_stop(wasm_exec_env_t exec_env, const char *name)
 int akira_native_app_switch(wasm_exec_env_t exec_env, const char *name)
 {
     /* Both app.switch and app.control grant access to this lighter operation */
-    uint32_t mask = akira_security_get_cap_mask(exec_env);
+    uint64_t mask = akira_security_get_cap_mask(exec_env);
     if (!(mask & (AKIRA_CAP_APP_SWITCH | AKIRA_CAP_APP_CONTROL))) {
         LOG_WRN("app_switch: capability denied (need app.switch or app.control)");
         return -EPERM;
@@ -352,3 +352,25 @@ int akira_native_app_request_update(wasm_exec_env_t exec_env)
     return -ENOTSUP;
 #endif
 }
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_LIFECYCLE))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_lifecycle_natives[] = {
+    {"app_get_status", (void *)akira_native_app_get_status, "($)i", NULL},
+    {"app_list", (void *)akira_native_app_list, "(ii)i", NULL},
+    {"app_get_self_name", (void *)akira_native_app_get_self_name, "(ii)i", NULL},
+    /* Write-control — requires AKIRA_CAP_APP_CONTROL */
+    {"app_start", (void *)akira_native_app_start, "($)i", NULL},
+    {"app_stop", (void *)akira_native_app_stop, "($)i", NULL},
+    /* Lightweight handoff — requires AKIRA_CAP_APP_SWITCH or APP_CONTROL */
+    {"app_switch", (void *)akira_native_app_switch, "($)i", NULL},
+    {"app_check_update", (void *)akira_native_app_check_update, "(ii)i", NULL},
+    {"app_request_update", (void *)akira_native_app_request_update, "()i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_lifecycle_api, "env", akira_lifecycle_natives);
+#endif

@@ -351,4 +351,4 @@ When registering native functions in WAMR, these signatures are used:
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

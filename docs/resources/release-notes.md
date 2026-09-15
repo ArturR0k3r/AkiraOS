@@ -11,9 +11,9 @@ permalink: /resources/release-notes
 > Release history. `CHANGELOG.md` at the repository root is the authoritative,
 > commit-level record; this page summarises each release.
 
-## v1.6.4 — Unreleased
+## v1.6.5 — Unreleased
 
-**Status:** development series on the `v1.6.x` branch. `VERSION` tracks 1.6.4, but
+**Status:** development series on the `v1.6.x` branch. `VERSION` tracks 1.6.5, but
 **no 1.6.x git tag exists yet** — the newest tag is `v1.5.8`.
 
 The 1.6 series is a connectivity build-out plus a production-readiness pass that
@@ -306,4 +306,4 @@ Initial public release with OCRE runtime, basic BLE, WiFi OTA, and LittleFS stor
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

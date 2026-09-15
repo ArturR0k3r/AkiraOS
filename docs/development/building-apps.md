@@ -336,10 +336,10 @@ wamrc --opt-level=0 --size-level=3 -o app.aot app.wasm
 
 #### Setup wamrc
 
-Build `wamrc` from the WAMR submodule already included in AkiraOS (required — the AkiraOS fork includes Xtensa backend support):
+Build `wamrc` from the `wasm-micro-runtime` west project that `west update` fetches (required — the AkiraOS fork includes Xtensa backend support):
 
 ```bash
-cd ~/akira-workspace/AkiraOS/modules/wasm-micro-runtime/wamr-compiler
+cd ~/akira-workspace/modules/lib/wasm-micro-runtime/wamr-compiler
 cmake . -DWAMR_BUILD_PLATFORM=linux
 make
 sudo cp wamrc /usr/local/bin/
@@ -450,4 +450,4 @@ AkiraOS:~$ app stop myapp
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

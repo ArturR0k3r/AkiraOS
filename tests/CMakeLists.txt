@@ -6,6 +6,10 @@ cmake_minimum_required(VERSION 3.20.0)
 list(APPEND BOARD_ROOT ${CMAKE_CURRENT_LIST_DIR}/..)
 list(APPEND DTS_ROOT   ${CMAKE_CURRENT_LIST_DIR}/..)
 
+# The suite compiles the sources under test directly (below), so the akira-os
+# module must not also build its libraries into this image.
+set(AKIRA_OS_BUILD_LIBRARIES OFF)
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(akiraos_tests)
 
@@ -31,6 +35,7 @@ target_include_directories(app PRIVATE
 target_sources(app PRIVATE
     # Sources under test
     ${AKIRA_SRC}/runtime/manifest_parser.c
+    ${AKIRA_SRC}/runtime/akira_abi_check.c
     ${AKIRA_SRC}/runtime/security.c
     ${AKIRA_SRC}/runtime/security/app_signing_v2.c
     ${AKIRA_SRC}/runtime/security/sandbox.c

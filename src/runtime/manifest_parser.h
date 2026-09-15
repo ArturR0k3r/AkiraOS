@@ -62,6 +62,11 @@ extern "C"
         char name[32];                          /**< Application name */
         char version[16];                       /**< Version string (e.g., "1.0.0") */
         bool valid;                             /**< True if manifest was successfully parsed */
+        bool has_abi;                           /**< True if the "abi" key was present */
+        uint8_t abi_major;                      /**< WASM ABI major the app targets */
+        uint8_t abi_minor;                      /**< WASM ABI minor the app targets */
+        bool has_min_os;                        /**< True if "min_akiraos_version" was present */
+        uint16_t min_os[3];                     /**< min_akiraos_version major.minor.patch */
         akira_manifest_net_policy_t net_policy; /**< Optional per-app network policy */
         /** Raw "commands" JSON array, verbatim (opaque to firmware, consumed by hub
          *  dashboard). Defaults to "[]" if absent. */

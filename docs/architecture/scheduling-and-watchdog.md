@@ -7,7 +7,7 @@ nav_order: 8
 
 # Cooperative Scheduling Model & Watchdog Contract
 
-_Architecture document · AkiraOS v1.6.4_
+_Architecture document · AkiraOS v1.6.5_
 
 ---
 
@@ -306,4 +306,4 @@ _See also:_
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

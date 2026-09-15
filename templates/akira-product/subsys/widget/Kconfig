@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+config WIDGET
+    bool "Widget product subsystem"
+    depends on AKIRA_OS
+    help
+      Example product subsystem: a vendor capability, a vendor native API and a
+      boot hook, all registered through AkiraOS extension points.

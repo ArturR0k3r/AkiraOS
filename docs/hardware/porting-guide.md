@@ -160,8 +160,7 @@ CONFIG_CLOCK_CONTROL=y
 ```bash
 cd ..
 unset ZEPHYR_BASE
-west build --pristine -b my_sensor_node/nrf54l15/cpuapp AkiraOS \
-  -d build -- -DMODULE_EXT_ROOT=AkiraOS
+west build --pristine -b my_sensor_node/nrf54l15/cpuapp AkiraOS -d build
 ```
 
 Expected: CMake configure succeeds and `build/zephyr/zephyr.elf` is produced.
@@ -181,7 +180,7 @@ Flash and connect a serial terminal at 115200 8N1.  Expected banner:
 
 ```
 *** Booting Zephyr OS build v4.3.0 ***
-AkiraOS v1.6.4
+AkiraOS v1.6.5
 AkiraOS:~$
 ```
 
@@ -423,6 +422,54 @@ Enable AOT for production to eliminate interpreter overhead:
 
 ---
 
+## Per-SoC notes
+
+AkiraOS supports boards across four SoC families out of the box; the reference
+board confs in `snippets/akira-board/boards/` are worked examples. Family
+specifics when porting your own board:
+
+### Espressif ESP32-S3 / C3 / C6 / H2
+
+- The flagship path. ESP32-S3 gets PSRAM via `CONFIG_ESP_SPIRAM` +
+  `CONFIG_AKIRA_PSRAM`; put the WAMR heap, framebuffer and bulk statics there —
+  internal DRAM is the bottleneck (BT/WiFi/WASM stacks must stay in SRAM).
+- WiFi is `CONFIG_WIFI_ESP32` + `CONFIG_NET_SOCKETS_OFFLOAD`; pair the board with
+  `akira-profile-connected`.
+- MCUboot on ESP32-C6/H2 needs AkiraOS's patched linker script — `build.sh`
+  passes it via `CONFIG_CUSTOM_LINKER_SCRIPT` (the Zephyr tree is never edited).
+- RISC-V ESP32 (C6/H2) images are RISC-V; watch the BLE system-heap floor on S3
+  (see the BT heap notes in the architecture docs).
+
+### Nordic nRF54L15 (and nRF5x)
+
+- BLE-first, no WiFi: pair with `akira-profile-sensor-node` or `minimal` plus
+  `CONFIG_BT`. Example: `nrf54l15dk/nrf54l15/cpuapp`.
+- No PSRAM — keep `CONFIG_WAMR_HEAP_SIZE` and `MAX_CONTAINERS` small; the WASM
+  runtime allocates from the system heap.
+- Flash is internal RRAM/flash; MCUboot uses the in-tree partitions.
+
+### STMicroelectronics STM32 (H7 / L4 / U5)
+
+- Networked STM32 (nucleo_h743zi) uses the on-chip MAC + an external PHY, not
+  WiFi. Sensor/low-power STM32 (nucleo_l476rg, b_u585i_iot02a, steval_stwinbx1)
+  run headless with `akira-profile-sensor-node`.
+- **Signing:** STM32 boards build signed MCUboot images. Do **not** ship with
+  MCUboot's development key — generate a product key (`west akira keygen`) and
+  set `CONFIG_MCUBOOT_SIGNATURE_KEY_FILE`; `CONFIG_AKIRA_RELEASE_BUILD=y` fails
+  the build if the dev key is still in use.
+- No PSRAM; size the WAMR heap to internal SRAM.
+
+### Raspberry Pi RP2040 / RP2350 (Pico, Pico 2)
+
+- The shell is over **USB CDC-ACM** (`CONFIG_AKIRA_USB` + USB CDC), not UART —
+  the standard Pico exposes no UART header. Confirm the CDC console in the board
+  overlay.
+- No wireless on the base Pico; a headless `minimal`/`sensor-node` product. Small
+  SRAM — keep the WASM heap and container count modest.
+- RP2350 (`rpi_pico2/rp2350a/m33`) is Cortex-M33; RP2040 is dual Cortex-M0+.
+
+---
+
 ## References
 
 - [AkiraOS Architecture](../architecture/)
@@ -434,4 +481,4 @@ Enable AOT for production to eliminate interpreter overhead:
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

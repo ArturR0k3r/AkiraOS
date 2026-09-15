@@ -183,7 +183,7 @@ int akira_gpio_write(uint32_t pin, uint32_t value)
 int akira_native_gpio_configure(wasm_exec_env_t exec_env, uint32_t pin, uint32_t flags)
 {
     /* Output pin requires write capability; input pin requires read capability */
-    uint32_t required_cap = (flags & AKIRA_GPIO_OUTPUT) ?
+    uint64_t required_cap = (flags & AKIRA_GPIO_OUTPUT) ?
                             AKIRA_CAP_GPIO_WRITE : AKIRA_CAP_GPIO_READ;
 
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, required_cap, -EPERM);
@@ -203,4 +203,19 @@ int akira_native_gpio_write(wasm_exec_env_t exec_env, uint32_t pin, uint32_t val
     return akira_gpio_write(pin, value);
 }
 
+#endif
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_GPIO))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_gpio_natives[] = {
+    {"gpio_configure", (void *)akira_native_gpio_configure, "(ii)i", NULL},
+    {"gpio_read", (void *)akira_native_gpio_read, "(i)i", NULL},
+    {"gpio_write", (void *)akira_native_gpio_write, "(ii)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_gpio_api, "env", akira_gpio_natives);
 #endif

@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Application Kconfig for the product. Source your subsystems here; the AkiraOS
+# CONFIG_AKIRA_* options come from the akira-os module automatically.
+rsource "subsys/widget/Kconfig"
+source "Kconfig.zephyr"

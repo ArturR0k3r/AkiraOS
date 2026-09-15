@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "manifest_parser.h"
+#include "akira_abi_check.h"
 #include "security.h" /* cap bit-mask constants */
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
@@ -214,6 +215,93 @@ ZTEST(manifest_parser, test_wasm_no_manifest_section)
 
     zassert_equal(rc, -ENOENT,
                   "expected -ENOENT for missing section, got %d", rc);
+}
+
+ZTEST(manifest_parser, test_high_capability_bits)
+{
+    /* Capabilities above bit 31 must survive parsing; a 16- or 32-bit mask
+     * anywhere on the path would silently drop them. */
+    const char *json =
+        "{\"name\":\"hibits\",\"version\":\"1.0.0\","
+        "\"memory_quota\":65536,"
+        "\"capabilities\":[\"ai.infer\",\"mqtt\",\"sync\"]}";
+
+    akira_manifest_t m;
+    int rc = manifest_parse_json(json, strlen(json), &m);
+
+    zassert_equal(rc, 0, "parse should succeed, got %d", rc);
+    zassert_true(m.cap_mask & AKIRA_CAP_AIINFER, "ai.infer (bit 32) missing");
+    zassert_true(m.cap_mask & AKIRA_CAP_MQTT, "mqtt (bit 35) missing");
+    zassert_true(m.cap_mask & AKIRA_CAP_SYNC, "sync (bit 39) missing");
+}
+
+ZTEST(manifest_parser, test_abi_and_min_version_parsed)
+{
+    const char *json =
+        "{\"name\":\"v\",\"abi\":\"1.2\",\"min_akiraos_version\":\"1.6.0\"}";
+    akira_manifest_t m;
+
+    zassert_equal(manifest_parse_json(json, strlen(json), &m), 0, "parse failed");
+    zassert_true(m.has_abi, "abi flag");
+    zassert_equal(m.abi_major, 1, "abi major");
+    zassert_equal(m.abi_minor, 2, "abi minor");
+    zassert_true(m.has_min_os, "min_os flag");
+    zassert_equal(m.min_os[0], 1, "min major");
+    zassert_equal(m.min_os[1], 6, "min minor");
+}
+
+ZTEST(manifest_parser, test_no_abi_keys)
+{
+    const char *json = "{\"name\":\"v\"}";
+    akira_manifest_t m;
+
+    zassert_equal(manifest_parse_json(json, strlen(json), &m), 0, "parse failed");
+    zassert_false(m.has_abi, "no abi key");
+    zassert_false(m.has_min_os, "no min_os key");
+}
+
+/* ── ABI gate (akira_abi_check) ─────────────────────────────────────────── */
+
+static akira_manifest_t abi_manifest(bool has_abi, int amaj, int amin,
+                                     bool has_min, int mj, int mn, int mp)
+{
+    akira_manifest_t m = { .valid = true, .has_abi = has_abi,
+                           .abi_major = amaj, .abi_minor = amin,
+                           .has_min_os = has_min };
+    m.min_os[0] = mj; m.min_os[1] = mn; m.min_os[2] = mp;
+    return m;
+}
+
+ZTEST(manifest_parser, test_abi_gate)
+{
+    const uint16_t fw[3] = {1, 6, 4};
+
+    akira_manifest_t same = abi_manifest(true, 1, 0, false, 0, 0, 0);
+    zassert_equal(akira_abi_check(&same, 1, 0, fw), 0, "same ABI must pass");
+
+    akira_manifest_t older_minor = abi_manifest(true, 1, 0, false, 0, 0, 0);
+    zassert_equal(akira_abi_check(&older_minor, 1, 3, fw), 0, "older minor must pass");
+
+    akira_manifest_t newer_minor = abi_manifest(true, 1, 5, false, 0, 0, 0);
+    zassert_equal(akira_abi_check(&newer_minor, 1, 3, fw), 0, "newer minor warns but passes");
+
+    akira_manifest_t major2 = abi_manifest(true, 2, 0, false, 0, 0, 0);
+    zassert_equal(akira_abi_check(&major2, 1, 0, fw), -ENOTSUP, "major mismatch must fail");
+
+    akira_manifest_t none = abi_manifest(false, 0, 0, false, 0, 0, 0);
+    zassert_equal(akira_abi_check(&none, 1, 0, fw), 0, "missing ABI is legacy, passes");
+
+    akira_manifest_t need_new = abi_manifest(true, 1, 0, true, 1, 7, 0);
+    zassert_equal(akira_abi_check(&need_new, 1, 0, fw), -ENOTSUP,
+                  "min_akiraos_version newer than firmware must fail");
+
+    akira_manifest_t need_old = abi_manifest(true, 1, 0, true, 1, 5, 0);
+    zassert_equal(akira_abi_check(&need_old, 1, 0, fw), 0,
+                  "min_akiraos_version older than firmware passes");
+
+    akira_manifest_t need_patch = abi_manifest(true, 1, 0, true, 1, 6, 9);
+    zassert_equal(akira_abi_check(&need_patch, 1, 0, fw), -ENOTSUP,
+                  "patch component is compared too");
 }
 
 ZTEST_SUITE(manifest_parser, NULL, NULL, NULL, NULL, NULL);

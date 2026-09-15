@@ -119,6 +119,173 @@ ZTEST(security, test_cap_native_check_always_permits)
                  "native check should permit all caps");
 }
 
+/* ── capability registry ────────────────────────────────────────────────── */
+
+/* A product capability, defined the way product firmware defines one. */
+AKIRA_CAPABILITY_DEFINE(test_acme_cap, "acme.test", 48, AKIRA_CAPABILITY_PRIVILEGED);
+
+/* Every manifest string the parser accepted before the registry existed, with
+ * the mask it produced. The registry must reproduce each one exactly. */
+static const struct {
+    const char *name;
+    uint64_t mask;
+} legacy_caps[] = {
+    {"display.write", AKIRA_CAP_DISPLAY_WRITE},
+    {"display.read", AKIRA_CAP_DISPLAY_WRITE},
+    {"input.read", AKIRA_CAP_INPUT_READ},
+    {"input.write", AKIRA_CAP_INPUT_WRITE},
+    {"sensor.read", AKIRA_CAP_SENSOR_READ},
+    {"rf.transceive", AKIRA_CAP_RF_TRANSCEIVE},
+    {"ble", AKIRA_CAP_BLE},
+    {"bt.shell", AKIRA_CAP_BLE},
+    {"storage.read", AKIRA_CAP_STORAGE_READ},
+    {"storage.write", AKIRA_CAP_STORAGE_WRITE},
+    {"gpio.read", AKIRA_CAP_GPIO_READ},
+    {"gpio.write", AKIRA_CAP_GPIO_WRITE},
+    {"timer", AKIRA_CAP_TIMER},
+    {"uart", AKIRA_CAP_UART},
+    {"i2c", AKIRA_CAP_I2C},
+    {"pwm", AKIRA_CAP_PWM},
+    {"hid", AKIRA_CAP_HID},
+    {"app.control", AKIRA_CAP_APP_CONTROL},
+    {"ipc", AKIRA_CAP_IPC},
+    {"app.switch", AKIRA_CAP_APP_SWITCH},
+    {"memory", AKIRA_CAP_MEMORY},
+    {"memory.alloc", AKIRA_CAP_MEMORY},
+    {"app.info", AKIRA_CAP_APP_INFO},
+    {"power.read", AKIRA_CAP_POWER_READ},
+    {"power.control", AKIRA_CAP_POWER_CTRL},
+    {"power.*", AKIRA_CAP_POWER_READ | AKIRA_CAP_POWER_CTRL},
+    {"settings.read", AKIRA_CAP_SETTINGS},
+    {"settings.write", AKIRA_CAP_SETTINGS},
+    {"settings.*", AKIRA_CAP_SETTINGS},
+    {"adc", AKIRA_CAP_ADC},
+    {"wdt", AKIRA_CAP_WDT},
+    {"ai.infer", AKIRA_CAP_AIINFER},
+    {"matter", AKIRA_CAP_MATTER},
+    {"matter.*", AKIRA_CAP_MATTER},
+    {"mqtt", AKIRA_CAP_MQTT},
+    {"mqtt.*", AKIRA_CAP_MQTT},
+    {"fs.read", AKIRA_CAP_FS_READ},
+    {"fs.write", AKIRA_CAP_FS_WRITE},
+    {"fs.*", AKIRA_CAP_FS_READ | AKIRA_CAP_FS_WRITE},
+    {"rtc.read", AKIRA_CAP_RTC_READ},
+    {"rtc.write", AKIRA_CAP_RTC_WRITE},
+    {"rtc.*", AKIRA_CAP_RTC_READ | AKIRA_CAP_RTC_WRITE},
+    {"wifi.inject", AKIRA_CAP_WIFI_INJECT},
+    {"ota.trigger", AKIRA_CAP_OTA_TRIGGER},
+    {"crypto", AKIRA_CAP_CRYPTO},
+    {"ble.scan", AKIRA_CAP_BLE_SCAN},
+    {"ble.spam", AKIRA_CAP_BLE_SPAM},
+    {"mesh", AKIRA_CAP_MESH},
+    {"mesh.*", AKIRA_CAP_MESH},
+    {"sync", AKIRA_CAP_SYNC},
+    {"sync.*", AKIRA_CAP_SYNC},
+    {"display.*", AKIRA_CAP_DISPLAY_WRITE},
+    {"input.*", AKIRA_CAP_INPUT_READ | AKIRA_CAP_INPUT_WRITE},
+    {"sensor.*", AKIRA_CAP_SENSOR_READ},
+    {"rf.*", AKIRA_CAP_RF_TRANSCEIVE},
+    {"bt.*", AKIRA_CAP_BLE | AKIRA_CAP_HID | AKIRA_CAP_BLE_SCAN | AKIRA_CAP_BLE_SPAM},
+    {"storage.*", AKIRA_CAP_STORAGE_READ | AKIRA_CAP_STORAGE_WRITE},
+    {"gpio.*", AKIRA_CAP_GPIO_READ | AKIRA_CAP_GPIO_WRITE},
+    {"network.*", AKIRA_CAP_NETWORK},
+    {"network.use", AKIRA_CAP_NETWORK},
+    {"network.connect", AKIRA_CAP_NETWORK},
+    {"hw.*", AKIRA_CAP_TIMER | AKIRA_CAP_UART | AKIRA_CAP_I2C | AKIRA_CAP_PWM},
+};
+
+ZTEST(security_registry, test_legacy_strings_unchanged)
+{
+    for (size_t i = 0; i < ARRAY_SIZE(legacy_caps); i++) {
+        uint64_t got = akira_capability_str_to_mask(legacy_caps[i].name);
+
+        zassert_equal(got, legacy_caps[i].mask, "%s: got 0x%016llx want 0x%016llx",
+                      legacy_caps[i].name, (unsigned long long)got,
+                      (unsigned long long)legacy_caps[i].mask);
+    }
+}
+
+ZTEST(security_registry, test_wildcard_all_excludes_unassigned_bits)
+{
+    uint64_t all = akira_capability_str_to_mask("*");
+
+    zassert_equal(all & AKIRA_CAP_ALL_KNOWN, AKIRA_CAP_ALL_KNOWN, "\"*\" must include every core cap");
+    zassert_true(all & BIT64(48), "\"*\" must include registered product caps");
+    zassert_equal(all & GENMASK64(47, 40), 0ULL, "\"*\" must not grant unassigned bits 40-47");
+    zassert_equal(all, akira_capability_known_mask(), "\"*\" must equal the known mask");
+}
+
+ZTEST(security_registry, test_vendor_capability)
+{
+    zassert_equal(akira_capability_str_to_mask("acme.test"), BIT64(48), "exact vendor name");
+    zassert_equal(akira_capability_str_to_mask("acme.*"), BIT64(48), "vendor wildcard");
+    zassert_equal(akira_capability_str_to_mask("acme"), 0ULL, "bare prefix is not a name");
+    zassert_equal(akira_capability_str_to_mask("acm.*"), 0ULL, "partial prefix must not match");
+    zassert_equal(akira_capability_str_to_mask("app.*"), 0ULL,
+                  "generic wildcards never apply to core names");
+    zassert_true(akira_capability_privileged_mask() & BIT64(48), "vendor privileged flag");
+    zassert_equal(akira_capability_privileged_mask() & AKIRA_CAP_PRIVILEGED, AKIRA_CAP_PRIVILEGED,
+                  "core privileged caps stay privileged");
+}
+
+ZTEST(security_registry, test_capability_names)
+{
+    zassert_str_equal(akira_capability_name(AKIRA_CAP_OTA_TRIGGER), "ota.trigger");
+    zassert_str_equal(akira_capability_name(AKIRA_CAP_SETTINGS), "settings.*");
+    zassert_str_equal(akira_capability_name(BIT64(48)), "acme.test");
+    zassert_str_equal(akira_capability_name(BIT64(45)), "unknown");
+    zassert_str_equal(akira_capability_name(0), "unknown");
+    zassert_str_equal(akira_capability_name(AKIRA_CAP_HID | AKIRA_CAP_NETWORK), "network.use",
+                      "multi-bit masks report the lowest bit");
+}
+
+ZTEST(security_registry, test_grant_clamps_and_reports_privileged)
+{
+    uint64_t privileged = 0;
+    uint64_t requested = AKIRA_CAP_DISPLAY_WRITE | AKIRA_CAP_NETWORK | BIT64(45) | BIT64(48);
+    uint64_t granted = akira_capability_grant(requested, false, &privileged);
+    uint64_t expected = (AKIRA_CAP_DISPLAY_WRITE | AKIRA_CAP_NETWORK | BIT64(48)) &
+                        (uint64_t)CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK;
+
+    zassert_equal(granted, expected, "granted 0x%016llx", (unsigned long long)granted);
+    zassert_equal(privileged, granted & akira_capability_privileged_mask(),
+                  "privileged bits granted to an unattested app must be reported");
+    zassert_equal(akira_capability_grant(requested, true, NULL), expected,
+                  "without CONFIG_AKIRA_REQUIRE_SIGNED_APPS an embedded manifest is unattested too");
+}
+
+ZTEST(security_registry, test_validate_rejects_bad_tables)
+{
+    static const struct akira_capability good[] = {
+        {"acme.valve", BIT64(50), 50, 0},
+        {"acme.pump", BIT64(51), 51, AKIRA_CAPABILITY_PRIVILEGED},
+    };
+    static const struct akira_capability dup_bit[] = {
+        {"acme.a", BIT64(50), 50, 0}, {"acme.b", BIT64(50), 50, 0},
+    };
+    static const struct akira_capability dup_name[] = {
+        {"acme.a", BIT64(50), 50, 0}, {"acme.a", BIT64(51), 51, 0},
+    };
+    static const struct akira_capability bad_mask[] = {{"acme.a", BIT64(51), 50, 0}};
+    static const struct akira_capability no_dot[] = {{"acme", BIT64(50), 50, 0}};
+    static const struct akira_capability star[] = {{"acme.*", BIT64(50), 50, 0}};
+    static const struct akira_capability core_prefix[] = {{"fs.extra", BIT64(50), 50, 0}};
+    static const struct akira_capability core_alias[] = {{"network.connect", BIT64(50), 50, 0}};
+
+#define VALIDATE(table) akira_capability_validate(table, (table) + ARRAY_SIZE(table))
+    zassert_equal(VALIDATE(good), 0);
+    zassert_equal(VALIDATE(dup_bit), -EEXIST);
+    zassert_equal(VALIDATE(dup_name), -EEXIST);
+    zassert_equal(VALIDATE(bad_mask), -EINVAL);
+    zassert_equal(VALIDATE(no_dot), -EINVAL);
+    zassert_equal(VALIDATE(star), -EINVAL);
+    zassert_equal(VALIDATE(core_prefix), -EINVAL);
+    zassert_equal(VALIDATE(core_alias), -EINVAL);
+#undef VALIDATE
+
+    zassert_equal(akira_capability_registry_validate(), 0, "linked registry must be valid");
+}
+
 /* ── SHA-256 hashing ────────────────────────────────────────────────────── */
 
 ZTEST(security, test_hash_null_inputs)
@@ -377,5 +544,6 @@ ZTEST(security_sandbox, test_sandbox_kernel_trust_allows_all)
 /* ── suite registration ─────────────────────────────────────────────────── */
 
 ZTEST_SUITE(security, NULL, NULL, NULL, NULL, NULL);
+ZTEST_SUITE(security_registry, NULL, NULL, NULL, NULL, NULL);
 ZTEST_SUITE(security_signing, NULL, signing_setup, NULL, NULL, NULL);
 ZTEST_SUITE(security_sandbox, NULL, NULL, NULL, NULL, NULL);

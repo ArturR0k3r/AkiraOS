@@ -535,3 +535,42 @@ int akira_native_hid_fido_send(wasm_exec_env_t exec_env,
     return -ENOTSUP;
 #endif
 }
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_HID))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_hid_natives[] = {
+    {"hid_enable", (void *)akira_native_hid_enable, "()i", NULL},
+    {"hid_disable", (void *)akira_native_hid_disable, "()i", NULL},
+    {"hid_is_connected", (void *)akira_native_hid_is_connected, "()i", NULL},
+    {"hid_key_press",      (void *)akira_native_hid_key_press,      "(i)i",  NULL},
+    {"hid_key_release",    (void *)akira_native_hid_key_release,    "(i)i",  NULL},
+    {"hid_key_release_all",(void *)akira_native_hid_key_release_all,"()i",   NULL},
+    {"hid_type_string",    (void *)akira_native_hid_type_string,    "($)i",  NULL},
+    {"hid_set_modifiers",  (void *)akira_native_hid_set_modifiers,  "(i)i",  NULL},
+    {"hid_gamepad_press", (void *)akira_native_hid_gamepad_press, "(i)i", NULL},
+    {"hid_gamepad_release", (void *)akira_native_hid_gamepad_release, "(i)i", NULL},
+    {"hid_gamepad_set_axis", (void *)akira_native_hid_gamepad_set_axis, "(ii)i", NULL},
+    {"hid_gamepad_set_dpad", (void *)akira_native_hid_gamepad_set_dpad, "(i)i", NULL},
+    {"hid_gamepad_reset", (void *)akira_native_hid_gamepad_reset, "()i", NULL},
+    {"hid_mouse_move", (void *)akira_native_hid_mouse_move, "(ii)i", NULL},
+    {"hid_mouse_btn_press", (void *)akira_native_hid_mouse_btn_press, "(i)i", NULL},
+    {"hid_mouse_btn_release", (void *)akira_native_hid_mouse_btn_release, "(i)i", NULL},
+    {"hid_mouse_scroll", (void *)akira_native_hid_mouse_scroll, "(i)i", NULL},
+    {"hid_consumer_send", (void *)akira_native_hid_consumer_send, "(i)i", NULL},
+    {"hid_send_raw_report", (void *)akira_native_hid_send_raw_report, "(iii)i", NULL},
+    {"hid_raw_recv",        (void *)akira_native_hid_raw_recv,        "(ii)i",  NULL},
+    {"hid_fido_recv",       (void *)akira_native_hid_fido_recv,       "(ii)i",  NULL},
+    {"hid_fido_send",       (void *)akira_native_hid_fido_send,       "(ii)i",  NULL},
+    {"hid_action_register", (void *)akira_native_hid_action_register, "($ii)i", NULL},
+    {"hid_action_trigger", (void *)akira_native_hid_action_trigger, "($)i", NULL},
+    {"hid_set_transport", (void *)akira_native_hid_set_transport, "(i)i", NULL},
+    {"hid_set_device_types", (void *)akira_native_hid_set_device_types, "(i)i", NULL},
+    {"hid_init", (void *)akira_native_hid_init, "(ii)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_hid_api, "env", akira_hid_natives);
+#endif

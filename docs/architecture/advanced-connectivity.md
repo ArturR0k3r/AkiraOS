@@ -7,7 +7,7 @@ nav_order: 5
 
 # Advanced Connectivity Layer
 
-> **Status (v1.6.4):**
+> **Status (v1.6.5):**
 >
 > | Protocol | Status | Notes |
 > |----------|--------|-------|
@@ -361,4 +361,4 @@ SPDX-License-Identifier: Apache-2.0
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

@@ -161,7 +161,7 @@ cd ~/akira-workspace/AkiraOS
 **Expected output:**
 ```
 *** Booting Zephyr OS build v4.3.0 ***
-[00:00:00.000] <inf> main: AkiraOS v1.6.4 starting...
+[00:00:00.000] <inf> main: AkiraOS v1.6.5 starting...
 [00:00:00.010] <inf> wasm: Runtime initialized
 AkiraOS:~$ 
 ```
@@ -246,7 +246,8 @@ west blobs fetch hal_espressif  # If using ESP32
 ```bash
 cd ~/akira-workspace/AkiraOS
 git pull origin main
-git submodule update --recursive
+git submodule update --init AkiraSDK   # the SDK is a git submodule
+cd .. && west update                   # Zephyr, WAMR, TFLite Micro, other modules
 ```
 
 ### Update SDK (Rare)
@@ -339,4 +340,4 @@ west espmonitor                # Open serial console
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

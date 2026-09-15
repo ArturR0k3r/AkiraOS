@@ -449,6 +449,28 @@ Compile with:
 wat2wasm app.wat -o app.wasm
 ```
 
+## Version and compatibility keys
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `abi` | string `"MAJOR.MINOR"` | legacy 1.x | The AkiraOS WASM import ABI the app was built against. The runtime **refuses** an app whose major differs from the firmware, and warns when its minor is newer (imports added later would trap). The AkiraSDK stamps this automatically (`embed_manifest.py`). |
+| `min_akiraos_version` | string `"MAJOR.MINOR.PATCH"` | none | Lowest AkiraOS firmware version the app supports. The runtime refuses to install or start it on older firmware. |
+
+Both are checked at install time (before the app is written to flash) and again
+at load time (so an app installed before a firmware downgrade is still caught).
+An app with no `abi` key is treated as the legacy ABI and loads with a warning,
+so apps built before ABI stamping keep working.
+
+```json
+{
+  "name": "myapp",
+  "version": "1.0.0",
+  "abi": "1.0",
+  "min_akiraos_version": "1.6.0",
+  "capabilities": ["display.write"]
+}
+```
+
 ---
 
 ## Related Documentation
@@ -460,4 +482,4 @@ wat2wasm app.wat -o app.wasm
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.4)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*
