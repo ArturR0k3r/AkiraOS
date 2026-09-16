@@ -7,6 +7,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/atomic.h>
+#include <lib/mem_helper.h>
 #include <errno.h>
 #include <string.h>
 
@@ -15,18 +16,17 @@ LOG_MODULE_REGISTER(rf_framework, LOG_LEVEL_INF);
 /* Maximum number of RF drivers that can be registered */
 #define RF_MAX_DRIVERS 8
 
-/* Driver registry */
+/* Driver registry. Mutex-protected, thread-context only — safe in PSRAM.
+ * All fields below default to zero (false/0/NULL), so this is a tentative
+ * (zero-init) definition — required for AKIRA_BULK_BSS, whose .ext_ram.bss
+ * section is NOBITS and skips flash-to-RAM initializer copy. */
 static struct {
     bool initialized;
     const struct akira_rf_driver *drivers[RF_MAX_DRIVERS];
     uint8_t driver_count;
     const struct akira_rf_driver *active_driver;
     struct k_mutex lock;
-} g_rf_framework = {
-    .initialized = false,
-    .driver_count = 0,
-    .active_driver = NULL,
-};
+} g_rf_framework AKIRA_BULK_BSS;
 
 int rf_framework_init(void)
 {

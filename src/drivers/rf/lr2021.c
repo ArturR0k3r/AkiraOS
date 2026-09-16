@@ -19,6 +19,7 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
+#include <lib/mem_helper.h>
 #include <errno.h>
 #include <string.h>
 
@@ -169,6 +170,10 @@ LOG_MODULE_REGISTER(akira_lr2021, LOG_LEVEL_INF);
 /* =========================================================================
  * Driver state
  * ========================================================================= */
+/* irq_sem is given from lr2021_irq_handler() (GPIO ISR context, DT
+ * IRQ_DEFAULT_PRIORITY — a normal maskable interrupt, not exempt from the
+ * flash-write interrupt-masking window). Safe in PSRAM by the same argument
+ * already proven for BT's semaphore/mutex/queue redirect this session. */
 static struct {
     bool initialized;
     struct spi_dt_spec spi;
@@ -204,7 +209,7 @@ static struct {
                                       * that could re-arm RX and overwrite it */
     radio_event_cb_t event_cb;
     void *event_user_data;
-} g_lr2021;
+} g_lr2021 AKIRA_BULK_BSS;
 
 /* Forward declarations — called from init before their definitions */
 static int lr2021_set_frequency(uint32_t freq_hz);

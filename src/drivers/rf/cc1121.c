@@ -28,6 +28,7 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
+#include <lib/mem_helper.h>
 #include <errno.h>
 #include <string.h>
 
@@ -200,6 +201,8 @@ static const struct spi_dt_spec g_spi = SPI_DT_SPEC_GET(
     SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB | SPI_WORD_SET(8),
     0);
 
+/* No GPIO/IRQ callback in this driver (polling-only) — thread-context only,
+ * safe in PSRAM. */
 static struct {
     bool initialized;
     struct gpio_dt_spec reset;
@@ -211,7 +214,7 @@ static struct {
     int16_t last_rx_rssi;
     radio_event_cb_t event_cb;
     void *event_user_data;
-} g_cc1121;
+} g_cc1121 AKIRA_BULK_BSS;
 
 /* =========================================================================
  * Low-level SPI helpers

@@ -11,6 +11,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
+#include <lib/mem_helper.h>
 #include <string.h>
 #include <errno.h>
 
@@ -18,11 +19,13 @@ LOG_MODULE_REGISTER(nfc_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 #define MAX_NFC_DEVICES CONFIG_AKIRA_NFC_MAX_DEVICES
 
+/* Mutex-protected, thread-context only (SE050 is I2C/polling, no ISR
+ * anywhere in this path) — safe in PSRAM. */
 static struct {
     nfc_handle_t   *devices[MAX_NFC_DEVICES];  /* NULL = empty slot */
     struct k_mutex  lock;
     bool            initialized;
-} nfc_registry;
+} nfc_registry AKIRA_BULK_BSS;
 
 int nfc_manager_init(void)
 {
