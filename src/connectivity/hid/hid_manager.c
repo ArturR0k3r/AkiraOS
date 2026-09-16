@@ -40,7 +40,7 @@ static struct
 
     /* Mutex for thread safety */
     struct k_mutex mutex;
-} hid_mgr;
+} hid_mgr AKIRA_BULK_BSS;
 
 /*===========================================================================*/
 /* Internal Functions                                                        */

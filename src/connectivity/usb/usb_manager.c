@@ -11,6 +11,7 @@
 #include <zephyr/logging/log.h>
 #include <errno.h>
 #include <string.h>
+#include <lib/mem_helper.h>
 
 LOG_MODULE_REGISTER(usb_manager, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -73,12 +74,11 @@ struct usb_manager_context {
     struct k_mutex mode_mutex;
 };
 
-/* Global USB manager context */
-static struct usb_manager_context usb_mgr_ctx = {
-    .state = USB_STATE_DISABLED,
-    .initialized = false,
-    .mode = USB_MODE_IDLE,
-};
+/* Global USB manager context.
+ * All fields below default to zero (USB_STATE_DISABLED == 0, false, USB_MODE_IDLE == 0),
+ * so this is a tentative (zero-init) definition — required for AKIRA_BULK_BSS, whose
+ * .ext_ram.bss section is NOBITS and skips flash-to-RAM initializer copy. */
+static struct usb_manager_context usb_mgr_ctx AKIRA_BULK_BSS;
 
 /* USB device context
  * VID 0x303A = Espressif Systems (customer-allocated pool)
