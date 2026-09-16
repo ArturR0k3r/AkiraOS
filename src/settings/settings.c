@@ -27,12 +27,14 @@ LOG_MODULE_REGISTER(akira_settings, CONFIG_LOG_DEFAULT_LEVEL);
 #define IV_SIZE 12
 #define TAG_SIZE 16
 
+/* Thread-context only (settings_set/get encrypt/decrypt before nvs_write,
+ * never from ISR, never DMA'd - HW AES accel here is register-poll, no
+ * DMA path in the mbedtls port), safe in PSRAM like ENCRYPTION_KEY below. */
 static struct
 {
     mbedtls_gcm_context gcm;
     bool initialized;
-} crypto_ctx = {
-    .initialized = false};
+} crypto_ctx AKIRA_BULK_BSS;
 
 static uint8_t ENCRYPTION_KEY[32] __attribute__((section(".ext_ram.bss")));
 
