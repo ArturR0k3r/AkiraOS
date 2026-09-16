@@ -6,14 +6,19 @@
  * to the app manager and system APIs.  Responses are sent back via
  * usb_hid_raw_send().
  *
- * The raw OUT report callback is called from the USB interrupt context,
- * so actual work is deferred to a dedicated kernel work item.
+ * The raw OUT report callback runs on Zephyr's "usbd" thread (set_report is
+ * invoked from usbd_hid_ctd(), which only ever runs inside usbd_core.c's
+ * dedicated event-processing thread — the hardware IRQ just posts a k_event
+ * further down in the DWC2 driver), not raw interrupt context. Work is still
+ * deferred to a dedicated kernel work item to keep the usbd thread itself
+ * unblocked, not because of an ISR constraint.
  */
 
 #include "hid_app_handler.h"
 #include "usb/usb_hid.h"
 #include "akira.h"
 #include "drivers/platform_hal.h"
+#include "lib/mem_helper.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -78,12 +83,14 @@ static void send_error(uint8_t cmd, uint8_t seq, uint8_t err)
 
 #define CMD_BUF_SIZE USB_HID_RAW_PAYLOAD_SIZE
 
+/* Thread-context only (usbd core thread, see file header) -- safe in PSRAM
+ * like the other USB manager structs. */
 static struct
 {
     struct k_work work;
     uint8_t buf[CMD_BUF_SIZE];
     uint8_t len;
-} cmd_work;
+} cmd_work AKIRA_BULK_BSS;
 
 static K_MUTEX_DEFINE(install_mutex);
 
@@ -373,7 +380,7 @@ static void cmd_work_handler(struct k_work *work)
 }
 
 /*===========================================================================*/
-/* Raw OUT report callback (ISR context)                                    */
+/* Raw OUT report callback (usbd core thread, see file header)              */
 /*===========================================================================*/
 
 static void raw_report_cb(const uint8_t *data, uint8_t len)
