@@ -1,4 +1,5 @@
 #include "simple_json.h"
+#include "mem_helper.h"
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
@@ -23,7 +24,7 @@ static size_t parse_json_string(const char *s, size_t len, size_t i, char **out)
     if (i >= len || s[i] != '"') return 0;
     i++;
     size_t cap = 32;
-    char *buf = malloc(cap);
+    char *buf = akira_malloc_buffer(cap);
     if (!buf) return 0;
     size_t bp = 0;
 
@@ -56,8 +57,10 @@ static size_t parse_json_string(const char *s, size_t len, size_t i, char **out)
         }
         if (bp + 1 >= cap) {
             cap *= 2;
-            char *nb = realloc(buf, cap);
-            if (!nb) { free(buf); return 0; }
+            char *nb = akira_malloc_buffer(cap);
+            if (!nb) { akira_free_buffer(buf); return 0; }
+            memcpy(nb, buf, bp);
+            akira_free_buffer(buf);
             buf = nb;
         }
     }
@@ -97,7 +100,7 @@ uint32_t parse_capabilities_mask(const char *json, size_t json_len)
             size_t ni = parse_json_string(json, json_len, i, &key);
             if (!ni) break; /* malformed string */
             if (strcmp(key, "capabilities") == 0) {
-                free(key);
+                akira_free_buffer(key);
                 i = skip_ws(json, json_len, ni);
                 if (i < json_len && json[i] == ':') {
                     i++;
@@ -115,7 +118,7 @@ uint32_t parse_capabilities_mask(const char *json, size_t json_len)
                                 size_t vi = parse_json_string(json, json_len, i, &val);
                                 if (!vi) break; /* bad string */
                                 mask |= capability_str_to_mask(val);
-                                free(val);
+                                akira_free_buffer(val);
                                 i = vi;
                                 continue;
                             }
@@ -127,7 +130,7 @@ uint32_t parse_capabilities_mask(const char *json, size_t json_len)
                     }
                 }
             } else {
-                free(key);
+                akira_free_buffer(key);
                 i = ni;
             }
         } else {
@@ -154,7 +157,7 @@ int simple_json_get_string(const char *json, size_t json_len, const char *key, c
             if (!ni) break;
             int found = 0;
             if (strcmp(k, key) == 0) found = 1;
-            free(k);
+            akira_free_buffer(k);
             if (found) {
                 i = skip_ws(json, json_len, ni);
                 if (i < json_len && json[i] == ':') i++;
@@ -165,7 +168,7 @@ int simple_json_get_string(const char *json, size_t json_len, const char *key, c
                     if (!vi) return -EIO;
                     strncpy(out, val, out_len - 1);
                     out[out_len - 1] = '\0';
-                    free(val);
+                    akira_free_buffer(val);
                     return 0;
                 }
                 return -ENOENT;

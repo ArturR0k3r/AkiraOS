@@ -278,8 +278,11 @@ static struct
  * but left a stale counter value). */
 static int compact_entries(uint16_t counter)
 {
-    /* Heap-allocate to avoid blowing the stack (MAX_KEYS * ~97 bytes). */
-    settings_entry_t *buf = k_malloc(sizeof(settings_entry_t) * counter);
+    /* Heap-allocate to avoid blowing the stack (MAX_KEYS * ~97 bytes).
+     * PSRAM-first: this only runs at init when NVS holes are detected, and
+     * the whole sequence already blocks on NVS flash I/O under a mutex, so
+     * PSRAM's extra access latency is noise here — not a hot loop. */
+    settings_entry_t *buf = akira_malloc_buffer(sizeof(settings_entry_t) * counter);
     if (!buf)
     {
         LOG_ERR("compact_entries: out of memory");
@@ -306,7 +309,7 @@ static int compact_entries(uint16_t counter)
     {
         nvs_write(&storage.nvs, SETTINGS_START_ID + i, &buf[i], sizeof(settings_entry_t));
     }
-    k_free(buf);
+    akira_free_buffer(buf);
 
     /* Delete any leftover slots above the new count */
     for (uint16_t i = valid; i < counter; i++)
@@ -442,7 +445,7 @@ static int settings_set(const char *key, const char *value, uint8_t is_encrypted
         return -ENOTSUP;
 #else
         size_t encrypted_buf_size = MAGIC_SIZE + IV_SIZE + strlen(value) + TAG_SIZE;
-        uint8_t *encrypted_buf = k_malloc(encrypted_buf_size);
+        uint8_t *encrypted_buf = akira_malloc_buffer(encrypted_buf_size);
         if (!encrypted_buf)
         {
             LOG_ERR("Failed to allocate encryption buffer");
@@ -453,32 +456,32 @@ static int settings_set(const char *key, const char *value, uint8_t is_encrypted
         if (encrypted_len < 0)
         {
             LOG_ERR("Encryption failed: %d", encrypted_len);
-            k_free(encrypted_buf);
+            akira_free_buffer(encrypted_buf);
             return encrypted_len;
         }
 
         size_t b64_len = 4 * ((encrypted_len + 2) / 3) + 1;
-        b64_value = k_malloc(b64_len);
+        b64_value = akira_malloc_buffer(b64_len);
         if (!b64_value)
         {
-            k_free(encrypted_buf);
+            akira_free_buffer(encrypted_buf);
             return -ENOMEM;
         }
 
         size_t written;
         int ret = base64_encode(b64_value, b64_len, &written, encrypted_buf, encrypted_len);
-        k_free(encrypted_buf);
+        akira_free_buffer(encrypted_buf);
 
         if (ret != 0)
         {
-            k_free(b64_value);
+            akira_free_buffer(b64_value);
             return ret;
         }
 
         if (strlen(b64_value) >= MAX_VALUE_LEN)
         {
             LOG_ERR("Encrypted value too long: %zu >= %d", strlen(b64_value), MAX_VALUE_LEN);
-            k_free(b64_value);
+            akira_free_buffer(b64_value);
             return -E2BIG;
         }
 
@@ -499,7 +502,7 @@ static int settings_set(const char *key, const char *value, uint8_t is_encrypted
     {
         LOG_WRN("Failed to read SETTINGS_COUNTER_ID (%d)", ret);
         if (b64_value)
-            k_free(b64_value);
+            akira_free_buffer(b64_value);
         return ret;
     }
 
@@ -512,7 +515,7 @@ static int settings_set(const char *key, const char *value, uint8_t is_encrypted
         {
             LOG_WRN("Failed to add %s - %s at index %d", key, value, entry_id);
             if (b64_value)
-                k_free(b64_value);
+                akira_free_buffer(b64_value);
             return ret;
         }
         counter++;
@@ -530,12 +533,12 @@ static int settings_set(const char *key, const char *value, uint8_t is_encrypted
         {
             LOG_WRN("Failed to change value of %s to %s at index %d", key, value, entry_id);
             if (b64_value)
-                k_free(b64_value);
+                akira_free_buffer(b64_value);
             return ret;
         }
     }
     if (b64_value)
-        k_free(b64_value);
+        akira_free_buffer(b64_value);
     return 0;
 }
 
@@ -746,14 +749,14 @@ static void setting_work_handler(struct k_work *work)
     if (sw->callback)
     {
         if (sw->key)
-            k_free(sw->key);
+            akira_free_buffer(sw->key);
         if (sw->type == AKIRA_SETTINGS_OP_SET && sw->value)
         {
-            k_free(sw->value);
+            akira_free_buffer(sw->value);
         }
     }
 
-    k_free(sw);
+    akira_free_buffer(sw);
 }
 
 static int submit_settings_work(struct akira_setting_work *work)
@@ -771,11 +774,11 @@ static int submit_settings_work(struct akira_setting_work *work)
         if (work->callback)
         {
             if (work->key)
-                k_free(work->key);
+                akira_free_buffer(work->key);
             if (work->type == AKIRA_SETTINGS_OP_SET && work->value)
-                k_free(work->value);
+                akira_free_buffer(work->value);
         }
-        k_free(work);
+        akira_free_buffer(work);
         return -EINVAL;
     }
 
@@ -841,7 +844,7 @@ int akira_settings_set(const char *key, const char *value, uint8_t is_encrypted)
     k_sem_init(&completion_sem, 0, 1);
 
     int result = -1;
-    struct akira_setting_work *work = k_malloc(sizeof(struct akira_setting_work));
+    struct akira_setting_work *work = akira_malloc_buffer(sizeof(struct akira_setting_work));
     if (!work)
         return -ENOMEM;
 
@@ -891,7 +894,7 @@ int akira_settings_get(const char *key, char *value, size_t max_len)
     k_sem_init(&completion_sem, 0, 1);
 
     int result = -1;
-    struct akira_setting_work *work = k_malloc(sizeof(struct akira_setting_work));
+    struct akira_setting_work *work = akira_malloc_buffer(sizeof(struct akira_setting_work));
     if (!work)
         return -ENOMEM;
 
@@ -930,7 +933,7 @@ int akira_settings_delete(const char *key)
     k_sem_init(&completion_sem, 0, 1);
 
     int result = -1;
-    struct akira_setting_work *work = k_malloc(sizeof(struct akira_setting_work));
+    struct akira_setting_work *work = akira_malloc_buffer(sizeof(struct akira_setting_work));
     if (!work)
         return -ENOMEM;
 
@@ -968,7 +971,7 @@ int akira_settings_clear(void)
     k_sem_init(&completion_sem, 0, 1);
 
     int result = -1;
-    struct akira_setting_work *work = k_malloc(sizeof(struct akira_setting_work));
+    struct akira_setting_work *work = akira_malloc_buffer(sizeof(struct akira_setting_work));
     if (!work)
         return -ENOMEM;
 
@@ -1091,13 +1094,13 @@ int akira_settings_set_async(const char *key, const char *value, settings_wq_cal
         return -E2BIG;
     }
 
-    struct akira_setting_work *work = k_malloc(sizeof(struct akira_setting_work));
+    struct akira_setting_work *work = akira_malloc_buffer(sizeof(struct akira_setting_work));
     if (!work)
         return -ENOMEM;
 
     work->type = AKIRA_SETTINGS_OP_SET;
-    work->key = k_malloc(strlen(key) + 1);
-    work->value = k_malloc(strlen(value) + 1);
+    work->key = akira_malloc_buffer(strlen(key) + 1);
+    work->value = akira_malloc_buffer(strlen(value) + 1);
     work->encrypted = is_encrypted;
     work->callback = callback;
     work->user_data = user_data;
@@ -1107,10 +1110,10 @@ int akira_settings_set_async(const char *key, const char *value, settings_wq_cal
     if (!work->key || !work->value)
     {
         if (work->key)
-            k_free(work->key);
+            akira_free_buffer(work->key);
         if (work->value)
-            k_free(work->value);
-        k_free(work);
+            akira_free_buffer(work->value);
+        akira_free_buffer(work);
         return -ENOMEM;
     }
 
@@ -1127,12 +1130,12 @@ int akira_settings_delete_async(const char *key, settings_wq_callback_t callback
         return -EINVAL;
     }
 
-    struct akira_setting_work *work = k_malloc(sizeof(struct akira_setting_work));
+    struct akira_setting_work *work = akira_malloc_buffer(sizeof(struct akira_setting_work));
     if (!work)
         return -ENOMEM;
 
     work->type = AKIRA_SETTINGS_OP_DELETE;
-    work->key = k_malloc(strlen(key) + 1);
+    work->key = akira_malloc_buffer(strlen(key) + 1);
     work->value = NULL;
     work->callback = callback;
     work->user_data = user_data;
@@ -1141,7 +1144,7 @@ int akira_settings_delete_async(const char *key, settings_wq_callback_t callback
 
     if (!work->key)
     {
-        k_free(work);
+        akira_free_buffer(work);
         return -ENOMEM;
     }
 

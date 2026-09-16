@@ -14,6 +14,7 @@
  */
 
 #include "ed25519.h"
+#include "lib/mem_helper.h"
 
 #include <string.h>
 #include <errno.h>
@@ -109,7 +110,7 @@ static int sha512_oneshot(const uint8_t *msg, size_t len, uint8_t out[64])
 {
 	uint64_t H[8];
 	size_t padded_len = ((len + 1 + 16 + 127) / 128) * 128;
-	uint8_t *buf = k_malloc(padded_len);
+	uint8_t *buf = akira_malloc_buffer(padded_len);
 	if (!buf) return -1;
 
 	memcpy(H, sha512_iv, sizeof(H));
@@ -138,7 +139,7 @@ static int sha512_oneshot(const uint8_t *msg, size_t len, uint8_t out[64])
 	}
 
 	memset(buf, 0, padded_len);
-	k_free(buf);
+	akira_free_buffer(buf);
 	return 0;
 }
 
@@ -655,7 +656,7 @@ int ed25519_sign(const uint8_t seed[32], const uint8_t *msg, uint32_t msg_len,
 	mbedtls_mpi_init(&s); mbedtls_mpi_init(&tmp);
 	ge_init(&A); ge_init(&R);
 
-	buf = k_malloc(64u + (size_t)msg_len);
+	buf = akira_malloc_buffer(64u + (size_t)msg_len);
 	if (!buf) { ret = -1; goto done; }
 
 	ret = curve_ctx_init(&c);
@@ -711,7 +712,7 @@ int ed25519_sign(const uint8_t seed[32], const uint8_t *msg, uint32_t msg_len,
 done:
 	if (buf) {
 		memset(buf, 0, 64u + (size_t)msg_len);
-		k_free(buf);
+		akira_free_buffer(buf);
 	}
 	memset(h, 0, sizeof(h));
 	memset(a_bytes, 0, sizeof(a_bytes));
@@ -754,7 +755,7 @@ int ed25519_verify(const uint8_t pub[32], const uint8_t *msg, uint32_t msg_len,
 	ret = point_decode(sig, &R, &c);
 	if (ret) goto done;
 
-	buf = k_malloc(64u + (size_t)msg_len);
+	buf = akira_malloc_buffer(64u + (size_t)msg_len);
 	if (!buf) { ret = -ENOMEM; goto done; }
 	memcpy(buf, sig, 32);        /* R, taken from the signature as-is */
 	memcpy(buf + 32, pub, 32);
@@ -782,7 +783,7 @@ int ed25519_verify(const uint8_t pub[32], const uint8_t *msg, uint32_t msg_len,
 done:
 	if (buf) {
 		memset(buf, 0, 64u + (size_t)msg_len);
-		k_free(buf);
+		akira_free_buffer(buf);
 	}
 	mbedtls_mpi_free(&s); mbedtls_mpi_free(&k);
 	ge_free(&A); ge_free(&R); ge_free(&sB); ge_free(&kA); ge_free(&rhs);
