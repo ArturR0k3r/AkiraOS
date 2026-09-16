@@ -53,12 +53,21 @@
 #ifdef CONFIG_AKIRA_WASM_PYTHON
 #include "akira_python_api.h"
 #endif
+#include "lib/mem_helper.h"
 
 LOG_MODULE_REGISTER(akira_export_api, CONFIG_AKIRA_LOG_LEVEL);
 
 bool akira_register_native_apis()
 {
-    static NativeSymbol native_syms[] = {
+    /* wasm_runtime_register_natives() qsort()s this table in place (see
+     * wasm_native.c's register_natives()), so it can't stay `const` - but
+     * that sort happens once here, from thread context, well after PSRAM
+     * init (called from akira_runtime_init() after wasm_runtime_full_init()).
+     * Keep the compile-time initializer as a `const` template (PSRAM-backed
+     * for free via CONFIG_SPIRAM_RODATA), copy it into a PSRAM-resident
+     * mutable buffer, and register/sort that copy instead - same pattern as
+     * this session's WiFi OSI vtable fix. */
+    static const NativeSymbol native_syms_ro[] = {
 #ifdef CONFIG_AKIRA_WASM_API
         {"printf_native", (void *)akira_native_printf, "($)i", NULL},
         {"delay", (void *)akira_native_delay, "(i)i", NULL},
@@ -410,6 +419,9 @@ bool akira_register_native_apis()
 #endif
 
     };
+
+    static NativeSymbol AKIRA_BULK_BSS native_syms[sizeof(native_syms_ro) / sizeof(NativeSymbol)];
+    memcpy(native_syms, native_syms_ro, sizeof(native_syms_ro));
 
     if (!wasm_runtime_register_natives("env", native_syms,
                                        sizeof(native_syms) / sizeof(NativeSymbol))) {
