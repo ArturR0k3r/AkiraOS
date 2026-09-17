@@ -651,16 +651,11 @@ static void handle_list(uint32_t just)
         }
     }
     if (just & (BIT(AKIRA_BTN_LEFT) | BIT(AKIRA_BTN_RIGHT))) {
-        printk("AKPLAY: tab switch start, g_tab=%d filtered=%d sel=%d scroll=%d\n",
-               g_tab, g_filtered_count, g_sel, g_scroll);
         g_tab = (just & BIT(AKIRA_BTN_LEFT))
             ? (g_tab - 1 + TAB_COUNT) % TAB_COUNT
             : (g_tab + 1) % TAB_COUNT;
-        printk("AKPLAY: new g_tab=%d, calling rebuild_filter\n", g_tab);
         rebuild_filter();
-        printk("AKPLAY: rebuild_filter done, filtered=%d, calling redraw\n", g_filtered_count);
         redraw();
-        printk("AKPLAY: redraw done\n");
     }
     if (just & BIT(AKIRA_BTN_X)) {
         g_tag_filter++;
