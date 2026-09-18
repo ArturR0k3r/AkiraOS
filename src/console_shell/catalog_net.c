@@ -5,6 +5,7 @@
 
 #include "catalog_net.h"
 #include <connectivity/net/net_stream.h>
+#include <lib/mem_helper.h>
 #include <zephyr/kernel.h>
 #include <string.h>
 #include <strings.h>
@@ -289,7 +290,7 @@ int catalog_https_get(const char *host, uint16_t port, const char *path,
 {
     char cur_host[128];
     char cur_path[256];
-    static char location[CATALOG_LOCATION_SIZE];
+    static char AKIRA_BULK_BSS location[CATALOG_LOCATION_SIZE];
 
     strncpy(cur_host, host, sizeof(cur_host) - 1);
     cur_host[sizeof(cur_host) - 1] = '\0';
