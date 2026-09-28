@@ -1807,23 +1807,62 @@ config AKIRA_OTA_ALLOW_INSECURE_HTTP
       transport is authenticated. Development only.
 
 config AKIRA_BOOT_GUARD
-    bool "AkiraOS software boot counter / rollback guard"
-    default n
-    select AKIRA_OTA
-    select NVS
+    bool "Automatic rollback of firmware that fails to boot"
+    default y
+    depends on MCUBOOT_IMG_MANAGER
+    select REBOOT
     help
-      Track consecutive unconfirmed boots in NVS.  After
-      CONFIG_AKIRA_OTA_MAX_BOOT_FAILURES resets without confirmation,
-      trigger ota_request_rollback() automatically.
+      MCUboot boots a freshly installed image once as a trial and restores
+      the previous firmware if the trial image resets before it is
+      confirmed. The boot guard confirms the image after a healthy boot
+      (AKIRA_HOOK_BOOT_READY plus AKIRA_BOOT_GUARD_CONFIRM_DELAY_S) and
+      forces a reset when it crashes or hangs, so a bad update rolls back
+      on its own. Keep this enabled with MCUboot: in swap mode an image
+      that nobody confirms is rolled back on its next reset.
+      See include/akira_boot_guard.h.
 
-config AKIRA_OTA_MAX_BOOT_FAILURES
-    int "Max consecutive unconfirmed boots before rollback"
-    default 3
-    range 1 10
-    depends on AKIRA_BOOT_GUARD
+if AKIRA_BOOT_GUARD
+
+config AKIRA_BOOT_GUARD_CONFIRM_DELAY_S
+    int "Healthy uptime after boot before a new image is confirmed (s)"
+    default 30
+    range 0 3600
     help
-      Number of consecutive boots without akira_boot_guard_confirm() before
-      the boot guard triggers OTA rollback.
+      Seconds the trial image must keep running after AKIRA_HOOK_BOOT_READY
+      before it is confirmed. A crash inside this window rolls back.
+
+config AKIRA_BOOT_GUARD_MANUAL_CONFIRM
+    bool "Leave confirmation to the application"
+    help
+      Do not confirm automatically. The product confirms with
+      akira_boot_guard_confirm() (or ota_confirm() from WASM) once its own
+      health checks pass; without that the trial deadline rolls back.
+
+config AKIRA_BOOT_GUARD_TRIAL_TIMEOUT_S
+    int "Trial deadline: reboot and roll back if not confirmed by then (s)"
+    default 300
+    range 30 86400
+    help
+      Catches an image that hangs instead of crashing. Must exceed
+      AKIRA_BOOT_GUARD_CONFIRM_DELAY_S plus the time to reach BOOT_READY.
+
+config AKIRA_BOOT_GUARD_INIT_PRIORITY
+    int "Boot guard SYS_INIT priority (APPLICATION level)"
+    default 60
+    help
+      Must be greater than AKIRA_SETTINGS_INIT_PRIORITY so the trial record
+      can be stored in settings.
+
+config AKIRA_BOOT_GUARD_FATAL_REBOOT
+    bool "Reboot on a fatal error during a trial boot"
+    default y
+    depends on !AKIRA_PANIC
+    help
+      Provide k_sys_fatal_error_handler(): reboot (and so roll back) when a
+      trial image crashes, halt as before otherwise. AKIRA_PANIC already
+      reboots on every fatal error, so it is not needed with that.
+
+endif # AKIRA_BOOT_GUARD
 
 endmenu
 

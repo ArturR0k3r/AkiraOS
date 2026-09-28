@@ -31,6 +31,10 @@
 #define OTA_FLASH_AVAILABLE 0
 #endif
 
+#ifdef CONFIG_AKIRA_BOOT_GUARD
+#include <akira_boot_guard.h>
+#endif
+
 LOG_MODULE_REGISTER(ota_manager, AKIRA_LOG_LEVEL);
 
 #if OTA_FLASH_AVAILABLE
@@ -110,6 +114,11 @@ static K_MUTEX_DEFINE(ota_buf_mutex); /* protects write_buffer + buffer_pos */
 /* Flash management */
 static const struct flash_area *secondary_fa = NULL;
 static uint8_t write_buffer[OTA_WRITE_BUFFER_SIZE] __aligned(4);
+
+/* Set once this boot starts writing a new image over the secondary slot,
+ * which until then holds the firmware that ran before the last swap. */
+static bool secondary_overwritten;
+
 static uint16_t buffer_pos = 0;
 
 /* Expected SHA-256 of the incoming image, supplied by the transport/handler
@@ -329,6 +338,7 @@ static enum ota_result do_start_update(uint32_t expected_size)
 
     update_progress(OTA_STATE_RECEIVING, "Erasing flash...");
     LOG_INF("OTA: Erasing flash... (0%%)");
+    secondary_overwritten = true;
 
     ret = flash_area_erase(secondary_fa, 0, secondary_fa->fa_size);
     if (ret)
@@ -636,9 +646,26 @@ static enum ota_result do_abort_update(void)
 
 static enum ota_result do_confirm_firmware(void)
 {
+#ifdef CONFIG_AKIRA_BOOT_GUARD
+    /* Let the boot guard end the trial (deadline, rollback record) too. */
+    int ret = akira_boot_guard_confirm();
+#else
     int ret = boot_write_img_confirmed();
+#endif
     return (ret == 0) ? OTA_OK : OTA_ERROR_BOOT_REQUEST_FAILED;
 }
+
+#if OTA_FLASH_AVAILABLE
+static void rollback_reboot_fn(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    sys_reboot(SYS_REBOOT_COLD);
+}
+
+/* Delayed so the caller (shell, WASM app) can still report the result. */
+static K_WORK_DELAYABLE_DEFINE(rollback_reboot_work, rollback_reboot_fn);
+#define OTA_ROLLBACK_REBOOT_DELAY K_SECONDS(1)
+#endif
 
 /*===========================================================================*/
 /* OTA Worker Thread                                                         */
@@ -1038,21 +1065,54 @@ enum ota_result ota_confirm_firmware(void)
 
 enum ota_result ota_request_rollback(void)
 {
-    /* If the current image has not yet been confirmed (test-mode boot), a
-     * cold reset will cause MCUboot to automatically revert to the previous
-     * confirmed image.  If the image was already confirmed, rollback is not
-     * possible without reinstalling the old firmware via a new OTA cycle.
-     * Either way, this call marks the state and lets the caller trigger the
-     * reboot via sys_reboot() or the shell. */
+#if OTA_FLASH_AVAILABLE
+    const char *msg;
+
+    if (ota_is_update_in_progress())
+    {
+        return OTA_ERROR_ALREADY_IN_PROGRESS;
+    }
+
+    if (!boot_is_img_confirmed())
+    {
+        /* Trial boot: MCUboot restores the previous image on the next reset. */
+        msg = "Rolling back: rebooting into previous firmware";
+    }
+    else
+    {
+#ifdef CONFIG_MCUBOOT_BOOTLOADER_MODE_OVERWRITE_ONLY
+        /* The update overwrote the previous image; there is nothing to restore. */
+        return OTA_ERROR_INVALID_IMAGE;
+#else
+        /* After a swap upgrade the secondary slot holds the previous image.
+         * Boot it as a trial; MCUboot re-verifies it before swapping. */
+        struct mcuboot_img_header hdr;
+        if (secondary_overwritten ||
+            boot_read_bank_header(FLASH_AREA_IMAGE_SECONDARY, &hdr, sizeof(hdr)) != 0)
+        {
+            LOG_WRN("Rollback: no previous image in the secondary slot");
+            return OTA_ERROR_INVALID_IMAGE;
+        }
+        if (boot_request_upgrade(BOOT_UPGRADE_TEST) != 0)
+        {
+            return OTA_ERROR_BOOT_REQUEST_FAILED;
+        }
+        msg = "Rolling back: rebooting into previous firmware (trial)";
+#endif
+    }
+
     k_mutex_lock(&ota_mutex, K_FOREVER);
     ota_status.state = OTA_STATE_IDLE;
-    strncpy(ota_status.status_message, "Rollback requested — reboot to apply",
-            sizeof(ota_status.status_message) - 1);
+    strncpy(ota_status.status_message, msg, sizeof(ota_status.status_message) - 1);
     ota_status.status_message[sizeof(ota_status.status_message) - 1] = '\0';
     k_mutex_unlock(&ota_mutex);
 
-    LOG_INF("OTA rollback requested (reboot to apply)");
+    LOG_WRN("%s", msg);
+    k_work_schedule(&rollback_reboot_work, OTA_ROLLBACK_REBOOT_DELAY);
     return OTA_OK;
+#else
+    return OTA_ERROR_NOT_INITIALIZED;
+#endif
 }
 
 enum ota_result ota_register_progress_callback(ota_progress_cb_t callback, void *user_data)
@@ -1140,6 +1200,15 @@ static int cmd_ota_status(const struct shell *sh, size_t argc, char **argv)
     {
         shell_print(sh, "Status: %s", p->status_message);
     }
+
+#ifdef CONFIG_AKIRA_BOOT_GUARD
+    shell_print(sh, "Firmware: %s",
+                akira_boot_guard_is_trial() ? "trial (not yet confirmed)" : "confirmed");
+    if (akira_boot_guard_rolled_back())
+    {
+        shell_print(sh, "Last update failed its trial boot and was rolled back");
+    }
+#endif
 
     shell_print(sh, "\nNote: LittleFS storage is separate from firmware slots");
     shell_print(sh, "      and NOT erased during OTA updates");

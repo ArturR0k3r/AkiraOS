@@ -40,9 +40,12 @@ target_sources(app PRIVATE
     ${AKIRA_SRC}/runtime/security/app_signing_v2.c
     ${AKIRA_SRC}/runtime/security/sandbox.c
     ${AKIRA_SRC}/connectivity/ota/ota_manager.c
+    ${AKIRA_SRC}/runtime/akira_boot_guard.c
+    ${AKIRA_SRC}/runtime/akira_hooks.c
 
     # Stubs
     stubs/stub_mcuboot.c
+    stubs/stub_settings.c
 
     # Matter accessory path + in-firmware mock co-processor
     ${AKIRA_SRC}/runtime/akira_matter_ipc.c
@@ -56,6 +59,7 @@ target_sources(app PRIVATE
     src/test_security.c
     src/test_app_lifecycle.c
     src/test_ota_state.c
+    src/test_boot_guard.c
     src/test_matter_accessory.c
     src/test_mqtt_ha.c
     src/test_display_clip.c
@@ -82,5 +86,15 @@ target_compile_definitions(app PRIVATE
 # boot_write_img_confirmed symbols are satisfied by stubs/stub_mcuboot.c.
 set_source_files_properties(
     ${AKIRA_SRC}/connectivity/ota/ota_manager.c
-    PROPERTIES COMPILE_DEFINITIONS "CONFIG_BOOTLOADER_MCUBOOT=1"
+    PROPERTIES COMPILE_DEFINITIONS "CONFIG_BOOTLOADER_MCUBOOT=1;CONFIG_AKIRA_BOOT_GUARD=1"
+)
+
+# CONFIG_AKIRA_BOOT_GUARD depends on MCUBOOT_IMG_MANAGER, unavailable here for
+# the same reason, so the boot guard gets its symbols the same way. The short
+# confirm delay keeps the BOOT_READY auto-confirm test fast.
+set_source_files_properties(
+    ${AKIRA_SRC}/runtime/akira_boot_guard.c
+    src/test_boot_guard.c
+    PROPERTIES COMPILE_DEFINITIONS
+    "CONFIG_AKIRA_BOOT_GUARD=1;CONFIG_AKIRA_BOOT_GUARD_CONFIRM_DELAY_S=1;CONFIG_AKIRA_BOOT_GUARD_TRIAL_TIMEOUT_S=300;CONFIG_AKIRA_BOOT_GUARD_INIT_PRIORITY=60"
 )

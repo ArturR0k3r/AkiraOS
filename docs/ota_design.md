@@ -18,7 +18,7 @@ nav_order: 10
 | # | Goal |
 |---|------|
 | G1 | Atomic slot-swap: only boot new firmware after explicit confirmation |
-| G2 | Automatic rollback after N consecutive boot failures (configurable) |
+| G2 | Automatic rollback when a new image crashes, hangs or never becomes healthy |
 | G3 | Delta (binary-patch) update mode to reduce download size |
 | G4 | WASM app can trigger / monitor OTA without elevated native access |
 | G5 | Single `docs/feature_overhead.md` entry tracking flash/RAM cost |
@@ -34,7 +34,7 @@ nav_order: 10
 - Pluggable transport interface (`ota_transport_t`)
 
 **Missing for v1.6:**
-1. `akira_boot_guard` — persistent boot counter stored in NVS, triggers rollback if the counter exceeds `CONFIG_AKIRA_OTA_MAX_BOOT_FAILURES` without being cleared.
+1. `akira_boot_guard` — confirms a new image after a healthy boot and forces a reset when it crashes or hangs, so MCUboot rolls it back (section 4).
 2. Manifest-based HTTP fetch — JSON manifest → URL → streaming download into MCUboot secondary slot.
 3. Delta patching — streaming bspatch applied between the running slot and the incoming binary.
 4. WASM native API — `wasm_ota_check()`, `wasm_ota_fetch_and_apply()`, `wasm_ota_get_state()`.
@@ -50,77 +50,100 @@ Flash map (typical):
   ├──────────────────────────────────────────┤
   │  slot0_partition      (primary — running)│
   ├──────────────────────────────────────────┤
-  │  slot1_partition      (secondary — OTA)  │
+  │  slot1_partition      (secondary — OTA / │
+  │                        previous firmware)│
   ├──────────────────────────────────────────┤
-  │  panic_store          (NVS — crash log)  │
-  ├──────────────────────────────────────────┤
-  │  boot_counter         (NVS — boot count) │  ← NEW
+  │  storage              (settings, LittleFS)│
   └──────────────────────────────────────────┘
 ```
 
-MCUboot performs the swap atomically: if the new image does not call
-`boot_write_img_confirmed()` within `CONFIG_MCUBOOT_WATCHDOG_FEED_TIMEOUT_MS`,
-it reverts to the previous primary slot on next reset.
+MCUboot must run in a **swap** mode (swap-using-move on ESP32 and STM32).
+`ota_finalize_update()` marks the downloaded image with
+`boot_request_upgrade(BOOT_UPGRADE_TEST)`; on the next reset MCUboot swaps it
+into slot0 and boots it once as a *trial*. If the trial image resets without
+calling `boot_write_img_confirmed()`, MCUboot swaps the previous firmware back.
+After a confirmed swap, slot1 holds the previous firmware until the next
+download overwrites it.
 
-AkiraOS adds a software-level boot guard **on top** of MCUboot to handle the
-case where the device crashes during application startup before the RTOS
-watchdog feeds MCUboot.
+Overwrite-only mode (`CONFIG_BOOT_UPGRADE_ONLY`) copies the new image over the
+old one, so nothing can be rolled back. MCUboot's Espressif SoC defaults pick
+it; `build.sh` overrides it with `boards/mcuboot-swap-move.conf` for the Xtensa
+parts (ESP32, ESP32-S2, ESP32-S3). The RISC-V parts (C3/C6/H2) stay
+overwrite-only for now: their bootloader has no IRAM headroom and swap mode is
+not validated there. Sysbuild builds already pass the swap mode to MCUboot.
 
 ---
 
 ## 4. Boot Guard Design (`akira_boot_guard`)
 
-### 4.1 Data Layout
+MCUboot only reverts an image that *resets* before it is confirmed. The boot
+guard makes sure every failure ends in a reset and a healthy image gets
+confirmed. It is on by default wherever `CONFIG_MCUBOOT_IMG_MANAGER=y`: in swap
+mode an image nobody confirms would be rolled back on its next reset.
 
-A small NVS partition (`boot_counter`) holds a single record:
-
-```c
-typedef struct {
-    uint32_t magic;          // 0xB007C0DE when valid
-    uint8_t  boot_count;     // incremented on every unconfirmed boot
-    uint8_t  confirmed;      // set to 1 after akira_boot_guard_confirm()
-    uint8_t  _pad[2];
-} akira_boot_counter_t;
-```
-
-### 4.2 Boot Sequence
+### 4.1 Trial boot
 
 ```
-akira_boot_guard_init()
+SYS_INIT (APPLICATION, after settings)  akira_boot_guard_init()
    │
-   ├─ Read NVS record
-   │   ├─ Not found → write {magic, boot_count=1, confirmed=0}
-   │   └─ Found
-   │       ├─ confirmed=1 → reset to {confirmed=0, boot_count=1} → OK
-   │       └─ confirmed=0
-   │           ├─ boot_count < MAX → increment, write back → continue
-   │           └─ boot_count >= MAX → LOG_ERR, call ota_request_rollback() → reboot
+   ├─ boot_is_img_confirmed() → confirmed image
+   │     └─ "ota/trial" record present and names another image?
+   │           → the previous trial failed and MCUboot rolled back:
+   │             log it, erase the failed image's header in slot1,
+   │             emit AKIRA_HOOK_OTA_ERROR (ota.error = -ECANCELED) at BOOT_READY
    │
-   └─ Return 0 (continue boot) or -EAGAIN (rollback triggered)
+   └─ not confirmed → trial boot
+         ├─ store "ota/trial" = "<version>/<size>" of the trial image
+         └─ start the deadline timer (AKIRA_BOOT_GUARD_TRIAL_TIMEOUT_S)
+
+AKIRA_HOOK_BOOT_READY (end of akira_start())
+   └─ trial → confirm after AKIRA_BOOT_GUARD_CONFIRM_DELAY_S of uptime
 ```
 
-### 4.3 Confirmation
+| Failure during the trial | What resets the device |
+|--------------------------|------------------------|
+| Crash (fatal error) | `k_sys_fatal_error_handler()` reboots — the guard's own handler (`AKIRA_BOOT_GUARD_FATAL_REBOOT`) or `AKIRA_PANIC` |
+| Hang, BOOT_READY never reached | Deadline timer (runs from the timer interrupt, so a deadlocked thread cannot block it) |
+| Hang with interrupts locked | Hardware watchdog (`CONFIG_AKIRA_WDT`) |
+| Product-specific health check fails | `akira_boot_guard_reject()` |
 
-The application must call `akira_boot_guard_confirm()` once it is healthy
-(e.g., after successful network join + first sensor read). This sets
-`confirmed=1` and calls `ota_confirm_firmware()` to also confirm at the
-MCUboot level.
+### 4.2 Confirmation
+
+By default the image is confirmed `AKIRA_BOOT_GUARD_CONFIRM_DELAY_S` seconds
+after `AKIRA_HOOK_BOOT_READY`. With `CONFIG_AKIRA_BOOT_GUARD_MANUAL_CONFIRM=y`
+the product confirms itself — `akira_boot_guard_confirm()` from C, `ota_confirm()`
+from a WASM app with `AKIRA_CAP_OTA_TRIGGER`, or `ota confirm` in the shell —
+once its own checks pass (network joined, first sensor read, ...). Every
+confirm path ends the trial: it writes the MCUboot flag, stops the deadline,
+clears the record and emits `AKIRA_HOOK_OTA_CONFIRMED`.
+
+Firmware that does not boot through `akira_start()` must emit
+`AKIRA_HOOK_BOOT_READY` itself or use manual confirmation; otherwise every
+update rolls back at the deadline.
+
+### 4.3 Manual rollback
+
+`ota_request_rollback()` (shell `ota rollback`, WASM `ota_rollback()`):
+
+- trial image: reboot, MCUboot restores the previous firmware;
+- confirmed image: if slot1 still holds the previous firmware (no download
+  since the last swap, not a discarded failed image), mark it as a trial with
+  `boot_request_upgrade(BOOT_UPGRADE_TEST)` and reboot. MCUboot verifies it
+  before swapping, and the boot guard handles it like any other trial;
+- otherwise `OTA_ERROR_INVALID_IMAGE`, and no reboot.
+
+The reboot is delayed by one second so the caller can report the result.
 
 ### 4.4 Kconfig
 
-```kconfig
-config AKIRA_BOOT_GUARD
-    bool "AkiraOS software boot guard"
-    default n
-    select AKIRA_OTA
-    select NVS
-
-config AKIRA_OTA_MAX_BOOT_FAILURES
-    int "Max consecutive unconfirmed boots before rollback"
-    default 3
-    range 1 10
-    depends on AKIRA_BOOT_GUARD
-```
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `AKIRA_BOOT_GUARD` | `y` (needs `MCUBOOT_IMG_MANAGER`) | Enable the guard |
+| `AKIRA_BOOT_GUARD_CONFIRM_DELAY_S` | 30 | Healthy uptime after BOOT_READY before confirming |
+| `AKIRA_BOOT_GUARD_MANUAL_CONFIRM` | `n` | Leave confirmation to the product |
+| `AKIRA_BOOT_GUARD_TRIAL_TIMEOUT_S` | 300 | Reboot (and roll back) if not confirmed by then |
+| `AKIRA_BOOT_GUARD_INIT_PRIORITY` | 60 | SYS_INIT priority; must follow settings |
+| `AKIRA_BOOT_GUARD_FATAL_REBOOT` | `y` unless `AKIRA_PANIC` | Reboot on a fatal error during a trial |
 
 ---
 
@@ -230,11 +253,11 @@ config AKIRA_OTA_DELTA_CHUNK_SIZE
 
 | # | Criterion | Test |
 |---|-----------|------|
-| AC1 | Three consecutive unconfirmed boots trigger rollback | `tests/ota/test_boot_guard.c` |
+| AC1 | A trial image is confirmed after BOOT_READY; a failed trial is reported as a rollback on the next boot | `tests/src/test_boot_guard.c` |
 | AC2 | Delta patch produces identical binary to full-image download | `tests/ota/test_delta.c` |
 | AC3 | `wasm_ota_get_state()` returns correct enum | `tests/wasm_api/test_ota_api.c` |
 | AC4 | OTA without `AKIRA_CAP_OTA_TRIGGER` returns `-EACCES` | `tests/wasm_api/test_ota_api.c` |
-| AC5 | Native sim build with `CONFIG_AKIRA_BOOT_GUARD=y` compiles and runs AC1 | CI |
+| AC5 | Native sim test build compiles the boot guard and runs AC1 | CI |
 
 ---
 
@@ -242,7 +265,7 @@ config AKIRA_OTA_DELTA_CHUNK_SIZE
 
 | Module | Flash (text) | RAM (bss/data) |
 |--------|-------------|----------------|
-| `akira_boot_guard` | ~1.2 KB | ~128 B (NVS fs struct) |
+| `akira_boot_guard` | ~1.5 KB | ~100 B (timer, work item) |
 | `akira_delta` | ~8.0 KB (bzip2 subset) | ~4.1 KB (ctx, heap-allocated) |
 | `akira_ota_api` | ~1.0 KB | ~0 B |
 | Total (all enabled) | **~10.2 KB** | **~4.2 KB** |

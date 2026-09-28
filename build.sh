@@ -294,13 +294,27 @@ build_mcuboot() {
         print_warning "No MCUboot or board overlay for ${board_id}: MCUboot uses the board's default partitions"
     fi
 
-    # Pass board-specific MCUboot Kconfig overrides when present.
-    # These live in AkiraOS/boards/<board>.mcuboot.conf so the mcuboot repo
+    # MCUboot Kconfig overrides live in AkiraOS/boards/ so the mcuboot repo
     # stays at its upstream manifest-rev without local commits.
+    local mcuboot_confs=()
+    # Espressif SoCs default MCUboot to overwrite-only, which leaves nothing to
+    # roll back to after a bad OTA image. Swap instead, matching the app build.
+    # Xtensa parts only: the RISC-V parts (C3/C6/H2) have no IRAM headroom in
+    # the bootloader and swap mode is not yet validated there.
+    case "${BOARD_CHIP[$BOARD]}" in
+        esp32|esp32s2|esp32s3)
+            mcuboot_confs+=("$SCRIPT_DIR/boards/mcuboot-swap-move.conf") ;;
+    esac
+    # Board-specific overrides (boards/<board>.mcuboot.conf) go last so they win.
     local mcuboot_conf="$SCRIPT_DIR/boards/${board_id}.mcuboot.conf"
     if [[ -f "$mcuboot_conf" ]]; then
-        extra_cmake+=" -DEXTRA_CONF_FILE=$mcuboot_conf"
-        print_info "MCUboot conf: $mcuboot_conf"
+        mcuboot_confs+=("$mcuboot_conf")
+    fi
+    if [[ ${#mcuboot_confs[@]} -gt 0 ]]; then
+        local conf_list
+        conf_list="$(IFS=';'; echo "${mcuboot_confs[*]}")"
+        extra_cmake+=" -DEXTRA_CONF_FILE=$conf_list"
+        print_info "MCUboot conf: $conf_list"
     fi
 
     # ESP32-C6 and ESP32-H2 MCUboot images need AkiraOS's patched linker scripts
