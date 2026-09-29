@@ -331,6 +331,12 @@ static void adv_slow_work_handler(struct k_work *work)
     {
         return;
     }
+    if (bt_mgr.mode == BT_MODE_MESH)
+    {
+        /* The slow restart below advertises the default HID data, dropping the
+         * mesh service UUID phones filter on. Keep the custom advert as-is. */
+        return;
+    }
     LOG_INF("BLE: switching to low-power advertising interval");
 
     static const struct bt_le_adv_param slow = BT_LE_ADV_PARAM_INIT(
