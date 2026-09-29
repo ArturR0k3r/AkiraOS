@@ -14,6 +14,9 @@
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/uuid.h>
+#include "../bluetooth/bt_manager.h"
 #include <zephyr/sys/util.h>
 #include <string.h>
 #include "lib/mem_helper.h"
@@ -47,7 +50,9 @@ struct ble_radio_data {
     int16_t last_rx_rssi;
 };
 
-static struct ble_radio_data ble_data;
+/* Zero-init, BT/shell-thread only — moved to PSRAM to keep internal DRAM under
+ * its limit (mesh GATT statics were added). memset in radio_ble_register(). */
+static struct ble_radio_data AKIRA_BULK_BSS ble_data;
 static radio_handle_t ble_handle;
 static struct bt_le_ext_adv *ble_ext_adv;
 
@@ -68,6 +73,36 @@ static struct k_msgq ble_rx_msgq;
 static char AKIRA_BULK_BSS __aligned(4)
     ble_rx_msgq_buf[BLE_RX_MSGQ_DEPTH * sizeof(struct ble_rx_msg)];
 
+/* Common RX path for both transports (adv scan and GATT write). */
+static void ble_rx_enqueue(const uint8_t *payload, size_t len, int16_t rssi)
+{
+    struct ble_rx_msg msg = {
+        .len = (uint16_t)MIN(len, sizeof(msg.data)),
+        .rssi = rssi,
+    };
+
+    memcpy(msg.data, payload, msg.len);
+    if (k_msgq_put(&ble_rx_msgq, &msg, K_NO_WAIT) != 0) {
+        LOG_WRN("BLE rx_msgq full, dropping len=%u", msg.len);
+        return;
+    }
+
+    ble_data.stats.rx_packets++;
+    ble_data.stats.rx_bytes += msg.len;
+    ble_data.stats.rssi = rssi;
+
+    if (ble_handle.event_cb) {
+        radio_event_t event = {
+            .type = RADIO_EVENT_RX_DONE,
+            .data = msg.data,
+            .len = msg.len,
+            .rssi = rssi,
+            .user_data = ble_handle.event_user_data,
+        };
+        ble_handle.event_cb(&event, ble_handle.event_user_data);
+    }
+}
+
 static bool ble_adv_ad_cb(struct bt_data *data, void *user_data)
 {
     const struct bt_le_scan_recv_info *info = user_data;
@@ -83,32 +118,8 @@ static bool ble_adv_ad_cb(struct bt_data *data, void *user_data)
         return false; /* our own advertisement looped back through our scanner */
     }
 
-    const uint8_t *payload = &data->data[AKIRA_BLE_MAGIC_LEN];
-    struct ble_rx_msg msg = {
-        .len = (uint16_t)MIN(data->data_len - AKIRA_BLE_MAGIC_LEN, sizeof(msg.data)),
-        .rssi = info->rssi,
-    };
-
-    memcpy(msg.data, payload, msg.len);
-    if (k_msgq_put(&ble_rx_msgq, &msg, K_NO_WAIT) != 0) {
-        LOG_WRN("BLE rx_msgq full, dropping len=%u", msg.len);
-        return false;
-    }
-
-    ble_data.stats.rx_packets++;
-    ble_data.stats.rx_bytes += msg.len;
-    ble_data.stats.rssi = info->rssi;
-
-    if (ble_handle.event_cb) {
-        radio_event_t event = {
-            .type = RADIO_EVENT_RX_DONE,
-            .data = msg.data,
-            .len = msg.len,
-            .rssi = info->rssi,
-            .user_data = ble_handle.event_user_data,
-        };
-        ble_handle.event_cb(&event, ble_handle.event_user_data);
-    }
+    ble_rx_enqueue(&data->data[AKIRA_BLE_MAGIC_LEN], data->data_len - AKIRA_BLE_MAGIC_LEN,
+                   info->rssi);
 
     return false; /* one AD structure per report is all we ever send */
 }
@@ -119,6 +130,131 @@ static void ble_scan_recv(const struct bt_le_scan_recv_info *info,
 {
     bt_data_parse(buf, ble_adv_ad_cb, (void *)info);
 }
+
+
+/* GATT transport for phones. iOS can't transmit or read raw advertising
+ * payloads, so a phone connects to this service instead: it WRITEs mesh
+ * packets to the characteristic (fed into the same rx queue as scanned
+ * adverts) and we NOTIFY outgoing packets to it. UUIDs must match
+ * AkiraMeshBleManager.swift. Registered only while the BLE mesh radio is
+ * initialised (dynamic DB), so Companion/HID connections never see it. */
+#if defined(CONFIG_BT_PERIPHERAL) && defined(CONFIG_BT_GATT_DYNAMIC_DB)
+#define AKIRA_MESH_GATT 1
+
+/* const UUIDs live in flash — internal DRAM is nearly full on this target. */
+#define MESH_SVC_UUID  BT_UUID_DECLARE_128(BT_UUID_128_ENCODE(0xA1524D02, 0x0001, 0x4E56, 0x8D4E, 0x494B52413001))
+#define MESH_CHAR_UUID BT_UUID_DECLARE_128(BT_UUID_128_ENCODE(0xA1524D02, 0x0002, 0x4E56, 0x8D4E, 0x494B52413001))
+static const uint8_t mesh_adv_uuid128[16] = {
+    BT_UUID_128_ENCODE(0xA1524D02, 0x0001, 0x4E56, 0x8D4E, 0x494B52413001)
+};
+
+#define MESH_GATT_VALUE_ATTR 2 /* index of the characteristic value in mesh_attrs[] */
+#define MESH_GATT_READV_MS   500
+
+static bool mesh_notify_enabled;
+
+static ssize_t mesh_gatt_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+                               const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
+{
+    ARG_UNUSED(conn);
+    ARG_UNUSED(attr);
+    ARG_UNUSED(flags);
+
+    if (offset != 0) {
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+    }
+    ble_rx_enqueue(buf, len, 0);
+    return len;
+}
+
+static void mesh_gatt_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
+{
+    ARG_UNUSED(attr);
+    mesh_notify_enabled = (value == BT_GATT_CCC_NOTIFY);
+    LOG_INF("BLE mesh GATT notify %s", mesh_notify_enabled ? "on" : "off");
+}
+
+static struct bt_gatt_attr mesh_attrs[] = {
+    BT_GATT_PRIMARY_SERVICE(MESH_SVC_UUID),
+    BT_GATT_CHARACTERISTIC(MESH_CHAR_UUID,
+                           BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP | BT_GATT_CHRC_NOTIFY,
+                           BT_GATT_PERM_WRITE, NULL, mesh_gatt_write, NULL),
+    BT_GATT_CCC(mesh_gatt_ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+};
+static struct bt_gatt_service mesh_gatt_svc = BT_GATT_SERVICE(mesh_attrs);
+static bool mesh_gatt_registered;
+
+/* Another mode (e.g. Companion) may already be advertising its own UUID;
+ * bt_manager_start_advertising_custom() then returns success without
+ * changing the advert. Stop first so the mesh UUID is what's on air. */
+static int mesh_gatt_advertise(void)
+{
+    bt_manager_stop_advertising();
+    return bt_manager_start_advertising_custom(mesh_adv_uuid128);
+}
+
+/* bt_manager doesn't re-advertise after a disconnect (auto_advertise is off
+ * in lazy-init), so restart it here while the mesh radio is up. Deferred so
+ * bt_manager's own disconnected_cb has finished updating its state first. */
+static void mesh_readv_work_fn(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    if (ble_data.initialized) {
+        mesh_gatt_advertise();
+    }
+}
+static K_WORK_DELAYABLE_DEFINE(mesh_readv_work, mesh_readv_work_fn);
+
+static void mesh_conn_disconnected(struct bt_conn *conn, uint8_t reason)
+{
+    ARG_UNUSED(conn);
+    ARG_UNUSED(reason);
+    if (ble_data.initialized) {
+        k_work_reschedule(&mesh_readv_work, K_MSEC(MESH_GATT_READV_MS));
+    }
+}
+BT_CONN_CB_DEFINE(mesh_conn_cb) = {
+    .disconnected = mesh_conn_disconnected,
+};
+
+static void mesh_gatt_start(void)
+{
+    int ret = bt_gatt_service_register(&mesh_gatt_svc);
+
+    if (ret) {
+        LOG_ERR("BLE mesh GATT register failed: %d", ret);
+        return;
+    }
+    mesh_gatt_registered = true;
+    ret = mesh_gatt_advertise();
+    if (ret) {
+        LOG_ERR("BLE mesh GATT advertising failed: %d", ret);
+    }
+}
+
+static void mesh_gatt_stop(void)
+{
+    k_work_cancel_delayable(&mesh_readv_work);
+    if (mesh_gatt_registered) {
+        bt_manager_stop_advertising();
+        bt_gatt_service_unregister(&mesh_gatt_svc);
+        mesh_gatt_registered = false;
+    }
+    mesh_notify_enabled = false;
+}
+
+static void mesh_gatt_notify(const uint8_t *data, size_t len)
+{
+    if (!mesh_notify_enabled) {
+        return;
+    }
+    int ret = bt_gatt_notify(NULL, &mesh_attrs[MESH_GATT_VALUE_ATTR], data, len);
+
+    if (ret) {
+        LOG_WRN("BLE mesh GATT notify failed: %d (len=%zu)", ret, len);
+    }
+}
+#endif /* CONFIG_BT_PERIPHERAL && CONFIG_BT_GATT_DYNAMIC_DB */
 
 /* RAL operation implementations */
 
@@ -153,6 +289,9 @@ static int ble_radio_init(radio_handle_t *handle)
     
     data->initialized = true;
     handle->state = RADIO_STATE_IDLE;
+#ifdef AKIRA_MESH_GATT
+    mesh_gatt_start();
+#endif
     
     LOG_INF("BLE radio initialized - Address: %02x:%02x:%02x:%02x:%02x:%02x",
             data->hw_addr[5], data->hw_addr[4], data->hw_addr[3],
@@ -165,6 +304,10 @@ static int ble_radio_deinit(radio_handle_t *handle)
 {
     struct ble_radio_data *data = handle->priv_data;
     
+#ifdef AKIRA_MESH_GATT
+    data->initialized = false; /* stops mesh_readv_work re-advertising */
+    mesh_gatt_stop();
+#endif
     /* Unregister scan callbacks */
     bt_le_scan_cb_unregister(&data->scan_cb);
 
@@ -236,6 +379,10 @@ static int ble_radio_send(radio_handle_t *handle, const uint8_t *data, size_t le
     if (len > AKIRA_BLE_MAX_PACKET) {
         return -EMSGSIZE;
     }
+
+#ifdef AKIRA_MESH_GATT
+    mesh_gatt_notify(data, len);
+#endif
 
     ret = ble_ext_adv_ensure();
     if (ret) {
