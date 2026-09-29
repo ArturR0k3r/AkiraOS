@@ -2543,6 +2543,26 @@ static void mesh_shell_rx_cb(const uint8_t *src_id, const uint8_t *data,
            src_id[AKIRA_MESH_NODE_ID_LEN - 1], len, (int)len, data);
 }
 
+/* Parse up to 2*AKIRA_MESH_NODE_ID_LEN hex digits into a node id, left-padded
+ * with zeros, so "1", "01" and "0000000000000001" all mean the same node. Stops
+ * at the first non-hex character. */
+static void parse_node_id(const char *hex, uint8_t id[AKIRA_MESH_NODE_ID_LEN])
+{
+    char padded[2 * AKIRA_MESH_NODE_ID_LEN + 1];
+    size_t len = strnlen(hex, sizeof(padded));
+    if (len > 2 * AKIRA_MESH_NODE_ID_LEN) {
+        len = 2 * AKIRA_MESH_NODE_ID_LEN;
+    }
+    memset(padded, '0', sizeof(padded) - 1);
+    memcpy(&padded[2 * AKIRA_MESH_NODE_ID_LEN - len], hex, len);
+    padded[2 * AKIRA_MESH_NODE_ID_LEN] = '\0';
+
+    for (size_t i = 0; i < AKIRA_MESH_NODE_ID_LEN; i++) {
+        char byte[3] = {padded[2 * i], padded[2 * i + 1], '\0'};
+        id[i] = (uint8_t)strtoul(byte, NULL, 16);
+    }
+}
+
 static int cmd_mesh_init(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 2) {
@@ -2604,7 +2624,7 @@ static int cmd_mesh_send(const struct shell *sh, size_t argc, char **argv)
     }
 
     uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
-    dest[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+    parse_node_id(argv[1], dest);
 
     const char *text = argv[2];
     int64_t t0 = k_uptime_get();
@@ -2628,7 +2648,7 @@ static int cmd_mesh_sendu(const struct shell *sh, size_t argc, char **argv)
     }
 
     uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
-    dest[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+    parse_node_id(argv[1], dest);
 
     const char *text = argv[2];
     int64_t t0 = k_uptime_get();
@@ -2655,7 +2675,7 @@ static int cmd_mesh_sendu_burst(const struct shell *sh, size_t argc, char **argv
     }
 
     uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
-    dest[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+    parse_node_id(argv[1], dest);
     uint32_t count = (uint32_t)strtoul(argv[2], NULL, 10);
     size_t size = (size_t)strtoul(argv[3], NULL, 10);
 
@@ -2694,7 +2714,7 @@ static int cmd_mesh_linkdrop(const struct shell *sh, size_t argc, char **argv)
         return -EINVAL;
     }
     uint8_t peer[AKIRA_MESH_NODE_ID_LEN] = {0};
-    peer[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+    parse_node_id(argv[1], peer);
     int ret = akira_mesh_debug_link_drop(peer);
     if (ret) {
         shell_error(sh, "mesh linkdrop failed: %d", ret);
@@ -2711,7 +2731,7 @@ static int cmd_mesh_linkrestore(const struct shell *sh, size_t argc, char **argv
         return -EINVAL;
     }
     uint8_t peer[AKIRA_MESH_NODE_ID_LEN] = {0};
-    peer[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+    parse_node_id(argv[1], peer);
     int ret = akira_mesh_debug_link_restore(peer);
     if (ret) {
         shell_error(sh, "mesh linkrestore failed: %d", ret);
@@ -2745,7 +2765,7 @@ static int cmd_mesh_app(const struct shell *sh, size_t argc, char **argv)
     }
 
     uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
-    dest[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+    parse_node_id(argv[1], dest);
     const char *name = argv[2];
 
     static AKIRA_BULK_BSS uint8_t app_buf[CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024];
@@ -2776,7 +2796,7 @@ static int cmd_mesh_sendstream(const struct shell *sh, size_t argc, char **argv)
     }
 
     uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
-    dest[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+    parse_node_id(argv[1], dest);
     size_t size = (size_t)strtoul(argv[2], NULL, 10);
 
     static uint8_t AKIRA_BULK_BSS stream_buf[4096];
