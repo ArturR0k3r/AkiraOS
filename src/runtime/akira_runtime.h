@@ -131,6 +131,13 @@ int akira_runtime_init(void);
  */
 int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size);
 
+/* Same as akira_runtime_load_wasm(), but takes ownership of `buffer` instead
+ * of copying it: `buffer` must be a standalone akira_malloc_buffer()
+ * allocation the caller will not reuse or free. On any outcome — success or
+ * failure — this call consumes `buffer`; the caller must not touch it again.
+ */
+int akira_runtime_load_wasm_owned(uint8_t *buffer, uint32_t size);
+
 /* Start/stop a loaded instance by id */
 int akira_runtime_start(int instance_id);
 int akira_runtime_stop(int instance_id);
@@ -140,6 +147,10 @@ int akira_runtime_stop(int instance_id);
  */
 int akira_runtime_install_with_manifest(const char *name, const void *binary, size_t size, const char *manifest_json, size_t manifest_size);
 int akira_runtime_install(const char *name, const void *binary, size_t size);
+
+/* Same as akira_runtime_install_with_manifest(), but takes ownership of
+ * `binary` instead of copying it — see akira_runtime_load_wasm_owned(). */
+int akira_runtime_install_with_manifest_owned(const char *name, uint8_t *binary, size_t size, const char *manifest_json, size_t manifest_size);
 
 /* Destroy/uninstall helpers */
 int akira_runtime_destroy(int instance_id);

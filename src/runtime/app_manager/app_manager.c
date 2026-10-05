@@ -2000,12 +2000,14 @@ int app_manager_run_from_sd(const char *name_or_path)
         }
     }
 
-    /* ---- Load into WAMR ---- */
-    int container_id = akira_runtime_install_with_manifest(
+    /* ---- Load into WAMR ----
+     * _owned() hands `buffer` off directly as WAMR's durable binary copy
+     * instead of making a second PSRAM copy internally — it is consumed on
+     * every outcome, so it must not be freed here. */
+    int container_id = akira_runtime_install_with_manifest_owned(
         name, buffer, (size_t)size,
         json_len > 0 ? json : NULL,
         json_len > 0 ? (size_t)json_len : 0);
-    akira_free_buffer(buffer);
     akira_free_buffer(json);
 
     if (container_id < 0) {

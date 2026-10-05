@@ -424,11 +424,17 @@ int akira_runtime_init(void)
  * The WASM binary is processed in 16KB chunks, with the chunk buffer
  * allocated from PSRAM when available to minimize SRAM pressure.
  */
-int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
+/* Shared body for akira_runtime_load_wasm() / akira_runtime_load_wasm_owned().
+ * When take_ownership is true, `buffer` is a standalone akira_malloc_buffer()
+ * allocation the caller has handed off: it is consumed on every return path
+ * (used directly as owned_binary on success, freed on failure) instead of
+ * being copied into a fresh buffer. */
+static int load_wasm_impl(uint8_t *buffer, uint32_t size, bool take_ownership)
 {
     if (!atomic_get(&g_runtime_initialized))
     {
         LOG_ERR("Runtime not initialized");
+        if (take_ownership) akira_free_buffer(buffer);
         return -ENODEV;
     }
 
@@ -436,6 +442,7 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
         (memcmp(buffer, "\0asm", 4) != 0 && memcmp(buffer, "\0aot", 4) != 0))
     {
         LOG_ERR("Invalid WASM/AOT binary");
+        if (take_ownership) akira_free_buffer(buffer);
         return -EINVAL;
     }
 
@@ -456,6 +463,7 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
     if (slot < 0)
     {
         LOG_ERR("No free slots for WASM modules");
+        if (take_ownership) akira_free_buffer(buffer);
         return slot;
     }
 
@@ -468,6 +476,7 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
         LOG_ERR("WASM binary integrity check failed: %d", integrity_ret);
         sandbox_audit_log(AUDIT_EVENT_INTEGRITY_FAIL, "load", (uint32_t)size);
         g_apps[slot].used = false; /* release reserved slot */
+        if (take_ownership) akira_free_buffer(buffer);
         return integrity_ret;
     }
 
@@ -484,64 +493,8 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
     }
 
     /* ===== Step 4: Load WASM module ===== */
-    /* Allocate a small probe buffer to check if PSRAM is available,
-     * then free it immediately — we only need the source type (chunk_src). */
-    mem_source_t chunk_src;
-    uint8_t *chunk_probe = akira_malloc_buffer_ex(CHUNK_BUFFER_SIZE, &chunk_src);
-    if (!chunk_probe)
-    {
-        LOG_ERR("Failed to probe memory source (%d bytes)", CHUNK_BUFFER_SIZE);
-        g_apps[slot].used = false; /* release reserved slot */
-        return -ENOMEM;
-    }
-    LOG_INF("Memory source: %s",
-            chunk_src == MEM_SOURCE_PSRAM ? "PSRAM" : "SRAM");
-    akira_free_buffer(chunk_probe);
-    chunk_probe = NULL;
-
-    /* Use WAMR's streaming loader for chunked loading when available,
-     * otherwise fall back to direct load with our buffer management.
-     *
-     * For WAMR interpreter mode, wasm_runtime_load() requires the full
-     * binary, but we use our PSRAM-backed buffer to stage it.
-     */
     wasm_module_t module = NULL;
     char error_buf[128] = {0};
-
-    /* For large WASM files, copy to PSRAM-backed buffer if the source
-     * is in constrained memory. This trades one-time copy for reduced
-     * peak SRAM during the WAMR load/parse phase.
-     */
-    const uint8_t *load_buffer = buffer;
-    uint8_t *staged_buffer = NULL;
-
-    if (size > CHUNK_BUFFER_SIZE && chunk_src == MEM_SOURCE_PSRAM)
-    {
-        /* Stage the entire WASM to PSRAM in chunks to reduce SRAM pressure */
-        staged_buffer = akira_malloc_buffer(size);
-        if (staged_buffer)
-        {
-            LOG_INF("Staging %u bytes WASM to external memory", size);
-
-            /* Copy directly from source to PSRAM in chunks.
-             * No intermediate bounce buffer needed — source is a contiguous
-             * SRAM/flash region, and chunking here only serves to preserve
-             * cache/DMA locality on the PSRAM write path. */
-            uint32_t offset = 0;
-            while (offset < size)
-            {
-                uint32_t chunk_len = MIN(CHUNK_BUFFER_SIZE, size - offset);
-                memcpy(staged_buffer + offset, buffer + offset, chunk_len);
-                offset += chunk_len;
-            }
-            load_buffer = staged_buffer;
-            LOG_INF("WASM staged to PSRAM successfully");
-        }
-        else
-        {
-            LOG_WRN("Could not stage to PSRAM, loading from original buffer");
-        }
-    }
 
     /* WAMR stores raw pointers into the binary buffer for export/import name
      * strings when called via wasm_runtime_load() (which sets
@@ -549,18 +502,30 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
      * load_from_sections). The buffer MUST outlive wasm_runtime_unload() or
      * every wasm_runtime_lookup_function() call will hit dangling pointers.
      *
-     * Strategy: reuse staged_buffer if we already copied to PSRAM; otherwise
-     * allocate a fresh owned copy. The caller's `buffer` is never borrowed. */
+     * take_ownership callers already hand us a standalone PSRAM/SRAM buffer
+     * meant to become that durable copy — use it directly. Otherwise make
+     * our own copy; the caller's `buffer` is borrowed, not owned. */
     uint8_t *owned_binary;
-    if (staged_buffer)
+    if (take_ownership)
     {
-        /* Transfer ownership — staged_buffer is already a full PSRAM copy */
-        owned_binary = staged_buffer;
-        staged_buffer = NULL;
+        owned_binary = buffer;
     }
     else
     {
-        /* load_buffer == buffer (caller-owned) — make our own durable copy */
+        /* Probe the allocator so large copies land in PSRAM when available. */
+        mem_source_t chunk_src;
+        uint8_t *chunk_probe = akira_malloc_buffer_ex(CHUNK_BUFFER_SIZE, &chunk_src);
+        if (!chunk_probe)
+        {
+            LOG_ERR("Failed to probe memory source (%d bytes)", CHUNK_BUFFER_SIZE);
+            g_apps[slot].used = false; /* release reserved slot */
+            return -ENOMEM;
+        }
+        LOG_INF("Memory source: %s",
+                chunk_src == MEM_SOURCE_PSRAM ? "PSRAM" : "SRAM");
+        akira_free_buffer(chunk_probe);
+        chunk_probe = NULL;
+
         owned_binary = akira_malloc_buffer(size);
         if (!owned_binary)
         {
@@ -568,7 +533,21 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
             g_apps[slot].used = false; /* release reserved slot */
             return -ENOMEM;
         }
-        memcpy(owned_binary, buffer, size);
+
+        if (size > CHUNK_BUFFER_SIZE && chunk_src == MEM_SOURCE_PSRAM)
+        {
+            LOG_INF("Staging %u bytes WASM to external memory", size);
+        }
+
+        /* Copy source into the owned buffer. Chunking here only serves to
+         * preserve cache/DMA locality on the PSRAM write path. */
+        uint32_t offset = 0;
+        while (offset < size)
+        {
+            uint32_t chunk_len = MIN(CHUNK_BUFFER_SIZE, size - offset);
+            memcpy(owned_binary + offset, buffer + offset, chunk_len);
+            offset += chunk_len;
+        }
     }
 
     /* Load the WASM module — owned_binary is intentionally NOT freed here */
@@ -614,8 +593,19 @@ int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
 #else
     (void)buffer;
     (void)size;
+    if (take_ownership) akira_free_buffer(buffer);
     return -ENOTSUP; /* WASM runtime not available */
 #endif
+}
+
+int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
+{
+    return load_wasm_impl((uint8_t *)buffer, size, false);
+}
+
+int akira_runtime_load_wasm_owned(uint8_t *buffer, uint32_t size)
+{
+    return load_wasm_impl(buffer, size, true);
 }
 
 /* ===== Thread-per-app implementation ===== */
@@ -999,10 +989,15 @@ int akira_runtime_stop(int instance_id)
 #endif
 }
 
-int akira_runtime_install_with_manifest(const char *name, const void *binary, size_t size, const char *manifest_json, size_t manifest_size)
+static int install_with_manifest_impl(const char *name, uint8_t *binary, size_t size,
+                                       const char *manifest_json, size_t manifest_size,
+                                       bool take_ownership)
 {
     if (!name || !binary || size == 0)
+    {
+        if (take_ownership) akira_free_buffer(binary);
         return -EINVAL;
+    }
 
     /* Parse manifest with fallback: WASM section first, then JSON */
     akira_manifest_t manifest;
@@ -1033,7 +1028,9 @@ int akira_runtime_install_with_manifest(const char *name, const void *binary, si
     }
 
     /* Load into runtime memory - this will also parse embedded manifest */
-    int id = akira_runtime_load_wasm((const uint8_t *)binary, (uint32_t)size);
+    int id = take_ownership
+                 ? akira_runtime_load_wasm_owned(binary, (uint32_t)size)
+                 : akira_runtime_load_wasm(binary, (uint32_t)size);
     if (id < 0)
         return id;
 
@@ -1054,6 +1051,16 @@ int akira_runtime_install_with_manifest(const char *name, const void *binary, si
     g_apps[id].name[sizeof(g_apps[id].name) - 1] = '\0';
 
     return id;
+}
+
+int akira_runtime_install_with_manifest(const char *name, const void *binary, size_t size, const char *manifest_json, size_t manifest_size)
+{
+    return install_with_manifest_impl(name, (uint8_t *)binary, size, manifest_json, manifest_size, false);
+}
+
+int akira_runtime_install_with_manifest_owned(const char *name, uint8_t *binary, size_t size, const char *manifest_json, size_t manifest_size)
+{
+    return install_with_manifest_impl(name, binary, size, manifest_json, manifest_size, true);
 }
 
 int akira_runtime_install(const char *name, const void *binary, size_t size)
