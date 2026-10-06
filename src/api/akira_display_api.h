@@ -81,6 +81,10 @@ int akira_native_display_rect_outline(wasm_exec_env_t exec_env, int32_t x, int32
 int akira_native_display_bitmap(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t *data, uint32_t data_size);
 int akira_native_display_bitmap_transparent(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t *data, uint32_t data_size, uint32_t key);
 int akira_native_display_raw_write(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t *data, uint32_t data_size);
+int akira_native_display_raw_write_async(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t *data, uint32_t data_size);
+int akira_native_display_raw_wait(wasm_exec_env_t exec_env);
+/** Block until any queued asynchronous raw write has reached the panel. */
+void akira_display_raw_async_wait(void);
 
 /* Phase 4 native wrappers */
 int akira_native_display_hline(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t len, uint32_t color);

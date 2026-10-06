@@ -93,6 +93,8 @@ bool akira_register_native_apis()
         {"display_bitmap", (void *)akira_native_display_bitmap, "(iiii*~)i", NULL},
         {"display_bitmap_transparent", (void *)akira_native_display_bitmap_transparent, "(iiii*~i)i", NULL},
         {"display_raw_write", (void *)akira_native_display_raw_write, "(iiii*~)i", NULL},
+        {"display_raw_write_async", (void *)akira_native_display_raw_write_async, "(iiii*~)i", NULL},
+        {"display_raw_wait", (void *)akira_native_display_raw_wait, "()i", NULL},
         /* Phase 4 — UI helper primitives */
         {"display_hline", (void *)akira_native_display_hline, "(iiii)i", NULL},
         {"display_vline", (void *)akira_native_display_vline, "(iiii)i", NULL},

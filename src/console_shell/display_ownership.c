@@ -23,8 +23,12 @@ static display_owner_t g_owner = DISPLAY_OWNER_SHELL;
 
 /* ------------------------------------------------------------------ */
 
+extern void akira_display_raw_async_wait(void);
+
 int akira_display_claim_shell(void)
 {
+    /* let an in-flight app transfer finish before the shell draws */
+    akira_display_raw_async_wait();
     int ret = k_mutex_lock(&g_display_mutex, K_MSEC(500));
 
     if (ret < 0) {

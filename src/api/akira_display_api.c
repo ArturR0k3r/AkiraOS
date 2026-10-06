@@ -684,6 +684,55 @@ int akira_native_display_raw_write(wasm_exec_env_t exec_env,
     return akira_display_hal_write_raw(x, y, w, h, (const uint16_t *)data);
 }
 
+/* ── Asynchronous raw write ──────────────────────────────────────────────
+ * Queues the SPI transfer on the system work queue so the app keeps running while
+ * the panel is being written. The caller must not touch the buffer until
+ * display_raw_wait() returns. At most one transfer is in flight. If the app is
+ * stopped mid-transfer the worker only reads (possibly freed) memory for a few
+ * milliseconds; PSRAM stays mapped, so the worst case is a garbled frame. */
+static struct { int x, y, w, h; const uint16_t *data; } raw_async_job;
+static K_SEM_DEFINE(raw_async_idle, 1, 1);
+
+static void raw_async_fn(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    (void)akira_display_hal_write_raw(raw_async_job.x, raw_async_job.y,
+                                      raw_async_job.w, raw_async_job.h, raw_async_job.data);
+    k_sem_give(&raw_async_idle);
+}
+static K_WORK_DEFINE(raw_async_work, raw_async_fn);
+
+void akira_display_raw_async_wait(void)
+{
+    k_sem_take(&raw_async_idle, K_FOREVER);
+    k_sem_give(&raw_async_idle);
+}
+
+int akira_native_display_raw_write_async(wasm_exec_env_t exec_env,
+    int32_t x, int32_t y, int32_t w, int32_t h,
+    const uint8_t *data, uint32_t data_size)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EACCES);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(-EBUSY);
+    if (!data) return -EINVAL;
+    if ((int64_t)data_size < (int64_t)w * h * 2) {
+        LOG_ERR("display_raw_write_async: data_size %u < w*h*2 (%d)", data_size, w * h * 2);
+        return -EINVAL;
+    }
+    k_sem_take(&raw_async_idle, K_FOREVER);   /* previous transfer must be done */
+    raw_async_job.x = x; raw_async_job.y = y; raw_async_job.w = w; raw_async_job.h = h;
+    raw_async_job.data = (const uint16_t *)data;
+    k_work_submit(&raw_async_work);
+    return 0;
+}
+
+int akira_native_display_raw_wait(wasm_exec_env_t exec_env)
+{
+    ARG_UNUSED(exec_env);
+    akira_display_raw_async_wait();
+    return 0;
+}
+
 int akira_native_display_bitmap_transparent(wasm_exec_env_t exec_env,
     int32_t x, int32_t y, int32_t w, int32_t h,
     const uint8_t *data, uint32_t data_size, uint32_t key)
