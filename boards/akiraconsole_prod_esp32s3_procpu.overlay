@@ -166,9 +166,11 @@
 			reg   = <0x00400000 DT_SIZE_K(32)>;
 		};
 
-		lfs1_partition: partition@408000 {
+		/* Moved past hub_nvs and grown 512 KB -> 2560 KB so a 1 MB SNES ROM app
+		 * fits (0x48A000..0x70A000). The old 512 KB region at 0x408000 is orphaned. */
+		lfs1_partition: partition@48a000 {
 			label = "lfs_storage";
-			reg   = <0x00408000 DT_SIZE_K(512)>;
+			reg   = <0x0048A000 DT_SIZE_K(2560)>;
 		};
 
 		/* Hub credentials NVS — device_id + auth token
