@@ -262,6 +262,24 @@ clean_build() {
     fi
 }
 
+# OTA signing: boards that take OTA updates are signed with this key, and their
+# MCUboot only boots images that verify against it. Without the key file the
+# build stays unsigned.
+OTA_SIGNING_KEY="${AKIRA_OTA_KEY:-$HOME/.config/akira/ota-signing.pem}"
+
+# Prints the cmake args that enable signing for $1 (mcuboot|app) when the board
+# enables CONFIG_AKIRA_OTA and the key exists.
+ota_signing_args() {
+    local kind="$1" conf
+    conf=$(grep -l "^# BOARD_ZEPHYR: ${BOARD_MAP[$BOARD]}\$" "$SCRIPT_DIR"/boards/*.conf 2>/dev/null | head -1)
+    [[ -f "$OTA_SIGNING_KEY" && -n "$conf" ]] && grep -q '^CONFIG_AKIRA_OTA=y' "$conf" || return 0
+    if [[ "$kind" == mcuboot ]]; then
+        echo "-DCONFIG_BOOT_SIGNATURE_TYPE_ECDSA_P256=y -DCONFIG_BOOT_SIGNATURE_KEY_FILE=\"$OTA_SIGNING_KEY\""
+    else
+        echo "-DCONFIG_MCUBOOT_GENERATE_UNSIGNED_IMAGE=n -DCONFIG_MCUBOOT_SIGNATURE_KEY_FILE=\"$OTA_SIGNING_KEY\""
+    fi
+}
+
 build_mcuboot() {
     local zephyr_board="${BOARD_MAP[$BOARD]}"
     local build_dir=$(get_mcuboot_build_dir)
@@ -286,6 +304,8 @@ build_mcuboot() {
         extra_cmake+=" -DEXTRA_DTC_OVERLAY_FILE=$board_overlay"
         print_info "MCUboot overlay: $board_overlay"
     fi
+
+    extra_cmake+=" $(ota_signing_args mcuboot)"
 
     # Pass board-specific MCUboot Kconfig overrides when present.
     # These live in AkiraOS/boards/<board>.mcuboot.conf so the mcuboot repo
@@ -379,6 +399,8 @@ build_application() {
         extra_cmake+=" -DEXTRA_CONF_FILE=$debug_conf"
         print_info "Debug conf: $debug_conf"
     fi
+
+    extra_cmake+=" $(ota_signing_args app)"
 
     if west build --pristine -b "$zephyr_board" AkiraOS -d "$build_dir" -- $extra_cmake; then
         print_success "AkiraOS build complete!"
