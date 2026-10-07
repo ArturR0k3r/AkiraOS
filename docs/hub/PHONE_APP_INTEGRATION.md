@@ -18,7 +18,7 @@ with the device over **Bluetooth LE** using a custom GATT service implemented in
 |---------|-------------|
 | Device info & status | Firmware version, free heap, running apps, BLE RSSI |
 | App management | Install, start, stop, and uninstall WASM apps |
-| Firmware OTA | Trigger a signed firmware update from a URL |
+| Firmware OTA | Stream a signed firmware image from the phone |
 | Settings | Read and write device settings stored in NVS |
 | Shell terminal | Execute Zephyr shell commands, stream output |
 | File browser | List, download, upload, and delete files on `/lfs` |
@@ -260,22 +260,30 @@ are rejected with an error.
 
 #### OTA Firmware
 
+Every companion attribute requires an encrypted link, so the phone pairs and
+bonds (Just Works) on first use; an unbonded peer cannot issue any op.
+
+The phone downloads the signed image itself and streams it over DATA_UP, so the
+Console needs no internet. MCUboot verifies the image signature at boot; the
+companion link only checks the digest the phone announced.
+
 | Op | Params | Response `data` | Description |
 |----|--------|-----------------|-------------|
-| `ota.start` | `{url, version, signature}` | — | Begin firmware update |
+| `ota.begin` | `{size, sha256}` | — | Erase the secondary slot (2-30 s, the response waits for it) and start receiving |
+| `ota.end` | — | — | Check size and SHA-256, then stage the image for MCUboot |
+| `ota.apply` | — | — | Reboot; MCUboot verifies the signature and installs the staged image |
 | `ota.status` | — | `{state, progress, version}` | Current OTA status |
 
-The `signature` field is an Ed25519 signature (hex string) of the `.akfw` bundle.
-The device fetches the firmware from `url` over HTTPS, verifying the signature
-before handing it to the MCUboot OTA manager.
+Between `ota.begin` and `ota.end` the phone sends the image in DATA_UP frames
+with transfer type `0x04` (`COMP_XFER_FW_DATA`), flag `COMP_FLAG_LAST` on the
+final frame. A mismatch, an overflow or a disconnect aborts the update and
+leaves the running firmware untouched. The Espressif MCUboot build overwrites
+the running slot (`BOOT_UPGRADE_ONLY`), so there is no automatic revert: a
+correctly signed image that fails to boot needs a USB reflash.
 
 ```json
-{ "op": "ota.start", "id": 40, "params": {
-    "url": "https://hub.akiraos.io/api/v1/firmware/1.5.0/download",
-    "version": "1.5.0",
-    "signature": "a1b2c3d4e5f6…"
-} }
-{ "op": "ota.start", "id": 40, "ok": true }
+{ "op": "ota.begin", "id": 40, "params": { "size": 1260688, "sha256": "a1b2c3…" } }
+{ "op": "ota.begin", "id": 40, "ok": true }
 ```
 
 ---
@@ -454,7 +462,7 @@ For the initial AkiraApp release the mobile team must implement:
 - [ ] STATUS_CHAR handler — update device health card in real-time
 - [ ] App list screen — `apps.list`, start/stop/uninstall buttons
 - [ ] App install screen — file picker → DATA_UP chunked transfer
-- [ ] OTA update screen — `ota.start` with URL + signature from AkiraHub API
+- [ ] OTA update screen — `ota.begin` / DATA_UP type 0x04 / `ota.end` / `ota.apply`
 - [ ] Settings editor — `settings.list`, edit, `settings.set`
 - [ ] Shell terminal screen — `shell.exec`, display output
 - [ ] File browser — `files.list`, download (`files.read`), delete (`files.delete`)

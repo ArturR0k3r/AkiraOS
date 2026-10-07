@@ -925,6 +925,32 @@ bool ota_is_update_in_progress(void)
             ota_status.state == OTA_STATE_INSTALLING);
 }
 
+int ota_get_slot_sizes(size_t *primary_size, size_t *secondary_size)
+{
+    if (!primary_size || !secondary_size)
+    {
+        return -EINVAL;
+    }
+
+    const struct flash_area *fa;
+    int ret = flash_area_open(FLASH_AREA_IMAGE_PRIMARY, &fa);
+    if (ret)
+    {
+        return ret;
+    }
+    *primary_size = fa->fa_size;
+    flash_area_close(fa);
+
+    ret = flash_area_open(FLASH_AREA_IMAGE_SECONDARY, &fa);
+    if (ret)
+    {
+        return ret;
+    }
+    *secondary_size = fa->fa_size;
+    flash_area_close(fa);
+    return 0;
+}
+
 /* String conversion functions */
 const char *ota_result_to_string(enum ota_result result)
 {

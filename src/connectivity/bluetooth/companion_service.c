@@ -49,6 +49,7 @@ LOG_MODULE_REGISTER(companion_svc, CONFIG_AKIRA_LOG_LEVEL);
 #include <lib/akpkg.h>
 #ifdef CONFIG_AKIRA_OTA
 #include "../../connectivity/ota/ota_manager.h"
+#include <mbedtls/sha256.h>
 #endif
 #include <settings/settings.h>
 #include <akira.h>
@@ -98,6 +99,15 @@ static struct {
     char     app_name[32];  /* app name for COMP_XFER_APP_DATA */
     uint32_t expected_size; /* from apps.install.begin size param */
 } s_xfer;
+
+#ifdef CONFIG_AKIRA_OTA
+/* Firmware image being streamed to the OTA slot: running hash and the digest
+ * the phone announced in ota.begin. */
+static mbedtls_sha256_context s_fw_sha;
+static uint8_t s_fw_expected[32];
+
+static void fw_abort(void);
+#endif
 
 /* Periodic status notification timer */
 static struct k_work_delayable s_status_timer;
@@ -335,6 +345,9 @@ static void handle_apps_install_begin(const char *op, int id, const char *params
         return;
     }
 
+#ifdef CONFIG_AKIRA_OTA
+    fw_abort();
+#endif
     if (s_xfer.active) {
         /* Abort previous incomplete transfer */
         akira_free_buffer(s_xfer.buf);
@@ -630,6 +643,9 @@ static void handle_files_write(const char *op, int id, const char *params)
         return;
     }
 
+#ifdef CONFIG_AKIRA_OTA
+    fw_abort();
+#endif
     if (s_xfer.active) {
         akira_free_buffer(s_xfer.buf);
         memset(&s_xfer, 0, sizeof(s_xfer));
@@ -677,15 +693,154 @@ static void handle_files_mkdir(const char *op, int id, const char *params)
     send_resp(op, id, rc == 0, rc == 0 ? NULL : "mkdir failed");
 }
 
-static void handle_ota_start(const char *op, int id, const char *params)
+#ifdef CONFIG_AKIRA_OTA
+
+#define FW_ERASE_TIMEOUT_MS 60000
+
+static void fw_abort(void)
+{
+    if (s_xfer.active && s_xfer.type == COMP_XFER_FW_DATA) {
+        mbedtls_sha256_free(&s_fw_sha);
+        ota_abort_update();
+        memset(&s_xfer, 0, sizeof(s_xfer));
+        akira_sd_card_set_transfer_active(false);
+    }
+}
+
+static bool hex_to_bytes(const char *hex, uint8_t *out, size_t out_len)
+{
+    if (strlen(hex) != out_len * 2) {
+        return false;
+    }
+    for (size_t i = 0; i < out_len; i++) {
+        char pair[3] = {hex[2 * i], hex[2 * i + 1], '\0'};
+        char *endp;
+        unsigned long v = strtoul(pair, &endp, 16);
+        if (*endp != '\0') {
+            return false;
+        }
+        out[i] = (uint8_t)v;
+    }
+    return true;
+}
+
+static void handle_ota_begin(const char *op, int id, const char *params)
+{
+    char size_s[16] = {0};
+    char sha_s[72] = {0};
+    json_get_str(params, "size", size_s, sizeof(size_s));
+    json_get_str(params, "sha256", sha_s, sizeof(sha_s));
+
+    uint32_t size = (uint32_t)strtoul(size_s, NULL, 10);
+    size_t primary = 0, secondary = 0;
+    if (size == 0 || !hex_to_bytes(sha_s, s_fw_expected, sizeof(s_fw_expected))) {
+        send_resp(op, id, false, "missing size or sha256");
+        return;
+    }
+    if (ota_get_slot_sizes(&primary, &secondary) != 0 || size > secondary) {
+        send_resp(op, id, false, "image larger than slot");
+        return;
+    }
+
+    if (s_xfer.active) {
+        if (s_xfer.type == COMP_XFER_FW_DATA) {
+            fw_abort();
+        } else {
+            akira_free_buffer(s_xfer.buf);
+            memset(&s_xfer, 0, sizeof(s_xfer));
+            akira_sd_card_set_transfer_active(false);
+        }
+    }
+
+    if (ota_start_update(size) != OTA_OK) {
+        send_resp(op, id, false, "ota start failed");
+        return;
+    }
+
+    /* The worker erases the whole slot before it drains data (2-30 s).
+     * Frames sent earlier would fill the 4 KB pipe and time out. */
+    int64_t deadline = k_uptime_get() + FW_ERASE_TIMEOUT_MS;
+    for (;;) {
+        const struct ota_progress *p = ota_get_progress();
+        if (p->state == OTA_STATE_ERROR) {
+            send_resp(op, id, false, "flash erase failed");
+            return;
+        }
+        if (p->state == OTA_STATE_RECEIVING && strcmp(p->status_message, "Ready") == 0) {
+            break;
+        }
+        if (k_uptime_get() > deadline) {
+            ota_abort_update();
+            send_resp(op, id, false, "flash erase timeout");
+            return;
+        }
+        k_sleep(K_MSEC(100));
+    }
+
+    mbedtls_sha256_init(&s_fw_sha);
+    mbedtls_sha256_starts(&s_fw_sha, 0);
+    s_xfer.type          = COMP_XFER_FW_DATA;
+    s_xfer.expected_size = size;
+    s_xfer.received      = 0;
+    s_xfer.active        = true;
+    akira_sd_card_set_transfer_active(true);
+    LOG_INF("BLE OTA begin: size=%u", size);
+    send_resp(op, id, true, NULL);
+}
+
+static void handle_ota_end(const char *op, int id, const char *params)
 {
     ARG_UNUSED(params);
-    /* The firmware OTA manager is streaming/local only (ota_start_update /
-     * write_chunk / finalize). There is no URL+signature pull entry point, so
-     * BLE-initiated OTA is not yet supported — firmware updates go over WiFi
-     * (HTTP /api/v1/ota/upload). Report clearly so the app can fall back. */
-    send_resp(op, id, false, "ota over BLE not supported; use WiFi");
+    if (!s_xfer.active || s_xfer.type != COMP_XFER_FW_DATA) {
+        send_resp(op, id, false, "no active transfer");
+        return;
+    }
+    if (s_xfer.received != s_xfer.expected_size) {
+        fw_abort();
+        send_resp(op, id, false, "incomplete image");
+        return;
+    }
+
+    uint8_t digest[32];
+    mbedtls_sha256_finish(&s_fw_sha, digest);
+    if (memcmp(digest, s_fw_expected, sizeof(digest)) != 0) {
+        LOG_ERR("BLE OTA sha256 mismatch");
+        fw_abort();
+        send_resp(op, id, false, "sha256 mismatch");
+        return;
+    }
+
+    enum ota_result rc = ota_finalize_update();
+    mbedtls_sha256_free(&s_fw_sha);
+    memset(&s_xfer, 0, sizeof(s_xfer));
+    akira_sd_card_set_transfer_active(false);
+    if (rc != OTA_OK) {
+        send_resp(op, id, false, ota_result_to_string(rc));
+        return;
+    }
+    send_resp(op, id, true, NULL);
 }
+
+static void handle_ota_apply(const char *op, int id, const char *params)
+{
+    ARG_UNUSED(params);
+    if (ota_get_progress()->state != OTA_STATE_COMPLETE) {
+        send_resp(op, id, false, "no staged image");
+        return;
+    }
+    send_resp(op, id, true, NULL);
+    ota_reboot_to_apply_update(1000);
+}
+
+#else
+
+static void handle_ota_unavailable(const char *op, int id, const char *params)
+{
+    ARG_UNUSED(params);
+    send_resp(op, id, false, "ota unavailable in this build");
+}
+
+#endif
 
 /* The OTA manager is only compiled when CONFIG_AKIRA_OTA is set (it also needs
  * FLASH_MAP + BOOTLOADER_MCUBOOT).  The companion service is useful without it
@@ -781,7 +936,15 @@ static void cmd_work_handler(struct k_work *work)
     else if (strcmp(op, COMP_OP_FILES_WRITE)         == 0) { handle_files_write(op, id, params); }
     else if (strcmp(op, COMP_OP_FILES_DELETE)        == 0) { handle_files_delete(op, id, params); }
     else if (strcmp(op, COMP_OP_FILES_MKDIR)         == 0) { handle_files_mkdir(op, id, params); }
-    else if (strcmp(op, COMP_OP_OTA_START)           == 0) { handle_ota_start(op, id, params); }
+#ifdef CONFIG_AKIRA_OTA
+    else if (strcmp(op, COMP_OP_OTA_BEGIN)           == 0) { handle_ota_begin(op, id, params); }
+    else if (strcmp(op, COMP_OP_OTA_END)             == 0) { handle_ota_end(op, id, params); }
+    else if (strcmp(op, COMP_OP_OTA_APPLY)           == 0) { handle_ota_apply(op, id, params); }
+#else
+    else if (strcmp(op, COMP_OP_OTA_BEGIN)           == 0 ||
+             strcmp(op, COMP_OP_OTA_END)             == 0 ||
+             strcmp(op, COMP_OP_OTA_APPLY)           == 0) { handle_ota_unavailable(op, id, params); }
+#endif
     else if (strcmp(op, COMP_OP_OTA_STATUS)          == 0) { handle_ota_status(op, id, params); }
     else {
         char err[48];
@@ -837,6 +1000,21 @@ static ssize_t data_up_write(struct bt_conn *conn,
     if (!s_xfer.active) {
         return BT_GATT_ERR(BT_ATT_ERR_WRITE_NOT_PERMITTED);
     }
+
+#ifdef CONFIG_AKIRA_OTA
+    if (s_xfer.type == COMP_XFER_FW_DATA) {
+        if ((xflags & COMP_FLAG_ERROR) ||
+            s_xfer.received + plen > s_xfer.expected_size ||
+            (plen && ota_write_chunk(frame + 4, plen) != OTA_OK)) {
+            LOG_ERR("BLE OTA aborted at %u/%u", s_xfer.received, s_xfer.expected_size);
+            fw_abort();
+            return BT_GATT_ERR(BT_ATT_ERR_WRITE_NOT_PERMITTED);
+        }
+        mbedtls_sha256_update(&s_fw_sha, frame + 4, plen);
+        s_xfer.received += plen;
+        return (ssize_t)len;
+    }
+#endif
 
     /* Copy payload into staging buffer */
     if (s_xfer.received + plen > s_xfer.capacity) {
@@ -1034,6 +1212,9 @@ static void conn_cb_disconnected(struct bt_conn *conn, uint8_t reason)
     LOG_INF("Companion: phone disconnected (reason 0x%02x)", reason);
 
     /* Clean up any in-progress transfer */
+#ifdef CONFIG_AKIRA_OTA
+    fw_abort();
+#endif
     if (s_xfer.active) {
         akira_free_buffer(s_xfer.buf);
         memset(&s_xfer, 0, sizeof(s_xfer));
@@ -1114,6 +1295,9 @@ int companion_svc_deinit(void)
         s_conn = NULL;
     }
 
+#ifdef CONFIG_AKIRA_OTA
+    fw_abort();
+#endif
     if (s_xfer.active) {
         akira_free_buffer(s_xfer.buf);
         memset(&s_xfer, 0, sizeof(s_xfer));
