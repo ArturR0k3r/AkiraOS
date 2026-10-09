@@ -60,7 +60,7 @@ LOG_MODULE_REGISTER(akira_main, CONFIG_AKIRA_LOG_LEVEL);
 int main(void)
 {
     LOG_INF("=====================================================)");
-    LOG_INF("AkiraOS booting (v1.5.8)");
+    LOG_INF("AkiraOS booting (v" CONFIG_AKIRA_OS_VERSION ")");
     LOG_INF("Platform: %s", akira_get_platform_name());
     LOG_INF("Build: %s %s", __DATE__, __TIME__);
     LOG_INF("=====================================================)");

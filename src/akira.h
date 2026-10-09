@@ -38,7 +38,7 @@ extern "C"
 #ifndef AKIRA_VERSION_PATCH
 #define AKIRA_VERSION_PATCH 8
 #endif
-#define AKIRA_VERSION_STRING "1.5.8"
+#define AKIRA_VERSION_STRING CONFIG_AKIRA_OS_VERSION
 #define AKIRA_CODENAME "C1PH3R"
 
     /* Simple version struct */
