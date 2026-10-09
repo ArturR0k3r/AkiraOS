@@ -218,9 +218,8 @@ int main(void)
 #endif
 #endif
 
-#if defined(CONFIG_AKIRA_HTTP_SERVER)
 #if defined(CONFIG_AKIRA_OTA)
-    /* Initialize OTA manager (required by /upload endpoint) */
+    /* Starts the OTA worker thread: every transport needs it (HTTP /upload, companion ota.begin) */
     if (ota_manager_init() < 0)
     {
         LOG_ERR("OTA manager init failed");
@@ -231,6 +230,7 @@ int main(void)
     }
 #endif
 
+#if defined(CONFIG_AKIRA_HTTP_SERVER)
     if (akira_http_server_init() < 0)
     {
         LOG_ERR("HTTP server init failed");
