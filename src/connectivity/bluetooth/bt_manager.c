@@ -233,20 +233,12 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
         }
         else if (err == BT_SECURITY_ERR_AUTH_REQUIREMENT)
         {
-            if (bt_mgr.mode == BT_MODE_HID)
-            {
-                /* HID: Windows "Remove device" wiped its LTK but device kept the
-                 * stale bond. Windows reconnects fresh with MITM=1 → AUTH_REQUIREMENT.
-                 * Wipe our stale bond and force just-works re-pair. */
-                LOG_INF("HID stale bond for %s — wiping and re-pairing", addr);
-                bt_unpair(BT_ID_DEFAULT, bt_conn_get_dst(conn));
-                bt_conn_set_security(conn, BT_SECURITY_L2 | BT_SECURITY_FORCE_PAIR);
-            }
-            else
-            {
-                /* Non-HID: BONDABLE=n, no LTK to store — stay at L1. */
-                LOG_WRN("Peer %s requires MITM (NoInputNoOutput) — staying at L1", addr);
-            }
+            /* The peer forgot us (Windows "Remove device", iOS "Forget This Device")
+             * but we kept the bond, and Zephyr refuses to overwrite an existing
+             * bond with a just-works pairing. Wipe it and force a fresh pair. */
+            LOG_INF("Stale bond for %s — wiping and re-pairing", addr);
+            bt_unpair(BT_ID_DEFAULT, bt_conn_get_dst(conn));
+            bt_conn_set_security(conn, BT_SECURITY_L2 | BT_SECURITY_FORCE_PAIR);
         }
         return;
     }
