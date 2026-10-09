@@ -12,7 +12,9 @@
  * The service runs in BT_MODE_COMPANION — mutually exclusive with
  * BT_MODE_HID and BT_MODE_BLE_APP.  All BLE callbacks execute in the
  * Zephyr BT thread.  Heavy work (shell execution, file I/O, OTA) is
- * delegated to a dedicated workqueue so the BT thread is never blocked.
+ * delegated to the system workqueue so the BT thread is never blocked.
+ * That queue also runs the watchdog feeder, so a handler must not wait long
+ * on it; slow operations answer later from a delayable work item.
  *
  * CMD_CHAR (WRITE) ──► cmd_work (workqueue) ──► handler ──► notify RESP_CHAR
  * DATA_UP  (WRITE_WO_RSP) ──► transfer state machine ──► file/app staging buf
@@ -696,9 +698,24 @@ static void handle_files_mkdir(const char *op, int id, const char *params)
 #ifdef CONFIG_AKIRA_OTA
 
 #define FW_ERASE_TIMEOUT_MS 60000
+#define FW_ERASE_POLL_MS    100
+
+/* ota.begin is answered from s_begin_work, not from the command handler: the
+ * slot erase takes seconds, and waiting for it on the system workqueue starves
+ * the watchdog feeder and the UI. */
+static struct k_work_delayable s_begin_work;
+static bool s_begin_pending;
+static int s_begin_id;
+static uint32_t s_begin_size;
+static int64_t s_begin_deadline;
 
 static void fw_abort(void)
 {
+    if (s_begin_pending) {
+        s_begin_pending = false;
+        k_work_cancel_delayable(&s_begin_work);
+        ota_abort_update();
+    }
     if (s_xfer.active && s_xfer.type == COMP_XFER_FW_DATA) {
         mbedtls_sha256_free(&s_fw_sha);
         ota_abort_update();
@@ -742,6 +759,9 @@ static void handle_ota_begin(const char *op, int id, const char *params)
         return;
     }
 
+    if (s_begin_pending) {
+        fw_abort();
+    }
     if (s_xfer.active) {
         if (s_xfer.type == COMP_XFER_FW_DATA) {
             fw_abort();
@@ -758,34 +778,48 @@ static void handle_ota_begin(const char *op, int id, const char *params)
     }
 
     /* The worker erases the whole slot before it drains data (2-30 s).
-     * Frames sent earlier would fill the 4 KB pipe and time out. */
-    int64_t deadline = k_uptime_get() + FW_ERASE_TIMEOUT_MS;
-    for (;;) {
-        const struct ota_progress *p = ota_get_progress();
-        if (p->state == OTA_STATE_ERROR) {
-            send_resp(op, id, false, "flash erase failed");
-            return;
-        }
-        if (p->state == OTA_STATE_RECEIVING && strcmp(p->status_message, "Ready") == 0) {
-            break;
-        }
-        if (k_uptime_get() > deadline) {
-            ota_abort_update();
-            send_resp(op, id, false, "flash erase timeout");
-            return;
-        }
-        k_sleep(K_MSEC(100));
-    }
+     * Frames sent earlier would fill the 4 KB pipe and time out, so the
+     * response goes out once the worker reports Ready. */
+    s_begin_id       = id;
+    s_begin_size     = size;
+    s_begin_deadline = k_uptime_get() + FW_ERASE_TIMEOUT_MS;
+    s_begin_pending  = true;
+    k_work_reschedule(&s_begin_work, K_MSEC(FW_ERASE_POLL_MS));
+}
 
-    mbedtls_sha256_init(&s_fw_sha);
-    mbedtls_sha256_starts(&s_fw_sha, 0);
-    s_xfer.type          = COMP_XFER_FW_DATA;
-    s_xfer.expected_size = size;
-    s_xfer.received      = 0;
-    s_xfer.active        = true;
-    akira_sd_card_set_transfer_active(true);
-    LOG_INF("BLE OTA begin: size=%u", size);
-    send_resp(op, id, true, NULL);
+static void begin_poll_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    if (!s_begin_pending) {
+        return;
+    }
+    const struct ota_progress *p = ota_get_progress();
+    if (p->state == OTA_STATE_ERROR) {
+        s_begin_pending = false;
+        send_resp(COMP_OP_OTA_BEGIN, s_begin_id, false, "flash erase failed");
+        return;
+    }
+    if (p->state == OTA_STATE_RECEIVING && strcmp(p->status_message, "Ready") == 0) {
+        s_begin_pending = false;
+        mbedtls_sha256_init(&s_fw_sha);
+        mbedtls_sha256_starts(&s_fw_sha, 0);
+        s_xfer.type          = COMP_XFER_FW_DATA;
+        s_xfer.expected_size = s_begin_size;
+        s_xfer.received      = 0;
+        s_xfer.active        = true;
+        akira_sd_card_set_transfer_active(true);
+        LOG_INF("BLE OTA begin: size=%u", s_begin_size);
+        send_resp(COMP_OP_OTA_BEGIN, s_begin_id, true, NULL);
+        return;
+    }
+    if (k_uptime_get() > s_begin_deadline) {
+        s_begin_pending = false;
+        ota_abort_update();
+        send_resp(COMP_OP_OTA_BEGIN, s_begin_id, false, "flash erase timeout");
+        return;
+    }
+    k_work_reschedule(&s_begin_work, K_MSEC(FW_ERASE_POLL_MS));
 }
 
 static void handle_ota_end(const char *op, int id, const char *params)
@@ -1262,6 +1296,9 @@ int companion_svc_init(void)
 
     k_work_init(&s_cmd_work, cmd_work_handler);
     k_work_init_delayable(&s_status_timer, status_timer_handler);
+#ifdef CONFIG_AKIRA_OTA
+    k_work_init_delayable(&s_begin_work, begin_poll_handler);
+#endif
 
     bt_gatt_cb_register(&companion_gatt_cb);
 
