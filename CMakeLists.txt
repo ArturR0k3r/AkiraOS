@@ -700,7 +700,7 @@ if(CONFIG_AKIRA_BT_HID)
 endif()
 
 if(CONFIG_AKIRA_BT_COMPANION)
-    target_sources(app PRIVATE src/connectivity/bluetooth/companion_service.c)
+    target_sources(app PRIVATE src/connectivity/bluetooth/companion_service.c src/connectivity/bluetooth/companion_fs_util.c)
 endif()
 
 if(CONFIG_AKIRA_BT_ECHO)

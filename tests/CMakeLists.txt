@@ -36,6 +36,7 @@ target_sources(app PRIVATE
     ${AKIRA_SRC}/connectivity/ota/ota_manager.c
     ${AKIRA_SRC}/console_shell/catalog_net.c
     ${AKIRA_SRC}/console_shell/catalogue_parser.c
+    ${AKIRA_SRC}/connectivity/bluetooth/companion_fs_util.c
 
     # Stubs
     stubs/stub_mcuboot.c
@@ -47,6 +48,7 @@ target_sources(app PRIVATE
     src/test_ota_state.c
     src/test_catalog_net.c
     src/test_catalogue_parser.c
+    src/test_companion_fs_util.c
 )
 
 # ota_manager.c guards its flash_area and mcuboot includes behind:
