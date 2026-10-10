@@ -43,6 +43,14 @@
 #include <errno.h>
 #include "../../lib/mem_helper.h"
 #include "../../storage/sd_card.h"
+#include "companion_fs_util.h"
+#include "../../console_shell/akira_os_shell.h"
+#ifdef CONFIG_AKIRA_USB_MSC
+#include "../../storage/usb_msc.h"
+#define SD_IN_MSC() akira_usb_msc_owns_sd()
+#else
+#define SD_IN_MSC() false
+#endif
 
 LOG_MODULE_REGISTER(companion_svc, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -101,6 +109,9 @@ static struct {
     char     app_name[32];  /* app name for COMP_XFER_APP_DATA */
     uint32_t expected_size; /* from apps.install.begin size param */
 } s_xfer;
+
+/* True while the phone holds the SD card for the file explorer (see fs_session_*). */
+static bool s_fs_session;
 
 #ifdef CONFIG_AKIRA_OTA
 /* Firmware image being streamed to the OTA slot: running hash and the digest
@@ -328,6 +339,10 @@ static void handle_apps_uninstall(const char *op, int id, const char *params)
 
 static void handle_apps_install_begin(const char *op, int id, const char *params)
 {
+    if (s_fs_session) {
+        send_resp(op, id, false, "busy");
+        return;
+    }
     char name[32]  = "";
     char size_s[16] = "";
 
@@ -524,134 +539,219 @@ static void handle_shell_exec(const char *op, int id, const char *params)
     send_resp(op, id, false, "shell exec not supported");
 }
 
+/* --------------------------------------------------------------------------
+ * SD file-explorer session: one at a time, lease-based, dropped on disconnect.
+ * -------------------------------------------------------------------------- */
+
+#define FS_LEASE_MS 30000
+
+static struct k_work_delayable s_fs_lease;
+
+static void fs_session_release(void)
+{
+    if (!s_fs_session) {
+        return;
+    }
+    s_fs_session = false;
+    k_work_cancel_delayable(&s_fs_lease);
+    if (s_xfer.active && s_xfer.type == COMP_XFER_FILE_DATA) {
+        akira_free_buffer(s_xfer.buf);
+        memset(&s_xfer, 0, sizeof(s_xfer));
+        akira_sd_card_set_transfer_active(false);
+    }
+    akira_sd_card_set_fs_session(false);
+}
+
+static void fs_lease_expired(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    LOG_WRN("fs session lease expired");
+    fs_session_release();
+}
+
+/* Every files.* op calls this first. Renews the lease. */
+static bool fs_gate(const char *op, int id)
+{
+    if (!s_fs_session) {
+        send_resp(op, id, false, "no_session");
+        return false;
+    }
+    if (SD_IN_MSC()) {
+        send_resp(op, id, false, "sd_in_usb_mode");
+        return false;
+    }
+    k_work_reschedule(&s_fs_lease, K_MSEC(FS_LEASE_MS));
+    return true;
+}
+
+#define FS_APPS_DIR "/SD:/apps/"
+
+static bool fs_in_apps(const char *path)
+{
+    return strncmp(path, FS_APPS_DIR, strlen(FS_APPS_DIR)) == 0;
+}
+
+/* True when path is the binary or manifest of an app that is running. */
+static bool fs_app_running(const char *path)
+{
+    if (!fs_in_apps(path)) {
+        return false;
+    }
+    char name[APP_NAME_MAX_LEN];
+    strncpy(name, path + strlen(FS_APPS_DIR), sizeof(name) - 1);
+    name[sizeof(name) - 1] = '\0';
+    char *dot = strrchr(name, '.');
+    if (dot) {
+        *dot = '\0';
+    }
+    return app_manager_get_state(name) == APP_STATE_RUNNING;
+}
+
+/* Keep the app registry and launcher in step with /SD:/apps changes. */
+static void fs_apps_changed(const char *path)
+{
+    if (fs_in_apps(path)) {
+        app_manager_resync_sd_apps();
+        akira_os_shell_notify_app_changed();
+    }
+}
+
+#define FS_LIST_BODY_MAX 150   /* leaves room for the "next" tail and the RESP envelope in 244 B */
+#define FS_READ_MAX      2048
+
+static uint8_t s_fs_read_buf[FS_READ_MAX] __attribute__((section(".ext_ram.bss")));
+
 static void handle_files_list(const char *op, int id, const char *params)
 {
-    char path[128] = "/lfs";
+    char path[COMP_FS_PATH_MAX] = COMP_FS_ROOT;
+    char cursor_s[12] = "0";
+
+    if (!fs_gate(op, id)) {
+        return;
+    }
     json_get_str(params, "path", path, sizeof(path));
+    json_get_str(params, "cursor", cursor_s, sizeof(cursor_s));
+    if (!comp_fs_path_ok(path)) {
+        send_resp(op, id, false, "path_denied");
+        return;
+    }
+    long cursor = strtol(cursor_s, NULL, 10);
 
     struct fs_dir_t dir;
     fs_dir_t_init(&dir);
-
-    int rc = fs_opendir(&dir, path);
-    if (rc) {
-        send_resp(op, id, false, "opendir failed");
+    if (fs_opendir(&dir, path)) {
+        send_resp(op, id, false, "not_found");
         return;
     }
 
-    char buf[CHAR_BUF_SIZE];
-    int pos = snprintf(buf, sizeof(buf), "[");
-
-    struct fs_dirent entry;
+    char buf[FS_LIST_BODY_MAX + 40];
+    int pos = snprintf(buf, sizeof(buf), "{\"entries\":[");
+    int next = -1;
+    long idx = 0;
     bool first = true;
-    while ((rc = fs_readdir(&dir, &entry)) == 0 && entry.name[0]) {
-        if ((size_t)pos >= sizeof(buf) - 60) {
-            break; /* truncate — client must paginate or list subdirs */
+    struct fs_dirent entry;
+
+    while (fs_readdir(&dir, &entry) == 0 && entry.name[0]) {
+        if (idx++ < cursor) {
+            continue;
         }
-        pos += snprintf(buf + pos, sizeof(buf) - pos,
-                        "%s{\"name\":\"%s\",\"type\":\"%s\",\"size\":%zu}",
-                        first ? "" : ",",
-                        entry.name,
-                        entry.type == FS_DIR_ENTRY_DIR ? "dir" : "file",
-                        entry.size);
+        char item[96];
+        int n = comp_fs_fmt_entry(item, sizeof(item), entry.name,
+                                  entry.type == FS_DIR_ENTRY_DIR, entry.size);
+        if (n < 0) {
+            continue;                       /* name too long for a page: skip it */
+        }
+        if (pos + n + 1 > FS_LIST_BODY_MAX) {
+            next = (int)(idx - 1);          /* this entry starts the next page */
+            break;
+        }
+        pos += snprintf(buf + pos, sizeof(buf) - pos, "%s%s", first ? "" : ",", item);
         first = false;
     }
-    snprintf(buf + pos, sizeof(buf) - pos, "]");
     fs_closedir(&dir);
-
+    snprintf(buf + pos, sizeof(buf) - pos, "],\"next\":%d}", next);
     send_resp(op, id, true, buf);
 }
 
 static void handle_files_read(const char *op, int id, const char *params)
 {
-    char path[128] = "";
-    json_get_str(params, "path", path, sizeof(path));
-    if (!path[0]) {
-        send_resp(op, id, false, "missing path");
+    char path[COMP_FS_PATH_MAX] = "";
+    char off_s[12] = "0";
+    char len_s[8] = "2048";
+
+    if (!fs_gate(op, id)) {
         return;
+    }
+    json_get_str(params, "path", path, sizeof(path));
+    json_get_str(params, "offset", off_s, sizeof(off_s));
+    json_get_str(params, "len", len_s, sizeof(len_s));
+    if (!comp_fs_path_ok(path)) {
+        send_resp(op, id, false, "path_denied");
+        return;
+    }
+    uint32_t offset = (uint32_t)strtoul(off_s, NULL, 10);
+    uint32_t want = (uint32_t)strtoul(len_s, NULL, 10);
+    if (want == 0 || want > FS_READ_MAX) {
+        want = FS_READ_MAX;
     }
 
     struct fs_file_t f;
     fs_file_t_init(&f);
-    int rc = fs_open(&f, path, FS_O_READ);
-    if (rc) {
-        send_resp(op, id, false, "open failed");
+    if (fs_open(&f, path, FS_O_READ)) {
+        send_resp(op, id, false, "not_found");
         return;
     }
-    akira_sd_card_set_transfer_active(true);
-
-    /* Send data in COMP_DATA_PAYLOAD_MAX chunks via DATA_DOWN notifications */
-    extern const struct bt_gatt_attr *companion_attrs;
-    uint8_t frame[4 + COMP_DATA_PAYLOAD_MAX];
-    ssize_t got;
-    bool error = false;
-
-    send_resp(op, id, true, NULL); /* ACK — data follows on DATA_DOWN */
-
-    while ((got = fs_read(&f, frame + 4, COMP_DATA_PAYLOAD_MAX)) > 0) {
-        uint8_t flags = 0;
-        /* Peek ahead: if next read would return 0, this is the last chunk */
-        char peek;
-        ssize_t more = fs_read(&f, &peek, 1);
-        if (more <= 0) {
-            flags |= COMP_FLAG_LAST;
-        } else {
-            /* Seek back one byte */
-            fs_seek(&f, -1, FS_SEEK_CUR);
-        }
-
-        frame[0] = COMP_XFER_FILE_DATA;
-        frame[1] = flags;
-        frame[2] = (uint8_t)(got & 0xFF);
-        frame[3] = (uint8_t)((got >> 8) & 0xFF);
-        int nr = bt_gatt_notify(s_conn, &companion_attrs[9], /* data_dn val */
-                                frame, (uint16_t)(4 + got));
-        if (nr) {
-            error = true;
-            break;
-        }
-        k_sleep(K_MSEC(10)); /* give phone BLE stack time to enqueue */
+    ssize_t got = 0;
+    int rc = fs_seek(&f, offset, FS_SEEK_SET);
+    if (rc == 0) {
+        got = fs_read(&f, s_fs_read_buf, want);
     }
-
-    if (!error && got < 0) {
-        /* Send error frame */
-        frame[0] = COMP_XFER_FILE_DATA;
-        frame[1] = COMP_FLAG_LAST | COMP_FLAG_ERROR;
-        frame[2] = 0;
-        frame[3] = 0;
-        bt_gatt_notify(s_conn, &companion_attrs[9], frame, 4);
-    }
-
     fs_close(&f);
-    akira_sd_card_set_transfer_active(false);
+    if (rc || got < 0) {
+        send_resp(op, id, false, "io_error");
+        return;
+    }
+
+    char data[24];
+    snprintf(data, sizeof(data), "{\"n\":%d}", (int)got);
+    send_resp(op, id, true, data);
+    if (got > 0) {
+        stream_bytes_down(s_fs_read_buf, (int)got);
+    }
 }
 
 static void handle_files_write(const char *op, int id, const char *params)
 {
-    char path[128]  = "";
+    char path[COMP_FS_PATH_MAX] = "";
     char size_s[16] = "";
+
+    if (!fs_gate(op, id)) {
+        return;
+    }
     json_get_str(params, "path", path, sizeof(path));
     json_get_str(params, "size", size_s, sizeof(size_s));
-
-    if (!path[0] || !size_s[0]) {
-        send_resp(op, id, false, "missing path or size");
+    if (!comp_fs_path_mutable_ok(path)) {
+        send_resp(op, id, false, "path_denied");
+        return;
+    }
+    if (!size_s[0]) {
+        send_resp(op, id, false, "missing size");
         return;
     }
 
     uint32_t size = (uint32_t)strtoul(size_s, NULL, 10);
     uint32_t max  = (uint32_t)CONFIG_AKIRA_BT_COMPANION_MAX_TRANSFER_KB * 1024U;
-
     if (size == 0 || size > max) {
         send_resp(op, id, false, "invalid size");
         return;
     }
-
-#ifdef CONFIG_AKIRA_OTA
-    fw_abort();
-#endif
-    if (s_xfer.active) {
+    if (s_xfer.active && s_xfer.type != COMP_XFER_FILE_DATA) {
+        send_resp(op, id, false, "busy");
+        return;
+    }
+    if (s_xfer.active) {                    /* restart of an earlier, unfinished upload */
         akira_free_buffer(s_xfer.buf);
         memset(&s_xfer, 0, sizeof(s_xfer));
-        akira_sd_card_set_transfer_active(false);
     }
 
     s_xfer.buf = akira_malloc_buffer(size);
@@ -659,40 +759,124 @@ static void handle_files_write(const char *op, int id, const char *params)
         send_resp(op, id, false, "out of memory");
         return;
     }
-
     s_xfer.type          = COMP_XFER_FILE_DATA;
     s_xfer.capacity      = size;
     s_xfer.received      = 0;
     s_xfer.expected_size = size;
     s_xfer.active        = true;
-    akira_sd_card_set_transfer_active(true);
     strncpy(s_xfer.path, path, sizeof(s_xfer.path) - 1);
-
     send_resp(op, id, true, NULL);
+}
+
+static void handle_files_write_end(const char *op, int id, const char *params)
+{
+    ARG_UNUSED(params);
+    if (!fs_gate(op, id)) {
+        return;
+    }
+    if (!s_xfer.active || s_xfer.type != COMP_XFER_FILE_DATA) {
+        send_resp(op, id, false, "no active transfer");
+        return;
+    }
+
+    if (fs_app_running(s_xfer.path)) {
+        send_resp(op, id, false, "busy");
+        return;
+    }
+    int rc = (s_xfer.received == s_xfer.expected_size) ? 0 : -EIO;
+    char tmp[COMP_FS_PATH_MAX];
+    if (rc == 0) {
+        rc = comp_fs_tmp_path(s_xfer.path, tmp, sizeof(tmp));
+    }
+    if (rc == 0) {
+        struct fs_file_t f;
+        fs_file_t_init(&f);
+        rc = fs_open(&f, tmp, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
+        if (rc == 0) {
+            ssize_t w = fs_write(&f, s_xfer.buf, s_xfer.received);
+            int c = fs_close(&f);
+            rc = (w == (ssize_t)s_xfer.received && c == 0) ? 0 : -EIO;
+        }
+        if (rc == 0) {
+            fs_unlink(s_xfer.path);         /* FAT cannot rename over an existing file */
+            rc = fs_rename(tmp, s_xfer.path);
+        }
+        if (rc != 0) {
+            fs_unlink(tmp);
+        }
+    }
+    LOG_INF("BLE file write %s: %s (%u bytes)", s_xfer.path,
+            rc == 0 ? "OK" : "FAIL", s_xfer.received);
+    if (rc == 0) {
+        fs_apps_changed(s_xfer.path);
+    }
+
+    akira_free_buffer(s_xfer.buf);
+    memset(&s_xfer, 0, sizeof(s_xfer));
+    akira_sd_card_set_transfer_active(false);
+    send_resp(op, id, rc == 0, rc == 0 ? NULL : "io_error");
 }
 
 static void handle_files_delete(const char *op, int id, const char *params)
 {
-    char path[128] = "";
+    char path[COMP_FS_PATH_MAX] = "";
+    if (!fs_gate(op, id)) {
+        return;
+    }
     json_get_str(params, "path", path, sizeof(path));
-    if (!path[0]) {
-        send_resp(op, id, false, "missing path");
+    if (!comp_fs_path_mutable_ok(path)) {
+        send_resp(op, id, false, "path_denied");
+        return;
+    }
+    if (fs_app_running(path)) {
+        send_resp(op, id, false, "busy");
         return;
     }
     int rc = fs_unlink(path);
-    send_resp(op, id, rc == 0, rc == 0 ? NULL : "delete failed");
+    if (rc == 0) {
+        fs_apps_changed(path);
+    }
+    send_resp(op, id, rc == 0, rc == 0 ? NULL : "io_error");
 }
 
 static void handle_files_mkdir(const char *op, int id, const char *params)
 {
-    char path[128] = "";
+    char path[COMP_FS_PATH_MAX] = "";
+    if (!fs_gate(op, id)) {
+        return;
+    }
     json_get_str(params, "path", path, sizeof(path));
-    if (!path[0]) {
-        send_resp(op, id, false, "missing path");
+    if (!comp_fs_path_mutable_ok(path)) {
+        send_resp(op, id, false, "path_denied");
         return;
     }
     int rc = fs_mkdir(path);
-    send_resp(op, id, rc == 0, rc == 0 ? NULL : "mkdir failed");
+    send_resp(op, id, rc == 0, rc == 0 ? NULL : "io_error");
+}
+
+static void handle_files_rename(const char *op, int id, const char *params)
+{
+    char from[COMP_FS_PATH_MAX] = "";
+    char to[COMP_FS_PATH_MAX] = "";
+    if (!fs_gate(op, id)) {
+        return;
+    }
+    json_get_str(params, "from", from, sizeof(from));
+    json_get_str(params, "to", to, sizeof(to));
+    if (!comp_fs_path_mutable_ok(from) || !comp_fs_path_mutable_ok(to)) {
+        send_resp(op, id, false, "path_denied");
+        return;
+    }
+    if (fs_app_running(from) || fs_app_running(to)) {
+        send_resp(op, id, false, "busy");
+        return;
+    }
+    int rc = fs_rename(from, to);
+    if (rc == 0) {
+        fs_apps_changed(from);
+        fs_apps_changed(to);
+    }
+    send_resp(op, id, rc == 0, rc == 0 ? NULL : "io_error");
 }
 
 #ifdef CONFIG_AKIRA_OTA
@@ -743,6 +927,10 @@ static bool hex_to_bytes(const char *hex, uint8_t *out, size_t out_len)
 
 static void handle_ota_begin(const char *op, int id, const char *params)
 {
+    if (s_fs_session) {
+        send_resp(op, id, false, "busy");
+        return;
+    }
     char size_s[16] = {0};
     char sha_s[72] = {0};
     json_get_str(params, "size", size_s, sizeof(size_s));
@@ -898,6 +1086,48 @@ static void handle_ota_status(const char *op, int id, const char *params)
     send_resp(op, id, true, buf);
 }
 
+static void handle_fs_session_open(const char *op, int id, const char *params)
+{
+    ARG_UNUSED(params);
+    if (s_fs_session) {
+        k_work_reschedule(&s_fs_lease, K_MSEC(FS_LEASE_MS));
+        send_resp(op, id, true, NULL);
+        return;
+    }
+    if (SD_IN_MSC()) {
+        send_resp(op, id, false, "sd_in_usb_mode");
+        return;
+    }
+    bool ota_pending = false;
+#ifdef CONFIG_AKIRA_OTA
+    ota_pending = s_begin_pending;
+#endif
+    if (s_xfer.active || ota_pending || akira_sd_card_is_transfer_active()) {
+        send_resp(op, id, false, "busy");
+        return;
+    }
+    if (!akira_sd_card_is_present()) {
+        send_resp(op, id, false, "sd_unavailable");
+        return;
+    }
+    s_fs_session = true;
+    akira_sd_card_set_fs_session(true);
+    if (SD_IN_MSC()) {                      /* MSC took the card between the check and the flag */
+        fs_session_release();
+        send_resp(op, id, false, "sd_in_usb_mode");
+        return;
+    }
+    k_work_reschedule(&s_fs_lease, K_MSEC(FS_LEASE_MS));
+    send_resp(op, id, true, NULL);
+}
+
+static void handle_fs_session_close(const char *op, int id, const char *params)
+{
+    ARG_UNUSED(params);
+    fs_session_release();
+    send_resp(op, id, true, NULL);
+}
+
 /* --------------------------------------------------------------------------
  * Command dispatcher (runs in workqueue context)
  * -------------------------------------------------------------------------- */
@@ -970,6 +1200,10 @@ static void cmd_work_handler(struct k_work *work)
     else if (strcmp(op, COMP_OP_FILES_WRITE)         == 0) { handle_files_write(op, id, params); }
     else if (strcmp(op, COMP_OP_FILES_DELETE)        == 0) { handle_files_delete(op, id, params); }
     else if (strcmp(op, COMP_OP_FILES_MKDIR)         == 0) { handle_files_mkdir(op, id, params); }
+    else if (strcmp(op, COMP_OP_FILES_WRITE_END)     == 0) { handle_files_write_end(op, id, params); }
+    else if (strcmp(op, COMP_OP_FILES_RENAME)        == 0) { handle_files_rename(op, id, params); }
+    else if (strcmp(op, COMP_OP_FS_SESSION_OPEN)     == 0) { handle_fs_session_open(op, id, params); }
+    else if (strcmp(op, COMP_OP_FS_SESSION_CLOSE)    == 0) { handle_fs_session_close(op, id, params); }
 #ifdef CONFIG_AKIRA_OTA
     else if (strcmp(op, COMP_OP_OTA_BEGIN)           == 0) { handle_ota_begin(op, id, params); }
     else if (strcmp(op, COMP_OP_OTA_END)             == 0) { handle_ota_end(op, id, params); }
@@ -1072,35 +1306,13 @@ static ssize_t data_up_write(struct bt_conn *conn,
     }
 
     if (xflags & COMP_FLAG_LAST) {
-        /* Transfer complete — for file writes, flush to filesystem now */
-        if (s_xfer.type == COMP_XFER_FILE_DATA) {
-            struct fs_file_t f;
-            fs_file_t_init(&f);
-            int rc = fs_open(&f, s_xfer.path,
-                             FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
-            if (rc == 0) {
-                rc = (int)fs_write(&f, s_xfer.buf, s_xfer.received);
-                fs_close(&f);
-            }
-            LOG_INF("BLE file write %s: %s (%u bytes)",
-                    s_xfer.path,
-                    rc >= 0 ? "OK" : "FAIL",
-                    s_xfer.received);
-
-            akira_free_buffer(s_xfer.buf);
-            memset(&s_xfer, 0, sizeof(s_xfer));
-            akira_sd_card_set_transfer_active(false);
-        } else {
-            /* COMP_XFER_APP_DATA: the staged image must SURVIVE until
-             * apps.install.end consumes it.  Freeing it here left
-             * handle_apps_install_end() looking at s_xfer.active == false,
-             * so it answered "no active transfer" and silently installed
-             * nothing (no device-side log — only the phone saw the error).
-             * Cleanup happens in handle_apps_install_end(), and on
-             * disconnect / the next install.begin if the peer goes away. */
-            LOG_INF("BLE app staged: %u bytes, awaiting apps.install.end",
-                    s_xfer.received);
-        }
+        /* Staged. COMP_XFER_APP_DATA is consumed by apps.install.end and
+         * COMP_XFER_FILE_DATA by files.write.end. Both must SURVIVE until then:
+         * freeing here left the end handler seeing s_xfer.active == false, so it
+         * answered "no active transfer" and silently did nothing (no device-side
+         * log, only the phone saw the error). Cleanup happens in the end handler,
+         * and on disconnect / the next begin if the peer goes away. */
+        LOG_INF("BLE transfer staged: %u bytes", s_xfer.received);
     }
 
     return (ssize_t)len;
@@ -1256,6 +1468,7 @@ static void conn_cb_disconnected(struct bt_conn *conn, uint8_t reason)
         memset(&s_xfer, 0, sizeof(s_xfer));
         akira_sd_card_set_transfer_active(false);
     }
+    fs_session_release();
 }
 
 BT_CONN_CB_DEFINE(companion_conn_cb) = {
@@ -1296,6 +1509,7 @@ int companion_svc_init(void)
 
     k_work_init(&s_cmd_work, cmd_work_handler);
     k_work_init_delayable(&s_status_timer, status_timer_handler);
+    k_work_init_delayable(&s_fs_lease, fs_lease_expired);
 #ifdef CONFIG_AKIRA_OTA
     k_work_init_delayable(&s_begin_work, begin_poll_handler);
 #endif

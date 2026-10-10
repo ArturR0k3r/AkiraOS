@@ -108,11 +108,15 @@ extern "C" {
 
 #define COMP_OP_SHELL_EXEC        "shell.exec"         /* params: {"cmd":"..."} */
 
-#define COMP_OP_FILES_LIST        "files.list"         /* params: {"path":"..."} */
-#define COMP_OP_FILES_READ        "files.read"         /* params: {"path":"..."} — data streams on DATA_DOWN */
+#define COMP_OP_FILES_LIST        "files.list"         /* params: {"path":"...","cursor":N} — paged, see "next" */
+#define COMP_OP_FILES_READ        "files.read"         /* params: {"path":"...","offset":N,"len":N<=2048} — {"n":N}, then N bytes on DATA_DOWN */
 #define COMP_OP_FILES_WRITE       "files.write"        /* params: {"path":"...","size":<bytes>} — data via DATA_UP */
 #define COMP_OP_FILES_DELETE      "files.delete"       /* params: {"path":"..."} */
 #define COMP_OP_FILES_MKDIR       "files.mkdir"        /* params: {"path":"..."} */
+#define COMP_OP_FILES_WRITE_END   "files.write.end"    /* no params — flush the staged file (temp + rename) */
+#define COMP_OP_FILES_RENAME      "files.rename"       /* params: {"from":"...","to":"..."} */
+#define COMP_OP_FS_SESSION_OPEN   "fs.session.open"    /* no params — take the SD card for file ops (idempotent, renews lease) */
+#define COMP_OP_FS_SESSION_CLOSE  "fs.session.close"   /* no params */
 
 #define COMP_OP_OTA_BEGIN         "ota.begin"          /* params: {"size":<bytes>,"sha256":"<64 hex>"} — image streams on DATA_UP */
 #define COMP_OP_OTA_END           "ota.end"            /* no params — verify sha256 and stage the image for MCUboot */
