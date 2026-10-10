@@ -39,6 +39,10 @@
 #include "ble_app_service.h"
 #endif
 
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+#include "companion_service.h"
+#endif
+
 #if defined(CONFIG_AKIRA_SETTINGS)
 #include "../../settings/settings.h"
 #endif
@@ -892,6 +896,15 @@ int bt_manager_spam_start(int preset)
         return -EINVAL;
     }
 
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+    /* Companion normally owns the radio from boot. Spamming is a deliberate,
+     * operator-initiated action, so tear the companion link down rather than
+     * refusing — restored on spam_stop() below. */
+    if (bt_mgr.mode == BT_MODE_COMPANION) {
+        companion_svc_deinit();
+    }
+#endif
+
     int ret = bt_manager_set_mode(BT_MODE_BLE_SPAM);
 
     if (ret < 0) {
@@ -917,6 +930,13 @@ int bt_manager_spam_stop(void)
     k_work_cancel_delayable_sync(&spam_work, &sync);
     bt_le_adv_stop();
     bt_manager_set_mode(BT_MODE_NONE);
+
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+    if (bt_manager_boot_mode_is_companion()) {
+        companion_svc_init();
+    }
+#endif
+
     LOG_INF("BLE spam stopped (%u packets sent)", spam_packet_count);
     return 0;
 }
