@@ -27,6 +27,7 @@
 #if defined(CONFIG_AKIRA_MESH_APP_AUTO_INSTALL)
 #include "runtime/app_manager/app_manager.h"
 #endif
+#include "../../storage/sd_card.h"
 
 LOG_MODULE_REGISTER(akira_mesh_app_dist, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -191,7 +192,7 @@ void mesh_app_dist_module_init(const akira_mesh_config_t *config, akira_mesh_sta
 static bool mesh_app_pick_dest(uint32_t total_len, bool *use_sd_out, const char **path_out)
 {
     fs_info_t info;
-    if (fs_manager_sd_available() &&
+    if (fs_manager_sd_available() && !akira_sd_card_is_fs_session() &&
         fs_manager_get_type_info(FS_TYPE_SD_CARD, &info) == 0 &&
         info.free_bytes >= total_len) {
         *use_sd_out = true;

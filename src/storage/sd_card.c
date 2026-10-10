@@ -47,6 +47,8 @@ LOG_MODULE_REGISTER(akira_sd_card, CONFIG_AKIRA_LOG_LEVEL);
 static bool  g_mounted;
 static volatile bool g_transfer_active;
 static int   g_transfer_insomnia_handle = -1; /* -1 = no lock held */
+static volatile bool g_fs_session;
+static int   g_session_insomnia_handle = -1;  /* -1 = no lock held */
 static FATFS g_fat_fs AKIRA_BULK_BSS;
 
 static struct fs_mount_t g_sd_mount = {
@@ -371,9 +373,29 @@ void akira_sd_card_set_transfer_active(bool active)
     }
 }
 
+void akira_sd_card_set_fs_session(bool active)
+{
+    g_fs_session = active;
+
+    if (active) {
+        if (g_session_insomnia_handle < 0) {
+            g_session_insomnia_handle = akira_pm_insomnia_enter(
+                "sd-session", SD_TRANSFER_INSOMNIA_MAX_MS);
+        }
+    } else if (g_session_insomnia_handle >= 0) {
+        akira_pm_insomnia_exit(g_session_insomnia_handle);
+        g_session_insomnia_handle = -1;
+    }
+}
+
+bool akira_sd_card_is_fs_session(void)
+{
+    return g_fs_session;
+}
+
 bool akira_sd_card_is_transfer_active(void)
 {
-    return g_transfer_active;
+    return g_transfer_active || g_fs_session;
 }
 
 void akira_sd_card_deinit_force(void)

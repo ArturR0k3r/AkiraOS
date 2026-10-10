@@ -66,6 +66,10 @@ void akira_sd_card_set_transfer_active(bool active);
 /** True while a long-running SD transfer is in flight. */
 bool akira_sd_card_is_transfer_active(void);
 
+/** Hold the card for a BLE file-explorer session: blocks USB MSC, app install and mesh writes. */
+void akira_sd_card_set_fs_session(bool active);
+bool akira_sd_card_is_fs_session(void);
+
 #ifdef CONFIG_AKIRA_SD_HOTPLUG
 typedef void (*akira_sd_hotplug_cb_t)(bool present, void *user_data);
 
@@ -116,6 +120,8 @@ static inline void akira_sd_card_deinit(void)      {}
 static inline void akira_sd_card_release_for_usb_msc(void) {}
 static inline void akira_sd_card_set_transfer_active(bool active) { (void)active; }
 static inline bool akira_sd_card_is_transfer_active(void) { return false; }
+static inline void akira_sd_card_set_fs_session(bool active) { (void)active; }
+static inline bool akira_sd_card_is_fs_session(void) { return false; }
 static inline bool akira_sd_card_is_physically_present(void) { return false; }
 static inline void akira_sd_card_hotplug_pause(void)  {}
 static inline void akira_sd_card_hotplug_resume(void) {}
