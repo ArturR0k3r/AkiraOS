@@ -519,6 +519,16 @@ extern "C"
      */
     int app_manager_unregister_sd_apps(void);
 
+    /**
+     * @brief Bring the SD registry in line with /SD:/apps/ after files changed.
+     *
+     * Unpacks new .akpkg archives, adds new apps, and drops idle SD entries
+     * whose binary was deleted. Running apps are not touched.
+     *
+     * @return Number of apps added, negative on error.
+     */
+    int app_manager_resync_sd_apps(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -2428,6 +2428,38 @@ int app_manager_register_sd_apps(void)
     return registered;
 }
 
+int app_manager_resync_sd_apps(void)
+{
+    if (!g_initialized) {
+        return -EINVAL;
+    }
+
+    /* Drop idle SD entries whose binary is gone, then pick up new files
+     * (register also unpacks any .akpkg). Running apps are left alone. */
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++) {
+        if (g_registry[i].name[0] == '\0' ||
+            g_registry[i].source != APP_SOURCE_SD ||
+            g_registry[i].container_id >= 0) {
+            continue;
+        }
+        char path[96];
+        struct fs_dirent st;
+        snprintf(path, sizeof(path), "%s/%s.wasm", SD_APPS_DIR, g_registry[i].name);
+        bool gone = fs_stat(path, &st) != 0;
+        snprintf(path, sizeof(path), "%s/%s.aot", SD_APPS_DIR, g_registry[i].name);
+        gone = gone && fs_stat(path, &st) != 0;
+        if (gone) {
+            LOG_INF("SD app removed: %s", g_registry[i].name);
+            memset(&g_registry[i], 0, sizeof(g_registry[i]));
+            g_app_count--;
+        }
+    }
+    k_mutex_unlock(&g_registry_mutex);
+
+    return app_manager_register_sd_apps();
+}
+
 int app_manager_unregister_sd_apps(void)
 {
     if (!g_initialized) {
