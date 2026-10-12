@@ -218,10 +218,17 @@ static void handle_device_info(const char *op, int id, const char *params)
 {
     ARG_UNUSED(params);
     char buf[CHAR_BUF_SIZE];
+    char addr[BT_ADDR_STR_LEN] = "";
+    bt_addr_le_t ids[CONFIG_BT_ID_MAX];
+    size_t count = ARRAY_SIZE(ids);
+    bt_id_get(ids, &count);
+    if (count > 0) {
+        bt_addr_to_str(&ids[0].a, addr, sizeof(addr));
+    }
     snprintf(buf, sizeof(buf),
              "{\"fw\":\"%s\",\"model\":\"AkiraConsole\","
-             "\"bt_addr\":\"<addr>\"}",
-             AKIRA_VERSION_STRING);
+             "\"bt_addr\":\"%s\"}",
+             AKIRA_VERSION_STRING, addr);
     send_resp(op, id, true, buf);
 }
 
@@ -1572,10 +1579,19 @@ void companion_svc_notify_status(void)
     /* Build the same JSON as cloud device.status. free_heap is reported as 0:
      * there is no portable free-heap query here and passing NULL to a slab
      * accessor would fault. */
+    char sd[48] = "";
+    struct fs_statvfs vfs;
+    if (akira_sd_card_is_present() && fs_statvfs("/SD:", &vfs) == 0) {
+        snprintf(sd, sizeof(sd), ",\"sd_total_kb\":%u,\"sd_free_kb\":%u",
+                 (unsigned)(((uint64_t)vfs.f_blocks * vfs.f_frsize) / 1024),
+                 (unsigned)(((uint64_t)vfs.f_bfree * vfs.f_frsize) / 1024));
+    }
+
     int n = snprintf((char *)s_status_buf, sizeof(s_status_buf),
                      "{\"fw\":\"%s\",\"free_heap\":0,"
-                     "\"running_apps\":[],\"bt_rssi\":0}",
-                     AKIRA_VERSION_STRING);
+                     "\"running_apps\":[],\"bt_rssi\":0,\"uptime_s\":%u%s}",
+                     AKIRA_VERSION_STRING,
+                     (unsigned)(k_uptime_get() / 1000), sd);
 
     if (n <= 0 || (size_t)n >= sizeof(s_status_buf)) {
         return;
