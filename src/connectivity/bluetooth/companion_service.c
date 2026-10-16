@@ -31,6 +31,9 @@
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/sys/sys_heap.h>
 #include <zephyr/kernel.h>
 #include <zephyr/fs/fs.h>
 #include <zephyr/logging/log.h>
@@ -1491,8 +1494,39 @@ static struct bt_gatt_cb companion_gatt_cb = {
  * Periodic status timer
  * -------------------------------------------------------------------------- */
 
+/* Last RSSI of the companion link in dBm, 0 when the controller can't report it. */
+static int8_t s_rssi;
+
+/* Runs on the system workqueue only: a synchronous HCI command from the BT RX
+ * thread (e.g. the CCC callback) would deadlock waiting for its own event. */
+static void refresh_rssi(void)
+{
+    uint16_t handle;
+    struct net_buf *buf, *rsp = NULL;
+    struct bt_hci_cp_read_rssi *cp;
+
+    s_rssi = 0;
+    if (!s_conn || bt_hci_get_conn_handle(s_conn, &handle)) {
+        return;
+    }
+    buf = bt_hci_cmd_alloc(K_MSEC(100));
+    if (!buf) {
+        return;
+    }
+    cp = net_buf_add(buf, sizeof(*cp));
+    cp->handle = sys_cpu_to_le16(handle);
+    if (bt_hci_cmd_send_sync(BT_HCI_OP_READ_RSSI, buf, &rsp) == 0 && rsp) {
+        const struct bt_hci_rp_read_rssi *rp = (const void *)rsp->data;
+        if (rp->status == 0) {
+            s_rssi = rp->rssi;
+        }
+        net_buf_unref(rsp);
+    }
+}
+
 static void status_timer_handler(struct k_work *work)
 {
+    refresh_rssi();
     companion_svc_notify_status();
     k_work_reschedule(&s_status_timer,
                       K_MSEC(CONFIG_AKIRA_BT_COMPANION_STATUS_INTERVAL_MS));
@@ -1576,9 +1610,17 @@ void companion_svc_notify_status(void)
         return;
     }
 
-    /* Build the same JSON as cloud device.status. free_heap is reported as 0:
-     * there is no portable free-heap query here and passing NULL to a slab
-     * accessor would fault. */
+    /* Build the same JSON as cloud device.status. free_heap is the kernel
+     * heap only (0 when runtime stats are off); bt_rssi is the last value
+     * read by the status timer, 0 when unavailable. */
+    uint32_t free_heap = 0;
+#if defined(CONFIG_SYS_HEAP_RUNTIME_STATS)
+    extern struct k_heap _system_heap;
+    struct sys_memory_stats kheap = {0};
+    sys_heap_runtime_stats_get(&_system_heap.heap, &kheap);
+    free_heap = (uint32_t)kheap.free_bytes;
+#endif
+
     char sd[48] = "";
     struct fs_statvfs vfs;
     if (akira_sd_card_is_present() && fs_statvfs("/SD:", &vfs) == 0) {
@@ -1588,9 +1630,9 @@ void companion_svc_notify_status(void)
     }
 
     int n = snprintf((char *)s_status_buf, sizeof(s_status_buf),
-                     "{\"fw\":\"%s\",\"free_heap\":0,"
-                     "\"running_apps\":[],\"bt_rssi\":0,\"uptime_s\":%u%s}",
-                     AKIRA_VERSION_STRING,
+                     "{\"fw\":\"%s\",\"free_heap\":%u,"
+                     "\"running_apps\":[],\"bt_rssi\":%d,\"uptime_s\":%u%s}",
+                     AKIRA_VERSION_STRING, (unsigned)free_heap, (int)s_rssi,
                      (unsigned)(k_uptime_get() / 1000), sd);
 
     if (n <= 0 || (size_t)n >= sizeof(s_status_buf)) {
