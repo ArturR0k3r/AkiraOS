@@ -66,6 +66,9 @@ LOG_MODULE_REGISTER(companion_svc, CONFIG_AKIRA_LOG_LEVEL);
 #endif
 #include <settings/settings.h>
 #include <akira.h>
+#if defined(CONFIG_AKIRA_POWER_MANAGER)
+#include <drivers/power/power_manager.h>
+#endif
 
 /* --------------------------------------------------------------------------
  * UUID definitions
@@ -1642,13 +1645,49 @@ void companion_svc_notify_status(void)
                  (unsigned)(((uint64_t)vfs.f_bfree * vfs.f_frsize) / 1024));
     }
 
+    char bat[64] = "";
+#if defined(CONFIG_AKIRA_POWER_MANAGER)
+    akira_battery_status_t bs = {0};
+    int bs_rc = akira_pm_get_battery_status(&bs);
+    if (bs_rc == 0) {
+        snprintf(bat, sizeof(bat), ",\"bat_pct\":%u,\"bat_mv\":%d,\"charging\":%s",
+                 (unsigned)bs.level_percent, (int)bs.voltage_mv,
+                 bs.charging ? "true" : "false");
+    } else if (bs.charging) {
+        snprintf(bat, sizeof(bat), ",\"charging\":true");
+    }
+#endif
+
     int n = snprintf((char *)s_status_buf, sizeof(s_status_buf),
                      "{\"fw\":\"%s\",\"free_heap\":%u,"
-                     "\"running_apps\":[],\"bt_rssi\":%d,\"uptime_s\":%u%s}",
+                     "\"bt_rssi\":%d,\"uptime_s\":%u%s%s",
                      AKIRA_VERSION_STRING, (unsigned)free_heap, (int)s_rssi,
-                     (unsigned)(k_uptime_get() / 1000), sd);
-
+                     (unsigned)(k_uptime_get() / 1000), sd, bat);
     if (n <= 0 || (size_t)n >= sizeof(s_status_buf)) {
+        return;
+    }
+
+    /* running_apps goes last so names that do not fit in the 244-byte notify
+     * are dropped instead of losing the whole status. */
+    static app_info_t apps[CONFIG_AKIRA_APP_MAX_INSTALLED + CONFIG_AKIRA_APP_MAX_RUNNING]
+        __attribute__((section(".ext_ram.bss")));
+    int count = app_manager_list(apps, (int)(sizeof(apps) / sizeof(apps[0])));
+    n += snprintf((char *)s_status_buf + n, sizeof(s_status_buf) - n, ",\"running_apps\":[");
+    bool first = true;
+    for (int i = 0; i < count; i++) {
+        if (apps[i].state != APP_STATE_RUNNING) {
+            continue;
+        }
+        int len = strlen(apps[i].name) + 4; /* quotes, comma, closing "]}" */
+        if ((size_t)(n + len + 2) >= sizeof(s_status_buf)) {
+            break;
+        }
+        n += snprintf((char *)s_status_buf + n, sizeof(s_status_buf) - n,
+                      "%s\"%s\"", first ? "" : ",", apps[i].name);
+        first = false;
+    }
+    n += snprintf((char *)s_status_buf + n, sizeof(s_status_buf) - n, "]}");
+    if ((size_t)n >= sizeof(s_status_buf)) {
         return;
     }
 
