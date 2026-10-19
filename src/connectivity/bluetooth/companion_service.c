@@ -275,23 +275,32 @@ static void stream_bytes_down(const uint8_t *data, int len)
     } while (off < len);
 }
 
-static char s_list_json[2048] __attribute__((section(".ext_ram.bss")));
+/* Worst-case bytes one apps.list entry takes: JSON punctuation + longest state string. */
+#define APP_LIST_ENTRY_OVERHEAD 48
 
 static void handle_apps_list(const char *op, int id, const char *params)
 {
     ARG_UNUSED(params);
     /* The list can exceed one 244-byte notify (many SD-card apps), so ACK on
-     * RESP and stream the JSON array over DATA_DOWN. */
-    static app_info_t list[32] __attribute__((section(".ext_ram.bss")));
+     * RESP and stream the JSON array over DATA_DOWN. The JSON buffer is sized
+     * from the app count. */
+    static app_info_t list[CONFIG_AKIRA_APP_MAX_INSTALLED + CONFIG_AKIRA_APP_MAX_RUNNING]
+        __attribute__((section(".ext_ram.bss")));
     int count = app_manager_list(list, (int)(sizeof(list) / sizeof(list[0])));
     if (count < 0) {
         count = 0;
     }
 
-    int pos = 0;
-    pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos, "[");
-    for (int i = 0; i < count && (size_t)pos < sizeof(s_list_json) - 96; i++) {
-        pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos,
+    size_t cap = 4 + (size_t)count * (APP_NAME_MAX_LEN + APP_VERSION_MAX_LEN + APP_LIST_ENTRY_OVERHEAD);
+    char *json = akira_malloc_buffer(cap);
+    if (!json) {
+        send_resp(op, id, false, "no memory");
+        return;
+    }
+
+    int pos = snprintf(json, cap, "[");
+    for (int i = 0; i < count && (size_t)pos < cap; i++) {
+        pos += snprintf(json + pos, cap - pos,
                         "%s{\"name\":\"%s\",\"state\":\"%s\","
                         "\"version\":\"%s\"}",
                         i > 0 ? "," : "",
@@ -299,10 +308,14 @@ static void handle_apps_list(const char *op, int id, const char *params)
                         app_state_to_str(list[i].state),
                         list[i].version);
     }
-    pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos, "]");
+    if ((size_t)pos >= cap - 1) {
+        pos = (int)cap - 2;
+    }
+    pos += snprintf(json + pos, cap - pos, "]");
 
     send_resp(op, id, true, NULL);   /* ACK; array follows on DATA_DOWN */
-    stream_bytes_down((const uint8_t *)s_list_json, pos);
+    stream_bytes_down((const uint8_t *)json, pos);
+    akira_free_buffer(json);
 }
 
 static void handle_apps_start(const char *op, int id, const char *params)
