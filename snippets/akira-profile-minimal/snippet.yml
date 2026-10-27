@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+name: akira-profile-minimal
+append:
+  EXTRA_CONF_FILE: akira-profile-minimal.conf

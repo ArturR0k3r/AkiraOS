@@ -108,6 +108,30 @@ extern "C"
     int app_verify_wasm_integrity(const void *binary, size_t size,
                                   uint8_t *hash_out);
 
+    /**
+     * @brief Verify the Dilithium-2 (FIPS 204) signature of an .akpkg payload.
+     *
+     * Computes SHA-256(manifest || wasm [|| model]) and delegates verification
+     * to the akira_platform_pqc_verify() weak hook. When AkiraPlatform is
+     * absent or CONFIG_AKIRA_PLATFORM_PQC_SIGNING is disabled, the default
+     * weak implementation is a no-op that returns 0.
+     *
+     * @param manifest       manifest.json bytes.
+     * @param manifest_size  Length of manifest.
+     * @param wasm           app.wasm / app.aot bytes.
+     * @param wasm_size      Length of wasm.
+     * @param model          model.tflite bytes (NULL if not present).
+     * @param model_size     Length of model (0 if not present).
+     * @param sig            sig.dilithium2 bytes from the .akpkg archive.
+     * @param sig_size       Length of sig.
+     * @return 0 if valid or no PQC enforcement active; -EACCES on mismatch;
+     *         -ENODATA if sig is NULL and REQUIRED mode is active.
+     */
+    int app_verify_pqc_sig(const uint8_t *manifest, size_t manifest_size,
+                           const uint8_t *wasm,     size_t wasm_size,
+                           const uint8_t *model,    size_t model_size,
+                           const uint8_t *sig,      size_t sig_size);
+
 #ifdef __cplusplus
 }
 #endif

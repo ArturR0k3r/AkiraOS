@@ -7,6 +7,106 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.6.5] — Unreleased
+
+> Development series on the `v1.6.x` branch. `VERSION` tracks 1.6.5; this section
+> is backfilled from the commits since 1.5.8 plus the production-readiness
+> hardening pass, and is not yet tagged/released.
+
+### Implemented (previously stubbed)
+- `feat(sensors)`: BME280 register writes over I2C (`i2c_reg_write_byte`) — was `-ENOTSUP`.
+- `feat(cloud)`: Real device telemetry in the status payload — battery via the power
+  manager, free heap via `sys_heap_runtime_stats_get`, CPU% via Zephyr thread runtime
+  stats — replacing hardcoded `3700 mV / 85% / 0 / 0`.
+- `feat(http)`: Static file serving from the filesystem (`CONFIG_AKIRA_HTTP_STATIC_FILES`,
+  default n) with extension→Content-Type mapping and path-traversal protection.
+- `feat(ota)`: WASM app OTA — real HTTP(S) manifest fetch + firmware download streamed
+  into the OTA manager with SHA-256 verification and anti-rollback (refuses non-newer
+  versions); `-ENOSYS` fallback without `CONFIG_HTTP_CLIENT`.
+- `feat(http)`: RFC 6455 WebSocket server — opening handshake, server→client text/binary
+  frame encoding, client frame decode (mask, ping/pong/close) — replacing the unframed stub.
+- `feat(coap)`: DNS resolution (hostnames), Content-Format option parsing, a fixed
+  `coap_header_get_token()` contract, and RFC 7959 Block2 GET / Block1 PUT transfer.
+- `feat(display)`: LVGL input driven by real Zephyr input events (gpio-keys / D-pad /
+  gamepad / touch) via `INPUT_CALLBACK_DEFINE` (`CONFIG_AKIRA_LVGL_INPUT_ZEPHYR`).
+- `feat(radio)`: 802.15.4 raw receive via net promiscuous mode with real per-frame
+  LQI/RSSI (`CONFIG_AKIRA_RADIO_802154_PROMISC_RX`), replacing a hardcoded LQI of 200.
+
+### Still stubbed (need more than firmware)
+- USB-host mass-storage mount (needs an MSC host class + disk/FAT backend not vendored),
+  Matter non-accessory path (needs the CHIP SDK), Thread (needs OpenThread), and mesh WASM
+  app distribution (large RF-transport change) return `-ENOSYS`/stay gated until integrated.
+
+### Security & hardening (production-readiness pass)
+- `feat(ota)`: Verify a downloaded image's SHA-256 against authenticated metadata
+  before it is ever marked bootable (`CONFIG_AKIRA_OTA_REQUIRE_HASH`,
+  `ota_set_expected_sha256()`); the old 4-byte magic-only check is no longer
+  sufficient.
+- `feat(security)`: Clamp the capability mask an app can self-assert from its
+  (unauthenticated) manifest — `"*"` is bounded to defined capabilities and
+  unsigned apps are limited by `CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK`; privileged
+  grants to unattested apps are audit-logged.
+- `feat(settings)`: Derive a per-device AES-256 key from the hardware unique ID
+  (`CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY`, fail-closed) instead of a shared
+  compile-time key.
+- `fix(license)`: Relicense first-party USB CDC serial, the FUSB302 VBUS-sense
+  driver, and the BLE companion service from GPL-3.0 to Apache-2.0; add a CI
+  SPDX/copyleft gate and a `NOTICE` file.
+- `docs`: Correct README secure-boot/OTA claims to the real (in-progress) status.
+- `ci`: Version-consistency gate, expanded board matrix, pinned container image.
+- Advertised-but-incomplete entry points now return `-ENOSYS`/`-ENOTSUP` instead
+  of reporting fake success (pending full implementation, see below).
+
+### Added
+- `feat(security)`: Fail-closed app verification gate (`CONFIG_AKIRA_REQUIRE_SIGNED_APPS`).
+- `feat(pqc)`: Dilithium-2 post-quantum signature verify path in the runtime.
+- `feat(matter)`: Device-as-endpoint (accessory) support with an in-firmware mock co-processor for tests; accessory mock build enabled on esp32c6.
+- `feat(mqtt)`: Home Assistant MQTT client integration (discovery + `ha_light_*`/`mqtt_*` WASM natives).
+- `feat(mesh)`: AODV routing with reliable delivery and capability-based transport.
+- `feat(radio)`: CC1121 OOK modulation, raw OOK capture/replay, continuous RX with frequency-offset registers; LR2021 LoRa modulation (runtime-selectable with FSK).
+- `feat(api)`: HID modifier + FIDO/U2F Report ID 4 channel, AES-256-CTR, WiFi deauth, and raw RF capture/replay WASM APIs.
+- `feat(board)`: esp32s3_super_mini — 2 MB Quad PSRAM + WiFi, LEDC PWM, and WASM BLE RGB controller.
+- `feat(shell)`: `bt gatt` command to dump registered GATT services.
+- `feat(bench)`: `akiraclaw_bench` hardware benchmark suite.
+- `feat(security)`: `CONFIG_AKIRA_RELEASE_BUILD` fails configuration on development-only security settings: HTTP no-auth, empty or example upload token, the direct upload endpoint, unsigned apps, and unsigned or dev-key-signed MCUboot images. Development builds print the same findings as one warning.
+- `feat(release)`: `west akira` command group (`keygen`, `sbom`, `sign`, `pack`, `release`) for product firmware — generate product signing keys (kept out of git via a written `.gitignore`), emit a CycloneDX 1.4 SBOM from the west manifest, sign the MCUboot image, forward app packaging to `akira-cli`, and assemble a `dist/` release (signed image + ELF + SBOM + `SHA256SUMS`). Registered through `west-commands` on the akira-os project so downstream products inherit it. A tag-triggered `.github/workflows/release.yml` builds, signs with the `MCUBOOT_KEY_PEM` secret, and uploads the artifacts to the GitHub release.
+
+### Fixed / Security
+- `fix(ble)`: Require an encrypted link for privileged management writes; make WASM app GATT services discoverable.
+- `fix(security)`: Consistent `-EPERM` for capability denial; map `ota.trigger` capability string to its mask.
+- `fix(wasm)`: Centralized, validated WASM pointer+length translation across HID/RF native APIs; decrement per-app memory quota on `mem_free`.
+- `fix(ws)`: Connect `wss://` over TLS instead of silent cleartext.
+- `fix(fs)`: Fail loud instead of diverting persistent writes to RAM.
+- `fix(akiraconsole_prod)`: Fit `dram0.bss` and right-size the BT system heap to restore BLE.
+- `fix(boards)`: Restore builds for rpi_pico(2), nucleo_h743zi, xiao_esp32c6.
+- `fix(version)`: Firmware reported 1.6.2 instead of `VERSION`. CMake compile definitions overrode `AKIRA_VERSION_*`, and `akira.h` probed `<app_version.h>` rather than Zephyr's `<zephyr/app_version.h>`. OTA version reporting and anti-rollback now use the real version.
+- `fix(app_manager)`: Stop filling the 16-bit `permissions` field from a 4-string parser whose bits did not match `AKIRA_CAP_*` (enforcement already used the 64-bit runtime mask). `akira caps` now shows the granted 64-bit mask instead of `heap_kb`; lifecycle APIs no longer truncate the mask to 32 bits.
+- `fix(ota)`!: **Automatic rollback of a firmware update that fails to boot.** Before, it could not happen: `build.sh` built MCUboot overwrite-only on ESP32 (the Espressif SoC default), which destroys the previous image, and nothing confirmed a new image, so on swap-mode boards (STM32) every OTA reverted on its next reset. `build.sh` now builds MCUboot swap-using-move for ESP32/S2/S3 (`boards/mcuboot-swap-move.conf`), matching the app build; C3/C6/H2 stay overwrite-only (no bootloader IRAM headroom, swap not validated). `akira_boot_guard` is rewritten and on by default with `MCUBOOT_IMG_MANAGER`. It confirms a trial image `AKIRA_BOOT_GUARD_CONFIRM_DELAY_S` (30 s) after `AKIRA_HOOK_BOOT_READY`. It reboots the image, so MCUboot restores the previous firmware, on a fatal error, at the `AKIRA_BOOT_GUARD_TRIAL_TIMEOUT_S` (300 s) deadline, or on `akira_boot_guard_reject()`. On the next boot it reports the rollback (`akira_boot_guard_rolled_back()`, `AKIRA_HOOK_OTA_ERROR`, `ota status`). `ota_request_rollback()` now actually rolls back, to the previous firmware kept in slot1, instead of only setting a status string. Removed: the NVS boot counter, `CONFIG_AKIRA_OTA_MAX_BOOT_FAILURES` and `akira_boot_guard_count()`. They needed a `boot_counter` partition that no board defines, so the old guard never built.
+- `fix(stack)`: App listings put `app_info_t` arrays (608 B per entry) on thread stacks smaller than the array: shell app list, `akira apps`/`akira caps`/memory report (4096 B shell stack), HID get-apps (4096 B system workqueue), the HTTP apps route (6144 B), and the WASM `app_list` API (8192 B app stack). They now use the new `app_manager_list_alloc()`, which heap-allocates (PSRAM first) and also returns SD-XIP apps that the fixed 8-entry HID list dropped.
+
+### Changed
+- `fix(version)`: Derive `AKIRA_VERSION_*` from the `VERSION` file.
+- `ci`: Codecov no-regression coverage gate.
+- `refactor(ui)`: Remove the unused stub UI framework.
+- `ci`: Pin the Zephyr CI container to `ci:v0.28.6` by digest.
+- `build`: Remove no-op `KCONFIG_WARN_UNDEF`/`KCONFIG_WERROR` CMake cache overrides (kconfiglib reads these from the environment).
+- `deprecate(lib)`: `parse_capabilities_mask()` in `simple_json.h`; use `manifest_parse_json()`.
+- `docs`: Product branches (KeyaPlatform, AkiraEar, Latch) are frozen; see CONTRIBUTING.
+- `build`!: **AkiraOS is a real Zephyr module.** Its options moved to `zephyr/Kconfig` behind `CONFIG_AKIRA_OS` (default `n`) and its sources to `zephyr/CMakeLists.txt` (`akira_wamr` and `akira_os_core` libraries plus an `akira_os` interface target). **Applications must set `CONFIG_AKIRA_OS=y`.** The repository root is now a thin reference app; the boot sequence is `akira_start()` (`src/akira_os.c`), so product firmware in its own repository can link `akira_os` and reuse it. MCUboot and other images that only use the module's boards are unaffected.
+- `build`!: WAMR and TFLite Micro are west projects under `modules/lib/` instead of git submodules; run `west update`. `-DMODULE_EXT_ROOT` is no longer needed. Existing `AkiraOS/modules/*` checkouts are ignored, not deleted.
+- `samples`: `out_of_tree_product` shows product firmware consuming AkiraOS as a module; CI builds it on native_sim.
+- `feat(extensibility)`!: **capability registry.** Capabilities are now registry entries (`AKIRA_CAPABILITY_DEFINE`, `include/akira_capability.h`); core bit numbers 0–47 are frozen, products define their own in bits 48–63 with build-time collision detection. `akira_capability_str_to_mask()` reproduces every previous string exactly; `"*"` and the sanitize path use the registry's known mask, so unassigned bits are never granted. The runtime refuses to start on a colliding registry. Also fixes the external-manifest merge that bypassed the capability clamp, and three AES native signatures (`(**i*~*)i` → 5 params).
+- `feat(extensibility)`: **native API registry.** WASM natives are registered with `AKIRA_NATIVE_API_DEFINE()` (`include/akira_native_registry.h`) next to the functions they export, instead of one central `#ifdef` array; products add natives the same way. A native defined twice stops the runtime. The tables moved to ROM and are copied to PSRAM at start-up, saving ~2 KB DRAM on akiraconsole_prod.
+- `feat(extensibility)`: **system hooks.** `AKIRA_HOOK_DEFINE()` (`include/akira_hooks.h`) delivers boot, app-lifecycle, connectivity and OTA events, so product firmware extends AkiraOS without editing the boot sequence. The legacy `akira_on_app_*` weak hooks still fire, through a compatibility shim.
+- `security`!: On a hardened board (`CONFIG_AKIRA_REQUIRE_SIGNED_APPS=y` with a narrowed `CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK`), a signed app must **embed** its manifest in the WASM binary (AkiraSDK `embed_manifest.py`) for its capabilities to be granted; a sidecar/package-only manifest is now clamped like any unattested request, because it is re-read from the filesystem at start and is not covered by the app signature. Default builds (`REQUIRE_SIGNED_APPS=n`, all-ones unsigned mask) are unaffected. This also removes the pre-1.6.5 unclamped `|=` merge of sidecar capabilities, an escalation path.
+- `feat(security)`: **versioned WASM ABI.** Firmware exports `AKIRA_WASM_ABI_VERSION` (`include/akira_abi.h`); an app's `"abi"` manifest key is checked at install and load — a major mismatch is refused, a newer minor warns, a missing stamp is treated as legacy 1.x. `min_akiraos_version` is now enforced. akpkg manifests ≥ 4096 B are rejected. CI check `scripts/check_wasm_abi.py` fails on new drift between the firmware natives and the SDK header.
+- `build`: split the per-board snippet into `akira-board` (hardware/SoC/storage) and `akira-reference` (the reference firmware's service selection). A product now pairs `akira-board` with a service profile (`akira-profile-*`), so any profile builds on any board; the reference firmware applies both and its `.config` is byte-identical on all 17 boards. Residual: on upstream devkits the WiFi driver is Zephyr-defined and not auto-enabled by a profile.
+- `build`: per-board AkiraOS setup (flash layout, storage nodes, tuning) and the display panel moved from the reference app's `boards/` into module snippets (`snippets/akira-board`, `snippets/akira-display-*`); products apply them with `AKIRA_SNIPPETS`/`west build -S`. `.config` and devicetree are byte-for-byte identical for all 17 boards (`scripts/check_board_snippet.sh`).
+- `build`: `build.sh` no longer copies MCUboot linker patches into the Zephyr tree for ESP32-C6/H2; it passes `CONFIG_CUSTOM_LINKER_SCRIPT` instead, so the Zephyr checkout is never modified.
+- `docs`: maker-facing signing/release guide, a support & compatibility policy (release channels, LTS, and the firmware ↔ WASM-ABI ↔ SDK matrix), and per-SoC porting notes (ESP32-S3/C3/C6/H2, Nordic nRF54L15, STM32 H7/L4/U5, RP2040/RP2350).
+
+---
+
 ## [1.5.8] — 2026-05-29
 
 ### Added

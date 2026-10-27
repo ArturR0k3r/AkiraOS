@@ -19,6 +19,28 @@
 #include <string.h>
 #include <stdio.h>
 
+#ifdef CONFIG_AKIRA_MATTER_ACCESSORY
+#include <runtime/akira_matter_ipc.h>
+
+/* Cached onboarding payload fetched from the co-processor. */
+static char s_qr_cache[AKIRA_MATTER_IPC_QR_LEN];
+static char s_manual_cache[AKIRA_MATTER_IPC_MANUAL_LEN];
+static bool s_onboarding_valid;
+
+/* Fetch (and cache) this node's QR + manual code from the co-processor. */
+static int accessory_refresh_onboarding(void)
+{
+    int rc = akira_matter_ipc_init();
+    if (rc != 0) {
+        return rc;
+    }
+    rc = akira_matter_ipc_get_qr(s_qr_cache, sizeof(s_qr_cache),
+                                 s_manual_cache, sizeof(s_manual_cache));
+    s_onboarding_valid = (rc == 0);
+    return rc;
+}
+#endif /* CONFIG_AKIRA_MATTER_ACCESSORY */
+
 LOG_MODULE_REGISTER(matter_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 /* Matter manager state */
@@ -122,7 +144,21 @@ int matter_start_commissioning(uint32_t timeout_sec)
     }
     
     LOG_INF("Starting Matter commissioning (timeout: %u sec)", timeout_sec);
-    
+
+#ifdef CONFIG_AKIRA_MATTER_ACCESSORY
+    /* Accessory mode: ask the co-processor to open the real commissioning
+     * window and refresh our onboarding payload. */
+    int rc = akira_matter_ipc_init();
+    if (rc == 0) {
+        rc = akira_matter_ipc_open_pairing((uint16_t)timeout_sec);
+    }
+    if (rc != 0) {
+        LOG_ERR("matter: co-processor pairing open failed (%d)", rc);
+        matter_state.stats.state = MATTER_COMM_STATE_ERROR;
+        return rc;
+    }
+    (void)accessory_refresh_onboarding();
+#else
     /* Start BLE advertising for commissioning */
     radio_handle_t *ble_radio = radio_manager_get(RADIO_TYPE_BLE);
     if (ble_radio) {
@@ -130,7 +166,8 @@ int matter_start_commissioning(uint32_t timeout_sec)
         /* This would start BLE advertising with Matter service UUID */
         LOG_INF("BLE commissioning enabled");
     }
-    
+#endif
+
     matter_state.stats.state = MATTER_COMM_STATE_BLE_ADVERTISING;
     matter_state.stats.commissioning_attempts++;
     
@@ -218,11 +255,27 @@ int matter_get_qr_code(char *buffer, size_t buffer_len)
     if (!matter_state.initialized) {
         return -ENODEV;
     }
-    
-    /* Generate Matter QR code payload */
-    /* Format: MT:<version><vendor-id><product-id><discriminator><setup-pin> */
-    snprintf(buffer, buffer_len, "MT:Y.K9042C00KA0648G00");  /* Example QR code */
-    
+
+#ifdef CONFIG_AKIRA_MATTER_ACCESSORY
+    /* Real onboarding payload comes from the co-processor. */
+    if (!s_onboarding_valid) {
+        int rc = accessory_refresh_onboarding();
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    strncpy(buffer, s_qr_cache, buffer_len - 1);
+    buffer[buffer_len - 1] = '\0';
+#else
+    /* No real commissioning payload exists without the co-processor
+     * (CONFIG_AKIRA_MATTER_ACCESSORY). The previous code returned a hardcoded
+     * example QR string, which would send a user through a commissioning flow
+     * that cannot succeed. Fail with -ENOSYS instead. */
+    ARG_UNUSED(buffer);
+    LOG_WRN("Matter QR code unavailable: co-processor accessory path not enabled");
+    return -ENOSYS;
+#endif
+
     LOG_DBG("Generated Matter QR code: %s", buffer);
     return 0;
 }
@@ -236,13 +289,24 @@ int matter_get_manual_code(char *buffer, size_t buffer_len)
     if (!matter_state.initialized) {
         return -ENODEV;
     }
-    
-    /* Generate 11-digit manual pairing code */
-    /* Format: discriminator (4 digits) + setup PIN (8 digits with check digit) */
-    snprintf(buffer, buffer_len, "%04d-%08u",
-             matter_state.config.discriminator,
-             matter_state.config.setup_pin_code);
-    
+
+#ifdef CONFIG_AKIRA_MATTER_ACCESSORY
+    if (!s_onboarding_valid) {
+        int rc = accessory_refresh_onboarding();
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    strncpy(buffer, s_manual_cache, buffer_len - 1);
+    buffer[buffer_len - 1] = '\0';
+#else
+    /* Without the co-processor accessory path there is no real setup PIN /
+     * discriminator, so any manual code would be non-functional. Fail loud. */
+    ARG_UNUSED(buffer);
+    LOG_WRN("Matter manual code unavailable: co-processor accessory path not enabled");
+    return -ENOSYS;
+#endif
+
     LOG_DBG("Generated Matter manual code: %s", buffer);
     return 0;
 }
@@ -309,16 +373,11 @@ int matter_get_attribute(uint8_t endpoint, uint32_t cluster,
     LOG_DBG("Matter get attribute: EP%d Cluster0x%08x Attr0x%08x",
             endpoint, cluster, attribute);
     
-    /* This would read Matter cluster attribute */
-    /* Example: chip::app::Clusters::OnOff::Attributes::OnOff::Get(endpoint, value) */
-    
-    matter_state.stats.messages_received++;
-    
-    /* Placeholder: return dummy value */
-    if (*value_len >= 1) {
-        *((uint8_t *)value) = 0;
-        *value_len = 1;
-    }
-    
-    return 0;
+    /* Reading a real Matter cluster attribute is not implemented
+     * (would call e.g. chip::app::Clusters::OnOff::Attributes::OnOff::Get).
+     * Returning a hardcoded 0 masqueraded as a real attribute value; fail with
+     * -ENOSYS so callers do not act on fabricated cluster state. */
+    LOG_WRN("Matter get-attribute unimplemented (EP%d Cluster0x%08x Attr0x%08x)",
+            endpoint, cluster, attribute);
+    return -ENOSYS;
 }

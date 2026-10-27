@@ -180,3 +180,20 @@ int akira_native_timer_free(wasm_exec_env_t exec_env, int32_t handle)
 int akira_timer_init(void) { return 0; }
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_TIMER))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_timer_natives[] = {
+    {"timer_create", (void *)akira_native_timer_create, "()i", NULL},
+    {"timer_start", (void *)akira_native_timer_start, "(i)i", NULL},
+    {"timer_stop", (void *)akira_native_timer_stop, "(i)i", NULL},
+    {"timer_elapsed", (void *)akira_native_timer_elapsed, "(i)i", NULL},
+    {"timer_free", (void *)akira_native_timer_free, "(i)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_timer_api, "env", akira_timer_natives);
+#endif

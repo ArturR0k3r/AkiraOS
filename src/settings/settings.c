@@ -16,6 +16,10 @@
 #include <mbedtls/gcm.h>
 #include <mbedtls/platform.h>
 #include <zephyr/random/random.h>
+#ifdef CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY
+#include <mbedtls/sha256.h>
+#include <zephyr/drivers/hwinfo.h>
+#endif
 #endif
 
 LOG_MODULE_REGISTER(akira_settings, CONFIG_LOG_DEFAULT_LEVEL);
@@ -64,6 +68,73 @@ static int parse_hex_key(void)
  * @param key_out  Output buffer — must be exactly 32 bytes.
  * @return 0 on success, negative errno on failure.
  */
+#ifdef CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY
+/**
+ * @brief Derive a per-device AES-256 key = HMAC-SHA256(base_key, device_id).
+ *
+ * Binds the effective key to a hardware-unique identifier so that the shared
+ * compile-time base key alone cannot decrypt any device's settings. Fails
+ * closed: if the device id is unavailable, no key is produced.
+ */
+static int derive_per_device_key(const uint8_t *base_key, uint8_t *key_out)
+{
+    uint8_t device_id[16];
+    ssize_t id_len = hwinfo_get_device_id(device_id, sizeof(device_id));
+    if (id_len <= 0)
+    {
+        LOG_ERR("Per-device key: hwinfo_get_device_id failed (%d) — refusing "
+                "to fall back to the shared compile-time key", (int)id_len);
+        return -ENODEV;
+    }
+
+    /* HMAC-SHA256(key = base_key, msg = device_id), implemented directly on top
+     * of mbedtls_sha256 (already linked) so we do not depend on the optional
+     * generic MD layer. Block size B=64, output L=32; base_key is 32 bytes so it
+     * fits a single block without pre-hashing. */
+    uint8_t k_ipad[64];
+    uint8_t k_opad[64];
+    uint8_t inner[32];
+    mbedtls_sha256_context sha;
+    int ret;
+
+    memset(k_ipad, 0, sizeof(k_ipad));
+    memset(k_opad, 0, sizeof(k_opad));
+    memcpy(k_ipad, base_key, 32);
+    memcpy(k_opad, base_key, 32);
+    for (int i = 0; i < 64; i++) {
+        k_ipad[i] ^= 0x36;
+        k_opad[i] ^= 0x5c;
+    }
+
+    /* inner = SHA256(k_ipad || device_id) */
+    mbedtls_sha256_init(&sha);
+    ret = mbedtls_sha256_starts(&sha, 0);
+    ret |= mbedtls_sha256_update(&sha, k_ipad, sizeof(k_ipad));
+    ret |= mbedtls_sha256_update(&sha, device_id, (size_t)id_len);
+    ret |= mbedtls_sha256_finish(&sha, inner);
+    mbedtls_sha256_free(&sha);
+    if (ret != 0) {
+        LOG_ERR("Per-device key: inner HMAC hash failed");
+        return -EIO;
+    }
+
+    /* key_out = SHA256(k_opad || inner) */
+    mbedtls_sha256_init(&sha);
+    ret = mbedtls_sha256_starts(&sha, 0);
+    ret |= mbedtls_sha256_update(&sha, k_opad, sizeof(k_opad));
+    ret |= mbedtls_sha256_update(&sha, inner, sizeof(inner));
+    ret |= mbedtls_sha256_finish(&sha, key_out);
+    mbedtls_sha256_free(&sha);
+    if (ret != 0) {
+        LOG_ERR("Per-device key: outer HMAC hash failed");
+        return -EIO;
+    }
+
+    LOG_INF("Per-device settings key derived from %d-byte hardware ID", (int)id_len);
+    return 0;
+}
+#endif /* CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY */
+
 __weak int akira_settings_get_encryption_key(uint8_t *key_out)
 {
     int ret = parse_hex_key();
@@ -71,8 +142,14 @@ __weak int akira_settings_get_encryption_key(uint8_t *key_out)
     {
         return ret;
     }
+#ifdef CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY
+    /* Mix the compile-time base key with the hardware-unique device id so the
+     * effective key differs per unit. Fails closed if the id is unavailable. */
+    return derive_per_device_key(ENCRYPTION_KEY, key_out);
+#else
     memcpy(key_out, ENCRYPTION_KEY, 32);
     return 0;
+#endif
 }
 
 static int crypto_init(void)
@@ -2006,49 +2083,41 @@ static int cmd_settings_set_wifi(const struct shell *sh, size_t argc, char **arg
         shell_print(sh, "");
         shell_print(sh, "Description:");
         shell_print(sh, "  Convenience command to set WiFi credentials.");
-        shell_print(sh, "  SSID is stored as plaintext, PSK is encrypted.");
+        shell_print(sh, "  Stored as one encrypted entry, written atomically.");
         shell_print(sh, "");
         shell_print(sh, "Examples:");
         shell_print(sh, "  settings set_wifi \"MyNetwork\" \"MyPassword123\"");
         shell_print(sh, "  settings set_wifi HomeWiFi SecurePass456");
         shell_print(sh, "");
         shell_print(sh, "Note:");
-        shell_print(sh, "  - SSID is stored at: %s", AKIRA_SETTINGS_WIFI_SSID_KEY);
-        shell_print(sh, "  - PSK is stored encrypted at: %s", AKIRA_SETTINGS_WIFI_PSK_KEY);
+        shell_print(sh, "  - Stored at: %s", AKIRA_SETTINGS_WIFI_CREDS_KEY);
         return -EINVAL;
     }
 
     const char *ssid = argv[1];
     const char *psk = argv[2];
 
-    // Set SSID (plaintext)
-    int ret = akira_settings_set(AKIRA_SETTINGS_WIFI_SSID_KEY, ssid, false);
-    if (ret != 0)
+    /* SSID+PSK as one tab-delimited value — a single NVS write is atomic,
+     * unlike two separate writes which leave a window where a power loss
+     * between them strands a new SSID paired with the old PSK. */
+    char combined[MAX_VALUE_LEN * 2 + 2];
+    int n = snprintf(combined, sizeof(combined), "%s\t%s", ssid, psk);
+    if (n < 0 || (size_t)n >= sizeof(combined))
     {
-        shell_error(sh, "Failed to set SSID: %d", ret);
-        return ret;
+        shell_error(sh, "SSID/PSK too long");
+        return -ENAMETOOLONG;
     }
 
-    // Set PSK (encrypted)
-#ifdef CONFIG_AKIRA_SETTINGS_ENCRYPTION
-    ret = akira_settings_set(AKIRA_SETTINGS_WIFI_PSK_KEY, psk, true);
-    if (ret != 0)
-    {
-        shell_error(sh, "Failed to set PSK: %d", ret);
-        // Try to delete the SSID we just set since operation failed
-        akira_settings_delete(AKIRA_SETTINGS_WIFI_SSID_KEY);
-        return ret;
-    }
-#else
-    shell_warn(sh, "⚠️  Encryption not enabled - PSK will be stored in plaintext!");
-    ret = akira_settings_set(AKIRA_SETTINGS_WIFI_PSK_KEY, psk, false);
-    if (ret != 0)
-    {
-        shell_error(sh, "Failed to set PSK: %d", ret);
-        akira_settings_delete(AKIRA_SETTINGS_WIFI_SSID_KEY);
-        return ret;
-    }
+#ifndef CONFIG_AKIRA_SETTINGS_ENCRYPTION
+    shell_warn(sh, "⚠️  Encryption not enabled - credentials will be stored in plaintext!");
 #endif
+
+    int ret = akira_settings_set(AKIRA_SETTINGS_WIFI_CREDS_KEY, combined, true);
+    if (ret != 0)
+    {
+        shell_error(sh, "Failed to set WiFi credentials: %d", ret);
+        return ret;
+    }
 
     shell_print(sh, "✅ WiFi credentials set successfully");
     shell_print(sh, "   SSID: %s", ssid);

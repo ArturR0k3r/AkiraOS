@@ -1,3 +1,10 @@
+---
+layout: default
+title: AkiraRuntime
+parent: Architecture
+nav_order: 2
+---
+
 # AkiraRuntime Architecture
 
 **Custom WebAssembly runtime for embedded systems.**
@@ -197,45 +204,113 @@ Actual API implementation
 - Branch prediction friendly
 - Planned: static jump table for <50 ns
 
+#### Implementing a Native Function
+
+Every native function follows the same three-step pattern: capability check, pointer translation, implementation.
+
+**1. Registration — WAMR signature string**
+
+Functions are registered in `src/api/akira_export_api.c`:
+
+```c
+{"my_func", (void *)akira_native_my_func, "(i*~)i", NULL},
+//                                          ^^^^
+//                                          WAMR type signature
+```
+
+Signature character reference:
+
+| Char | WASM type | C parameter type | Notes |
+|------|-----------|-----------------|-------|
+| `i`  | i32       | `int32_t` / `uint32_t` | plain integer |
+| `I`  | i64       | `int64_t` / `uint64_t` | 64-bit integer |
+| `f`  | f32       | `float`         | |
+| `F`  | f64       | `double`        | |
+| `*`  | i32 ptr   | `const T *` or `T *` | **See pointer rule below** |
+| `~`  | i32 len   | `uint32_t`      | **Must immediately follow `*`** |
+| `$`  | i32 ptr   | `const char *`  | null-terminated string pointer |
+| `V`  | void      | —               | return type only |
+
+**2. Pointer handling — the `*~` rule**
+
+When a signature contains `*~`, WAMR validates the `[ptr, ptr+len)` range against the WASM linear memory and **converts the pointer to a native address before calling your function**. The C parameter must be an actual pointer type, not `uint32_t`:
+
+```c
+// WRONG — double-converts; wasm_runtime_addr_app_to_native returns NULL
+int akira_native_my_func(wasm_exec_env_t env, uint32_t buf_ptr, uint32_t len) {
+    uint8_t *buf = wasm_runtime_addr_app_to_native(
+        wasm_runtime_get_module_inst(env), buf_ptr);  // ← always NULL for *~ params
+    ...
+}
+
+// RIGHT — WAMR already converted buf_ptr to a native pointer
+int akira_native_my_func(wasm_exec_env_t env, const uint8_t *buf, uint32_t len) {
+    if (!buf || len == 0) return -EINVAL;
+    // use buf directly — it points into WASM linear memory
+    ...
+}
+```
+
+Only use `wasm_runtime_addr_app_to_native()` when the signature uses bare `i` for a pointer (passing a raw WASM address as an integer). The `rf_send` function (`"(*i)i"`) is a historical example of this pattern — bare `*` without `~` does _not_ auto-convert.
+
+**3. Buffer allocation — use PSRAM**
+
+On boards with `CONFIG_AKIRA_PSRAM=y` (e.g. AkiraConsole), `k_malloc()` draws from the ~79 KB DRAM system heap, which BLE and WiFi stacks keep near-exhausted at runtime. Any native function that needs to copy or retain data longer than the call must use `akira_malloc_buffer()` instead:
+
+```c
+#include "lib/mem_helper.h"
+
+// WRONG — fails at runtime when BLE is active
+s->buf = k_malloc(size);
+
+// RIGHT — allocates from PSRAM via shared_multi_heap
+s->buf = akira_malloc_buffer(size);
+// ... use s->buf ...
+akira_free_buffer(s->buf);  // paired free
+```
+
+`akira_malloc_buffer()` calls `shared_multi_heap_alloc(SMH_REG_ATTR_EXTERNAL, size)`, which routes to PSRAM on ESP32-S3 and falls back to DRAM on boards without PSRAM. Always pair it with `akira_free_buffer()`.
+
+**Complete minimal example:**
+
+```c
+// src/api/akira_example_api.c
+
+#include "lib/mem_helper.h"
+#include <runtime/security.h>
+
+// Registered as: {"example_process", akira_native_example_process, "(i*~)i", NULL}
+int akira_native_example_process(wasm_exec_env_t exec_env,
+                                  int32_t mode,
+                                  const uint8_t *data, uint32_t data_len)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MY_CAP, -EACCES);
+
+    if (!data || data_len == 0)
+        return -EINVAL;
+
+    // data is a native pointer — no addr_app_to_native needed
+    uint8_t *work = akira_malloc_buffer(data_len);
+    if (!work)
+        return -ENOMEM;
+
+    memcpy(work, data, data_len);
+    /* ... process work buf ... */
+    akira_free_buffer(work);
+    return 0;
+}
+```
+
 ### Security Layer
 
 Custom capability-based access control system.
 
-**Capability Bits (23 total):**
-```c
-// Hardware Access (Bits 0-4)
-#define AKIRA_CAP_DISPLAY_WRITE  (1U << 0)
-#define AKIRA_CAP_INPUT_READ     (1U << 1)
-#define AKIRA_CAP_INPUT_WRITE    (1U << 2)
-#define AKIRA_CAP_SENSOR_READ    (1U << 3)
-#define AKIRA_CAP_RF_TRANSCEIVE  (1U << 4)
-
-// Communication (Bits 5, 8, 15)
-#define AKIRA_CAP_BLE            (1U << 5)
-#define AKIRA_CAP_NETWORK        (1U << 8)
-#define AKIRA_CAP_HID            (1U << 15)
-
-// Storage (Bits 6-7)
-#define AKIRA_CAP_STORAGE_READ   (1U << 6)
-#define AKIRA_CAP_STORAGE_WRITE  (1U << 7)
-
-// Peripherals (Bits 9-10, 11-14)
-#define AKIRA_CAP_GPIO_READ      (1U << 9)
-#define AKIRA_CAP_GPIO_WRITE     (1U << 10)
-#define AKIRA_CAP_TIMER          (1U << 11)
-#define AKIRA_CAP_UART           (1U << 12)
-#define AKIRA_CAP_I2C            (1U << 13)
-#define AKIRA_CAP_PWM            (1U << 14)
-
-// System & App Control (Bits 16-22)
-#define AKIRA_CAP_APP_CONTROL    (1U << 16)  // Start/stop apps
-#define AKIRA_CAP_IPC            (1U << 17)  // Inter-process communication
-#define AKIRA_CAP_APP_SWITCH     (1U << 18)  // Switch to another app
-#define AKIRA_CAP_MEMORY         (1U << 19)  // Quota-enforced heap allocation
-#define AKIRA_CAP_APP_INFO       (1U << 20)  // Read app status/list
-#define AKIRA_CAP_POWER_READ     (1U << 21)  // Battery level queries
-#define AKIRA_CAP_POWER_CTRL     (1U << 22)  // Sleep mode control
-```
+**Capability Bits:** 36 capabilities in a 64-bit mask (`1ULL << 0` ..
+`1ULL << 35`), defined in `src/runtime/security.h`. The full list — hardware
+access, storage, peripherals, system/app control, and the elevated
+OTA/WiFi-inject/Matter/MQTT capabilities — is documented in
+[security.md](security.md#2-capability-system-akiraruntime-layer), which is
+kept in sync with the header. Do not maintain a second copy here.
 
 **Inline Enforcement:**
 ```c
@@ -428,3 +503,7 @@ stateDiagram-v2
 - [Security Model](security.md)
 - [Native API Reference](../api-reference/native-api.md)
 - [Building WASM Apps](../development/building-apps.md)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

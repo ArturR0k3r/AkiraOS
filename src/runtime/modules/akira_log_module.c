@@ -44,18 +44,22 @@ static void log_error(wasm_exec_env_t exec_env, const char *message) {
     LOG_ERR("WASM: %s", s ? s : "(invalid)");
 }
 
-static NativeSymbol log_symbols[] = {
+#ifdef CONFIG_AKIRA_WASM_API
+#include <akira_native_registry.h>
+
+static const NativeSymbol log_symbols[] = {
     EXPORT_WASM_API_WITH_SIG(log_debug, "($)v"),
     EXPORT_WASM_API_WITH_SIG(log_info,  "($)v"),
     EXPORT_WASM_API_WITH_SIG(log_error, "($)v"),
 };
 
+/* Optional: if WAMR rejects it, only these log imports are unavailable. */
+AKIRA_NATIVE_API_DEFINE_FLAGS(akira_log_module_api, "akira_log", log_symbols,
+                              AKIRA_NATIVE_API_OPTIONAL);
+#endif
+
+/* Deprecated since 1.6: the runtime registers the "akira_log" module through the
+ * native API registry. Kept so existing callers keep linking. */
 int akira_register_log_module(void) {
-    int count = sizeof(log_symbols) / sizeof(NativeSymbol);
-    if (!wasm_runtime_register_natives("akira_log", log_symbols, count)) {
-        LOG_ERR("Failed to register log module");
-        return -1;
-    }
-    LOG_INF("AkiraOS log module registered");
     return 0;
 }

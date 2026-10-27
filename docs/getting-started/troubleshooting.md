@@ -1,3 +1,10 @@
+---
+layout: default
+title: Troubleshooting
+parent: Getting Started
+nav_order: 3
+---
+
 # Troubleshooting Guide
 
 Common issues and their solutions when working with AkiraOS.
@@ -258,8 +265,9 @@ ls -lh myapp.wasm
 
 # Current limit: ~1MB for HTTP uploads
 
-# Check upload endpoint
-curl -X POST -F "file=@myapp.wasm" http://192.168.x.x/upload -v
+# Check the app-install endpoint (raw body; /upload is firmware only)
+curl -X POST --data-binary @myapp.wasm \
+  "http://192.168.x.x/api/apps/install?name=myapp" -v
 ```
 
 ---
@@ -384,7 +392,7 @@ CONFIG_LOG_DEFAULT_LEVEL=4  # DEBUG
 CONFIG_LOG_MAX_LEVEL=4
 
 # Per-module logging
-CONFIG_AKIRA_LOG_LEVEL_DBG=y
+CONFIG_AKIRA_LOG_LEVEL=4   # 0=OFF 1=ERR 2=WRN 3=INF 4=DBG
 CONFIG_WAMR_LOG_LEVEL_DBG=y
 ```
 
@@ -481,3 +489,7 @@ See [SD Card Setup](../hardware/sd-card.md) for full formatting instructions and
 - Check [GitHub Issues](https://github.com/ArturR0k3r/AkiraOS/issues)
 - Ask in [Discussions](https://github.com/ArturR0k3r/AkiraOS/discussions)
 - Review [Architecture Docs](../architecture)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

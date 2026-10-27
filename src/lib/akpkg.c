@@ -733,7 +733,7 @@ int32_t akpkg_inflate(const uint8_t *gz, size_t gz_len,
         return -EIO;
     }
 
-    return (ssize_t)s.out_pos;
+    return (int32_t)s.out_pos;
 }
 
 size_t akpkg_base64_decode(const char *src, size_t src_len,
@@ -1024,13 +1024,19 @@ size_t akpkg_base64_decode(const char *src, size_t src_len,
 }
 
 int akpkg_tar_extract(const uint8_t *tar, size_t tar_len,
-                      const uint8_t **wasm_ptr, size_t *wasm_size,
-                      const char **manifest_ptr, size_t *manifest_size)
+                      const uint8_t **wasm_ptr,       size_t *wasm_size,
+                      const char    **manifest_ptr,   size_t *manifest_size,
+                      const uint8_t **model_ptr,      size_t *model_size,
+                      const uint8_t **dilithium2_ptr, size_t *dilithium2_size)
 {
     *wasm_ptr = NULL;
     *wasm_size = 0;
     *manifest_ptr = NULL;
     *manifest_size = 0;
+    if (model_ptr)       *model_ptr       = NULL;
+    if (model_size)      *model_size      = 0;
+    if (dilithium2_ptr)  *dilithium2_ptr  = NULL;
+    if (dilithium2_size) *dilithium2_size = 0;
 
     size_t pos = 0;
 
@@ -1074,6 +1080,16 @@ int akpkg_tar_extract(const uint8_t *tar, size_t tar_len,
                 *manifest_ptr = (const char *)(tar + pos);
                 *manifest_size = fsize;
             }
+            else if (strcmp(base, "model.tflite") == 0 && model_ptr && model_size)
+            {
+                *model_ptr  = tar + pos;
+                *model_size = fsize;
+            }
+            else if (strcmp(base, "sig.dilithium2") == 0 && dilithium2_ptr && dilithium2_size)
+            {
+                *dilithium2_ptr  = tar + pos;
+                *dilithium2_size = fsize;
+            }
         }
 
         /* Advance past the file data, rounded up to the next tar block. */
@@ -1087,6 +1103,12 @@ int akpkg_tar_extract(const uint8_t *tar, size_t tar_len,
                 (*manifest_ptr) ? "" : "manifest.json");
         return -ENOENT;
     }
+
+    if (model_ptr && *model_ptr)
+        LOG_DBG("akpkg: model.tflite found (%zu B)", *model_size);
+
+    if (dilithium2_ptr && *dilithium2_ptr)
+        LOG_DBG("akpkg: sig.dilithium2 found (%zu B)", *dilithium2_size);
 
     return 0;
 }

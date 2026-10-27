@@ -32,6 +32,9 @@ extern "C"
 /** Maximum length of a single allowed hostname */
 #define MANIFEST_NET_HOST_LEN 64
 
+/** Maximum size of the raw "commands" JSON array captured verbatim from the manifest */
+#define MANIFEST_COMMANDS_JSON_MAX_LEN 512
+
     /**
      * @brief Per-app network egress policy, parsed from manifest "network_policy".
      *
@@ -54,12 +57,20 @@ extern "C"
      */
     typedef struct
     {
-        uint32_t cap_mask;                      /**< Capability bitmask */
+        uint64_t cap_mask;                      /**< Capability bitmask */
         uint32_t memory_quota;                  /**< Memory quota in bytes (0 = default) */
         char name[32];                          /**< Application name */
         char version[16];                       /**< Version string (e.g., "1.0.0") */
         bool valid;                             /**< True if manifest was successfully parsed */
+        bool has_abi;                           /**< True if the "abi" key was present */
+        uint8_t abi_major;                      /**< WASM ABI major the app targets */
+        uint8_t abi_minor;                      /**< WASM ABI minor the app targets */
+        bool has_min_os;                        /**< True if "min_akiraos_version" was present */
+        uint16_t min_os[3];                     /**< min_akiraos_version major.minor.patch */
         akira_manifest_net_policy_t net_policy; /**< Optional per-app network policy */
+        /** Raw "commands" JSON array, verbatim (opaque to firmware, consumed by hub
+         *  dashboard). Defaults to "[]" if absent. */
+        char commands_json[MANIFEST_COMMANDS_JSON_MAX_LEN];
     } akira_manifest_t;
 
     /**
@@ -122,7 +133,7 @@ extern "C"
      * @param capability Capability string (e.g., "display.write")
      * @return Capability mask bit, or 0 if unknown
      */
-    uint32_t akira_capability_str_to_mask(const char *cap);
+    uint64_t akira_capability_str_to_mask(const char *cap);
 
     /**
      * @brief Get capability name from mask bit
@@ -130,7 +141,7 @@ extern "C"
      * @param mask Single capability bit
      * @return Capability string, or NULL if unknown
      */
-    const char *manifest_mask_to_capability(uint32_t mask);
+    const char *manifest_mask_to_capability(uint64_t mask);
 
 #ifdef __cplusplus
 }

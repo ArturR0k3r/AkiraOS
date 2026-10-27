@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Build this product against its pinned AkiraOS. Replace <board> with your board.
+name: product-ci
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: ghcr.io/zephyrproject-rtos/ci:v0.28.6
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: product }
+      - name: West workspace
+        run: west init -l product && west update
+      - name: Build
+        run: west build -b native_sim product     # set your product board
+      # A release job would sign with keys from CI secrets; see docs.

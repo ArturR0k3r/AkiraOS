@@ -307,7 +307,8 @@ int radio_ble_register(void)
     ble_handle.name = "BLE";
     ble_handle.capabilities = RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_SCAN |
                              RADIO_CAP_MESH | RADIO_CAP_ENCRYPTION |
-                             RADIO_CAP_LOW_POWER | RADIO_CAP_MULTICAST;
+                             RADIO_CAP_LOW_POWER | RADIO_CAP_MULTICAST |
+                             RADIO_CAP_MOD_BLE_PHY;
     ble_handle.ops = &ble_radio_ops;
     ble_handle.priv_data = &ble_data;
     ble_handle.state = RADIO_STATE_OFF;

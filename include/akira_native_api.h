@@ -200,43 +200,16 @@ int file_read(const char *filename, void *buffer, int buf_len);
  */
 int file_write(const char *filename, const void *buffer, int buf_len);
 
-/* ===== Input APIs ===== */
-
-/**
- * @brief Read all button states as a bitmask.
+/* ===== Input APIs =====
  *
- * Signature: "()i"
+ * There is currently no button input native API. The runtime registers no
+ * input_* symbol (see src/api/akira_export_api.c), so nothing is declared here.
+ * AKIRA_CAP_INPUT_READ / AKIRA_CAP_INPUT_WRITE remain defined and reserved.
  *
- * @return Bitmask of pressed buttons. Bit N is set when button N is pressed.
- *         Button numbering is platform-defined. For AkiraConsole targets,
- *         include <akiraconsole_native_api.h> for AKIRA_BTN_* constants.
- *
- * Requires: AKIRA_CAP_INPUT_READ capability
- *
- * Example in WASM:
- * @code
- * // With AkiraConsole — include <akiraconsole_native_api.h> for button IDs:
- * int buttons = input_read_buttons();
- * if (buttons & (1 << AKIRA_BTN_A)) {
- *     // Button A is pressed
- * }
- * @endcode
+ * Apps needing button state should use the LVGL input path
+ * (CONFIG_AKIRA_LVGL_INPUT_ZEPHYR), which bridges Zephyr input events into the
+ * display driver.
  */
-int input_read_buttons(void);
-
-/**
- * @brief Check if a specific button is pressed.
- *
- * Signature: "(i)i"
- *
- * @param button_id Platform-specific button index.
- *                  For AkiraConsole, use AKIRA_BTN_* constants from
- *                  <akiraconsole_native_api.h>.
- * @return 1 if button is pressed, 0 if not pressed.
- *
- * Requires: AKIRA_CAP_INPUT_READ capability
- */
-int input_button_pressed(int button_id);
 
 /* ===== GPIO APIs ===== */
 

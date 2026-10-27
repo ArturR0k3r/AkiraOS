@@ -59,28 +59,17 @@ See [Platform Guides](../platform) for supported development kits:
 AkiraOS can run on custom hardware. OEM porting resources:
 
 - [**Porting Guide**](porting-guide.md) — end-to-end walkthrough: BSP files, display, WASM runtime, OTA, and a day-by-day week plan to first running app.
-- [**BSP Template Scaffold**](../../boards/template/) — copy-and-rename starting point with FIXME markers for GPIO, SPI, I2C, PSRAM, display, and flash partitions.
+- [**BSP Template Scaffold**](https://github.com/ArturR0k3r/AkiraOS/tree/main/boards/template) — copy-and-rename starting point with FIXME markers for GPIO, SPI, I2C, PSRAM, display, and flash partitions.
 
 ### Using AkiraOS as a west module
 
-Third-party projects can import AkiraOS without forking:
+Product firmware lives in its own repository and uses AkiraOS as a Zephyr
+module — no fork. Pin an AkiraOS tag in your `west.yml`, pick a service profile,
+add your board, and register capabilities, native APIs and hooks from your own
+code. See the full walkthrough:
 
-```yaml
-# your-project/west.yml
-manifest:
-  projects:
-    - name: akira-os
-      url: https://github.com/your-org/AkiraOS.git
-      revision: v1.5.6
-      path: akira-os
-  self:
-    path: my-app
-```
-
-After `west update`, board definitions, DTS bindings, Kconfig symbols, and the
-full WASM runtime are available automatically — no `-DMODULE_EXT_ROOT` needed.
-
----
+- [**Using AkiraOS as a west module**](west-module.md) — new product repo to a
+  booting image, profiles, custom boards, and the extension points.
 
 ## Schematics & Design Files
 
@@ -94,3 +83,7 @@ Aki hardware designs are open source.
 
 - [Platform Support](../platform) - Software support for boards
 - [Getting Started](../getting-started) - Flashing firmware
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

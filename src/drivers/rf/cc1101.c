@@ -70,10 +70,11 @@ static struct
 {
     bool initialized;
     struct cc1101_config config;
-    rf_mode_t current_mode;
+    radio_mode_t current_mode;
     uint32_t frequency;
     int8_t tx_power;
-    rf_rx_callback_t rx_callback;
+    radio_event_cb_t event_cb;
+    void *event_user_data;
 } g_cc1101 = {0};
 
 static int cc1101_init(void)
@@ -93,22 +94,22 @@ static int cc1101_deinit(void)
     return 0;
 }
 
-static int cc1101_set_mode(rf_mode_t mode)
+static int cc1101_set_mode(radio_mode_t mode)
 {
     // TODO: Send mode command strobe
 
     switch (mode)
     {
-    case RF_MODE_SLEEP:
+    case RADIO_MODE_SLEEP:
         // CC1101_CMD_SPWD
         break;
-    case RF_MODE_STANDBY:
+    case RADIO_MODE_STANDBY:
         // CC1101_CMD_SIDLE
         break;
-    case RF_MODE_RX:
+    case RADIO_MODE_RX:
         // CC1101_CMD_SRX
         break;
-    case RF_MODE_TX:
+    case RADIO_MODE_TX:
         // CC1101_CMD_STX
         break;
     }
@@ -136,7 +137,7 @@ static int cc1101_set_power(int8_t dbm)
     return -3; // Not implemented
 }
 
-static int cc1101_set_modulation(rf_modulation_t mod)
+static int cc1101_set_modulation(radio_modulation_t mod)
 {
     // TODO: Configure MDMCFG2 register
     LOG_DBG("CC1101 set modulation: %d", mod);
@@ -194,42 +195,73 @@ static int cc1101_get_rssi(int16_t *rssi)
     return -3;    // Not implemented
 }
 
-static void cc1101_set_rx_callback(rf_rx_callback_t callback)
+static int cc1101_set_event_callback(radio_handle_t *handle, radio_event_cb_t cb, void *user_data)
 {
-    g_cc1101.rx_callback = callback;
+    ARG_UNUSED(handle);
+    g_cc1101.event_cb = cb;
+    g_cc1101.event_user_data = user_data;
+    return 0;
 }
 
-static const struct akira_rf_driver cc1101_driver = {
-    .name = "CC1101",
-    .type = RF_CHIP_CC1101,
-    .init = cc1101_init,
-    .deinit = cc1101_deinit,
-    .set_mode = cc1101_set_mode,
-    .set_frequency = cc1101_set_frequency,
-    .set_power = cc1101_set_power,
-    .set_modulation = cc1101_set_modulation,
-    .set_bitrate = cc1101_set_bitrate,
-    .tx = cc1101_tx,
-    .rx = cc1101_rx,
-    .get_rssi = cc1101_get_rssi,
-    .set_rx_callback = cc1101_set_rx_callback,
-    .set_spreading_factor = NULL, // Not applicable
-    .set_bandwidth = NULL,
-    .set_coding_rate = NULL,
+static int cc1101_ops_init(radio_handle_t *h)        { ARG_UNUSED(h); return cc1101_init(); }
+static int cc1101_ops_deinit(radio_handle_t *h)      { ARG_UNUSED(h); return cc1101_deinit(); }
+static int cc1101_ops_send(radio_handle_t *h, const uint8_t *d, size_t l) { ARG_UNUSED(h); return cc1101_tx(d, l); }
+static int cc1101_ops_recv(radio_handle_t *h, uint8_t *b, size_t l, uint32_t t) { ARG_UNUSED(h); return cc1101_rx(b, l, t); }
+static int cc1101_ops_set_frequency(radio_handle_t *h, uint32_t hz) { ARG_UNUSED(h); return cc1101_set_frequency(hz); }
+static int cc1101_ops_set_power(radio_handle_t *h, int8_t dbm)      { ARG_UNUSED(h); return cc1101_set_power(dbm); }
+static int cc1101_ops_get_rssi(radio_handle_t *h, int16_t *r)       { ARG_UNUSED(h); return cc1101_get_rssi(r); }
+static int cc1101_ops_set_mode(radio_handle_t *h, radio_mode_t m)   { ARG_UNUSED(h); return cc1101_set_mode(m); }
+static int cc1101_ops_set_modulation(radio_handle_t *h, radio_modulation_t m) { ARG_UNUSED(h); return cc1101_set_modulation(m); }
+static int cc1101_ops_set_bitrate(radio_handle_t *h, uint32_t bps)  { ARG_UNUSED(h); return cc1101_set_bitrate(bps); }
+
+static const radio_ops_t cc1101_ops = {
+    .init               = cc1101_ops_init,
+    .deinit             = cc1101_ops_deinit,
+    .send               = cc1101_ops_send,
+    .recv               = cc1101_ops_recv,
+    .set_event_callback = cc1101_set_event_callback,
+    .set_frequency      = cc1101_ops_set_frequency,
+    .set_power          = cc1101_ops_set_power,
+    .get_rssi           = cc1101_ops_get_rssi,
+    .set_mode           = cc1101_ops_set_mode,
+    .set_modulation     = cc1101_ops_set_modulation,
+    .set_bitrate        = cc1101_ops_set_bitrate,
+};
+
+static radio_handle_t cc1101_handle = {
+    .type         = RADIO_TYPE_SUBGHZ,
+    .name         = "CC1101",
+    .capabilities = RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_CCA | RADIO_CAP_RAW_MODE |
+                    RADIO_CAP_LOW_POWER | RADIO_CAP_BAND_SUBGHZ |
+                    RADIO_CAP_MOD_FSK | RADIO_CAP_MOD_OOK | RADIO_CAP_MOD_MSK,
+    .ops          = &cc1101_ops,
 };
 
 int cc1101_init_with_config(const struct cc1101_config *config)
 {
-    if (!config)
-    {
+    if (!config) {
         return -1;
     }
-
     memcpy(&g_cc1101.config, config, sizeof(g_cc1101.config));
     return cc1101_init();
 }
 
-const struct akira_rf_driver *cc1101_get_driver(void)
+radio_handle_t *cc1101_get_handle(void)
 {
-    return &cc1101_driver;
+    return &cc1101_handle;
 }
+
+#ifdef CONFIG_AKIRA_CC1101
+static int cc1101_auto_register(void)
+{
+    int ret = radio_manager_register(&cc1101_handle);
+    if (ret < 0 && ret != -EALREADY) {
+        LOG_ERR("Failed to register CC1101: %d", ret);
+        return ret;
+    }
+    LOG_INF("CC1101 registered with radio_manager");
+    return 0;
+}
+
+SYS_INIT(cc1101_auto_register, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
+#endif /* CONFIG_AKIRA_CC1101 */

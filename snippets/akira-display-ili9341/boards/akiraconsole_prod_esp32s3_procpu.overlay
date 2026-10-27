@@ -1,0 +1,50 @@
+/*
+ * ILI9341 overlay for AkiraConsole Production ESP32-S3.
+ *
+ * Applied by the akira-display-ili9341 snippet (west build -S akira-display-ili9341).
+ *
+ * Overrides the default zephyr,display (ST7789V) with the akira,ili9341 node
+ * and explicitly disables the ST7789V and MIPI-DBI nodes so no stray driver
+ * can bind to them (even with CONFIG_DT_HAS_SITRONIX_ST7789V_ENABLED=y).
+ *
+ * Hardware (CL28CS1046-40A 2.8" IPS 320x240):
+ *   DC  = GPIO9  (ACTIVE_HIGH)
+ *   RST = TCA6408 P2 (ACTIVE_LOW) — I2C GPIO expander U6
+ *   CS  = GPIO10 = SPI2 cs-gpios[1] (ACTIVE_LOW)
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/* Override chosen display */
+/ {
+	chosen {
+		zephyr,display = &akira_ili9341_prod;
+	};
+};
+
+/*
+ * Explicitly disable the ST7789V node and its MIPI-DBI parent.
+ * This ensures CONFIG_DT_HAS_SITRONIX_ST7789V_ENABLED resolves to 0 and
+ * no Zephyr MIPI-DBI driver attempts to claim GPIO9 (DC) or TCA6408 P2 (RST).
+ */
+&mipi_dbi_prod {
+	status = "disabled";
+};
+
+&st7789v_prod {
+	status = "disabled";
+};
+
+/* ILI9341 direct-SPI node — CS is cs-gpios[1] = GPIO10 */
+&spi2 {
+	akira_ili9341_prod: akira_ili9341@1 {
+		compatible        = "akira,ili9341";
+		reg               = <1>;                           /* cs-gpios[1] = GPIO10 */
+		spi-max-frequency = <10000000>;                    /* 10 MHz conservative  */
+		dc-gpios          = <&gpio0 9  GPIO_ACTIVE_HIGH>;  /* TFT_DC  = GPIO9      */
+		reset-gpios       = <&tca6408 2 GPIO_ACTIVE_LOW>;  /* TFT_RST = TCA6408 P2 */
+		width             = <320>;
+		height            = <240>;
+		status            = "okay";
+	};
+};

@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Per-board AkiraOS HARDWARE: buses, PSRAM/memory, SoC tuning, storage and the
+# flash/DTS layout, for every board AkiraOS supports out of the box. AkiraOS
+# SERVICES are chosen separately by a profile (akira-profile-*); the reference
+# firmware pairs this with akira-reference.
+#
+# Applications apply it by setting AKIRA_SNIPPETS before find_package(Zephyr):
+#   set(AKIRA_SNIPPETS akira-board)
+# Snippets passed with `west build -S` are applied after it and override it.
+#
+# Board keys are ${BOARD}${BOARD_QUALIFIERS}. build.sh reads the
+# "# BOARD_ZEPHYR:" headers of boards/*.conf in this directory.
+name: akira-board
+boards:
+  akiraconsole/esp32s3/procpu:
+    append:
+      EXTRA_CONF_FILE: boards/akiraconsole_esp32s3_procpu.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/akiraconsole_esp32s3_procpu.overlay
+  akiraconsole_prod/esp32s3/procpu:
+    append:
+      EXTRA_CONF_FILE: boards/akiraconsole_prod_esp32s3_procpu.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/akiraconsole_prod_esp32s3_procpu.overlay
+  b_u585i_iot02a/stm32u585xx:
+    append:
+      EXTRA_CONF_FILE: boards/b_u585i_iot02a.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/b_u585i_iot02a.overlay
+  esp32_devkitc/esp32/procpu:
+    append:
+      EXTRA_CONF_FILE: boards/esp32_devkitc_procpu.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/esp32_devkitc_procpu.overlay
+  esp32c3_devkitm/esp32c3:
+    append:
+      EXTRA_CONF_FILE: boards/esp32c3_devkitm.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/esp32c3_devkitm.overlay
+  esp32c6_devkitc/esp32c6/hpcore:
+    append:
+      EXTRA_CONF_FILE: boards/esp32c6_devkitc_esp32c6_hpcore.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/esp32c6_devkitc_esp32c6_hpcore.overlay
+  esp32h2_devkitm/esp32h2:
+    append:
+      EXTRA_CONF_FILE: boards/esp32h2_devkitm_esp32h2.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/esp32h2_devkitm_esp32h2.overlay
+  esp32s3_devkitm/esp32s3/procpu:
+    append:
+      EXTRA_CONF_FILE: boards/esp32s3_devkitm_esp32s3_procpu.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/esp32s3_devkitm_esp32s3_procpu.overlay
+  esp32s3_super_mini/esp32s3/procpu:
+    append:
+      EXTRA_CONF_FILE: boards/esp32s3_super_mini_esp32s3_procpu.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/esp32s3_super_mini_esp32s3_procpu.overlay
+  native_sim/native:
+    append:
+      EXTRA_CONF_FILE: boards/native_sim.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/native_sim.overlay
+  nrf54l15dk/nrf54l15/cpuapp:
+    append:
+      EXTRA_CONF_FILE: boards/nrf54l15dk_nrf54l15_cpuapp.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/nrf54l15dk_nrf54l15_cpuapp.overlay
+  nucleo_h743zi/stm32h743xx:
+    append:
+      EXTRA_CONF_FILE: boards/nucleo_h743zi.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/nucleo_h743zi.overlay
+  nucleo_l476rg/stm32l476xx:
+    append:
+      EXTRA_CONF_FILE: boards/nucleo_l476rg.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/nucleo_l476rg.overlay
+  rpi_pico/rp2040:
+    append:
+      EXTRA_CONF_FILE: boards/rpi_pico.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/rpi_pico.overlay
+  rpi_pico2/rp2350a/m33:
+    append:
+      EXTRA_CONF_FILE: boards/rpi_pico2_rp2350a_m33.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/rpi_pico2_rp2350a_m33.overlay
+  steval_stwinbx1/stm32u585xx:
+    append:
+      EXTRA_CONF_FILE: boards/steval_stwinbx1.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/steval_stwinbx1.overlay
+  xiao_esp32c6/esp32c6/hpcore:
+    append:
+      EXTRA_CONF_FILE: boards/xiao_esp32c6_esp32c6_hpcore.conf
+      EXTRA_DTC_OVERLAY_FILE: boards/xiao_esp32c6_esp32c6_hpcore.overlay

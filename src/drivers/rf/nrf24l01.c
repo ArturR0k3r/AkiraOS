@@ -5,6 +5,7 @@
  */
 
 #include "nrf24l01.h"
+#include "connectivity/radio_interface.h"
 #include <zephyr/logging/log.h>
 #include <string.h>
 
@@ -298,3 +299,36 @@ int nrf24_power_up(struct nrf24_config *config)
     uint8_t cfg = NRF24_CONFIG_EN_CRC | NRF24_CONFIG_CRCO | NRF24_CONFIG_PWR_UP;
     return nrf24_write_register(config, NRF24_REG_CONFIG, cfg);
 }
+
+/* =========================================================================
+ * radio_manager stub — ops not yet implemented, all return -ENOSYS via NULL
+ * ========================================================================= */
+
+static radio_handle_t nrf24l01_handle = {
+    .type         = RADIO_TYPE_NONE,
+    .name         = "NRF24L01",
+    .capabilities = RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_AUTO_ACK |
+                    RADIO_CAP_RAW_MODE | RADIO_CAP_LOW_POWER |
+                    RADIO_CAP_BAND_2GHZ4 | RADIO_CAP_MOD_FSK,
+    .ops          = NULL,
+};
+
+radio_handle_t *nrf24l01_get_handle(void)
+{
+    return &nrf24l01_handle;
+}
+
+#ifdef CONFIG_AKIRA_NRF24L01
+static int nrf24l01_auto_register(void)
+{
+    int ret = radio_manager_register(&nrf24l01_handle);
+    if (ret < 0 && ret != -EALREADY) {
+        LOG_ERR("Failed to register NRF24L01: %d", ret);
+        return ret;
+    }
+    LOG_INF("NRF24L01 registered with radio_manager (stub)");
+    return 0;
+}
+
+SYS_INIT(nrf24l01_auto_register, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
+#endif /* CONFIG_AKIRA_NRF24L01 */

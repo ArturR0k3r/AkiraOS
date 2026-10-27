@@ -9,6 +9,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* Registry API (akira_capability_*). Included by relative path so code that
+ * only has the AkiraOS src/ include paths (e.g. AkiraPlatform) still builds. */
+#include "../../include/akira_capability.h"
+
 /* WAMR headers are optional; provide lightweight typedefs when WAMR is not enabled */
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
@@ -24,71 +28,147 @@ extern "C" {
 #endif
 
 
-#define AKIRA_CAP_DISPLAY_WRITE (1U << 0)
-#define AKIRA_CAP_INPUT_READ (1U << 1)
-#define AKIRA_CAP_INPUT_WRITE (1U << 2)
-#define AKIRA_CAP_SENSOR_READ (1U << 3)
-#define AKIRA_CAP_RF_TRANSCEIVE (1U << 4)
-#define AKIRA_CAP_BLE        (1U << 5)  /* BLE app service: init, advertise, GATT */
-#define AKIRA_CAP_STORAGE_READ (1U << 6)
-#define AKIRA_CAP_STORAGE_WRITE (1U << 7)
-#define AKIRA_CAP_NETWORK (1U << 8)
-#define AKIRA_CAP_GPIO_READ (1U << 9)
-#define AKIRA_CAP_GPIO_WRITE (1U << 10)
-#define AKIRA_CAP_TIMER     (1U << 11)
-#define AKIRA_CAP_UART      (1U << 12)
-#define AKIRA_CAP_I2C       (1U << 13)
-#define AKIRA_CAP_PWM       (1U << 14)
+#define AKIRA_CAP_DISPLAY_WRITE (1ULL << 0)
+#define AKIRA_CAP_INPUT_READ    (1ULL << 1)
+#define AKIRA_CAP_INPUT_WRITE   (1ULL << 2)
+#define AKIRA_CAP_SENSOR_READ   (1ULL << 3)
+#define AKIRA_CAP_RF_TRANSCEIVE (1ULL << 4)
+#define AKIRA_CAP_BLE           (1ULL << 5)  /* BLE app service: init, advertise, GATT */
+#define AKIRA_CAP_STORAGE_READ  (1ULL << 6)
+#define AKIRA_CAP_STORAGE_WRITE (1ULL << 7)
+#define AKIRA_CAP_NETWORK       (1ULL << 8)
+#define AKIRA_CAP_GPIO_READ     (1ULL << 9)
+#define AKIRA_CAP_GPIO_WRITE    (1ULL << 10)
+#define AKIRA_CAP_TIMER         (1ULL << 11)
+#define AKIRA_CAP_UART          (1ULL << 12)
+#define AKIRA_CAP_I2C           (1ULL << 13)
+#define AKIRA_CAP_PWM           (1ULL << 14)
 /* Elevated privilege — must not be granted to untrusted apps by default */
-#define AKIRA_CAP_HID         (1U << 15)
-#define AKIRA_CAP_APP_CONTROL (1U << 16)
-#define AKIRA_CAP_IPC         (1U << 17)
+#define AKIRA_CAP_HID           (1ULL << 15)
+#define AKIRA_CAP_APP_CONTROL   (1ULL << 16)
+#define AKIRA_CAP_IPC           (1ULL << 17)
 /* Lightweight handoff: start another app and exit self — no stop/pause of
  * arbitrary apps.  Games and utilities can use this without full supervisor
  * power.  Manifest string: "app.switch" */
-#define AKIRA_CAP_APP_SWITCH  (1U << 18)
+#define AKIRA_CAP_APP_SWITCH    (1ULL << 18)
 /* Quota-enforced heap allocation from WASM-accessible memory.
  * Required to call mem_alloc / mem_free native APIs.
  * Manifest string: "memory" */
-#define AKIRA_CAP_MEMORY      (1U << 19)
+#define AKIRA_CAP_MEMORY        (1ULL << 19)
 /* Read-only app identity: get own name, list apps, query status.
  * Does NOT grant start/stop authority — use app.control for that.
  * Manifest string: "app.info" */
-#define AKIRA_CAP_APP_INFO    (1U << 20)
+#define AKIRA_CAP_APP_INFO      (1ULL << 20)
 /* Read-only power & battery queries (mode, battery level/status).
  * Manifest string: "power.read" */
-#define AKIRA_CAP_POWER_READ  (1U << 21)
+#define AKIRA_CAP_POWER_READ    (1ULL << 21)
 /* Full power control: set sleep mode, configure wake sources.
  * Elevated privilege — do not grant to untrusted apps.
  * Manifest string: "power.control" */
-#define AKIRA_CAP_POWER_CTRL  (1U << 22)
+#define AKIRA_CAP_POWER_CTRL    (1ULL << 22)
 /* Persistent key-value settings read/write (NVS-backed).
  * Manifest string: "settings.*" */
-#define AKIRA_CAP_SETTINGS    (1U << 23)
+#define AKIRA_CAP_SETTINGS      (1ULL << 23)
 /* ADC channel read (raw and millivolt).
  * Manifest string: "adc" */
-#define AKIRA_CAP_ADC         (1U << 24)
+#define AKIRA_CAP_ADC           (1ULL << 24)
 /* Feed/pet the system watchdog from a WASM app.
  * Manifest string: "wdt" */
-#define AKIRA_CAP_WDT         (1U << 25)
+#define AKIRA_CAP_WDT           (1ULL << 25)
 /* Filesystem read access (app sandbox only).
  * Manifest string: "fs.read" */
-#define AKIRA_CAP_FS_READ     (1U << 26)
+#define AKIRA_CAP_FS_READ       (1ULL << 26)
 /* Filesystem write/delete/mkdir access (app sandbox only).
  * Manifest string: "fs.write" */
-#define AKIRA_CAP_FS_WRITE    (1U << 27)
+#define AKIRA_CAP_FS_WRITE      (1ULL << 27)
 /* Cryptographic operations (hash, encrypt, random).
  * Manifest string: "crypto" */
-#define AKIRA_CAP_CRYPTO      (1U << 28)
+#define AKIRA_CAP_CRYPTO        (1ULL << 28)
 /* Real-time clock read access.
  * Manifest string: "rtc.read" */
-#define AKIRA_CAP_RTC_READ    (1U << 29)
+#define AKIRA_CAP_RTC_READ      (1ULL << 29)
 /* Real-time clock write / alarm set.
  * Manifest string: "rtc.write" */
-#define AKIRA_CAP_RTC_WRITE   (1U << 30)
+#define AKIRA_CAP_RTC_WRITE     (1ULL << 30)
 /* Trigger OTA update (elevated privilege).
  * Manifest string: "ota.trigger" */
-#define AKIRA_CAP_OTA_TRIGGER (1U << 31)
+#define AKIRA_CAP_OTA_TRIGGER   (1ULL << 31)
+/* On-device ML inference via TFLite Micro (AkiraClaw).
+ * Manifest string: "ai.infer" */
+#define AKIRA_CAP_AIINFER       (1ULL << 32)
+/* Matter/Thread co-processor IPC bridge.
+ * Manifest string: "matter" */
+#define AKIRA_CAP_MATTER        (1ULL << 33)
+/* 802.11 raw management frame injection (deauth, disassoc).
+ * Elevated privilege — requires explicit user consent.
+ * Manifest string: "wifi.inject" */
+#define AKIRA_CAP_WIFI_INJECT   (1ULL << 34)
+
+/* MQTT publish/subscribe + Home Assistant discovery.
+ * Manifest string: "mqtt" */
+#define AKIRA_CAP_MQTT          (1ULL << 35)
+
+/* BLE observer role: scan for nearby advertisers (no GATT connect).
+ * Manifest string: "ble.scan" */
+#define AKIRA_CAP_BLE_SCAN      (1ULL << 36)
+/* BLE rotating raw-advertiser (pairing-popup spam/spoof presets).
+ * Elevated privilege — broadcasts affect nearby devices, do not grant
+ * to untrusted apps by default. Manifest string: "ble.spam" */
+#define AKIRA_CAP_BLE_SPAM      (1ULL << 37)
+
+/* AkiraMesh: join the mesh, send/broadcast frames, enumerate nodes.
+ * Elevated privilege — the app drives a shared radio and can reach every
+ * device in range. Manifest string: "mesh" */
+#define AKIRA_CAP_MESH          (1ULL << 38)
+
+/* AkiraSync: open a distributed-ordering session and submit/consume events.
+ * Rides on AKIRA_CAP_MESH transport but is granted separately so an app can
+ * consume ordered state without being able to inject raw mesh frames.
+ * Manifest string: "sync" */
+#define AKIRA_CAP_SYNC          (1ULL << 39)
+
+/* Highest CORE capability bit currently defined (AKIRA_CAP_SYNC = bit 39).
+ * Core bit numbers are frozen; new core capabilities take the next free bit up
+ * to AKIRA_CAP_CORE_LAST_BIT and need a registry entry in security.c. Product
+ * capabilities live in bits 48-63 (AKIRA_CAPABILITY_DEFINE). */
+#define AKIRA_CAP_MAX_BIT       39
+
+/* Union of the CORE capability bits defined in this header.
+ * Use akira_capability_known_mask() for the set the runtime grants: it also
+ * covers product capabilities and never includes unassigned bits. */
+#define AKIRA_CAP_ALL_KNOWN     ((AKIRA_CAP_MAX_BIT >= 63) ? UINT64_MAX \
+                                 : ((1ULL << (AKIRA_CAP_MAX_BIT + 1)) - 1ULL))
+
+/* CORE capabilities that let an app affect the world outside the sandbox,
+ * persist state, or attack the RF/network environment. Granting any of these
+ * to an unattested (unsigned) app is security-sensitive and is audit-logged.
+ * The registry marks these entries privileged; akira_capability_privileged_mask()
+ * adds product capabilities flagged AKIRA_CAPABILITY_PRIVILEGED. */
+#define AKIRA_CAP_PRIVILEGED  ( \
+        AKIRA_CAP_RF_TRANSCEIVE | AKIRA_CAP_BLE | AKIRA_CAP_NETWORK | \
+        AKIRA_CAP_WIFI_INJECT | AKIRA_CAP_OTA_TRIGGER | AKIRA_CAP_HID | \
+        AKIRA_CAP_STORAGE_WRITE | AKIRA_CAP_FS_WRITE | AKIRA_CAP_SETTINGS | \
+        AKIRA_CAP_CRYPTO | AKIRA_CAP_POWER_CTRL | AKIRA_CAP_MATTER | \
+        AKIRA_CAP_MQTT | AKIRA_CAP_WDT | AKIRA_CAP_MESH )
+
+/**
+ * @brief Sanitize a capability mask that came from an app-supplied manifest.
+ *
+ * The manifest is NOT cryptographically bound to a trusted signer on a stock
+ * build, so an app can request any capabilities it likes (including the "*"
+ * wildcard). This clamps the request:
+ *   - always masks to AKIRA_CAP_ALL_KNOWN (drops undefined/high bits);
+ *   - when @p attested is false, additionally ANDs with the operator-configured
+ *     allow-mask for unsigned apps (CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK) so a
+ *     production board can refuse to hand privileged capabilities to code it
+ *     cannot attest.
+ * Privileged grants to unattested apps are audit-logged by the caller.
+ *
+ * @param requested  Capability bits parsed from the manifest.
+ * @param attested   True if the app passed a real signature/allowlist gate.
+ * @return The effective capability mask to grant.
+ */
+uint64_t akira_capability_sanitize_app_mask(uint64_t requested, bool attested);
 
 /*
  * Capability check macro using security subsystem.
@@ -127,26 +207,25 @@ extern "C" {
     } while (0)
 
 /* Central capability guard used by native APIs and runtime */
-bool akira_security_check_exec(wasm_exec_env_t exec_env, uint32_t capability);
-bool akira_security_check_native(uint32_t capability);
+bool akira_security_check_exec(wasm_exec_env_t exec_env, uint64_t capability);
+bool akira_security_check_native(uint64_t capability);
 
 /* Convenience wrapper used by native API implementations (non-wasm callers) */
-bool akira_security_check(uint32_t capability);
+bool akira_security_check(uint64_t capability);
 
 /* Get the current app's capability mask from exec_env - for use with inline macros */
-uint32_t akira_security_get_cap_mask(wasm_exec_env_t exec_env);
+uint64_t akira_security_get_cap_mask(wasm_exec_env_t exec_env);
 
-/* Capability string to mask helper (public so runtime can parse manifests).
- * This maps capability strings like "display.write" -> AKIRA_CAP_DISPLAY_WRITE
- */
-uint32_t akira_capability_str_to_mask(const char *cap);
-/* Mask to string helper for logging (returns first matching capability string) */
-char* akira_capability_mask_to_str(uint32_t cap);
+/* Capability string to mask: declared in akira_capability.h (registry lookup). */
+
+/* Mask to string helper for logging: name of the lowest registered bit set, or
+ * "unknown". Prefer akira_capability_name(), which returns a const string. */
+char* akira_capability_mask_to_str(uint64_t cap);
 
 /* Runtime helpers used by security implementation */
 #include <stddef.h>
 #include <stdint.h>
-uint32_t akira_runtime_get_cap_mask_for_module_inst(wasm_module_inst_t inst);
+uint64_t akira_runtime_get_cap_mask_for_module_inst(wasm_module_inst_t inst);
 int akira_runtime_get_name_for_module_inst(wasm_module_inst_t inst, char *buf, size_t buflen);
 
 

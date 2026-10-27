@@ -197,7 +197,7 @@ Expected boot output:
 
 ```
 *** Booting Zephyr OS build v4.3.0 ***
-[00:00:00.123] <inf> main: AkiraOS v1.5.8 starting...
+[00:00:00.123] <inf> main: AkiraOS v1.6.5 starting...
 [00:00:00.234] <inf> runtime: WAMR initialized
 [00:00:00.345] <inf> connectivity: WiFi stack ready
 [00:00:00.456] <inf> main: System initialized successfully
@@ -230,8 +230,10 @@ cd ~/akira-workspace/AkiraOS/AkiraSDK/wasm_apps
 ./build.sh hello_world
 # produces bin/hello_world.wasm
 
-# Upload to device over HTTP (device must be on WiFi)
-curl -X POST -F "file=@bin/hello_world.wasm" http://<device-ip>/upload
+# Install to device over HTTP (device must be on WiFi).
+# App binary is streamed raw to the app-manager route; /upload is firmware only.
+curl -X POST --data-binary @bin/hello_world.wasm \
+  "http://<device-ip>/api/apps/install?name=hello_world"
 ```
 
 ### Perform an OTA firmware update
@@ -338,12 +340,14 @@ pip3 install pyelftools
 west update -v   # retry with verbose output
 ```
 
-### Build fails with submodule errors
+### Build fails because WAMR, TFLite Micro or AkiraSDK is missing
+
+WAMR and TFLite Micro are west projects; AkiraSDK is a git submodule:
 
 ```bash
-cd ~/akira-workspace/AkiraOS
-git submodule update --init --recursive --force
-git submodule status  # verify
+cd ~/akira-workspace
+west update wasm-micro-runtime tflite-micro
+cd AkiraOS && git submodule update --init AkiraSDK
 ```
 
 ### "ZEPHYR_BASE not set" error

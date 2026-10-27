@@ -74,6 +74,23 @@ BT_GATT_SERVICE_DEFINE(echo_svc,
     BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 );
 
+int bt_echo_send(const uint8_t *data, size_t len)
+{
+    if (data == NULL || len == 0)
+    {
+        return -EINVAL;
+    }
+
+    /* attrs[2] is the characteristic value attribute (0=primary service,
+     * 1=characteristic declaration, 2=value, 3=CCC). */
+    int rc = bt_gatt_notify(NULL, &echo_svc.attrs[2], data, (uint16_t)len);
+    if (rc < 0)
+    {
+        LOG_ERR("Echo send failed: %d", rc);
+    }
+    return rc;
+}
+
 int bt_echo_init(void)
 {
     LOG_INF("BT Echo service %s", g_enabled ? "enabled" : "disabled");
@@ -92,6 +109,13 @@ bool bt_echo_is_enabled(void)
 }
 
 #else
+
+int bt_echo_send(const uint8_t *data, size_t len)
+{
+    ARG_UNUSED(data);
+    ARG_UNUSED(len);
+    return -ENOTSUP;
+}
 
 int bt_echo_init(void)
 {

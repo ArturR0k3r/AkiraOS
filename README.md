@@ -8,7 +8,7 @@
 
 Every app is a sandboxed `.wasm` module. Deploy over-the-air. No firmware flash required.
 
-[![Version](https://img.shields.io/badge/version-1.5.x-7f5af0?style=flat-square)](https://github.com/ArturR0k3r/AkiraOS/releases)
+[![Version](https://img.shields.io/badge/version-1.6.x-7f5af0?style=flat-square)](https://github.com/ArturR0k3r/AkiraOS/releases)
 [![Zephyr](https://img.shields.io/badge/Zephyr-4.3.0-3b82f6?style=flat-square)](https://zephyrproject.org)
 [![WAMR](https://img.shields.io/badge/WAMR-2.x-22c55e?style=flat-square)](https://github.com/bytecodealliance/wasm-micro-runtime)
 [![License](https://img.shields.io/badge/license-Apache%202.0-22c55e?style=flat-square)](LICENSE)
@@ -129,11 +129,14 @@ Install the [AkiraSDK toolchain](AkiraSDK/README.md) (clang/wasi-sdk used as a c
 
 ```bash
 # Build your first app
-cd AkiraSDK/wasm_apps/hello_world
+cd AkiraSDK/wasm_apps/generic/hello_world
 ../../build_wasm_app.sh -o hello_world.wasm main.c
 
-# Deploy to a running device over WiFi — no reflash needed
-curl -X POST -F "file=@hello_world.wasm" http://<device-ip>/upload
+# Deploy to a running device over WiFi — no reflash needed.
+# The app binary is streamed raw to the app-manager install route
+# (/upload is the firmware-flash endpoint, not for apps).
+curl -X POST --data-binary @hello_world.wasm \
+  "http://<device-ip>/api/apps/install?name=hello_world"
 ```
 
 **Example apps in `AkiraSDK/wasm_apps/`:**
@@ -159,10 +162,11 @@ Full API reference → [docs.akiraos.dev/api-reference](https://docs.akiraos.dev
 | Platform | Status | Architecture | Tier | Notes |
 |----------|--------|-------------|------|-------|
 | **AkiraConsole** | ✅ Supported | Xtensa LX7 | Tier 1 | ESP32-S3 · Custom HW |
-| ESP32 | ✅ Supported | Xtensa LX7 / RISC-V | Tier 1 | -S3 (LX7) · -H2 · -C6 (RISC-V) |
+| ESP32 | ✅ Supported | Xtensa LX7 / RISC-V | Tier 1 | -S3 (LX7) · -C3 · -C6 · -H2 (RISC-V). C6/H2 build but `build.sh` cannot flash them yet. |
 | native\_sim | ✅ Supported | Host (x86\_64) | Tier 1 | Fast iteration, no hardware needed |
 | nRF54L15 | ✅ Supported | ARM Cortex-M33 | Tier 2 | BLE 5.4 · Nordic |
-| STM32 | ✅ Supported | ARM Cortex-M | Tier 2 | B-U585I-IOT02A · STEVAL-STWINBX1 · H753 · H723 |
+| STM32 | ✅ Supported | ARM Cortex-M | Tier 2 | B-U585I-IOT02A · STEVAL-STWINBX1 · Nucleo-L476RG. Nucleo-H743ZI builds but `build.sh` cannot flash it. |
+| RP2040 / RP2350 | 🧪 Experimental | ARM Cortex-M0+/M33 | Tier 3 | Raspberry Pi Pico / Pico 2. Build only — flash the UF2 manually. |
 
 
 **Recommended:** ESP32-S3 DevKitM — or [AkiraConsole V3](https://akiraos.dev/akiraconsole) (coming to CrowdSupply).
@@ -187,7 +191,7 @@ The reference hardware platform for AkiraOS.
 
 ---
 
-## What's in v1.5.x
+## What's in v1.6.x
 
 125 commits · 350 files · ~40,600 lines of changes
 
@@ -219,8 +223,16 @@ Key config files: `prj.conf` · `boards/*.conf` · `boards/*.overlay` · `west.y
 
 1. **WASM Sandboxing** — no direct memory access to kernel space, stack/heap isolated per app
 2. **Capability Guard** — inline checks on every native API call, manifest-declared permissions
-3. **Secure Boot** — MCUboot validates firmware signature, WAMR validates module checksum
-4. **OTA Security** — SHA-256 integrity, atomic updates, rollback on failure
+3. **App Signing** — Ed25519 / RSA-2048 module signature verification is available and enforced
+   when `CONFIG_AKIRA_REQUIRE_SIGNED_APPS=y` (see the app-signing docs)
+4. **MCUboot** — dual-slot A/B updates with SHA-256 image integrity
+
+> **Hardening status (pre-1.x).** Firmware **authenticity** is not yet enforced on the ESP32
+> family: MCUboot validates a SHA-256 *integrity* hash, but ESP32 images are currently built
+> **unsigned** (STM32 boards sign with MCUboot's public demo key). ESP32 flash encryption and
+> Secure Boot V2 are not yet configured, and automatic boot-failure rollback is not yet wired
+> into a shipping board. Treat the secure-boot / signed-OTA / anti-rollback story as **in
+> progress** — see the production-readiness roadmap. Do not rely on it for a fielded device yet.
 
 [Security architecture →](https://docs.akiraos.dev/architecture/security.html)
 

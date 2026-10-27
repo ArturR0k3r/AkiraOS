@@ -7,6 +7,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/net/socket.h>
+#include <zephyr/net/tls_credentials.h>
 #include <zephyr/net/websocket.h>
 #include <zephyr/net/http/client.h>
 #include <string.h>
@@ -542,8 +543,24 @@ static void ws_client_thread_fn(void *p1, void *p2, void *p3)
     struct sockaddr_in *addr4 = (struct sockaddr_in *)addr_res->ai_addr;
     addr4->sin_port = htons(port);
 
-    /* Create socket */
-    conn->sock_fd = zsock_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    /* Create socket. A wss:// URL must go over TLS — never silently downgrade
+     * to cleartext. If TLS socket support is not compiled in, refuse the
+     * connection loudly instead of leaking data in the clear. */
+    if (use_tls)
+    {
+#if defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS)
+        conn->sock_fd = zsock_socket(AF_INET, SOCK_STREAM, IPPROTO_TLS_1_2);
+#else
+        LOG_ERR("wss:// requested but TLS is not enabled; refusing to connect in cleartext");
+        zsock_freeaddrinfo(addr_res);
+        conn->state = WS_CLIENT_ERROR;
+        return;
+#endif
+    }
+    else
+    {
+        conn->sock_fd = zsock_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    }
     if (conn->sock_fd < 0)
     {
         LOG_ERR("Socket creation failed");
@@ -551,6 +568,25 @@ static void ws_client_thread_fn(void *p1, void *p2, void *p3)
         conn->state = WS_CLIENT_ERROR;
         return;
     }
+
+#if defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS)
+    if (use_tls)
+    {
+        static const sec_tag_t sec_tags[] = {CONFIG_AKIRA_WS_TLS_SEC_TAG};
+        if (zsock_setsockopt(conn->sock_fd, SOL_TLS, TLS_SEC_TAG_LIST,
+                             sec_tags, sizeof(sec_tags)) < 0 ||
+            zsock_setsockopt(conn->sock_fd, SOL_TLS, TLS_HOSTNAME,
+                             host, strlen(host) + 1) < 0)
+        {
+            LOG_ERR("Failed to configure TLS for wss:// (errno %d); refusing cleartext", errno);
+            close(conn->sock_fd);
+            conn->sock_fd = -1;
+            zsock_freeaddrinfo(addr_res);
+            conn->state = WS_CLIENT_ERROR;
+            return;
+        }
+    }
+#endif
 
     /* Connect */
     ret = zsock_connect(conn->sock_fd, (struct sockaddr *)addr4,

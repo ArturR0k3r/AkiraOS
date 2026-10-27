@@ -1,0 +1,11 @@
+sample:
+  name: AkiraOS out-of-tree product
+  description: Product firmware that consumes AkiraOS as a Zephyr module
+tests:
+  akiraos.sample.out_of_tree_product:
+    build_only: true
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    tags: akiraos module

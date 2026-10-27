@@ -35,13 +35,13 @@ LOG_MODULE_REGISTER(akira_power_api, CONFIG_AKIRA_LOG_LEVEL);
 
 int akira_native_power_get_mode(wasm_exec_env_t exec_env)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_POWER_READ, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_POWER_READ, -EPERM);
     return (int)akira_pm_get_mode();
 }
 
 int akira_native_power_get_battery_level(wasm_exec_env_t exec_env)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_POWER_READ, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_POWER_READ, -EPERM);
 
     uint8_t pct = 0;
     int ret = akira_pm_get_battery_level(&pct);
@@ -55,7 +55,7 @@ int akira_native_power_get_battery_level(wasm_exec_env_t exec_env)
 int akira_native_power_get_battery_status(wasm_exec_env_t exec_env,
                                           uint8_t *buf, uint32_t buf_len)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_POWER_READ, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_POWER_READ, -EPERM);
 
     if (!buf || buf_len < BATT_BUF_MIN_LEN) {
         LOG_ERR("Invalid buffer: buf=%p len=%u (need %d)",
@@ -97,7 +97,7 @@ int akira_native_power_get_battery_status(wasm_exec_env_t exec_env,
 
 int akira_native_power_set_mode(wasm_exec_env_t exec_env, int mode)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_POWER_CTRL, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_POWER_CTRL, -EPERM);
 
     if (mode < POWER_MODE_ACTIVE || mode > POWER_MODE_HIBERNATE) {
         LOG_ERR("power_set_mode: invalid mode %d", mode);
@@ -109,19 +109,19 @@ int akira_native_power_set_mode(wasm_exec_env_t exec_env, int mode)
 int akira_native_power_wake_on_gpio(wasm_exec_env_t exec_env,
                                     uint32_t pin, int edge)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_POWER_CTRL, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_POWER_CTRL, -EPERM);
     return akira_pm_wake_on_gpio(pin, edge);
 }
 
 int akira_native_power_wake_on_timer(wasm_exec_env_t exec_env, uint32_t ms)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_POWER_CTRL, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_POWER_CTRL, -EPERM);
     return akira_pm_wake_on_timer(ms);
 }
 
 int akira_native_power_set_low_power(wasm_exec_env_t exec_env, int enable)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_POWER_CTRL, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_POWER_CTRL, -EPERM);
     return akira_pm_enable_low_power_mode(enable != 0);
 }
 
@@ -153,3 +153,24 @@ int akira_native_power_set_low_power(wasm_exec_env_t exec_env, int enable)
 }
 
 #endif /* CONFIG_AKIRA_WASM_POWER_CONTROL */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_POWER))
+#include <akira_native_registry.h>
+
+/* power.read: battery level/status, mode query */
+static const NativeSymbol akira_power_natives[] = {
+    {"power_get_mode", (void *)akira_native_power_get_mode, "()i", NULL},
+    {"power_get_battery_level", (void *)akira_native_power_get_battery_level, "()i", NULL},
+    {"power_get_battery_status", (void *)akira_native_power_get_battery_status, "(*~)i", NULL},
+    /* power.control: mode transitions and wake sources (elevated) */
+    {"power_set_mode", (void *)akira_native_power_set_mode, "(i)i", NULL},
+    {"power_wake_on_gpio", (void *)akira_native_power_wake_on_gpio, "(ii)i", NULL},
+    {"power_wake_on_timer", (void *)akira_native_power_wake_on_timer, "(i)i", NULL},
+    {"power_set_low_power", (void *)akira_native_power_set_low_power, "(i)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_power_api, "env", akira_power_natives);
+#endif

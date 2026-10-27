@@ -56,6 +56,13 @@ dkms.conf
 
 # Build directories
 build/
+build_bench/
+build_akiraconsole/
+build_b_u585i/
+build_esp32s3devkit/
+build_native/
+build_nrf54l15/
+twister-out/
 .build/
 outdir/
 
@@ -111,3 +118,11 @@ build_nrf53/
 #python env
 .venv/
 modules/wasm-micro-runtime
+
+tmp/
+flash.bin
+
+# Former git submodules, now west projects under ../modules/lib (see west.yml).
+# Ignored so existing local checkouts (such as a locally built wamrc) are kept.
+/modules/wasm-micro-runtime/
+/modules/tflite-micro/

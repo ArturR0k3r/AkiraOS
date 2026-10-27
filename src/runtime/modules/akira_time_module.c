@@ -22,17 +22,21 @@ static void sleep_ms(wasm_exec_env_t exec_env, int32_t ms) {
     }
 }
 
-static NativeSymbol time_symbols[] = {
+#ifdef CONFIG_AKIRA_WASM_API
+#include <akira_native_registry.h>
+
+static const NativeSymbol time_symbols[] = {
     EXPORT_WASM_API_WITH_SIG(get_time_ms, "()I"),
     EXPORT_WASM_API_WITH_SIG(sleep_ms, "(i)v"),
 };
 
+/* Optional: if WAMR rejects it, only these time imports are unavailable. */
+AKIRA_NATIVE_API_DEFINE_FLAGS(akira_time_module_api, "akira_time", time_symbols,
+                              AKIRA_NATIVE_API_OPTIONAL);
+#endif
+
+/* Deprecated since 1.6: the runtime registers the "akira_time" module through
+ * the native API registry. Kept so existing callers keep linking. */
 int akira_register_time_module(void) {
-    int count = sizeof(time_symbols) / sizeof(NativeSymbol);
-    if (!wasm_runtime_register_natives("akira_time", time_symbols, count)) {
-        LOG_ERR("Failed to register time module");
-        return -1;
-    }
-    LOG_INF("AkiraOS time module registered");
     return 0;
 }

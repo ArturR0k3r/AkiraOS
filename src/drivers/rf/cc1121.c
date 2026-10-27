@@ -20,12 +20,13 @@
  */
 
 #include "cc1121.h"
-#include "rf_framework.h"
+#include "connectivity/radio_interface.h"
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
+#include <zephyr/init.h>
 #include <errno.h>
 #include <string.h>
 
@@ -54,62 +55,90 @@ LOG_MODULE_REGISTER(akira_cc1121, LOG_LEVEL_INF);
 #define CC1121_DCFILT_CFG  0x0C
 #define CC1121_PREAMBLE_CFG1 0x0D
 #define CC1121_PREAMBLE_CFG0 0x0E
-#define CC1121_IQIC        0x0F
-#define CC1121_CHAN_BW     0x10
-#define CC1121_MDMCFG1     0x11
-#define CC1121_MDMCFG0     0x12
-#define CC1121_SYMBOL_RATE2 0x13
-#define CC1121_SYMBOL_RATE1 0x14
-#define CC1121_SYMBOL_RATE0 0x15
-#define CC1121_AGC_REF     0x16
-#define CC1121_AGC_CS_THR  0x17
-#define CC1121_AGC_GAIN_ADJUST 0x18
-#define CC1121_AGC_CFG3    0x19
-#define CC1121_AGC_CFG2    0x1A
-#define CC1121_AGC_CFG1    0x1B
-#define CC1121_AGC_CFG0    0x1C
-#define CC1121_FIFO_CFG    0x1D
-#define CC1121_DEV_ADDR    0x1E
-#define CC1121_SETTLING_CFG 0x1F
-#define CC1121_FS_CFG      0x20
-#define CC1121_WOR_CFG1    0x21
-#define CC1121_WOR_CFG0    0x22
-#define CC1121_WOR_EVENT0_MSB 0x23
-#define CC1121_WOR_EVENT0_LSB 0x24
+#define CC1121_FREQ_IF_CFG 0x0F
+#define CC1121_IQIC        0x10
+#define CC1121_CHAN_BW     0x11
+#define CC1121_MDMCFG1     0x12
+#define CC1121_MDMCFG0     0x13
+#define CC1121_SYMBOL_RATE2 0x14
+#define CC1121_SYMBOL_RATE1 0x15
+#define CC1121_SYMBOL_RATE0 0x16
+#define CC1121_AGC_REF     0x17
+#define CC1121_AGC_CS_THR  0x18
+#define CC1121_AGC_GAIN_ADJUST 0x19
+#define CC1121_AGC_CFG3    0x1A
+#define CC1121_AGC_CFG2    0x1B
+#define CC1121_AGC_CFG1    0x1C
+#define CC1121_AGC_CFG0    0x1D
+#define CC1121_FIFO_CFG    0x1E
+#define CC1121_DEV_ADDR    0x1F
+#define CC1121_SETTLING_CFG 0x20
+#define CC1121_FS_CFG      0x21
+#define CC1121_WOR_CFG1    0x22
+#define CC1121_WOR_CFG0    0x23
+#define CC1121_WOR_EVENT0_MSB 0x24
+#define CC1121_WOR_EVENT0_LSB 0x25
 #define CC1121_PKT_CFG2    0x26
 #define CC1121_PKT_CFG1    0x27
 #define CC1121_PKT_CFG0    0x28
 #define CC1121_RFEND_CFG1  0x29
 #define CC1121_RFEND_CFG0  0x2A
-#define CC1121_PA_CFG1     0x2B
-#define CC1121_PA_CFG0     0x2C
+#define CC1121_PA_CFG2     0x2B  /* PA_POWER_RAMP [5:0] */
+#define CC1121_PA_CFG1     0x2C  /* FIRST_IPL / SECOND_IPL / RAMP_SHAPE */
+#define CC1121_PA_CFG0     0x2D  /* Power ramp shape / ASK config */
+#define CC1121_PKT_LEN      0x2E  /* Packet length (max in variable mode) */
 
 /* Extended register addresses (used with CC1121_EXT_ADDR prefix) */
 #define CC1121_EXT_IF_MIX_CFG   0x00
 #define CC1121_EXT_FREQOFF_CFG  0x01
+#define CC1121_EXT_FREQOFF1     0x0A  /* Applied freq offset MSB (FOC/SAFC accumulates here) */
+#define CC1121_EXT_FREQOFF0     0x0B  /* Applied freq offset LSB */
+#define CC1121_EXT_EXT_CTRL     0x06  /* BURST_ADDR_INCR_EN at bit 0 */
 #define CC1121_EXT_FREQ2        0x0C  /* Carrier frequency [23:16] */
 #define CC1121_EXT_FREQ1        0x0D  /* Carrier frequency [15:8]  */
 #define CC1121_EXT_FREQ0        0x0E  /* Carrier frequency [7:0]   */
+#define CC1121_EXT_IF_ADC1      0x10
+#define CC1121_EXT_IF_ADC0      0x11
 #define CC1121_EXT_FS_DIG1      0x12
 #define CC1121_EXT_FS_DIG0      0x13
-#define CC1121_EXT_FS_CAL3      0x15
-#define CC1121_EXT_FS_CAL2      0x16
-#define CC1121_EXT_FS_CAL1      0x17
-#define CC1121_EXT_FS_CAL0      0x18
-#define CC1121_EXT_FS_CHP       0x19
-#define CC1121_EXT_FS_VCDAC_START 0x1B
-#define CC1121_EXT_FS_VCO4      0x1C
-#define CC1121_EXT_FS_VCO3      0x1D
-#define CC1121_EXT_FS_VCO2      0x1E
-#define CC1121_EXT_FS_VCO1      0x1F
-#define CC1121_EXT_FS_VCO0      0x20
+#define CC1121_EXT_FS_CAL3      0x14
+#define CC1121_EXT_FS_CAL2      0x15
+#define CC1121_EXT_FS_CAL1      0x16
+#define CC1121_EXT_FS_CAL0      0x17
+#define CC1121_EXT_FS_CHP       0x18
+#define CC1121_EXT_FS_DIVTWO    0x19
+#define CC1121_EXT_FS_DSM1      0x1A
+#define CC1121_EXT_FS_DSM0      0x1B
+#define CC1121_EXT_FS_DVC1      0x1C
+#define CC1121_EXT_FS_DVC0      0x1D
+#define CC1121_EXT_FS_LBI       0x1E
+#define CC1121_EXT_FS_PFD       0x1F
+#define CC1121_EXT_FS_PRE       0x20
+#define CC1121_EXT_FS_REG_DIV_CML 0x21
+#define CC1121_EXT_FS_SPARE     0x22
+#define CC1121_EXT_FS_VCO4      0x23
+#define CC1121_EXT_FS_VCO3      0x24
+#define CC1121_EXT_FS_VCO2      0x25
+#define CC1121_EXT_FS_VCO1      0x26
+#define CC1121_EXT_FS_VCO0      0x27
 #define CC1121_EXT_XOSC5        0x32
 #define CC1121_EXT_XOSC1        0x36
 #define CC1121_EXT_XOSC0        0x37
-#define CC1121_EXT_PARTNUMBER   0x8F  /* Should read 0x20 for CC1121 */
-#define CC1121_EXT_MARCSTATE    0xF5  /* Radio state machine status */
-#define CC1121_EXT_NUM_TXBYTES  0xFA  /* Bytes in TX FIFO */
-#define CC1121_EXT_NUM_RXBYTES  0xFB  /* Bytes in RX FIFO */
+#define CC1121_EXT_TOC_CFG      0x02  /* Timing offset correction: TOC_LIMIT[7:6], PRE_SYNC[5:3], POST_SYNC[2:0] */
+#define CC1121_EXT_PARTNUMBER   0x8F  /* Reads 0x23 on CC1121RHB */
+#define CC1121_EXT_RSSI1        0x71  /* RSSI upper 8 bits (signed, RSSI[11:4]) */
+#define CC1121_EXT_RSSI0        0x72  /* RSSI lower nibble + status             */
+#define CC1121_EXT_MARCSTATE    0x73  /* Radio state machine status */
+#define CC1121_EXT_AGC_GAIN3    0x79  /* AGC LNA gain settings */
+#define CC1121_EXT_AGC_GAIN2    0x7A
+#define CC1121_EXT_AGC_GAIN1    0x7B
+#define CC1121_EXT_AGC_GAIN0    0x7C
+#define CC1121_EXT_ASK_SOFT     0x7F  /* OOK soft decision: +16=carrier≥threshold, -16=below; bits[5:0] signed */
+#define CC1121_EXT_PQT_SYNC_ERR 0x75  /* bits[7:4]=PQT_ERROR (0=best), bits[3:0]=SYNC_ERROR (0=best, <SYNC_THR/2 → accepted) */
+#define CC1121_EXT_FREQOFF_EST0 0x78  /* Frequency offset estimate LSB (signed, units = fxosc/2^18 ~122Hz) */
+#define CC1121_EXT_MODEM_STATUS1 0x92 /* bit7=SYNC_FOUND bit1=PQT_REACHED bit0=PQT_VALID; RXFIFO status in bits[6:2] */
+#define CC1121_EXT_NUM_TXBYTES  0xD6  /* Bytes in TX FIFO */
+#define CC1121_EXT_NUM_RXBYTES  0xD7  /* Bytes in RX FIFO */
 
 /* Command strobes */
 #define CC1121_SRES    0x30  /* Reset */
@@ -132,15 +161,16 @@ LOG_MODULE_REGISTER(akira_cc1121, LOG_LEVEL_INF);
 #define CC1121_MARC_SLEEP    0x00
 #define CC1121_MARC_IDLE     0x01
 #define CC1121_MARC_CALIB    0x04
-#define CC1121_MARC_FS_LOCK  0x0C
-#define CC1121_MARC_TX       0x13
-#define CC1121_MARC_TX_END   0x14
-#define CC1121_MARC_RX       0x1D
-#define CC1121_MARC_RX_END   0x1E
+#define CC1121_MARC_FS_LOCK  0x0A  /* FS_LOCK MARC_STATE = 01010 */
+#define CC1121_MARC_TX            0x13
+#define CC1121_MARC_TX_END        0x14
+#define CC1121_MARC_RX            0x0D
+#define CC1121_MARC_RX_END        0x0E
+#define CC1121_MARC_RXFIFO_ERROR  0x11
+#define CC1121_MARC_FSTXON        0x12
 
-/* PA_CFG1 power levels (approximate dBm for 868 MHz) */
-#define CC1121_PA_10DBM   0x43
-#define CC1121_PA_14DBM   0x63
+/* PA_CFG2 bit 6 (RESERVED6) must be 1 — SmartRF Studio always sets it. */
+#define CC1121_PA_CFG2_BIT6  0x40
 
 /* Timeout waiting for IDLE */
 #define CC1121_IDLE_TIMEOUT_MS  500
@@ -154,24 +184,37 @@ LOG_MODULE_REGISTER(akira_cc1121, LOG_LEVEL_INF);
 #define CC1121_DT_POWER_DBM  DT_PROP_OR(CC1121_NODE, akira_default_tx_power_dbm, 14)
 #define CC1121_DT_BITRATE    DT_PROP_OR(CC1121_NODE, akira_default_bitrate_bps,   4800)
 #define CC1121_DT_XOSC_HZ    DT_PROP_OR(CC1121_NODE, akira_xosc_frequency_hz,     32000000)
+/* OOK runs at its own lower rate regardless of the DT default: 2400 baud is the
+ * SNR/sync-lock sweet spot against the CC1121 41.7 kHz filter floor. FSK keeps
+ * the DT rate. Applied per-modulation in cc1121_apply_modulation(). */
+#define CC1121_OOK_BITRATE   2400
+
+static int cc1121_set_power(int8_t dbm);
+static int cc1121_apply_modulation(radio_modulation_t mod);
+
+static const struct spi_dt_spec g_spi = SPI_DT_SPEC_GET(
+    CC1121_NODE,
+    SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB | SPI_WORD_SET(8),
+    0);
+
+/* 128B FIFO minus 1 length byte minus 2 RX APPEND_STATUS bytes. Applied on
+ * TX too (not just RX) so a sender never emits a frame the receiving side's
+ * FIFO can't hold — a 127B TX chunk starves 2 bytes of RX APPEND_STATUS
+ * headroom and drives the receiver into RXFIFO_ERROR on every max-size
+ * packet. */
+#define CC1121_MAX_PAYLOAD  125
 
 static struct {
     bool initialized;
-    struct spi_dt_spec spi;
-    struct gpio_dt_spec cs;
     struct gpio_dt_spec reset;
-    rf_mode_t current_mode;
+    radio_mode_t current_mode;
+    radio_modulation_t current_mod;
     uint32_t frequency_hz;
     uint32_t xosc_hz;
     int8_t tx_power_dbm;
-    rf_rx_callback_t rx_callback;
-} g_cc1121 = {
-    .initialized  = false,
-    /* Populated from DT at init — these are just zero-init sentinels */
-    .frequency_hz = 0,
-    .xosc_hz      = 0,
-    .tx_power_dbm = 0,
-};
+    radio_event_cb_t event_cb;
+    void *event_user_data;
+} g_cc1121;
 
 /* =========================================================================
  * Low-level SPI helpers
@@ -188,13 +231,7 @@ static int cc1121_spi_write(const uint8_t *hdr, size_t hdr_len,
         .buffers = tx,
         .count   = data ? 2 : 1,
     };
-
-    gpio_pin_set_dt(&g_cc1121.cs, 0);
-    k_usleep(1);
-    int ret = spi_write_dt(&g_cc1121.spi, &tx_set);
-    k_usleep(1);
-    gpio_pin_set_dt(&g_cc1121.cs, 1);
-    return ret;
+    return spi_write_dt(&g_spi, &tx_set);
 }
 
 static int cc1121_spi_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
@@ -203,26 +240,20 @@ static int cc1121_spi_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t 
     struct spi_buf rx = { .buf = rx_buf,          .len = len };
     struct spi_buf_set tx_set = { .buffers = &tx, .count = 1 };
     struct spi_buf_set rx_set = { .buffers = &rx, .count = 1 };
-
-    gpio_pin_set_dt(&g_cc1121.cs, 0);
-    k_usleep(1);
-    int ret = spi_transceive_dt(&g_cc1121.spi, &tx_set, &rx_set);
-    k_usleep(1);
-    gpio_pin_set_dt(&g_cc1121.cs, 1);
-    return ret;
+    return spi_transceive_dt(&g_spi, &tx_set, &rx_set);
 }
 
 /* =========================================================================
  * Register access (public)
  * ========================================================================= */
 
-int cc1121_write_reg(uint8_t addr, uint8_t value)
+static int cc1121_write_reg(uint8_t addr, uint8_t value)
 {
     uint8_t hdr[2] = { addr & 0x3F, value };
     return cc1121_spi_write(hdr, 2, NULL, 0);
 }
 
-int cc1121_read_reg(uint8_t addr, uint8_t *value)
+static int cc1121_read_reg(uint8_t addr, uint8_t *value)
 {
     uint8_t tx[2] = { CC1121_READ | (addr & 0x3F), 0x00 };
     uint8_t rx[2] = { 0 };
@@ -233,19 +264,25 @@ int cc1121_read_reg(uint8_t addr, uint8_t *value)
     return ret;
 }
 
-int cc1121_write_ext_reg(uint8_t ext_addr, uint8_t value)
+static int cc1121_write_ext_reg(uint8_t ext_addr, uint8_t value)
 {
     uint8_t hdr[3] = { CC1121_EXT_ADDR, ext_addr, value };
     return cc1121_spi_write(hdr, 3, NULL, 0);
 }
 
-int cc1121_read_ext_reg(uint8_t ext_addr, uint8_t *value)
+static int cc1121_read_ext_reg(uint8_t ext_addr, uint8_t *value)
 {
-    uint8_t tx[3] = { CC1121_READ | CC1121_EXT_ADDR, ext_addr, 0x00 };
-    uint8_t rx[3] = { 0 };
-    int ret = cc1121_spi_transceive(tx, rx, 3);
+    /* CC112x returns a chip status byte for every byte on SI.
+     * Extended register read requires 4-byte burst:
+     *   tx: cmd | ext_addr | dummy | dummy
+     *   rx: status | status | status | data
+     * BURST is required — B=0 paths return 0x00 on this chip revision. */
+    uint8_t hdr = CC1121_READ | CC1121_BURST | CC1121_EXT_ADDR;
+    uint8_t tx[4] = { hdr, ext_addr, 0x00, 0x00 };
+    uint8_t rx[4] = { 0 };
+    int ret = cc1121_spi_transceive(tx, rx, 4);
     if (ret == 0) {
-        *value = rx[2];
+        *value = rx[3];
     }
     return ret;
 }
@@ -255,12 +292,12 @@ static int cc1121_strobe(uint8_t cmd)
     return cc1121_spi_write(&cmd, 1, NULL, 0);
 }
 
-int cc1121_get_marcstate(uint8_t *state)
+static int cc1121_get_marcstate(uint8_t *state)
 {
     return cc1121_read_ext_reg(CC1121_EXT_MARCSTATE, state);
 }
 
-bool cc1121_is_ready(void)
+static bool cc1121_is_ready(void)
 {
     return g_cc1121.initialized;
 }
@@ -278,6 +315,9 @@ static int wait_for_idle(void)
         if (cc1121_get_marcstate(&state) < 0) {
             return -EIO;
         }
+        /* MARCSTATE register includes MARC_2PIN_STATE [6:5];
+         * only compare MARC_STATE [4:0] */
+        state &= 0x1F;
         if (state == CC1121_MARC_IDLE || state == CC1121_MARC_SLEEP) {
             return 0;
         }
@@ -287,31 +327,50 @@ static int wait_for_idle(void)
     return -ETIMEDOUT;
 }
 
-/* Frequency register encoding: FREQ[23:0] = f_carrier * 2^16 / f_xosc
+/* LO divider for the band that contains freq_hz.
+ * Must match the FSD_BANDSELECT value chosen by freq_to_fs_cfg().
+ * Datasheet SWRU295E Table 30. */
+static uint32_t freq_to_lo_div(uint32_t freq_hz)
+{
+    if (freq_hz < 370000000UL) {
+        return 12; /* 273–320 MHz band */
+    } else if (freq_hz < 550000000UL) {
+        return 8;  /* 410–480 MHz band */
+    } else {
+        return 4;  /* 820–960 MHz band */
+    }
+}
+
+/* Frequency register encoding (datasheet SWRU295E Eq. 26/27):
+ *   f_RF  = f_VCO / LO_Divider
+ *   f_VCO = (FREQ / 2^16) * f_xosc
+ *   => FREQ[23:0] = f_RF * LO_Divider * 2^16 / f_xosc
  * Crystal frequency comes from DT (akira,xosc-frequency-hz).
  */
 static void freq_to_regs(uint32_t freq_hz, uint32_t xosc_hz,
                           uint8_t *f2, uint8_t *f1, uint8_t *f0)
 {
-    uint64_t freq_word = ((uint64_t)freq_hz << 16) / xosc_hz;
+    uint64_t freq_word =
+        (((uint64_t)freq_hz * freq_to_lo_div(freq_hz)) << 16) / xosc_hz;
     *f2 = (freq_word >> 16) & 0xFF;
     *f1 = (freq_word >>  8) & 0xFF;
     *f0 =  freq_word        & 0xFF;
 }
 
-/* Symbol rate encoding: SR[23:0] = bps * 2^20 / f_xosc
- * Exponent E in bits [23:20], mantissa M in bits [19:0].
- * Crystal frequency comes from DT (akira,xosc-frequency-hz).
+/* CC112x symbol rate: f_sym = (2^20 + M) × 2^(E−39) × fxosc
+ * Compute val = bps × 2^39 / fxosc, then right-shift until val < 2^21.
+ * Shift count becomes E; M = val − 2^20.
  */
 static void bitrate_to_regs(uint32_t bps, uint32_t xosc_hz,
                               uint8_t *sr2, uint8_t *sr1, uint8_t *sr0)
 {
-    uint32_t sr = (uint32_t)(((uint64_t)bps << 20) / xosc_hz);
+    uint64_t val = ((uint64_t)bps << 39) / xosc_hz;
     uint8_t e = 0;
-    while (sr > 0xFFFFF) { sr >>= 1; e++; }
-    *sr2 = (e << 4) | ((sr >> 16) & 0x0F);
-    *sr1 = (sr >>  8) & 0xFF;
-    *sr0 =  sr        & 0xFF;
+    while (val >= (1ULL << 21)) { val >>= 1; e++; }
+    uint32_t m = (uint32_t)(val - (1ULL << 20));
+    *sr2 = ((e & 0x0F) << 4) | ((m >> 16) & 0x0F);
+    *sr1 = (m >> 8) & 0xFF;
+    *sr0 =  m       & 0xFF;
 }
 
 /* FS_CFG register value — selects the synthesizer band.
@@ -320,30 +379,55 @@ static void bitrate_to_regs(uint32_t bps, uint32_t xosc_hz,
  */
 static uint8_t freq_to_fs_cfg(uint32_t freq_hz)
 {
-    if (freq_hz < 400000000UL) {
-        return 0x02; /* 315 MHz band (290–350 MHz) */
-    } else if (freq_hz < 600000000UL) {
-        return 0x04; /* 433 MHz band (410–475 MHz) */
+    /* FS_CFG.FSD_BANDSELECT [3:0] selects the LO divider for the band.
+     * Bit 4 (FS_LOCK_EN) is set to 1 to enable the out-of-lock detector.
+     * Datasheet Table: SWRU295E page 83. */
+    if (freq_hz < 370000000UL) {
+        return 0x16; /* 273–320 MHz band (LO div = 12) */
+    } else if (freq_hz < 550000000UL) {
+        return 0x14; /* 410–480 MHz band (LO div = 8) */
     } else {
-        return 0x14; /* 868/915 MHz band (820–960 MHz) */
+        return 0x12; /* 820–960 MHz band (LO div = 4) */
     }
+}
+
+/* PA_CFG2 value for a target output power (datasheet SWRU295E p.88):
+ *   P_out[dBm] = (PA_POWER_RAMP + 1) / 2 - 18
+ *   => PA_POWER_RAMP = 2 * (dBm + 18) - 1
+ * PA_POWER_RAMP is 6 bits, valid range 0x03..0x3F (~ -16..+14 dBm).
+ * Bit 6 (RESERVED6) must be set.
+ */
+static uint8_t dbm_to_pa_cfg2(int8_t dbm)
+{
+    int ramp = 2 * ((int)dbm + 18) - 1;
+    if (ramp < 0x03) ramp = 0x03;
+    if (ramp > 0x3F) ramp = 0x3F;
+    return CC1121_PA_CFG2_BIT6 | (uint8_t)(ramp & 0x3F);
 }
 
 /* =========================================================================
  * Base register configuration — band-independent modulation settings.
- * FS_CFG (synthesizer band) and SYMBOL_RATE / PA_CFG1 are NOT in this
+ * FS_CFG (synthesizer band), SYMBOL_RATE, and PA_CFG2 are NOT in this
  * table; they are computed at init from DT values so no rebuild is
  * needed when frequency, bitrate, or TX power changes.
  * ========================================================================= */
 static const struct { uint8_t addr; uint8_t val; } k_cc1121_base_cfg[] = {
     { CC1121_IOCFG0,       0x06 },  /* GDO0: sync word detect */
-    { CC1121_SYNC_CFG1,    0x0B },  /* 16/16 bits, 30-bit tolerance */
-    { CC1121_SYNC_CFG0,    0x17 },
+    { CC1121_SYNC3,        0x55 },  /* Sync word [31:24] — SmartRF values */
+    { CC1121_SYNC2,        0x55 },  /* Sync word [23:16] */
+    { CC1121_SYNC1,        0x7A },  /* Sync word [15:8]  */
+    { CC1121_SYNC0,        0x0E },  /* Sync word [7:0]   */
+    { CC1121_SYNC_CFG1,    0x0B },  /* 30/32 sync (SmartRF/reset default) */
+    { CC1121_SYNC_CFG0,    0x0B },  /* SmartRF default */
     { CC1121_DEVIATION_M,  0x48 },  /* ±25 kHz deviation (2-FSK default) */
     { CC1121_MODCFG_DEV_E, 0x05 },
     { CC1121_DCFILT_CFG,   0x1C },
-    { CC1121_IQIC,         0xC6 },
-    { CC1121_CHAN_BW,       0x08 },  /* ~100 kHz RX filter BW */
+    { CC1121_PREAMBLE_CFG1, 0x18 },  /* 4 bytes preamble (FSK default). OOK overrides to 24 bytes
+                                         per-modulation in cc1121_apply_modulation(). */
+    { CC1121_PREAMBLE_CFG0, 0x2A },  /* PQT_EN=1, 16-symbol timeout, PQT=10 */
+    { CC1121_IQIC,         0x00 },  /* disabled — reset default; enabling without cal corrupts RX */
+    { CC1121_FREQ_IF_CFG,   0x40 },  /* 62.5 kHz digital IF (SmartRF/reset default) */
+    { CC1121_CHAN_BW,       0x01 },  /* 200 kHz RX filter — widest valid for CC1121 (BB_CIC=1, ADC_CIC=20). 0x08=BB_CIC=8 was OUT OF RANGE for CC1121 (max 4). */
     { CC1121_MDMCFG1,      0x46 },  /* 2-FSK modulation */
     { CC1121_MDMCFG0,      0x05 },
     /* SYMBOL_RATE2/1/0 written separately from DT akira,default-bitrate-bps */
@@ -354,27 +438,84 @@ static const struct { uint8_t addr; uint8_t val; } k_cc1121_base_cfg[] = {
     { CC1121_AGC_CFG1,     0xA9 },
     { CC1121_AGC_CFG0,     0xCF },
     { CC1121_FIFO_CFG,     0x00 },  /* Variable-length packets */
+    { CC1121_PA_CFG0,      0x79 },  /* SmartRF: PA ramp shape */
     /* FS_CFG written separately — derived from DT akira,default-frequency-hz */
     { CC1121_PKT_CFG2,     0x00 },  /* Normal CRC, packet mode */
-    { CC1121_PKT_CFG1,     0x05 },  /* Status bytes appended */
+    { CC1121_PKT_CFG1,     0x01 },  /* CRC disabled (bits[3:2]=00), APPEND_STATUS=1 — TEST: isolate CRC mismatch */
     { CC1121_PKT_CFG0,     0x20 },  /* Variable packet length */
-    /* PA_CFG1 written separately — derived from DT akira,default-tx-power-dbm */
+    { CC1121_PKT_LEN,      0xFF },  /* Max allowed packet length (datasheet §8.2.2);
+                                       255 − 2 APPEND_STATUS bytes = 253 usable */
+    /* PA_CFG2 written separately — derived from DT akira,default-tx-power-dbm */
 };
 
-/* Extended register defaults */
+/* Full modulation-dependent register set, re-applied on every switch.
+ * Values not in this set (FS_*, FREQ, SYMBOL_RATE, PA_CFG2 power) are
+ * modulation-independent and stay as configured at init. */
+static const struct { uint8_t addr; uint8_t val; } k_cc1121_fsk_mod[] = {
+    { CC1121_MODCFG_DEV_E, 0x05 },  /* MOD_FORMAT=000 2-FSK, DEV_E=5 */
+    { CC1121_DEVIATION_M,  0x48 },  /* ±25 kHz deviation */
+    { CC1121_MDMCFG1,      0x46 },
+    { CC1121_MDMCFG0,      0x05 },
+    { CC1121_CHAN_BW,      0x01 },
+    { CC1121_AGC_REF,      0x3C },
+    { CC1121_AGC_CS_THR,   0xEF },
+    { CC1121_AGC_CFG3,     0x83 },
+    { CC1121_AGC_CFG2,     0x00 },  /* restore to default (no freeze-on-sync for FSK) */
+    { CC1121_AGC_CFG1,     0xA9 },
+    { CC1121_AGC_CFG0,     0xCF },
+    { CC1121_DCFILT_CFG,   0x1C },  /* restore DC filter for FSK */
+    { CC1121_PA_CFG1,      0x56 },  /* RAMP_SHAPE=10 (reset) restored after OOK */
+    { CC1121_PA_CFG0,      0x79 },  /* PA ramp shape (FSK) */
+    { CC1121_PA_CFG2,      0x7F },  /* PA_POWER_RAMP=0x3F (~14 dBm), bit6=1 */
+    { CC1121_PKT_CFG0,     0x20 },  /* Variable-length packets (restore from OOK fixed-length) */
+    { CC1121_PKT_LEN,      0xFF },  /* Max packet length in variable mode */
+};
+static const struct { uint8_t addr; uint8_t val; } k_cc1121_ook_mod[] = {
+    { CC1121_MODCFG_DEV_E, 0x18 },  /* MOD_FORMAT=011 ASK/OOK */
+    { CC1121_DEVIATION_M,  0x48 },
+    { CC1121_MDMCFG1,      0x46 },
+    { CC1121_MDMCFG0,      0x05 },
+    { CC1121_CHAN_BW,      0x43 },  /* RX filter 41.7 kHz (dec32, BB_CIC=3) — narrowest on CC1121, best SNR. Paired with 2400 baud = 17x oversampled. */
+    { CC1121_AGC_REF,      0x20 },  /* Low AGC ref for OOK: prevents near-field envelope railing. */
+    { CC1121_AGC_CS_THR,   0x19 },  /* Reference low-rate carrier-sense threshold (was 0xEF). */
+    { CC1121_AGC_CFG3,     0xB1 },  /* AGC_MIN_GAIN=17: prevents OOK demod railing on strong signals. */
+    { CC1121_AGC_CFG2,     0xA0 },  /* START_PREVIOUS_GAIN_EN=1: each RX re-arm starts from last good gain, not max — AGC ready when packet arrives mid-window (fixes ~70% miss). FE_PERF=01. */
+    { CC1121_AGC_CFG1,     0x29 },  /* AGC_SYNC_BEHAVIOUR=001: freeze gain at sync so AGC doesn't chase noise between packets (mis-gain misses packets mid-window). The earlier deaf-after-1st was the SRX-settle/IDLE bug, now fixed by post-SRX settle. */
+    { CC1121_AGC_CFG0,     0xCF },  /* AGC_ASK_DECAY=11 (slowest): reference value. */
+    { CC1121_DCFILT_CFG,   0x0B },  /* Auto DC (FREEZE_COEFF=0), DCFILT_BW=256 samples (was 32/fastest): slow DC tracking holds baseline through long carrier-off runs, kills boundary bit-slip. */
+    { CC1121_PA_CFG1,      0x54 },  /* FIRST_IPL=2, SECOND_IPL=5, RAMP_SHAPE=00 (1/32 symbol OOK shape) */
+    { CC1121_PA_CFG0,      0x7C },  /* ASK_DEPTH=15, UPSAMPLER_P=100b=P=16 (legal for RAMP_SHAPE=00; P=2 is illegal → TX doesn't gate carrier off → all-ones) */
+    { CC1121_PA_CFG2,      0x7C },  /* PA_POWER_RAMP=60, bit6=1; OOK depth=60-4×15=0 (full) */
+    { CC1121_PKT_CFG0,     0x20 },  /* Variable-length packets for OOK RX parsing. */
+    { CC1121_PKT_LEN,      0xFF },  /* Max length in variable mode */
+};
+
+/* Extended register defaults.
+ * The FS_* synthesizer registers are the TI-recommended values that MUST be
+ * changed from reset for the PLL to lock (SmartRF Studio export; these values
+ * are frequency-independent across the CC112x family). Without them the VCO
+ * free-runs and the chip transmits at a fixed wrong frequency. */
 static const struct { uint8_t ext; uint8_t val; } k_cc1121_868_ext[] = {
-    { CC1121_EXT_IF_MIX_CFG,  0x00 },
-    { CC1121_EXT_FREQOFF_CFG, 0x22 },
-    { CC1121_EXT_FS_DIG1,     0x00 },
-    { CC1121_EXT_FS_DIG0,     0xAF },
-    { CC1121_EXT_FS_CAL1,     0x40 },
-    { CC1121_EXT_FS_CAL0,     0x0E },
-    { CC1121_EXT_FS_CHP,      0x28 },
-    { CC1121_EXT_FS_VCDAC_START, 0x0B },
-    { CC1121_EXT_FS_VCO0,     0xB9 },
-    { CC1121_EXT_XOSC5,       0x0E },
-    { CC1121_EXT_XOSC1,       0x03 },
-    { CC1121_EXT_XOSC0,       0x04 },
+    { CC1121_EXT_IF_MIX_CFG,    0x00 },
+    { CC1121_EXT_FREQOFF_CFG,   0x22 },  /* FOC_EN=1 (was 0x20=disabled!); FOC after
+                                             channel filter; compensates crystal offset
+                                             that was corrupting data bytes after sync */
+    { CC1121_EXT_IF_ADC1,       0xEE },
+    { CC1121_EXT_IF_ADC0,       0x10 },
+    { CC1121_EXT_FS_DIG1,       0x00 },
+    { CC1121_EXT_FS_DIG0,       0x5F },
+    { CC1121_EXT_FS_CAL1,       0x40 },
+    { CC1121_EXT_FS_CAL0,       0x0E },
+    { CC1121_EXT_FS_DIVTWO,     0x03 },
+    { CC1121_EXT_FS_DSM0,       0x33 },
+    { CC1121_EXT_FS_DVC0,       0x17 },
+    { CC1121_EXT_FS_PFD,        0x50 },
+    { CC1121_EXT_FS_PRE,        0x6E },
+    { CC1121_EXT_FS_REG_DIV_CML, 0x14 },
+    { CC1121_EXT_FS_SPARE,      0xAC },
+    { CC1121_EXT_FS_VCO0,       0xB4 },
+    { CC1121_EXT_XOSC5,         0x0E },
+    { CC1121_EXT_XOSC1,         0x03 },
 };
 
 /* =========================================================================
@@ -389,35 +530,17 @@ static int cc1121_init(void)
         return 0;
     }
 
-    /* --- SPI bus --------------------------------------------------------- */
-    const struct device *spi_dev = DEVICE_DT_GET(DT_BUS(CC1121_NODE));
-    if (!device_is_ready(spi_dev)) {
+    /* --- SPI bus + CS ---------------------------------------------------- */
+    if (!spi_is_ready_dt(&g_spi)) {
         LOG_ERR("SPI bus not ready");
         return -ENODEV;
     }
-    g_cc1121.spi.bus = spi_dev;
-    g_cc1121.spi.config.frequency  = DT_PROP(CC1121_NODE, spi_max_frequency);
-    g_cc1121.spi.config.operation  = SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB
-                                     | SPI_WORD_SET(8);
 
-    /* --- CS GPIO --------------------------------------------------------- */
-    g_cc1121.cs = (struct gpio_dt_spec)GPIO_DT_SPEC_GET(CC1121_NODE, cs_gpios);
-    if (!gpio_is_ready_dt(&g_cc1121.cs)) {
-        LOG_ERR("CS GPIO not ready");
-        return -ENODEV;
-    }
-    ret = gpio_pin_configure_dt(&g_cc1121.cs, GPIO_OUTPUT_INACTIVE);
-    if (ret < 0) {
-        return ret;
-    }
-    gpio_pin_set_dt(&g_cc1121.cs, 1); /* Deassert CS */
-
-    /* --- RESET GPIO (optional, shared with LR2021) ----------------------- */
+    /* --- RESET GPIO (optional) ------------------------------------------- */
     if (DT_NODE_HAS_PROP(CC1121_NODE, reset_gpios)) {
         g_cc1121.reset = (struct gpio_dt_spec)GPIO_DT_SPEC_GET(CC1121_NODE, reset_gpios);
         if (gpio_is_ready_dt(&g_cc1121.reset)) {
             gpio_pin_configure_dt(&g_cc1121.reset, GPIO_OUTPUT_INACTIVE);
-            /* Pulse reset */
             gpio_pin_set_dt(&g_cc1121.reset, 1);
             k_msleep(5);
             gpio_pin_set_dt(&g_cc1121.reset, 0);
@@ -433,13 +556,43 @@ static int cc1121_init(void)
     }
     k_msleep(10);
 
-    /* --- Verify part number ---------------------------------------------- */
-    uint8_t pn = 0;
-    ret = cc1121_read_ext_reg(CC1121_EXT_PARTNUMBER, &pn);
-    if (ret < 0 || pn != 0x20) {
-        LOG_ERR("CC1121 not found (PARTNUMBER=0x%02X, expected 0x20)", pn);
-        return -ENODEV;
+    /* --- SPI sanity check: read a standard register with known reset --- */
+    {
+        uint8_t iocfg0 = 0;
+        ret = cc1121_read_reg(CC1121_IOCFG0, &iocfg0);
+        LOG_INF("SPI check: IOCFG0=0x%02X (expect ~0x3C) ret=%d", iocfg0, ret);
     }
+
+    /* --- Verify part number ---------------------------------------------- */
+    {
+        uint8_t pn = 0;
+        /* Try burst-read method first (used by TI's own reference code for
+         * status registers), fall back to single-read */
+        uint8_t hdr = CC1121_READ | CC1121_BURST | CC1121_EXT_ADDR;
+        uint8_t tx[4] = { hdr, CC1121_EXT_PARTNUMBER, 0x00, 0x00 };
+        uint8_t rx[4] = { 0 };
+        ret = cc1121_spi_transceive(tx, rx, 4);
+        LOG_INF("PARTNUMBER burst-read: rx=[0x%02X 0x%02X 0x%02X 0x%02X] ret=%d",
+                rx[0], rx[1], rx[2], rx[3], ret);
+        /* rx[0]=status, rx[1]=status, rx[2]=status, rx[3]=data */
+        pn = rx[3];
+
+        if (ret < 0 || pn != 0x23) {
+            /* Try single-read as fallback */
+            uint8_t pn2 = 0;
+            int ret2 = cc1121_read_ext_reg(CC1121_EXT_PARTNUMBER, &pn2);
+            LOG_ERR("CC1121 not found (PARTNUMBER=0x%02X burst, 0x%02X single, expected 0x23)",
+                    pn, pn2);
+            return -ENODEV;
+        }
+    }
+
+    /* --- Disable burst address auto-increment (EXT_CTRL.BURST_ADDR_INCR_EN).
+     * When enabled (reset default), consecutive burst reads of extended
+     * registers return data from auto-incremented addresses because the
+     * chip returns a status byte for the first dummy, then increments
+     * the address counter before the actual data byte. */
+    cc1121_write_ext_reg(CC1121_EXT_EXT_CTRL, 0x00);
 
     /* --- Populate runtime state from device-tree -------------------------- */
     g_cc1121.frequency_hz = CC1121_DT_FREQ_HZ;
@@ -473,7 +626,11 @@ static int cc1121_init(void)
     cc1121_write_reg(CC1121_SYMBOL_RATE0, sr0);
 
     /* --- PA power — derived from DT tx-power-dbm ------------------------- */
-    cc1121_set_power(g_cc1121.tx_power_dbm);
+    {
+        uint8_t pa_val = dbm_to_pa_cfg2(g_cc1121.tx_power_dbm);
+        cc1121_write_reg(CC1121_PA_CFG2, pa_val);
+        LOG_INF("PA_CFG2=0x%02X for %d dBm", pa_val, g_cc1121.tx_power_dbm);
+    }
 
     /* --- Frequency registers — derived from DT frequency and crystal ------ */
     uint8_t f2, f1, f0;
@@ -481,6 +638,20 @@ static int cc1121_init(void)
     cc1121_write_ext_reg(CC1121_EXT_FREQ2, f2);
     cc1121_write_ext_reg(CC1121_EXT_FREQ1, f1);
     cc1121_write_ext_reg(CC1121_EXT_FREQ0, f0);
+
+    /* Read back FREQ regs to confirm SPI writes landed and band is correct */
+    {
+        uint8_t rb2 = 0, rb1 = 0, rb0 = 0;
+        cc1121_read_ext_reg(CC1121_EXT_FREQ2, &rb2);
+        cc1121_read_ext_reg(CC1121_EXT_FREQ1, &rb1);
+        cc1121_read_ext_reg(CC1121_EXT_FREQ0, &rb0);
+        LOG_INF("FREQ regs: wrote %02X%02X%02X read %02X%02X%02X (LO_div=%u)",
+                f2, f1, f0, rb2, rb1, rb0,
+                freq_to_lo_div(g_cc1121.frequency_hz));
+        if (rb2 != f2 || rb1 != f1 || rb0 != f0) {
+            LOG_ERR("FREQ readback mismatch — SPI write to ext regs failing");
+        }
+    }
 
     /* --- Calibrate ------------------------------------------------------- */
     ret = cc1121_strobe(CC1121_SCAL);
@@ -493,8 +664,36 @@ static int cc1121_init(void)
         return ret;
     }
 
+    /* --- Readback key modem registers to confirm SPI writes landed ---------- */
+    {
+        uint8_t v08=0, v0d=0, v0f=0, v10=0, v11=0, v14=0, v27=0, v28=0, v1e=0, v2e=0;
+        cc1121_read_reg(0x08, &v08);  /* SYNC_CFG1     expect 0x0B */
+        cc1121_read_reg(0x0D, &v0d);  /* PREAMBLE_CFG1 expect 0x18 */
+        cc1121_read_reg(0x0F, &v0f);  /* FREQ_IF_CFG   expect 0x40 */
+        cc1121_read_reg(0x10, &v10);  /* IQIC          expect 0x00 */
+        cc1121_read_reg(0x11, &v11);  /* CHAN_BW       expect 0x01 */
+        cc1121_read_reg(0x14, &v14);  /* SYMBOL_RATE2 */
+        cc1121_read_reg(0x1E, &v1e);  /* FIFO_CFG      expect 0x00 */
+        cc1121_read_reg(0x27, &v27);  /* PKT_CFG1      expect 0x01 */
+        cc1121_read_reg(0x28, &v28);  /* PKT_CFG0      expect 0x20 */
+        cc1121_read_reg(0x2E, &v2e);  /* PKT_LEN       expect 0xFF */
+        LOG_INF("REG_RB: SYNC_CFG1=%02X PRE_CFG1=%02X FREQ_IF=%02X IQIC=%02X CHAN_BW=%02X"
+                " SR2=%02X FIFO_CFG=%02X PKT_CFG1=%02X PKT_CFG0=%02X PKT_LEN=%02X",
+                v08, v0d, v0f, v10, v11, v14, v1e, v27, v28, v2e);
+        if (v08 != 0x0B) LOG_WRN("SYNC_CFG1 mismatch: got %02X want 0x0B", v08);
+        if (v0d != 0x18) LOG_WRN("PREAMBLE_CFG1 mismatch: got %02X want 0x18", v0d);
+        if (v0f != 0x40) LOG_WRN("FREQ_IF_CFG mismatch: got %02X want 0x40", v0f);
+        if (v10 != 0x00) LOG_WRN("IQIC mismatch: got %02X want 0x00", v10);
+        if (v1e != 0x00) LOG_WRN("FIFO_CFG mismatch: got %02X want 0x00 (CRC_AUTOFLUSH?)", v1e);
+        if (v27 != 0x01) LOG_WRN("PKT_CFG1 mismatch: got %02X want 0x01", v27);
+        if (v28 != 0x20) LOG_WRN("PKT_CFG0 mismatch: got %02X want 0x20", v28);
+        if (v2e != 0xFF) LOG_WRN("PKT_LEN mismatch: got %02X want 0xFF - packet filtering broken!", v2e);
+    }
+
+    cc1121_apply_modulation(RADIO_MOD_FSK);
+
     g_cc1121.initialized = true;
-    g_cc1121.current_mode = RF_MODE_STANDBY;
+    g_cc1121.current_mode = RADIO_MODE_STANDBY;
     LOG_INF("CC1121 ready: %u Hz, %d dBm", g_cc1121.frequency_hz, g_cc1121.tx_power_dbm);
     return 0;
 }
@@ -503,11 +702,11 @@ static int cc1121_deinit(void)
 {
     cc1121_strobe(CC1121_SPWD);
     g_cc1121.initialized = false;
-    g_cc1121.current_mode = RF_MODE_SLEEP;
+    g_cc1121.current_mode = RADIO_MODE_SLEEP;
     return 0;
 }
 
-static int cc1121_set_mode(rf_mode_t mode)
+static int cc1121_set_mode(radio_mode_t mode)
 {
     if (!g_cc1121.initialized) {
         return -ENODEV;
@@ -515,20 +714,22 @@ static int cc1121_set_mode(rf_mode_t mode)
 
     int ret = 0;
     switch (mode) {
-    case RF_MODE_SLEEP:
+    case RADIO_MODE_SLEEP:
         ret = cc1121_strobe(CC1121_SPWD);
         break;
-    case RF_MODE_STANDBY:
+    case RADIO_MODE_STANDBY:
         ret = cc1121_strobe(CC1121_SIDLE);
         if (ret == 0) {
             ret = wait_for_idle();
         }
         break;
-    case RF_MODE_RX:
+    case RADIO_MODE_RX:
+        cc1121_strobe(CC1121_SIDLE);
+        wait_for_idle();
         cc1121_strobe(CC1121_SFRX);
         ret = cc1121_strobe(CC1121_SRX);
         break;
-    case RF_MODE_TX:
+    case RADIO_MODE_TX:
         cc1121_strobe(CC1121_SFTX);
         ret = cc1121_strobe(CC1121_STX);
         break;
@@ -577,49 +778,130 @@ static int cc1121_set_power(int8_t dbm)
         return -ENODEV;
     }
 
-    /* PA_CFG1: coarse power setting. Values are approximate for 868 MHz.
-     * See CC1121 datasheet Table 10. */
-    uint8_t pa_val;
-    if (dbm <= 0) {
-        pa_val = 0x03;
-    } else if (dbm <= 5) {
-        pa_val = 0x1B;
-    } else if (dbm <= 10) {
-        pa_val = CC1121_PA_10DBM;
-    } else {
-        pa_val = CC1121_PA_14DBM; /* 14 dBm max */
-        dbm = 14;
+    if (dbm > 14) {
+        dbm = 14; /* PA_POWER_RAMP saturates at 0x3F (~14 dBm) */
     }
 
-    int ret = cc1121_write_reg(CC1121_PA_CFG1, pa_val);
+    int ramp = 2 * ((int)dbm + 18) - 1;
+    if (ramp < 0x03) ramp = 0x03;
+    if (ramp > 0x3F) ramp = 0x3F;
+
+    /* OOK: A_min=0 (full depth) requires PA_POWER_RAMP = 4*ASK_DEPTH
+     * (datasheet PA_CFG0). The fixed ASK_DEPTH=15 in the OOK table forces
+     * ramp>=60, so any power below max made PA_POWER_RAMP-4*ASK_DEPTH<0 =
+     * illegal -> dead carrier. Recompute ASK_DEPTH for the chosen power and
+     * snap ramp to 4*ASK_DEPTH so the depth constraint always holds. */
+    if (g_cc1121.current_mod == RADIO_MOD_OOK) {
+        uint8_t depth = (uint8_t)(ramp / 4);
+        if (depth == 0) depth = 1;
+        ramp = depth * 4;
+        cc1121_write_reg(CC1121_PA_CFG0, (uint8_t)((depth << 3) | 0x04));
+    }
+
+    int ret = cc1121_write_reg(CC1121_PA_CFG2,
+                               CC1121_PA_CFG2_BIT6 | (uint8_t)(ramp & 0x3F));
     if (ret == 0) {
         g_cc1121.tx_power_dbm = dbm;
     }
     return ret;
 }
 
-static int cc1121_set_modulation(rf_modulation_t mod)
+static int cc1121_apply_modulation(radio_modulation_t mod)
+{
+    const struct { uint8_t addr; uint8_t val; } *tbl;
+    size_t n;
+
+    switch (mod) {
+    case RADIO_MOD_FSK:
+    case RADIO_MOD_GFSK:
+        tbl = (const void *)k_cc1121_fsk_mod; n = ARRAY_SIZE(k_cc1121_fsk_mod);
+        mod = RADIO_MOD_FSK;
+        break;
+    case RADIO_MOD_OOK:
+        tbl = (const void *)k_cc1121_ook_mod; n = ARRAY_SIZE(k_cc1121_ook_mod);
+        break;
+    default:
+        LOG_WRN("CC1121 unsupported modulation %d, using 2-FSK", mod);
+        tbl = (const void *)k_cc1121_fsk_mod; n = ARRAY_SIZE(k_cc1121_fsk_mod);
+        mod = RADIO_MOD_FSK;
+        break;
+    }
+
+    /* Switch must happen in IDLE; recalibrate after (RX chain changes). */
+    cc1121_strobe(CC1121_SIDLE);
+    int ret = wait_for_idle();
+    if (ret < 0) return ret;
+
+    for (size_t i = 0; i < n; i++) {
+        ret = cc1121_write_reg(tbl[i].addr, tbl[i].val);
+        if (ret < 0) {
+            LOG_ERR("mod reg 0x%02X write failed: %d", tbl[i].addr, ret);
+            return ret;
+        }
+    }
+
+    /* FOC (frequency offset correction) must be disabled in OOK mode:
+     * FOC integrator drifts during "0" bits (no carrier), corrupting demod.
+     * Restore the FSK value (0x22, FOC_EN=1) when leaving OOK. */
+    cc1121_write_ext_reg(CC1121_EXT_FREQOFF_CFG,
+                         mod == RADIO_MOD_OOK ? 0x00 : 0x22);
+
+    /* For OOK: use symbol-by-symbol timing correction (TOC_LIMIT=01=±2%).
+     * Default block-based (TOC_LIMIT=00) with 64-symbol blocks can mistrack
+     * OOK signals that have long runs of same bit (no transitions).
+     * TOC_CFG = 0b01_001_011 (TOC_LIMIT=01, pre-scale=6/16, post-integral=1/32).
+     * Restore default for FSK (0x0B = block-based, 16+64 symbols). */
+    cc1121_write_ext_reg(CC1121_EXT_TOC_CFG,
+                         mod == RADIO_MOD_OOK ? 0x4B : 0x0B);
+
+    /* OOK-independent symbol rate: 2400 for OOK, DT default otherwise. The OOK
+     * mod table deliberately omits SYMBOL_RATE so it's set here per-modulation. */
+    {
+        uint8_t sr2, sr1, sr0;
+        uint32_t rate = (mod == RADIO_MOD_OOK) ? CC1121_OOK_BITRATE : CC1121_DT_BITRATE;
+        bitrate_to_regs(rate, g_cc1121.xosc_hz, &sr2, &sr1, &sr0);
+        cc1121_write_reg(CC1121_SYMBOL_RATE2, sr2);
+        cc1121_write_reg(CC1121_SYMBOL_RATE1, sr1);
+        cc1121_write_reg(CC1121_SYMBOL_RATE0, sr0);
+    }
+
+    /* OOK-independent preamble: 24 bytes for OOK (long runway for AGC/sync lock
+     * on isolated packets), 4 bytes for FSK (default). */
+    cc1121_write_reg(CC1121_PREAMBLE_CFG1, mod == RADIO_MOD_OOK ? 0x30 : 0x18);
+
+    /* RXOFF_MODE=RX: stay in RX after each packet so the demod, AGC and FOC keep
+     * their lock between packets — the per-recv cold re-arm (SIDLE/SCAL/SRX) was
+     * what left FSK deaf-after-1st (demod settle gap + AGC/FOC churn).
+     * cc1121_rx detects packet completion by NUM_RXBYTES-stable instead of
+     * MARC→IDLE (MARC stays RX under RXOFF_MODE=RX). RFEND_CFG1 bits[5:4]: 00=IDLE,
+     * 11=RX; rest = reset 0x0F (RX_TIME=no-timeout). */
+    cc1121_write_reg(CC1121_RFEND_CFG1, 0x3F);
+
+    ret = cc1121_strobe(CC1121_SCAL);
+    if (ret < 0) return ret;
+    ret = wait_for_idle();
+    if (ret < 0) return ret;
+
+    g_cc1121.current_mod = mod;
+    /* Force the next recv() to cold-arm: a modulation switch rewrites the demod
+     * config and ends in IDLE (SCAL above). Without this, a caller that still has
+     * current_mode==RX would skip the re-arm and run the demod on the half-applied
+     * old state → deaf after a mod switch. */
+    g_cc1121.current_mode = RADIO_MODE_STANDBY;
+
+    uint8_t rb = 0;
+    cc1121_read_reg(CC1121_MODCFG_DEV_E, &rb);
+    LOG_INF("CC1121 modulation=%s MODCFG_DEV_E=0x%02X",
+            mod == RADIO_MOD_OOK ? "OOK" : "2-FSK", rb);
+    return 0;
+}
+
+static int cc1121_set_modulation(radio_modulation_t mod)
 {
     if (!g_cc1121.initialized) {
         return -ENODEV;
     }
-
-    uint8_t mod_reg;
-    switch (mod) {
-    case RF_MOD_FSK:
-    case RF_MOD_GFSK:
-        mod_reg = 0x46; /* 2-FSK */
-        break;
-    case RF_MOD_OOK:
-        mod_reg = 0x36; /* ASK/OOK */
-        break;
-    default:
-        LOG_WRN("CC1121 does not support modulation %d, using 2-FSK", mod);
-        mod_reg = 0x46;
-        break;
-    }
-
-    return cc1121_write_reg(CC1121_MDMCFG1, mod_reg);
+    return cc1121_apply_modulation(mod);
 }
 
 static int cc1121_set_bitrate(uint32_t bps)
@@ -646,34 +928,52 @@ static int cc1121_tx(const uint8_t *data, size_t len)
     if (!g_cc1121.initialized) {
         return -ENODEV;
     }
-    if (!data || len == 0 || len > 127) {
+    if (!data || len == 0 || len > CC1121_MAX_PAYLOAD) {
         return -EINVAL;
     }
 
     /* Ensure idle */
-    /* Ensure idle */
     cc1121_strobe(CC1121_SIDLE);
+    wait_for_idle();
     cc1121_strobe(CC1121_SFTX);
+
+    {
+        uint8_t mod_e = 0, pa0 = 0, pa1 = 0, pa2 = 0;
+        cc1121_read_reg(CC1121_MODCFG_DEV_E, &mod_e);
+        cc1121_read_reg(CC1121_PA_CFG0, &pa0);
+        cc1121_read_reg(CC1121_PA_CFG1, &pa1);
+        cc1121_read_reg(CC1121_PA_CFG2, &pa2);
+        LOG_INF("TX regs: MODCFG=0x%02X PA0=0x%02X PA1=0x%02X PA2=0x%02X mod=%d",
+                mod_e, pa0, pa1, pa2, g_cc1121.current_mod);
+    }
 
     /* Write length byte + payload to TX FIFO */
     uint8_t hdr  = CC1121_TXFIFO_BURST;
     uint8_t lbuf = (uint8_t)len;
 
-    gpio_pin_set_dt(&g_cc1121.cs, 0);
-    k_usleep(1);
     struct spi_buf tx_bufs[] = {
         { .buf = &hdr,         .len = 1   },
         { .buf = &lbuf,        .len = 1   },
         { .buf = (void *)data, .len = len },
     };
     struct spi_buf_set tx_set = { .buffers = tx_bufs, .count = 3 };
-    int ret = spi_write_dt(&g_cc1121.spi, &tx_set);
-    k_usleep(1);
-    gpio_pin_set_dt(&g_cc1121.cs, 1);
+    int ret = spi_write_dt(&g_spi, &tx_set);
 
     if (ret < 0) {
         LOG_ERR("TX FIFO write failed: %d", ret);
         return ret;
+    }
+
+    /* Verify the FIFO actually holds length byte + payload before firing TX */
+    {
+        uint8_t txbytes = 0;
+        cc1121_read_ext_reg(CC1121_EXT_NUM_TXBYTES, &txbytes);
+        if (txbytes != len + 1) {
+            LOG_ERR("TX FIFO load mismatch: NUM_TXBYTES=%u expected=%zu",
+                    txbytes, len + 1);
+            cc1121_strobe(CC1121_SFTX);
+            return -EIO;
+        }
     }
 
     /* Trigger TX */
@@ -682,21 +982,51 @@ static int cc1121_tx(const uint8_t *data, size_t len)
         return ret;
     }
 
-    /* Wait for TX completion (MARCSTATE returns to IDLE/RX after TX_END) */
-    int64_t deadline = k_uptime_get() + 2000;
-    uint8_t state;
-    do {
-        k_msleep(1);
-        cc1121_get_marcstate(&state);
-    } while (state == CC1121_MARC_TX && k_uptime_get() < deadline);
+    /* Wait for calibration to finish and TX to start, then for TX to end.
+     * After STX the chip goes IDLE→SETTLING→...→TX→TX_END→IDLE.
+     * Phase 1: wait for MARC_STATE to reach TX (0x13).
+     * Phase 2: wait for MARC_STATE to leave TX (TX complete). */
+    {
+        int64_t deadline = k_uptime_get() + 2000;
+        uint8_t st = 0;
 
-    if (state == CC1121_MARC_TX) {
-        LOG_ERR("TX timeout");
-        cc1121_strobe(CC1121_SIDLE);
-        return -ETIMEDOUT;
+        /* Phase 1: wait to enter TX */
+        while (k_uptime_get() < deadline) {
+            if (cc1121_get_marcstate(&st) < 0) {
+                cc1121_strobe(CC1121_SIDLE);
+                return -EIO;
+            }
+            st &= 0x1F;
+            if (st == CC1121_MARC_TX) break;
+            if (st == CC1121_MARC_TX_END) break;  /* already finishing */
+            k_msleep(1);
+        }
+        if (st != CC1121_MARC_TX && st != CC1121_MARC_TX_END) {
+            LOG_ERR("TX never started (MARCSTATE=0x%02X, freq=%u pwr=%d)",
+                    st, g_cc1121.frequency_hz, g_cc1121.tx_power_dbm);
+            cc1121_strobe(CC1121_SIDLE);
+            return -EIO;
+        }
+
+        /* Phase 2: wait for TX to complete */
+        while (st == CC1121_MARC_TX && k_uptime_get() < deadline) {
+            k_msleep(1);
+            if (cc1121_get_marcstate(&st) < 0) {
+                cc1121_strobe(CC1121_SIDLE);
+                return -EIO;
+            }
+            st &= 0x1F;
+        }
+        if (st == CC1121_MARC_TX) {
+            LOG_ERR("TX timeout");
+            cc1121_strobe(CC1121_SIDLE);
+            return -ETIMEDOUT;
+        }
     }
 
-    g_cc1121.current_mode = RF_MODE_STANDBY;
+    g_cc1121.current_mode = RADIO_MODE_STANDBY;
+    LOG_INF("TX done: %zu bytes at %u Hz, %d dBm", len,
+            g_cc1121.frequency_hz, g_cc1121.tx_power_dbm);
     return 0;
 }
 
@@ -706,78 +1036,154 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
         return -ENODEV;
     }
 
-    cc1121_strobe(CC1121_SFRX);
-    cc1121_strobe(CC1121_SRX);
-    g_cc1121.current_mode = RF_MODE_RX;
+    /* RXOFF_MODE=RX: the chip stays in RX across packets, so we cold-arm only
+     * on the first entry and let the demod/AGC/FOC hold lock between recv()
+     * calls. A modulation switch resets current_mode to STANDBY
+     * (cc1121_apply_modulation) which forces the next call to re-arm cleanly. */
+    if (g_cc1121.current_mode != RADIO_MODE_RX) {
+        cc1121_strobe(CC1121_SIDLE);
+        wait_for_idle();
+        cc1121_strobe(CC1121_SFRX);
+
+        /* Explicit FS recalibration on every RX arm. Relying on FS_AUTOCAL alone
+         * left the synth un-/half-calibrated after the first packet → chip would
+         * not re-enter RX (MARCSTATE stuck IDLE 0x01) and went deaf until something
+         * external recalibrated (historically a frequency sweep). SCAL calibrates
+         * from IDLE and returns to IDLE; wait_for_idle() ensures it completes before
+         * SRX so RX is armed on a freshly-locked synth. */
+        cc1121_strobe(CC1121_SCAL);
+        wait_for_idle();
+
+        cc1121_strobe(CC1121_SRX);
+        g_cc1121.current_mode = RADIO_MODE_RX;
+        k_msleep(2);  /* let SRX settle into RX before the first FIFO poll */
+    }
+    LOG_DBG("RX started: freq=%u timeout=%u ms", g_cc1121.frequency_hz, timeout_ms);
 
     int64_t deadline = k_uptime_get() + (timeout_ms ? timeout_ms : CC1121_RX_TIMEOUT_MS);
-    uint8_t rx_bytes = 0;
+    uint8_t last_marc = CC1121_MARC_RX;
 
     while (k_uptime_get() < deadline) {
+        uint8_t rx_bytes = 0;
         cc1121_read_ext_reg(CC1121_EXT_NUM_RXBYTES, &rx_bytes);
-        if (rx_bytes > 0) {
-            break;
+
+        uint8_t marc = 0;
+        cc1121_get_marcstate(&marc);
+        marc &= 0x1F;
+
+        last_marc = marc;
+
+        /* Recover from RX FIFO overflow error */
+        if (marc == CC1121_MARC_RXFIFO_ERROR) {
+            LOG_WRN("RX FIFO overflow — flushing and restarting RX");
+            cc1121_strobe(CC1121_SIDLE);
+            k_msleep(1);
+            cc1121_strobe(CC1121_SFRX);
+            cc1121_strobe(CC1121_SRX);
+            last_marc = CC1121_MARC_RX;
+            k_msleep(1);
+            continue;
         }
-        k_msleep(1);
+
+        /* RXOFF_MODE=RX: MARC stays at RX (0x0D) across packets, so we can't
+         * use MARC→IDLE as the completion signal. Detect a fully-received
+         * packet by NUM_RXBYTES going non-zero and then stable: while the
+         * packet handler is still writing the FIFO the count keeps growing;
+         * once it stops the whole packet (len+payload+status) is in the FIFO. */
+        if (rx_bytes == 0) {
+            k_msleep(50);
+            continue;
+        }
+        k_msleep(8);
+        uint8_t rx_bytes2 = 0;
+        cc1121_read_ext_reg(CC1121_EXT_NUM_RXBYTES, &rx_bytes2);
+        if (rx_bytes2 != rx_bytes) {
+            continue;  /* still filling — wait for it to settle */
+        }
+        /* Spurious 1-2 bytes with no carrier = noise. Flush (SFRX needs IDLE)
+         * and re-enter RX. */
+        if (rx_bytes < 3) {
+            cc1121_strobe(CC1121_SIDLE);
+            wait_for_idle();
+            cc1121_strobe(CC1121_SFRX);
+            cc1121_strobe(CC1121_SRX);
+            k_msleep(1);
+            continue;
+        }
+
+        /* Valid completed packet */
+        {
+            /* Don't count the first byte (packet length) or the last two bytes (status) */
+            size_t payload_len = (size_t)(rx_bytes - 3);
+
+            if (payload_len > max_len) {
+                LOG_WRN("RX: payload_len=%zu > max=%zu — flush+restart",
+                        payload_len, max_len);
+                cc1121_strobe(CC1121_SIDLE);
+                cc1121_strobe(CC1121_SFRX);
+                cc1121_strobe(CC1121_SRX);
+                last_marc = CC1121_MARC_RX;
+                k_msleep(1);
+                continue;
+            }
+
+            /* Burst-read the entire RX FIFO in one SPI transaction.
+             * The first byte on SO is the chip status (during the hdr byte
+             * on SI); subsequent bytes are FIFO data. */
+            uint8_t burst = CC1121_RXFIFO_BURST;
+            uint8_t rx_buf[130] = { 0 };  /* 128 payload + 2 status */
+            uint8_t tx_dummy[130] = { 0 };
+            struct spi_buf tx_bufs[] = {
+                { .buf = &burst,   .len = 1          },
+                { .buf = tx_dummy, .len = rx_bytes   },
+            };
+            struct spi_buf rx_bufs_spi[] = {
+                { .buf = &burst,  .len = 1          },
+                { .buf = rx_buf,  .len = rx_bytes   },
+            };
+            struct spi_buf_set tx_set = { .buffers = tx_bufs, .count = 2 };
+            struct spi_buf_set rx_set = { .buffers = rx_bufs_spi, .count = 2 };
+            int ret = spi_transceive_dt(&g_spi, &tx_set, &rx_set);
+
+            if (ret < 0) {
+                LOG_ERR("RX FIFO read failed: %d", ret);
+                cc1121_strobe(CC1121_SIDLE);
+                return ret;
+            }
+
+            /* rx_buf[payload_len+1..rx_bytes-1] = status. Skip the length byte. */
+            memcpy(buffer, rx_buf + 1, payload_len);
+
+            LOG_DBG("RX done: %d bytes", (int)payload_len);
+
+            /* RXOFF_MODE=RX already returned the chip to RX and the burst
+             * read drained the FIFO — leave it armed and locked. */
+            g_cc1121.current_mode = RADIO_MODE_RX;
+
+            if (g_cc1121.event_cb) {
+                radio_event_t ev = {
+                    .type = RADIO_EVENT_RX_DONE,
+                    .data = buffer,
+                    .len = payload_len,
+                    .rssi = 0,
+                    .user_data = g_cc1121.event_user_data,
+                };
+                g_cc1121.event_cb(&ev, g_cc1121.event_user_data);
+            }
+            return (int)payload_len;
+        }
+
     }
 
-    if (rx_bytes == 0) {
-        cc1121_strobe(CC1121_SIDLE);
-        g_cc1121.current_mode = RF_MODE_STANDBY;
-        return 0;
+    /* Timeout */
+    {
+        uint8_t marc = 0;
+        cc1121_get_marcstate(&marc);
+        LOG_DBG("RX timeout: MARCSTATE=0x%02X NUM_RXBYTES=0", marc & 0x1F);
     }
-
-    /* Read length byte first */
-    uint8_t pkt_len = 0;
-    uint8_t hdr = CC1121_RXFIFO_BURST;
-
-    gpio_pin_set_dt(&g_cc1121.cs, 0);
-    k_usleep(1);
-    struct spi_buf tx_bufs[] = { { .buf = &hdr, .len = 1 } };
-    struct spi_buf rx_bufs[] = {
-        { .buf = &hdr,    .len = 1 },       /* status byte */
-        { .buf = &pkt_len,.len = 1 },        /* length byte */
-    };
-    struct spi_buf_set tx_set = { .buffers = tx_bufs, .count = 1 };
-    struct spi_buf_set rx_set = { .buffers = rx_bufs, .count = 2 };
-    spi_transceive_dt(&g_cc1121.spi, &tx_set, &rx_set);
-    k_usleep(1);
-    gpio_pin_set_dt(&g_cc1121.cs, 1);
-
-    size_t read_len = MIN(pkt_len, max_len);
-    if (read_len == 0) {
-        cc1121_strobe(CC1121_SFRX);
-        return 0;
-    }
-
-    /* Read payload */
-    uint8_t burst = CC1121_RXFIFO_BURST;
-    gpio_pin_set_dt(&g_cc1121.cs, 0);
-    k_usleep(1);
-    struct spi_buf tx2 = { .buf = &burst, .len = 1 };
-    struct spi_buf rx2[2] = {
-        { .buf = &burst, .len = 1       }, /* status */
-        { .buf = buffer, .len = read_len },
-    };
-    struct spi_buf_set tx2_set = { .buffers = &tx2,  .count = 1 };
-    struct spi_buf_set rx2_set = { .buffers = rx2,   .count = 2 };
-    int ret = spi_transceive_dt(&g_cc1121.spi, &tx2_set, &rx2_set);
-    k_usleep(1);
-    gpio_pin_set_dt(&g_cc1121.cs, 1);
-
-    cc1121_strobe(CC1121_SIDLE);
-    g_cc1121.current_mode = RF_MODE_STANDBY;
-
-    if (ret < 0) {
-        LOG_ERR("RX FIFO read failed: %d", ret);
-        return ret;
-    }
-
-    if (g_cc1121.rx_callback) {
-        g_cc1121.rx_callback(buffer, read_len, 0);
-    }
-
-    return (int)read_len;
+    /* RX stays armed across recv() timeouts so the next call resumes
+     * the same hot RX — no teardown here. */
+    return 0;
 }
 
 static int cc1121_get_rssi(int16_t *rssi)
@@ -786,48 +1192,301 @@ static int cc1121_get_rssi(int16_t *rssi)
         return -ENODEV;
     }
 
-    /* CC1121 reports RSSI as a 2's-complement 12-bit value in 0.0625 dBm steps.
-     * For simplicity, read RSSI1 (MSB) as an 8-bit signed estimate. */
-    uint8_t rssi1 = 0;
-    int ret = cc1121_read_ext_reg(0xF6, &rssi1); /* RSSI1 extended reg */
-    if (ret < 0) {
-        return ret;
+    /* Enter RX so the AGC runs and RSSI reflects real signal level. */
+    cc1121_strobe(CC1121_SIDLE);
+    wait_for_idle();
+    cc1121_strobe(CC1121_SFRX);
+    cc1121_strobe(CC1121_SRX);
+    k_msleep(10);
+
+    /* Read full 12-bit RSSI: RSSI1[7:0] = RSSI[11:4], RSSI0[6:3] = RSSI[3:0].
+     * CC112x: RSSI[11:0] is two's complement, 0.0625 dB/LSB.
+     * RSSI_dBm = (int12_t)RSSI[11:0] / 16 - offset.
+     *
+     * AGC_GAIN_ADJUST is at reset (0x00), so offset is applied in software.
+     * Typical offset for CC112x at 868 MHz is ~82-86 dB. */
+    uint8_t rssi1 = 0, rssi0 = 0;
+    cc1121_read_ext_reg(CC1121_EXT_RSSI1, &rssi1);
+    cc1121_read_ext_reg(CC1121_EXT_RSSI0, &rssi0);
+
+    /* DEBUG: log raw bytes to diagnose erratic readings */
+    LOG_INF("RSSI raw: RSSI1=0x%02X RSSI0=0x%02X", rssi1, rssi0);
+
+    cc1121_strobe(CC1121_SIDLE);
+
+    /* Build signed 12-bit value */
+    int16_t raw = ((int16_t)(int8_t)rssi1) << 4;
+    raw |= (rssi0 >> 3) & 0x0F;
+    if (raw & 0x0800) {
+        raw |= 0xF000;  /* sign-extend to 16-bit */
     }
-    /* Convert: value is (RSSI / 16) - offset.  Offset ≈ 74 dB for most configs. */
-    *rssi = (int16_t)((int8_t)rssi1) - 74;
+
+    /* 0.0625 dB/LSB → raw/16 converts to dB, then subtract offset (~84 dB at 868 MHz) */
+    *rssi = raw / 16 - 84;
     return 0;
 }
 
-static void cc1121_set_rx_callback(rf_rx_callback_t cb)
+static int cc1121_set_event_callback(radio_handle_t *handle, radio_event_cb_t cb, void *user_data)
 {
-    g_cc1121.rx_callback = cb;
+    ARG_UNUSED(handle);
+    g_cc1121.event_cb = cb;
+    g_cc1121.event_user_data = user_data;
+    return 0;
+}
+
+/* ── Raw OOK capture / replay ──────────────────────────────────────────────
+ * Bypass the packet engine: OOK demod, no sync word, infinite packet length,
+ * high symbol rate. The RX FIFO then holds the hard-sliced OOK bitstream
+ * (8 samples/byte at sample_rate_hz); TX FIFO bits gate the carrier the same
+ * way. State that apply_modulation() does NOT restore is snapshotted here. */
+struct cc1121_raw_saved {
+    radio_modulation_t mod;
+    uint8_t sr2, sr1, sr0;   /* SYMBOL_RATE2/1/0 */
+    uint8_t sync_cfg0;       /* SYNC_CFG0 (sync mode) */
+    uint8_t pkt_cfg1;        /* PKT_CFG1 (CRC / APPEND_STATUS) */
+};
+
+static int cc1121_raw_enter(uint32_t sample_rate_hz, struct cc1121_raw_saved *sv)
+{
+    /* Snapshot the registers raw mode clobbers that apply_modulation() won't
+     * put back (SYMBOL_RATE, SYNC_CFG0 and PKT_CFG1 are not in the mod table). */
+    sv->mod = g_cc1121.current_mod;
+    cc1121_read_reg(CC1121_SYMBOL_RATE2, &sv->sr2);
+    cc1121_read_reg(CC1121_SYMBOL_RATE1, &sv->sr1);
+    cc1121_read_reg(CC1121_SYMBOL_RATE0, &sv->sr0);
+    cc1121_read_reg(CC1121_SYNC_CFG0,    &sv->sync_cfg0);
+    cc1121_read_reg(CC1121_PKT_CFG1,     &sv->pkt_cfg1);
+
+    /* OOK demod path: wide CHAN_BW, AGC, PA all come from the OOK mod table. */
+    int ret = cc1121_apply_modulation(RADIO_MOD_OOK);
+    if (ret < 0) return ret;
+
+    /* High symbol rate oversamples the OOK envelope. */
+    uint8_t sr2, sr1, sr0;
+    bitrate_to_regs(sample_rate_hz, g_cc1121.xosc_hz, &sr2, &sr1, &sr0);
+    cc1121_write_reg(CC1121_SYMBOL_RATE2, sr2);
+    cc1121_write_reg(CC1121_SYMBOL_RATE1, sr1);
+    cc1121_write_reg(CC1121_SYMBOL_RATE0, sr0);
+
+    /* No sync word — free-running stream: clear SYNC_MODE (SYNC_CFG0[4:2]). */
+    cc1121_write_reg(CC1121_SYNC_CFG0, sv->sync_cfg0 & ~0x1C);
+
+    /* Infinite packet length (LENGTH_CONFIG=10b), no CRC / no status bytes. */
+    cc1121_write_reg(CC1121_PKT_CFG0, 0x40);
+    cc1121_write_reg(CC1121_PKT_CFG1, 0x00);
+    return 0;
+}
+
+static void cc1121_raw_exit(const struct cc1121_raw_saved *sv)
+{
+    cc1121_strobe(CC1121_SIDLE);
+    wait_for_idle();
+    cc1121_write_reg(CC1121_SYMBOL_RATE2, sv->sr2);
+    cc1121_write_reg(CC1121_SYMBOL_RATE1, sv->sr1);
+    cc1121_write_reg(CC1121_SYMBOL_RATE0, sv->sr0);
+    cc1121_write_reg(CC1121_SYNC_CFG0,    sv->sync_cfg0);
+    cc1121_write_reg(CC1121_PKT_CFG1,     sv->pkt_cfg1);
+    /* Restores MODCFG/AGC/PA/CHAN_BW/PKT_CFG0/FREQOFF/TOC + recalibrates. */
+    cc1121_apply_modulation(sv->mod);
+}
+
+static int cc1121_raw_capture(uint8_t *buf, size_t max_bytes,
+                              uint32_t sample_rate_hz, uint32_t timeout_ms)
+{
+    if (!g_cc1121.initialized) return -ENODEV;
+    if (!buf || max_bytes == 0 || max_bytes > 8192) return -EINVAL;
+
+    struct cc1121_raw_saved sv;
+    int ret = cc1121_raw_enter(sample_rate_hz, &sv);
+    if (ret < 0) { cc1121_raw_exit(&sv); return ret; }
+
+    cc1121_strobe(CC1121_SIDLE);
+    wait_for_idle();
+    cc1121_strobe(CC1121_SFRX);
+    cc1121_strobe(CC1121_SRX);
+
+    size_t  n        = 0;
+    int64_t deadline = k_uptime_get() + (timeout_ms ? timeout_ms : 2000);
+
+    /* Static zero array for TX dummy bytes (mirrors the proven rx() pattern). */
+    static const uint8_t tx_zeros[128] = { 0 };
+
+    while (n < max_bytes && k_uptime_get() < deadline) {
+        uint8_t marc = 0;
+        cc1121_get_marcstate(&marc);
+        if ((marc & 0x1F) == CC1121_MARC_RXFIFO_ERROR) {
+            cc1121_strobe(CC1121_SIDLE);
+            wait_for_idle();           /* SFRX is only valid in IDLE */
+            cc1121_strobe(CC1121_SFRX);
+            cc1121_strobe(CC1121_SRX);
+            continue;
+        }
+
+        uint8_t avail = 0;
+        cc1121_read_ext_reg(CC1121_EXT_NUM_RXBYTES, &avail);
+        if (avail == 0) { k_busy_wait(200); continue; }
+
+        /* Cap chunk to 128 — NUM_RXBYTES is ≤128 and tx_zeros is 128 bytes. */
+        size_t chunk = MIN((size_t)avail, max_bytes - n);
+        chunk = MIN(chunk, (size_t)128);
+
+        /* Burst-read `chunk` FIFO bytes. First SO byte (during the header byte
+         * on SI) is the chip status — captured into `status` and discarded. */
+        uint8_t hdr = CC1121_RXFIFO_BURST;
+        uint8_t status = 0;
+        struct spi_buf txb[] = {
+            { .buf = &hdr,              .len = 1     },
+            { .buf = (void *)tx_zeros,  .len = chunk },
+        };
+        struct spi_buf rxb[] = {
+            { .buf = &status, .len = 1     },
+            { .buf = &buf[n], .len = chunk },
+        };
+        struct spi_buf_set txs = { .buffers = txb, .count = 2 };
+        struct spi_buf_set rxs = { .buffers = rxb, .count = 2 };
+        if (spi_transceive_dt(&g_spi, &txs, &rxs) < 0) break;
+
+        n += chunk;
+    }
+
+    cc1121_raw_exit(&sv);
+    LOG_INF("raw capture: %zu bytes @ %u sps", n, sample_rate_hz);
+    return (int)n;
+}
+
+static int cc1121_raw_replay(const uint8_t *buf, size_t len,
+                             uint32_t sample_rate_hz, uint32_t repeat)
+{
+    if (!g_cc1121.initialized) return -ENODEV;
+    if (!buf || len == 0) return -EINVAL;
+    if (repeat == 0) repeat = 1;
+
+    struct cc1121_raw_saved sv;
+    int ret = cc1121_raw_enter(sample_rate_hz, &sv);
+    if (ret < 0) { cc1121_raw_exit(&sv); return ret; }
+
+    for (uint32_t r = 0; r < repeat; r++) {
+        cc1121_strobe(CC1121_SIDLE);
+        wait_for_idle();
+        cc1121_strobe(CC1121_SFTX);
+
+        /* Preload up to a full FIFO, then fire TX and keep refilling. */
+        size_t  sent = 0;
+        size_t  pre  = MIN(len, (size_t)128);
+        uint8_t hdr  = CC1121_TXFIFO_BURST;
+        struct spi_buf w0[] = {
+            { .buf = &hdr,            .len = 1   },
+            { .buf = (void *)&buf[0], .len = pre },
+        };
+        struct spi_buf_set ws0 = { .buffers = w0, .count = 2 };
+        if (spi_write_dt(&g_spi, &ws0) < 0) { cc1121_raw_exit(&sv); return -EIO; }
+        sent = pre;
+
+        cc1121_strobe(CC1121_STX);
+
+        int64_t tx_deadline = k_uptime_get() + 5000;
+        while (sent < len && k_uptime_get() < tx_deadline) {
+            uint8_t used = 0;
+            cc1121_read_ext_reg(CC1121_EXT_NUM_TXBYTES, &used);
+            if (used > 100) { k_busy_wait(200); continue; }  /* let FIFO drain */
+            size_t chunk = MIN(len - sent, (size_t)(128 - used));
+            struct spi_buf w[] = {
+                { .buf = &hdr,               .len = 1     },
+                { .buf = (void *)&buf[sent], .len = chunk },
+            };
+            struct spi_buf_set ws = { .buffers = w, .count = 2 };
+            if (spi_write_dt(&g_spi, &ws) < 0) { cc1121_raw_exit(&sv); return -EIO; }
+            sent += chunk;
+        }
+
+        /* Wait for TX to finish draining the FIFO back to IDLE. */
+        int64_t end = k_uptime_get() + 1000;
+        uint8_t marc = 0;
+        do {
+            cc1121_get_marcstate(&marc);
+        } while ((marc & 0x1F) != CC1121_MARC_IDLE && k_uptime_get() < end);
+
+        k_msleep(10);  /* gap between repeats */
+    }
+
+    cc1121_raw_exit(&sv);
+    LOG_INF("raw replay: %zu bytes x%u @ %u sps", len, repeat, sample_rate_hz);
+    return 0;
 }
 
 /* =========================================================================
- * RF framework driver struct
+ * radio_ops_t vtable shims
  * ========================================================================= */
 
-static const struct akira_rf_driver cc1121_driver = {
-    .name              = "CC1121",
-    .type              = RF_CHIP_CC1101, /* Reuse enum slot; CC1121 replaces CC1101 */
-    .init              = cc1121_init,
-    .deinit            = cc1121_deinit,
-    .set_mode          = cc1121_set_mode,
-    .set_frequency     = cc1121_set_frequency,
-    .set_power         = cc1121_set_power,
-    .set_modulation    = cc1121_set_modulation,
-    .set_bitrate       = cc1121_set_bitrate,
-    .tx                = cc1121_tx,
-    .rx                = cc1121_rx,
-    .get_rssi          = cc1121_get_rssi,
-    .set_rx_callback   = cc1121_set_rx_callback,
-    /* LoRa-specific ops not applicable */
-    .set_spreading_factor = NULL,
-    .set_bandwidth        = NULL,
-    .set_coding_rate      = NULL,
+static int cc1121_ops_init(radio_handle_t *h)        { ARG_UNUSED(h); return cc1121_init(); }
+static int cc1121_ops_deinit(radio_handle_t *h)      { ARG_UNUSED(h); return cc1121_deinit(); }
+static int cc1121_ops_send(radio_handle_t *h, const uint8_t *d, size_t l) { ARG_UNUSED(h); return cc1121_tx(d, l); }
+static int cc1121_ops_get_max_payload(radio_handle_t *h, size_t *max_len)
+{
+    ARG_UNUSED(h);
+    if (!g_cc1121.initialized) {
+        return -ENODEV;
+    }
+    *max_len = CC1121_MAX_PAYLOAD;
+    return 0;
+}
+static int cc1121_ops_recv(radio_handle_t *h, uint8_t *b, size_t l, uint32_t t) { ARG_UNUSED(h); return cc1121_rx(b, l, t); }
+static int cc1121_ops_set_frequency(radio_handle_t *h, uint32_t hz) { ARG_UNUSED(h); return cc1121_set_frequency(hz); }
+static int cc1121_ops_set_power(radio_handle_t *h, int8_t dbm)      { ARG_UNUSED(h); return cc1121_set_power(dbm); }
+static int cc1121_ops_get_rssi(radio_handle_t *h, int16_t *r)       { ARG_UNUSED(h); return cc1121_get_rssi(r); }
+static int cc1121_ops_set_mode(radio_handle_t *h, radio_mode_t m)   { ARG_UNUSED(h); return cc1121_set_mode(m); }
+static int cc1121_ops_set_modulation(radio_handle_t *h, radio_modulation_t m) { ARG_UNUSED(h); return cc1121_set_modulation(m); }
+static int cc1121_ops_set_bitrate(radio_handle_t *h, uint32_t bps)  { ARG_UNUSED(h); return cc1121_set_bitrate(bps); }
+static int cc1121_ops_raw_capture(radio_handle_t *h, uint8_t *b, size_t m,
+                                  uint32_t rate, uint32_t t)
+{ ARG_UNUSED(h); return cc1121_raw_capture(b, m, rate, t); }
+
+static int cc1121_ops_raw_replay(radio_handle_t *h, const uint8_t *b, size_t l,
+                                 uint32_t rate, uint32_t rep)
+{ ARG_UNUSED(h); return cc1121_raw_replay(b, l, rate, rep); }
+
+static const radio_ops_t cc1121_ops = {
+    .init               = cc1121_ops_init,
+    .deinit             = cc1121_ops_deinit,
+    .send               = cc1121_ops_send,
+    .recv               = cc1121_ops_recv,
+    .set_event_callback = cc1121_set_event_callback,
+    .set_frequency      = cc1121_ops_set_frequency,
+    .set_power          = cc1121_ops_set_power,
+    .get_rssi           = cc1121_ops_get_rssi,
+    .set_mode           = cc1121_ops_set_mode,
+    .set_modulation     = cc1121_ops_set_modulation,
+    .set_bitrate        = cc1121_ops_set_bitrate,
+    .raw_capture        = cc1121_ops_raw_capture,
+    .raw_replay         = cc1121_ops_raw_replay,
+    .get_max_payload    = cc1121_ops_get_max_payload,
 };
 
-const struct akira_rf_driver *cc1121_get_driver(void)
+static radio_handle_t cc1121_handle = {
+    .type         = RADIO_TYPE_SUBGHZ,
+    .name         = "CC1121",
+    .capabilities = RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_CCA | RADIO_CAP_RAW_MODE |
+                    RADIO_CAP_LOW_POWER | RADIO_CAP_BAND_SUBGHZ |
+                    RADIO_CAP_MOD_FSK | RADIO_CAP_MOD_OOK,
+    .ops          = &cc1121_ops,
+};
+
+radio_handle_t *cc1121_get_handle(void)
 {
-    return &cc1121_driver;
+    return &cc1121_handle;
 }
+
+#ifdef CONFIG_AKIRA_CC1121
+static int cc1121_auto_register(void)
+{
+    int ret = radio_manager_register(&cc1121_handle);
+    if (ret < 0 && ret != -EALREADY) {
+        LOG_ERR("Failed to register CC1121: %d", ret);
+        return ret;
+    }
+    LOG_INF("CC1121 registered with radio_manager");
+    return 0;
+}
+
+SYS_INIT(cc1121_auto_register, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
+#endif /* CONFIG_AKIRA_CC1121 */

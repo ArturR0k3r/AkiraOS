@@ -1,0 +1,11 @@
+sample:
+  name: AkiraOS product template
+  description: Product firmware skeleton — vendor capability, native API and hook
+tests:
+  akiraos.template.akira_product:
+    build_only: true
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    tags: akiraos module product

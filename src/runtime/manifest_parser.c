@@ -16,6 +16,7 @@
 #include <zephyr/logging/log.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <errno.h>
 #include <stdint.h>
 #include "runtime/security.h"
@@ -160,6 +161,9 @@ void manifest_init_defaults(akira_manifest_t *manifest)
     manifest->version[0] = '\0';
     manifest->valid = false;
     /* net_policy zeroed by memset — present=false, deny_all=false, counts=0 */
+    manifest->commands_json[0] = '[';
+    manifest->commands_json[1] = ']';
+    manifest->commands_json[2] = '\0';
 }
 
 int manifest_parse_json(const char *json, size_t json_len, akira_manifest_t *manifest)
@@ -239,6 +243,35 @@ int manifest_parse_json(const char *json, size_t json_len, akira_manifest_t *man
             if (!p)
                 return -EINVAL;
         }
+        else if (strcmp(key, "abi") == 0)
+        {
+            /* "MAJOR.MINOR": the AkiraOS WASM import ABI the app was built for. */
+            char abi[16];
+            p = json_parse_string(p, end, abi, sizeof(abi));
+            if (!p)
+                return -EINVAL;
+            unsigned int mj = 0, mn = 0;
+            if (sscanf(abi, "%u.%u", &mj, &mn) >= 1) {
+                manifest->has_abi = true;
+                manifest->abi_major = (uint8_t)mj;
+                manifest->abi_minor = (uint8_t)mn;
+            }
+        }
+        else if (strcmp(key, "min_akiraos_version") == 0)
+        {
+            /* "MAJOR.MINOR.PATCH": lowest AkiraOS version the app supports. */
+            char ver[16];
+            p = json_parse_string(p, end, ver, sizeof(ver));
+            if (!p)
+                return -EINVAL;
+            unsigned int a = 0, b = 0, c = 0;
+            if (sscanf(ver, "%u.%u.%u", &a, &b, &c) >= 1) {
+                manifest->has_min_os = true;
+                manifest->min_os[0] = (uint16_t)a;
+                manifest->min_os[1] = (uint16_t)b;
+                manifest->min_os[2] = (uint16_t)c;
+            }
+        }
         else if (strcmp(key, "capabilities") == 0)
         {
             /* Parse array of capability strings */
@@ -275,9 +308,9 @@ int manifest_parse_json(const char *json, size_t json_len, akira_manifest_t *man
                     return -EINVAL;
                 }
 
-                uint32_t cap = akira_capability_str_to_mask(str_val);
+                uint64_t cap = akira_capability_str_to_mask(str_val);
                 manifest->cap_mask |= cap;
-                LOG_DBG("Parsed capability: %s -> 0x%08x", str_val, cap);
+                LOG_DBG("Parsed capability: %s -> 0x%016llx", str_val, (unsigned long long)cap);
             }
         }
         else if (strcmp(key, "network_policy") == 0)
@@ -448,6 +481,59 @@ int manifest_parse_json(const char *json, size_t json_len, akira_manifest_t *man
                     manifest->net_policy.host_count,
                     manifest->net_policy.port_count);
         }
+        else if (strcmp(key, "commands") == 0)
+        {
+            /* Capture the array verbatim — firmware doesn't interpret command
+             * schemas, it just carries them to the hub dashboard. */
+            p = json_skip_ws(p, end);
+            if (p >= end || *p != '[')
+            {
+                LOG_ERR("Invalid JSON: commands must be array");
+                return -EINVAL;
+            }
+
+            const char *arr_start = p;
+            int depth = 0;
+            bool in_str = false;
+            while (p < end)
+            {
+                if (!in_str)
+                {
+                    if (*p == '"')
+                        in_str = true;
+                    else if (*p == '[')
+                        depth++;
+                    else if (*p == ']')
+                    {
+                        depth--;
+                        if (depth == 0)
+                        {
+                            p++;
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    if (*p == '\\' && p + 1 < end)
+                        p++;
+                    else if (*p == '"')
+                        in_str = false;
+                }
+                p++;
+            }
+
+            size_t arr_len = (size_t)(p - arr_start);
+            if (arr_len < sizeof(manifest->commands_json))
+            {
+                memcpy(manifest->commands_json, arr_start, arr_len);
+                manifest->commands_json[arr_len] = '\0';
+            }
+            else
+            {
+                LOG_WRN("commands array too large (%zu bytes), dropping", arr_len);
+            }
+        }
         else
         {
             /* Skip unknown keys - find end of value */
@@ -483,8 +569,8 @@ int manifest_parse_json(const char *json, size_t json_len, akira_manifest_t *man
     }
 
     manifest->valid = true;
-    LOG_INF("Parsed manifest: name=%s, cap_mask=0x%08x, memory_quota=%u",
-            manifest->name, manifest->cap_mask, manifest->memory_quota);
+    LOG_INF("Parsed manifest: name=%s, cap_mask=0x%016llx, memory_quota=%u",
+            manifest->name, (unsigned long long)manifest->cap_mask, manifest->memory_quota);
 
     return 0;
 }

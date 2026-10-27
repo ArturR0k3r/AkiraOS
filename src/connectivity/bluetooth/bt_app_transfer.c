@@ -78,10 +78,11 @@ static bool notify_enabled = false;
 BT_GATT_SERVICE_DEFINE(app_xfer_svc,
                        BT_GATT_PRIMARY_SERVICE(BT_UUID_APP_XFER),
 
-                       /* RX_DATA: Write without response for app chunks */
+                       /* RX_DATA: Write without response for app chunks
+                        * (encrypted link required — carries the app binary) */
                        BT_GATT_CHARACTERISTIC(BT_UUID_APP_RX_DATA,
                                               BT_GATT_CHRC_WRITE_WITHOUT_RESP,
-                                              BT_GATT_PERM_WRITE,
+                                              BT_GATT_PERM_WRITE_ENCRYPT,
                                               NULL, rx_data_write, NULL),
 
                        /* TX_STATUS: Notify for status updates */
@@ -92,10 +93,11 @@ BT_GATT_SERVICE_DEFINE(app_xfer_svc,
                        BT_GATT_CCC(status_ccc_changed,
                                    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
-                       /* CONTROL: Write for transfer control commands */
+                       /* CONTROL: Write for transfer control commands
+                        * (encrypted link required — install/start/stop/delete) */
                        BT_GATT_CHARACTERISTIC(BT_UUID_APP_CONTROL,
                                               BT_GATT_CHRC_WRITE,
-                                              BT_GATT_PERM_WRITE,
+                                              BT_GATT_PERM_WRITE_ENCRYPT,
                                               NULL, control_write, NULL), );
 
 static void status_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)

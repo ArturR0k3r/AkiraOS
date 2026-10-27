@@ -16,14 +16,23 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #include "akira.h"
+#include <lib/mem_helper.h>
 
 /* Include flash and MCUboot APIs only if available */
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/dfu/mcuboot.h>
+#if defined(CONFIG_MBEDTLS)
+#include <mbedtls/sha256.h>
+#define OTA_SHA256_AVAILABLE 1
+#endif
 #define OTA_FLASH_AVAILABLE 1
 #else
 #define OTA_FLASH_AVAILABLE 0
+#endif
+
+#ifdef CONFIG_AKIRA_BOOT_GUARD
+#include <akira_boot_guard.h>
 #endif
 
 LOG_MODULE_REGISTER(ota_manager, AKIRA_LOG_LEVEL);
@@ -65,7 +74,13 @@ K_MSGQ_DEFINE(ota_cmd_q, sizeof(struct ota_cmd), 4, 4);
  * preventing TCP/BLE/USB timeouts by keeping connections alive.
  */
 #define OTA_DATA_PIPE_SIZE CONFIG_AKIRA_OTA_DATA_PIPE_SIZE
-K_PIPE_DEFINE(ota_data_pipe, OTA_DATA_PIPE_SIZE, 4);
+/* Backing buffer placed in PSRAM on boards that have it (AKIRA_BULK_BSS is a
+ * no-op elsewhere): it is a thread-only ring — transport threads memcpy in via
+ * k_pipe_write, the worker memcpys out via k_pipe_read into a stack chunk before
+ * touching flash — so it is never accessed while the flash cache is disabled.
+ * The pipe is bound to the buffer at runtime in ota_manager_init(). */
+static struct k_pipe ota_data_pipe;
+static uint8_t AKIRA_BULK_BSS __aligned(4) ota_data_pipe_buf[OTA_DATA_PIPE_SIZE];
 
 /** Signaled by worker when CMD_FINALIZE or CMD_ABORT finishes */
 K_SEM_DEFINE(ota_done_sem, 0, 1);
@@ -99,7 +114,18 @@ static K_MUTEX_DEFINE(ota_buf_mutex); /* protects write_buffer + buffer_pos */
 /* Flash management */
 static const struct flash_area *secondary_fa = NULL;
 static uint8_t write_buffer[OTA_WRITE_BUFFER_SIZE] __aligned(4);
+
+/* Set once this boot starts writing a new image over the secondary slot,
+ * which until then holds the firmware that ran before the last swap. */
+static bool secondary_overwritten;
+
 static uint16_t buffer_pos = 0;
+
+/* Expected SHA-256 of the incoming image, supplied by the transport/handler
+ * that received the (authenticated) update metadata. Verified in
+ * do_finalize_update() before the image is ever marked bootable. */
+static uint8_t ota_expected_sha256[32];
+static bool    ota_expected_hash_set;
 
 /* Modular OTA transport support */
 #define MAX_OTA_TRANSPORTS 4
@@ -312,6 +338,7 @@ static enum ota_result do_start_update(uint32_t expected_size)
 
     update_progress(OTA_STATE_RECEIVING, "Erasing flash...");
     LOG_INF("OTA: Erasing flash... (0%%)");
+    secondary_overwritten = true;
 
     ret = flash_area_erase(secondary_fa, 0, secondary_fa->fa_size);
     if (ret)
@@ -427,6 +454,102 @@ static enum ota_result do_write_chunk(const uint8_t *data, uint16_t length)
     return result;
 }
 
+/**
+ * @brief Verify the written image against the expected SHA-256.
+ *
+ * Streams the just-written image back out of the secondary slot and compares
+ * its SHA-256 with the hash registered via ota_set_expected_sha256(). This is
+ * the authenticity/integrity gate that must pass before an image is ever marked
+ * bootable — the 4-byte MCUboot magic check alone proves nothing about content.
+ *
+ * Policy:
+ *   - expected hash set    -> compute + constant-time compare; mismatch rejects.
+ *   - no expected hash set -> reject when CONFIG_AKIRA_OTA_REQUIRE_HASH=y
+ *                             (fail closed), otherwise warn and allow.
+ */
+static enum ota_result verify_image_sha256(void)
+{
+    bool have_expected;
+    uint8_t expected[32];
+
+    k_mutex_lock(&ota_mutex, K_FOREVER);
+    have_expected = ota_expected_hash_set;
+    memcpy(expected, ota_expected_sha256, sizeof(expected));
+    k_mutex_unlock(&ota_mutex);
+
+    if (!have_expected) {
+#if IS_ENABLED(CONFIG_AKIRA_OTA_REQUIRE_HASH)
+        set_error(OTA_ERROR_INVALID_IMAGE,
+                  "No expected SHA-256 supplied; refusing unverified image");
+        LOG_ERR("OTA: image hash required but none was supplied — rejecting");
+        return OTA_ERROR_INVALID_IMAGE;
+#else
+        LOG_WRN("OTA: no expected SHA-256 supplied; installing without hash check");
+        return OTA_OK;
+#endif
+    }
+
+#if defined(OTA_SHA256_AVAILABLE)
+    mbedtls_sha256_context sha;
+    uint8_t digest[32];
+    uint8_t buf[256];
+    uint32_t remaining = ota_status.bytes_written;
+    uint32_t offset = 0;
+    int mret = 0;
+
+    mbedtls_sha256_init(&sha);
+    if (mbedtls_sha256_starts(&sha, 0 /* SHA-256, not SHA-224 */) != 0) {
+        mbedtls_sha256_free(&sha);
+        set_error(OTA_ERROR_INVALID_IMAGE, "SHA-256 init failed");
+        return OTA_ERROR_INVALID_IMAGE;
+    }
+
+    while (remaining > 0) {
+        uint32_t chunk = remaining < sizeof(buf) ? remaining : sizeof(buf);
+        if (flash_area_read(secondary_fa, offset, buf, chunk) != 0) {
+            mbedtls_sha256_free(&sha);
+            set_error(OTA_ERROR_INVALID_IMAGE, "Flash read-back failed");
+            return OTA_ERROR_INVALID_IMAGE;
+        }
+        mret = mbedtls_sha256_update(&sha, buf, chunk);
+        if (mret != 0) {
+            mbedtls_sha256_free(&sha);
+            set_error(OTA_ERROR_INVALID_IMAGE, "SHA-256 update failed");
+            return OTA_ERROR_INVALID_IMAGE;
+        }
+        offset += chunk;
+        remaining -= chunk;
+    }
+
+    if (mbedtls_sha256_finish(&sha, digest) != 0) {
+        mbedtls_sha256_free(&sha);
+        set_error(OTA_ERROR_INVALID_IMAGE, "SHA-256 finish failed");
+        return OTA_ERROR_INVALID_IMAGE;
+    }
+    mbedtls_sha256_free(&sha);
+
+    /* Constant-time comparison. */
+    uint8_t diff = 0;
+    for (int i = 0; i < 32; i++) {
+        diff |= (uint8_t)(digest[i] ^ expected[i]);
+    }
+    if (diff != 0) {
+        set_error(OTA_ERROR_INVALID_IMAGE, "SHA-256 mismatch — image rejected");
+        LOG_ERR("OTA: image SHA-256 mismatch — rejecting");
+        return OTA_ERROR_INVALID_IMAGE;
+    }
+
+    LOG_INF("OTA: image SHA-256 verified OK (%u bytes)", ota_status.bytes_written);
+    return OTA_OK;
+#else
+    /* No SHA-256 implementation available. A hash was expected but we cannot
+     * check it — fail closed rather than install an unverified image. */
+    set_error(OTA_ERROR_INVALID_IMAGE, "SHA-256 unavailable; cannot verify image");
+    LOG_ERR("OTA: SHA-256 unavailable but a hash was expected — rejecting");
+    return OTA_ERROR_INVALID_IMAGE;
+#endif
+}
+
 static enum ota_result do_finalize_update(void)
 {
     if (!secondary_fa)
@@ -462,6 +585,15 @@ static enum ota_result do_finalize_update(void)
     {
         set_error(OTA_ERROR_INVALID_IMAGE, "Invalid format");
         return OTA_ERROR_INVALID_IMAGE;
+    }
+
+    /* Authenticity/integrity gate: the image content must match the expected
+     * SHA-256 before we ever request a boot upgrade. Without this, the magic
+     * check above would happily install arbitrary bytes. */
+    enum ota_result verify_res = verify_image_sha256();
+    if (verify_res != OTA_OK)
+    {
+        return verify_res;
     }
 
     update_progress(OTA_STATE_INSTALLING, "Installing...");
@@ -514,9 +646,26 @@ static enum ota_result do_abort_update(void)
 
 static enum ota_result do_confirm_firmware(void)
 {
+#ifdef CONFIG_AKIRA_BOOT_GUARD
+    /* Let the boot guard end the trial (deadline, rollback record) too. */
+    int ret = akira_boot_guard_confirm();
+#else
     int ret = boot_write_img_confirmed();
+#endif
     return (ret == 0) ? OTA_OK : OTA_ERROR_BOOT_REQUEST_FAILED;
 }
+
+#if OTA_FLASH_AVAILABLE
+static void rollback_reboot_fn(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    sys_reboot(SYS_REBOOT_COLD);
+}
+
+/* Delayed so the caller (shell, WASM app) can still report the result. */
+static K_WORK_DELAYABLE_DEFINE(rollback_reboot_work, rollback_reboot_fn);
+#define OTA_ROLLBACK_REBOOT_DELAY K_SECONDS(1)
+#endif
 
 /*===========================================================================*/
 /* OTA Worker Thread                                                         */
@@ -717,6 +866,10 @@ static int ota_data_callback(const uint8_t *data, size_t len,
 /* Public API */
 int ota_manager_init(void)
 {
+    /* Bind the data pipe to its PSRAM-resident backing buffer before the worker
+     * thread or any transport handler can touch it. */
+    k_pipe_init(&ota_data_pipe, ota_data_pipe_buf, OTA_DATA_PIPE_SIZE);
+
     memset(&ota_status, 0, sizeof(ota_status));
     ota_status.state = OTA_STATE_IDLE;
     strcpy(ota_status.status_message, "Initialized");
@@ -773,9 +926,14 @@ enum ota_result ota_start_update(size_t expected_size)
     }
 
     /* Mark as in-progress immediately so ota_write_chunk() accepts data
-     * before the worker thread has set state to RECEIVING after erase. */
+     * before the worker thread has set state to RECEIVING after erase.
+     * Clear any expected hash from a prior session here (synchronously, before
+     * the worker starts) so the caller can set the new one right after this
+     * returns without racing the worker thread. */
     k_mutex_lock(&ota_mutex, K_FOREVER);
     ota_status.state = OTA_STATE_IN_PROGRESS;
+    ota_expected_hash_set = false;
+    memset(ota_expected_sha256, 0, sizeof(ota_expected_sha256));
     k_mutex_unlock(&ota_mutex);
 
     struct ota_cmd cmd = {.type = OTA_CMD_START, .size = (uint32_t)expected_size};
@@ -788,6 +946,19 @@ enum ota_result ota_start_update(size_t expected_size)
         return OTA_ERROR_ALREADY_IN_PROGRESS;
     }
 
+    return OTA_OK;
+}
+
+enum ota_result ota_set_expected_sha256(const uint8_t *hash)
+{
+    if (!hash) {
+        return OTA_ERROR_INVALID_PARAM;
+    }
+    k_mutex_lock(&ota_mutex, K_FOREVER);
+    memcpy(ota_expected_sha256, hash, sizeof(ota_expected_sha256));
+    ota_expected_hash_set = true;
+    k_mutex_unlock(&ota_mutex);
+    LOG_INF("OTA expected SHA-256 registered for image verification");
     return OTA_OK;
 }
 
@@ -894,21 +1065,54 @@ enum ota_result ota_confirm_firmware(void)
 
 enum ota_result ota_request_rollback(void)
 {
-    /* If the current image has not yet been confirmed (test-mode boot), a
-     * cold reset will cause MCUboot to automatically revert to the previous
-     * confirmed image.  If the image was already confirmed, rollback is not
-     * possible without reinstalling the old firmware via a new OTA cycle.
-     * Either way, this call marks the state and lets the caller trigger the
-     * reboot via sys_reboot() or the shell. */
+#if OTA_FLASH_AVAILABLE
+    const char *msg;
+
+    if (ota_is_update_in_progress())
+    {
+        return OTA_ERROR_ALREADY_IN_PROGRESS;
+    }
+
+    if (!boot_is_img_confirmed())
+    {
+        /* Trial boot: MCUboot restores the previous image on the next reset. */
+        msg = "Rolling back: rebooting into previous firmware";
+    }
+    else
+    {
+#ifdef CONFIG_MCUBOOT_BOOTLOADER_MODE_OVERWRITE_ONLY
+        /* The update overwrote the previous image; there is nothing to restore. */
+        return OTA_ERROR_INVALID_IMAGE;
+#else
+        /* After a swap upgrade the secondary slot holds the previous image.
+         * Boot it as a trial; MCUboot re-verifies it before swapping. */
+        struct mcuboot_img_header hdr;
+        if (secondary_overwritten ||
+            boot_read_bank_header(FLASH_AREA_IMAGE_SECONDARY, &hdr, sizeof(hdr)) != 0)
+        {
+            LOG_WRN("Rollback: no previous image in the secondary slot");
+            return OTA_ERROR_INVALID_IMAGE;
+        }
+        if (boot_request_upgrade(BOOT_UPGRADE_TEST) != 0)
+        {
+            return OTA_ERROR_BOOT_REQUEST_FAILED;
+        }
+        msg = "Rolling back: rebooting into previous firmware (trial)";
+#endif
+    }
+
     k_mutex_lock(&ota_mutex, K_FOREVER);
     ota_status.state = OTA_STATE_IDLE;
-    strncpy(ota_status.status_message, "Rollback requested — reboot to apply",
-            sizeof(ota_status.status_message) - 1);
+    strncpy(ota_status.status_message, msg, sizeof(ota_status.status_message) - 1);
     ota_status.status_message[sizeof(ota_status.status_message) - 1] = '\0';
     k_mutex_unlock(&ota_mutex);
 
-    LOG_INF("OTA rollback requested (reboot to apply)");
+    LOG_WRN("%s", msg);
+    k_work_schedule(&rollback_reboot_work, OTA_ROLLBACK_REBOOT_DELAY);
     return OTA_OK;
+#else
+    return OTA_ERROR_NOT_INITIALIZED;
+#endif
 }
 
 enum ota_result ota_register_progress_callback(ota_progress_cb_t callback, void *user_data)
@@ -996,6 +1200,15 @@ static int cmd_ota_status(const struct shell *sh, size_t argc, char **argv)
     {
         shell_print(sh, "Status: %s", p->status_message);
     }
+
+#ifdef CONFIG_AKIRA_BOOT_GUARD
+    shell_print(sh, "Firmware: %s",
+                akira_boot_guard_is_trial() ? "trial (not yet confirmed)" : "confirmed");
+    if (akira_boot_guard_rolled_back())
+    {
+        shell_print(sh, "Last update failed its trial boot and was rolled back");
+    }
+#endif
 
     shell_print(sh, "\nNote: LittleFS storage is separate from firmware slots");
     shell_print(sh, "      and NOT erased during OTA updates");

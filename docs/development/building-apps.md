@@ -1,3 +1,10 @@
+---
+layout: default
+title: Building WASM Apps
+parent: Development
+nav_order: 1
+---
+
 # Building WASM Applications
 
 Complete guide to developing WebAssembly applications for AkiraOS.
@@ -38,7 +45,7 @@ AkiraSDK/python/runtime/micropython.wasm
 
 or set the environment variable `MICROPYTHON_WASM=/path/to/micropython.wasm`.
 
-See [AkiraSDK/python/runtime/README.md](../../AkiraSDK/python/runtime/README.md).
+See [AkiraSDK/python/runtime/README.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/python/runtime/README.md).
 
 
 ## Build Process
@@ -93,7 +100,7 @@ $WASI_SDK_PATH/bin/clang \
 
 ## Rust Apps
 
-Full guide: [AkiraSDK/docs/RUST_GUIDE.md](../../AkiraSDK/docs/RUST_GUIDE.md)
+Full guide: [AkiraSDK/docs/RUST_GUIDE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/RUST_GUIDE.md)
 
 ### Project structure
 
@@ -165,7 +172,7 @@ strip = true
 
 ## Python Apps (MicroPython)
 
-Full guide: [AkiraSDK/docs/PYTHON_GUIDE.md](../../AkiraSDK/docs/PYTHON_GUIDE.md)
+Full guide: [AkiraSDK/docs/PYTHON_GUIDE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/PYTHON_GUIDE.md)
 
 ### Architecture
 
@@ -329,10 +336,10 @@ wamrc --opt-level=0 --size-level=3 -o app.aot app.wasm
 
 #### Setup wamrc
 
-Build `wamrc` from the WAMR submodule already included in AkiraOS (required — the AkiraOS fork includes Xtensa backend support):
+Build `wamrc` from the `wasm-micro-runtime` west project that `west update` fetches (required — the AkiraOS fork includes Xtensa backend support):
 
 ```bash
-cd ~/akira-workspace/AkiraOS/modules/wasm-micro-runtime/wamr-compiler
+cd ~/akira-workspace/modules/lib/wasm-micro-runtime/wamr-compiler
 cmake . -DWAMR_BUILD_PLATFORM=linux
 make
 sudo cp wamrc /usr/local/bin/
@@ -377,21 +384,17 @@ See [AOT Compilation Architecture](../architecture/aot-compilation.md) for detai
 
 ### Upload via HTTP
 
-The device provides two upload endpoints:
+Apps install through the app-manager route, which streams the **raw** body
+(no multipart) — so use `--data-binary`, not `-F`. `/upload` is the firmware
+flash endpoint and must not be used for apps.
 
 ```bash
-# Simple file upload (saved to /lfs/apps/ or /SD:/apps/)
-curl -X POST -F "file=@app.wasm" http://192.168.1.100/upload
-
-# Named app installation (recommended)
-curl -X POST \
-  -F "file=@app.wasm" \
+# Named app installation (name is optional; defaults to "uploaded_app")
+curl -X POST --data-binary @app.wasm \
   "http://192.168.1.100/api/apps/install?name=myapp"
 
-# Hybrid deployment with AOT (best performance)
-curl -X POST -F "file=@app.wasm" \
-  "http://192.168.1.100/api/apps/install?name=myapp"
-curl -X POST -F "file=@app-xtensa.aot" \
+# Hybrid deployment with AOT (best performance): install the .aot the same way
+curl -X POST --data-binary @app-xtensa.aot \
   "http://192.168.1.100/api/apps/install?name=myapp"
 ```
 
@@ -438,9 +441,13 @@ AkiraOS:~$ app stop myapp
 ## Related Documentation
 
 - [First App Tutorial](../getting-started/first-app.md)
-- [SDK API Reference](../../AkiraSDK/docs/API_REFERENCE.md)
-- [Rust App Guide](../../AkiraSDK/docs/RUST_GUIDE.md)
-- [Python App Guide](../../AkiraSDK/docs/PYTHON_GUIDE.md)
+- [SDK API Reference](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md)
+- [Rust App Guide](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/RUST_GUIDE.md)
+- [Python App Guide](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/PYTHON_GUIDE.md)
 - [Manifest Format](../api-reference/manifest-format.md)
 - [Best Practices](best-practices.md)
 - [Advanced Sample Apps](advanced-apps.md)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

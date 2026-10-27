@@ -12,14 +12,17 @@
 
 #include "app_signing.h"
 #include "sandbox.h"
+#include "lib/mem_helper.h"
 #include <zephyr/logging/log.h>
 #include <string.h>
 #include <errno.h>
 
 LOG_MODULE_REGISTER(akira_app_signing, CONFIG_AKIRA_LOG_LEVEL);
 
-/* Forward declaration — weak default defined later in this file */
+/* Forward declarations — weak defaults defined later in this file */
 int akira_platform_allowlist_verify(const uint8_t *app_hash, size_t hash_len);
+int akira_platform_pqc_verify(const uint8_t *digest, size_t digest_len,
+                               const uint8_t *sig,    size_t sig_len);
 
 /* mbedTLS integration */
 #ifdef CONFIG_MBEDTLS
@@ -68,7 +71,7 @@ static struct
     uint8_t root_pubkeys_der[MAX_TRUSTED_ROOTS][MAX_PUBKEY_DER_SIZE];
     size_t  root_pubkeys_len[MAX_TRUSTED_ROOTS];
     int root_count;
-} g_signing_state = {0};
+} g_signing_state AKIRA_BULK_BSS;
 
 /* ===== SHA-256 Implementation ===== */
 
@@ -586,5 +589,90 @@ __weak int akira_platform_allowlist_verify(const uint8_t *app_hash, size_t hash_
 {
     ARG_UNUSED(app_hash);
     ARG_UNUSED(hash_len);
+#ifdef CONFIG_AKIRA_REQUIRE_SIGNED_APPS
+    /* Fail closed: signed apps are required but no strong platform allowlist
+     * verifier is linked, so no binary can be attested — reject rather than
+     * let an app self-assert its capabilities. */
+    LOG_ERR("REQUIRE_SIGNED_APPS: no platform allowlist verifier linked; rejecting app");
+    return -EACCES;
+#else
     return 0; /* Default: allow all */
+#endif
+}
+
+/* ===== PQC Signature Verification (Dilithium-2 / FIPS 204) ===== */
+
+/**
+ * @brief Verify the Dilithium-2 .akpkg signature.
+ *
+ * Computes SHA-256(manifest || wasm [|| model]) then calls the
+ * akira_platform_pqc_verify() weak hook with the digest and the raw
+ * sig.dilithium2 bytes extracted from the archive.
+ */
+int app_verify_pqc_sig(const uint8_t *manifest, size_t manifest_size,
+                       const uint8_t *wasm,     size_t wasm_size,
+                       const uint8_t *model,    size_t model_size,
+                       const uint8_t *sig,      size_t sig_size)
+{
+    if (!manifest || manifest_size == 0 || !wasm || wasm_size == 0) {
+        return -EINVAL;
+    }
+
+#if CRYPTO_AVAILABLE
+    /* Compute SHA-256(manifest || wasm [|| model]) to match akira-cli digest(). */
+    mbedtls_sha256_context ctx;
+    uint8_t digest[32];
+
+    mbedtls_sha256_init(&ctx);
+    if (mbedtls_sha256_starts(&ctx, 0) != 0 ||
+        mbedtls_sha256_update(&ctx, manifest, manifest_size) != 0 ||
+        mbedtls_sha256_update(&ctx, wasm,     wasm_size)     != 0 ||
+        (model && model_size > 0 &&
+         mbedtls_sha256_update(&ctx, model, model_size) != 0)    ||
+        mbedtls_sha256_finish(&ctx, digest) != 0) {
+        mbedtls_sha256_free(&ctx);
+        LOG_ERR("PQC: SHA-256 computation failed");
+        return -EIO;
+    }
+    mbedtls_sha256_free(&ctx);
+
+    return akira_platform_pqc_verify(digest, sizeof(digest), sig, sig_size);
+#else
+    ARG_UNUSED(sig);
+    ARG_UNUSED(sig_size);
+    ARG_UNUSED(model);
+    ARG_UNUSED(model_size);
+    return 0; /* No crypto — PQC verification skipped */
+#endif
+}
+
+/**
+ * @brief Weak hook: Dilithium-2 signature verification.
+ *
+ * The default implementation is a no-op that allows all packages. AkiraPlatform
+ * overrides this with a strong liboqs-backed implementation when
+ * CONFIG_AKIRA_PLATFORM_PQC_SIGNING=y.
+ *
+ * @param digest      SHA-256(manifest || wasm [|| model]) — 32 bytes.
+ * @param digest_len  Must be 32.
+ * @param sig         sig.dilithium2 bytes (may be NULL if entry absent).
+ * @param sig_len     Length of sig (0 if entry absent).
+ * @return 0 if valid or PQC not enforced; -EACCES on signature mismatch;
+ *         -ENODATA if sig is NULL and mandatory mode is configured.
+ */
+__weak int akira_platform_pqc_verify(const uint8_t *digest, size_t digest_len,
+                                      const uint8_t *sig,    size_t sig_len)
+{
+    ARG_UNUSED(digest);
+    ARG_UNUSED(digest_len);
+    ARG_UNUSED(sig);
+    ARG_UNUSED(sig_len);
+#ifdef CONFIG_AKIRA_REQUIRE_SIGNED_APPS
+    /* Fail closed: signed apps are required but no strong platform PQC
+     * verifier is linked, so the signature cannot be checked — reject. */
+    LOG_ERR("REQUIRE_SIGNED_APPS: no platform PQC verifier linked; rejecting package");
+    return -EACCES;
+#else
+    return 0; /* Default: PQC not enforced */
+#endif
 }

@@ -7,6 +7,19 @@ manifest:
       revision: v4.3.0
       west-commands: scripts/west-commands.yml
       import: true
+
+    # WebAssembly Micro Runtime, AkiraOS fork (Xtensa AOT and Zephyr patches).
+    # Built by zephyr/CMakeLists.txt when CONFIG_AKIRA_WASM_RUNTIME=y.
+    - name: wasm-micro-runtime
+      url: https://github.com/ArturR0k3r/wasm-micro-runtime
+      revision: 2ba56464d2901927a5f707cff0edc0da0c28ccb9  # AkiraOS_Patch
+      path: modules/lib/wasm-micro-runtime
+
+    # TensorFlow Lite Micro for AkiraClaw edge AI (CONFIG_AKIRA_TFLITE_MICRO).
+    - name: tflite-micro
+      url: https://github.com/zephyrproject-rtos/tflite-micro
+      revision: 8d404de73acf7687831e16d88e86e4f73cfddf8e  # zephyr-v4.1.0
+      path: modules/lib/tflite-micro
     
     # AkiraPlatform (optional enterprise features)
     # Add via build.sh --platform flag to include in compilation
@@ -17,5 +30,6 @@ manifest:
       
   self:
     path: akira-os
+    west-commands: scripts/west-commands.yml
 
 

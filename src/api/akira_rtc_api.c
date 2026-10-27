@@ -61,7 +61,7 @@ static void rtc_api_late_init(void)
 
 int akira_native_rtc_get_unix_time(wasm_exec_env_t exec_env)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RTC_READ, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RTC_READ, -EPERM);
     rtc_api_late_init();
 
 #if defined(CONFIG_RTC) && defined(CONFIG_AKIRA_RTC_DEVICE)
@@ -86,7 +86,7 @@ int akira_native_rtc_get_unix_time(wasm_exec_env_t exec_env)
 
 int akira_native_rtc_get_uptime_ms(wasm_exec_env_t exec_env)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RTC_READ, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RTC_READ, -EPERM);
     return (int)(k_uptime_get() & 0x7FFFFFFF);
 }
 
@@ -94,7 +94,7 @@ int akira_native_rtc_get_uptime_ms(wasm_exec_env_t exec_env)
 
 int akira_native_rtc_set_unix_time(wasm_exec_env_t exec_env, int32_t unix_time)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RTC_WRITE, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RTC_WRITE, -EPERM);
     rtc_api_late_init();
 
 #if defined(CONFIG_RTC) && defined(CONFIG_AKIRA_RTC_DEVICE)
@@ -121,7 +121,7 @@ int akira_native_rtc_set_unix_time(wasm_exec_env_t exec_env, int32_t unix_time)
 
 int akira_native_rtc_set_alarm(wasm_exec_env_t exec_env, int32_t deadline_ms)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RTC_WRITE, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RTC_WRITE, -EPERM);
 
     if (deadline_ms <= 0) {
         return -EINVAL;
@@ -136,7 +136,7 @@ int akira_native_rtc_set_alarm(wasm_exec_env_t exec_env, int32_t deadline_ms)
 
 int akira_native_rtc_alarm_fired(wasm_exec_env_t exec_env)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RTC_READ, -EACCES);
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RTC_READ, -EPERM);
 
     if (g_alarm_deadline_ms > 0 &&
         k_uptime_get() >= g_alarm_deadline_ms) {
@@ -147,3 +147,21 @@ int akira_native_rtc_alarm_fired(wasm_exec_env_t exec_env)
 }
 
 #endif /* CONFIG_AKIRA_WASM_RTC */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_RTC))
+#include <akira_native_registry.h>
+
+/* rtc.*: get/set unix time, uptime, alarm */
+static const NativeSymbol akira_rtc_natives[] = {
+    {"rtc_get_unix_time",  (void *)akira_native_rtc_get_unix_time,  "()i",  NULL},
+    {"rtc_get_uptime_ms",  (void *)akira_native_rtc_get_uptime_ms,  "()i",  NULL},
+    {"rtc_set_unix_time",  (void *)akira_native_rtc_set_unix_time,  "(i)i", NULL},
+    {"rtc_set_alarm",      (void *)akira_native_rtc_set_alarm,      "(i)i", NULL},
+    {"rtc_alarm_fired",    (void *)akira_native_rtc_alarm_fired,    "()i",  NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_rtc_api, "env", akira_rtc_natives);
+#endif

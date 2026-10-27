@@ -30,6 +30,10 @@ LOG_MODULE_REGISTER(akira_lifecycle_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <runtime/app_manager/app_manager.h>
 #endif
 
+#ifdef CONFIG_AKIRA_CLOUD_APP_HANDLER
+#include <connectivity/cloud/cloud_app_handler.h>
+#endif
+
 /* APP_NAME_MAX_LEN defined in app_manager.h; provide fallback for non-manager builds */
 #ifndef APP_NAME_MAX_LEN
 #define APP_NAME_MAX_LEN 32
@@ -101,7 +105,7 @@ static void ensure_switch_wq_init(void)
 int akira_native_app_get_status(wasm_exec_env_t exec_env, const char *name)
 {
     /* Read-only query: app.info is sufficient; app.control also accepted */
-    uint32_t mask = akira_security_get_cap_mask(exec_env);
+    uint64_t mask = akira_security_get_cap_mask(exec_env);
     if (!(mask & (AKIRA_CAP_APP_INFO | AKIRA_CAP_APP_CONTROL))) {
         AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_INFO, -EPERM);
     }
@@ -121,7 +125,7 @@ int akira_native_app_list(wasm_exec_env_t exec_env,
                           uint32_t buf_ptr, uint32_t buf_len)
 {
     /* Read-only query: app.info is sufficient; app.control also accepted */
-    uint32_t mask = akira_security_get_cap_mask(exec_env);
+    uint64_t mask = akira_security_get_cap_mask(exec_env);
     if (!(mask & (AKIRA_CAP_APP_INFO | AKIRA_CAP_APP_CONTROL))) {
         AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_INFO, -EPERM);
     }
@@ -141,11 +145,10 @@ int akira_native_app_list(wasm_exec_env_t exec_env,
     }
 
 #ifdef CONFIG_AKIRA_APP_MANAGER
-    /* Retrieve all apps into a local stack buffer — avoid PSRAM alloc here */
-#define LIST_MAX 16
-    app_info_t apps[LIST_MAX];
-    int count = app_manager_list(apps, LIST_MAX);
-    if (count < 0) {
+    /* Heap-allocated: a full app_info_t listing is larger than the app thread stack. */
+    int count;
+    app_info_t *apps = app_manager_list_alloc(&count);
+    if (!apps) {
         return count;
     }
 
@@ -160,6 +163,7 @@ int akira_native_app_list(wasm_exec_env_t exec_env,
         pos += n;
     }
     wasm_buf[pos] = '\0';
+    akira_free_buffer(apps);
     return count;
 #else
     (void)wasm_buf;
@@ -172,7 +176,7 @@ int akira_native_app_get_self_name(wasm_exec_env_t exec_env,
                                    uint32_t buf_ptr, uint32_t buf_len)
 {
     /* Self-name is identity-only: app.info suffices; app.control also accepted */
-    uint32_t mask = akira_security_get_cap_mask(exec_env);
+    uint64_t mask = akira_security_get_cap_mask(exec_env);
     if (!(mask & (AKIRA_CAP_APP_INFO | AKIRA_CAP_APP_CONTROL))) {
         AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_INFO, -EPERM);
     }
@@ -253,7 +257,7 @@ int akira_native_app_stop(wasm_exec_env_t exec_env, const char *name)
 int akira_native_app_switch(wasm_exec_env_t exec_env, const char *name)
 {
     /* Both app.switch and app.control grant access to this lighter operation */
-    uint32_t mask = akira_security_get_cap_mask(exec_env);
+    uint64_t mask = akira_security_get_cap_mask(exec_env);
     if (!(mask & (AKIRA_CAP_APP_SWITCH | AKIRA_CAP_APP_CONTROL))) {
         LOG_WRN("app_switch: capability denied (need app.switch or app.control)");
         return -EPERM;
@@ -290,3 +294,83 @@ int akira_native_app_switch(wasm_exec_env_t exec_env, const char *name)
     return -ENOTSUP;
 #endif
 }
+
+int akira_native_app_check_update(wasm_exec_env_t exec_env, uint8_t *ver_buf, uint32_t buf_len)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_CONTROL, -EPERM);
+
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    char self[APP_NAME_MAX_LEN] = {0};
+    if (!inst || akira_runtime_get_name_for_module_inst(inst, self, sizeof(self)) < 0 || !self[0]) {
+        return -EINVAL;
+    }
+
+#ifdef CONFIG_AKIRA_APP_MANAGER
+    app_info_t info;
+    int ret = app_manager_get_info(self, &info);
+    if (ret < 0) {
+        return ret;
+    }
+    if (!info.has_update) {
+        return 0;
+    }
+    size_t vlen = strnlen(info.available_version, APP_VERSION_MAX_LEN);
+    size_t copy = (vlen < buf_len - 1) ? vlen : buf_len - 1;
+    memcpy(ver_buf, info.available_version, copy);
+    ver_buf[copy] = '\0';
+    return 1;
+#else
+    return -ENOTSUP;
+#endif
+}
+
+int akira_native_app_request_update(wasm_exec_env_t exec_env)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_CONTROL, -EPERM);
+
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    char self[APP_NAME_MAX_LEN] = {0};
+    if (!inst || akira_runtime_get_name_for_module_inst(inst, self, sizeof(self)) < 0 || !self[0]) {
+        return -EINVAL;
+    }
+
+#if defined(CONFIG_AKIRA_APP_MANAGER) && defined(CONFIG_AKIRA_CLOUD_APP_HANDLER)
+    app_info_t info;
+    int ret = app_manager_get_info(self, &info);
+    if (ret < 0) {
+        return ret;
+    }
+    if (!info.has_update) {
+        return -ENOENT;
+    }
+    /* cloud_app_update() returns quickly (queues async download on the cloud
+     * client's own thread) — safe to call synchronously from WASM native
+     * context, unlike app_manager_start()'s flash/PSRAM path (see the
+     * deferred-workqueue comment above for why that one differs). */
+    return cloud_app_update(self, NULL, NULL);
+#else
+    return -ENOTSUP;
+#endif
+}
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_LIFECYCLE))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_lifecycle_natives[] = {
+    {"app_get_status", (void *)akira_native_app_get_status, "($)i", NULL},
+    {"app_list", (void *)akira_native_app_list, "(ii)i", NULL},
+    {"app_get_self_name", (void *)akira_native_app_get_self_name, "(ii)i", NULL},
+    /* Write-control — requires AKIRA_CAP_APP_CONTROL */
+    {"app_start", (void *)akira_native_app_start, "($)i", NULL},
+    {"app_stop", (void *)akira_native_app_stop, "($)i", NULL},
+    /* Lightweight handoff — requires AKIRA_CAP_APP_SWITCH or APP_CONTROL */
+    {"app_switch", (void *)akira_native_app_switch, "($)i", NULL},
+    {"app_check_update", (void *)akira_native_app_check_update, "(ii)i", NULL},
+    {"app_request_update", (void *)akira_native_app_request_update, "()i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_lifecycle_api, "env", akira_lifecycle_natives);
+#endif

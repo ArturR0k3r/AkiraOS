@@ -26,6 +26,17 @@ LOG_MODULE_REGISTER(coap_client, CONFIG_AKIRA_LOG_LEVEL);
 #define COAP_ACK_TIMEOUT_MS 2000
 #define COAP_MAX_OBSERVERS 8
 
+/* Fallback so the file still builds when block-wise transfer is disabled. */
+#ifndef CONFIG_AKIRA_COAP_BLOCK_SIZE
+#define CONFIG_AKIRA_COAP_BLOCK_SIZE 256
+#endif
+
+/* Per-block scratch buffer: one full block payload plus CoAP header/option
+ * overhead (token, URI-Path, Block/Size, Content-Format, payload marker). */
+#define COAP_BLOCK_HDR_OVERHEAD 128
+#define COAP_BLOCK_BUF_SIZE (CONFIG_AKIRA_COAP_BLOCK_SIZE + COAP_BLOCK_HDR_OVERHEAD)
+
+
 /*===========================================================================*/
 /* Private Types                                                             */
 /*===========================================================================*/
@@ -156,23 +167,41 @@ static int create_socket(const char *host, uint16_t port, bool secure,
     int sock;
     int ret;
 
-    /* Resolve host - simplified for now, assume IPv4 */
     struct sockaddr_in *addr4 = (struct sockaddr_in *)addr;
+    memset(addr4, 0, sizeof(struct sockaddr_in));
     addr4->sin_family = AF_INET;
     addr4->sin_port = htons(port);
+    *addr_len = sizeof(struct sockaddr_in);
 
-    /* Try to parse as IP address first */
+    /* Fast path: the host is already a literal IPv4 address. */
     ret = zsock_inet_pton(AF_INET, host, &addr4->sin_addr);
     if (ret != 1)
     {
-        /* TODO: DNS resolution */
-        LOG_ERR("DNS resolution not implemented, use IP address");
-        return -ENOTSUP;
+        /* Otherwise resolve the hostname via DNS. The query is restricted
+         * to IPv4 to match the AF_INET socket created below; switch
+         * ai_family to AF_UNSPEC (and generalise the sockaddr handling) if
+         * IPv6 support is needed. */
+        struct zsock_addrinfo hints = {
+            .ai_family = AF_INET,
+            .ai_socktype = SOCK_DGRAM,
+        };
+        struct zsock_addrinfo *res = NULL;
+
+        ret = zsock_getaddrinfo(host, NULL, &hints, &res);
+        if (ret != 0 || res == NULL)
+        {
+            LOG_ERR("DNS resolution failed for '%s' (ret=%d)", host, ret);
+            return -EHOSTUNREACH;
+        }
+
+        /* Use the first A record and keep the port parsed from the URL. */
+        memcpy(addr4, res->ai_addr, sizeof(struct sockaddr_in));
+        addr4->sin_port = htons(port);
+        *addr_len = sizeof(struct sockaddr_in);
+        zsock_freeaddrinfo(res);
     }
 
-    *addr_len = sizeof(struct sockaddr_in);
-
-    /* Create UDP socket */
+    /* Create UDP socket (DTLS-wrapped when secure). */
     sock = zsock_socket(AF_INET, SOCK_DGRAM, secure ? IPPROTO_DTLS_1_2 : IPPROTO_UDP);
     if (sock < 0)
     {
@@ -191,6 +220,14 @@ static int create_socket(const char *host, uint16_t port, bool secure,
         {
             LOG_WRN("Failed to set DTLS sec tag: %d", errno);
         }
+
+        /* Provide the server name for SNI / peer verification. */
+        ret = zsock_setsockopt(sock, SOL_TLS, TLS_HOSTNAME,
+                               host, strlen(host) + 1);
+        if (ret < 0)
+        {
+            LOG_WRN("Failed to set DTLS hostname: %d", errno);
+        }
 #endif
     }
 
@@ -205,6 +242,81 @@ static int create_socket(const char *host, uint16_t port, bool secure,
 
     return sock;
 }
+
+
+/* Map the configured block size to the RFC 7959 enum; unsupported values
+ * fall back to 256 bytes. */
+static enum coap_block_size akira_coap_block_size(void)
+{
+    switch (CONFIG_AKIRA_COAP_BLOCK_SIZE)
+    {
+    case 16:
+        return COAP_BLOCK_16;
+    case 32:
+        return COAP_BLOCK_32;
+    case 64:
+        return COAP_BLOCK_64;
+    case 128:
+        return COAP_BLOCK_128;
+    case 256:
+        return COAP_BLOCK_256;
+    case 512:
+        return COAP_BLOCK_512;
+    case 1024:
+        return COAP_BLOCK_1024;
+    default:
+        return COAP_BLOCK_256;
+    }
+}
+
+/* Append each '/'-separated path segment as a Uri-Path option. strtok()
+ * transparently skips a leading '/'. */
+static int coap_append_uri_path(struct coap_packet *pkt, const char *path)
+{
+    if (!path || path[0] == '\0')
+    {
+        return 0;
+    }
+
+    char path_copy[256];
+    strncpy(path_copy, path, sizeof(path_copy) - 1);
+    path_copy[sizeof(path_copy) - 1] = '\0';
+
+    char *segment = strtok(path_copy, "/");
+    while (segment)
+    {
+        int ret = coap_packet_append_option(pkt, COAP_OPTION_URI_PATH,
+                                            (uint8_t *)segment, strlen(segment));
+        if (ret < 0)
+        {
+            return ret;
+        }
+        segment = strtok(NULL, "/");
+    }
+
+    return 0;
+}
+
+/* Parse a coap[s]:// URL, resolve it and return a connected UDP/DTLS socket.
+ * On success the resource path is written to 'path'. */
+static int coap_open_url_socket(const char *url, char *path, size_t path_len,
+                                struct sockaddr_storage *addr, socklen_t *addr_len)
+{
+    char host[128];
+    uint16_t port;
+    bool secure;
+    int ret;
+
+    ret = parse_coap_url(url, host, sizeof(host), &port, path, path_len, &secure);
+    if (ret < 0)
+    {
+        LOG_ERR("Failed to parse URL: %d", ret);
+        return ret;
+    }
+
+    return create_socket(host, port, secure, (struct sockaddr *)addr, addr_len);
+}
+
 
 static int send_coap_request(int sock, const coap_request_t *request,
                              const char *path, coap_response_t *response)
@@ -340,11 +452,15 @@ static int send_coap_request(int sock, const coap_request_t *request,
     /* Extract response data */
     response->code = coap_header_get_code(&resp_pkt);
 
-    /* Get token */
-    const uint8_t *resp_token = coap_header_get_token(&resp_pkt, &response->token_len);
-    if (resp_token && response->token_len <= COAP_CLIENT_MAX_TOKEN_LEN)
+    /* Get token. coap_header_get_token() copies the token into the caller's
+     * buffer (which must hold at least COAP_TOKEN_MAX_LEN bytes) and returns
+     * its length. */
+    uint8_t resp_token[COAP_CLIENT_MAX_TOKEN_LEN];
+    uint8_t resp_token_len = coap_header_get_token(&resp_pkt, resp_token);
+    response->token_len = resp_token_len;
+    if (resp_token_len > 0 && resp_token_len <= COAP_CLIENT_MAX_TOKEN_LEN)
     {
-        memcpy(response->token, resp_token, response->token_len);
+        memcpy(response->token, resp_token, resp_token_len);
     }
 
     /* Get payload */
@@ -372,8 +488,18 @@ static int send_coap_request(int sock, const coap_request_t *request,
         response->payload_len = 0;
     }
 
-    /* TODO: Parse content format option */
-    response->format = COAP_FORMAT_TEXT_PLAIN;
+    /* Parse the Content-Format option (RFC 7252 sec 5.10.3). A negative
+     * return means the option is absent; default to text/plain to preserve
+     * the previous behaviour. */
+    int content_format = coap_get_option_int(&resp_pkt, COAP_OPTION_CONTENT_FORMAT);
+    if (content_format >= 0)
+    {
+        response->format = (coap_content_format_t)content_format;
+    }
+    else
+    {
+        response->format = COAP_FORMAT_TEXT_PLAIN;
+    }
 
     return 0;
 }
@@ -615,37 +741,133 @@ int coap_client_download(const char *url, uint8_t *buffer, size_t buffer_len,
         return -EINVAL;
     }
 
-    /* TODO: Implement block transfer (RFC 7959) */
-    /* For now, do a simple GET */
+    char path[256];
+    struct sockaddr_storage addr;
+    socklen_t addr_len;
+    uint8_t token[COAP_CLIENT_MAX_TOKEN_LEN];
+    size_t token_len;
+    struct coap_block_context blk_ctx;
+    int sock;
+    int ret;
 
-    coap_response_t response = {0};
-    int ret = coap_client_get(url, &response);
-    if (ret < 0)
+    *received_len = 0;
+
+    k_mutex_lock(&client_mutex, K_FOREVER);
+
+    sock = coap_open_url_socket(url, path, sizeof(path), &addr, &addr_len);
+    if (sock < 0)
     {
-        return ret;
+        k_mutex_unlock(&client_mutex);
+        return sock;
     }
 
-    if (response.code != COAP_CODE_CONTENT)
+    /* Bounded blocking receive per block. */
+    struct timeval tv = {.tv_sec = 5, .tv_usec = 0};
+    zsock_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    /* One token for the whole transfer (RFC 7959). */
+    generate_token(token, &token_len);
+    coap_block_transfer_init(&blk_ctx, akira_coap_block_size(), 0);
+
+    while (true)
     {
-        coap_client_free_response(&response);
-        return -ENOENT;
+        uint8_t tx_buf[COAP_BLOCK_BUF_SIZE];
+        uint8_t rx_buf[COAP_BLOCK_BUF_SIZE];
+        struct coap_packet pkt;
+        struct coap_packet reply;
+        int rcvd;
+
+        ret = coap_packet_init(&pkt, tx_buf, sizeof(tx_buf), COAP_VERSION_1,
+                               COAP_TYPE_CON, token_len, token,
+                               COAP_METHOD_GET, get_next_message_id());
+        if (ret < 0)
+        {
+            goto out;
+        }
+
+        ret = coap_append_uri_path(&pkt, path);
+        if (ret < 0)
+        {
+            goto out;
+        }
+
+        /* Request the current block; block number is derived from
+         * blk_ctx.current. */
+        ret = coap_append_block2_option(&pkt, &blk_ctx);
+        if (ret < 0)
+        {
+            goto out;
+        }
+
+        ret = zsock_send(sock, pkt.data, pkt.offset, 0);
+        if (ret < 0)
+        {
+            ret = -errno;
+            goto out;
+        }
+
+        rcvd = zsock_recv(sock, rx_buf, sizeof(rx_buf), 0);
+        if (rcvd < 0)
+        {
+            ret = (errno == EAGAIN || errno == EWOULDBLOCK) ? -ETIMEDOUT : -errno;
+            goto out;
+        }
+
+        ret = coap_packet_parse(&reply, rx_buf, rcvd, NULL, 0);
+        if (ret < 0)
+        {
+            goto out;
+        }
+
+        uint8_t code = coap_header_get_code(&reply);
+        if (code != COAP_CODE_CONTENT)
+        {
+            LOG_ERR("Block2 download failed: %s", coap_code_to_str(code));
+            ret = -EIO;
+            goto out;
+        }
+
+        /* Pull Block2/Size2 from the reply: sets blk_ctx.current to this
+         * block's byte offset and records the total size when advertised.
+         * Degrades gracefully to a single response if the server ignores
+         * block-wise (current stays 0). */
+        ret = coap_update_from_block(&reply, &blk_ctx);
+        if (ret < 0)
+        {
+            goto out;
+        }
+
+        uint16_t frag_len = 0;
+        const uint8_t *frag = coap_packet_get_payload(&reply, &frag_len);
+        size_t offset = blk_ctx.current;
+        if (frag && frag_len > 0)
+        {
+            if (offset + frag_len > buffer_len)
+            {
+                LOG_ERR("Download buffer too small (have %zu bytes)", buffer_len);
+                ret = -ENOMEM;
+                goto out;
+            }
+            memcpy(buffer + offset, frag, frag_len);
+            if (offset + frag_len > *received_len)
+            {
+                *received_len = offset + frag_len;
+            }
+        }
+
+        /* Advance to the next block; returns 0 once the last block (MORE=0)
+         * has been received. */
+        if (coap_next_block(&reply, &blk_ctx) == 0)
+        {
+            ret = 0;
+            break;
+        }
     }
 
-    size_t copy_len = response.payload_len;
-    if (copy_len > buffer_len)
-    {
-        copy_len = buffer_len;
-    }
-
-    if (response.payload && copy_len > 0)
-    {
-        memcpy(buffer, response.payload, copy_len);
-    }
-    *received_len = copy_len;
-
-    coap_client_free_response(&response);
-
-    return 0;
+out:
+    zsock_close(sock);
+    k_mutex_unlock(&client_mutex);
+    return ret;
 }
 
 int coap_client_upload(const char *url, const uint8_t *data, size_t data_len,
@@ -656,25 +878,182 @@ int coap_client_upload(const char *url, const uint8_t *data, size_t data_len,
         return -EINVAL;
     }
 
-    /* TODO: Implement block transfer for large uploads */
-    /* For now, do a simple PUT */
-
-    coap_response_t response = {0};
-    int ret = coap_client_put(url, data, data_len, format, &response);
-    if (ret < 0)
+    /* Small payloads that fit in a single block need no block-wise transfer;
+     * fall back to a plain PUT (which handles its own socket + mutex). */
+    size_t block_bytes = coap_block_size_to_bytes(akira_coap_block_size());
+    if (data_len <= block_bytes)
     {
+        coap_response_t resp = {0};
+        int ret = coap_client_put(url, data, data_len, format, &resp);
+        if (ret == 0 && resp.code != COAP_CODE_CHANGED &&
+            resp.code != COAP_CODE_CREATED)
+        {
+            ret = -EIO;
+        }
+        coap_client_free_response(&resp);
         return ret;
     }
 
-    int result = 0;
-    if (response.code != COAP_CODE_CHANGED && response.code != COAP_CODE_CREATED)
+    char path[256];
+    struct sockaddr_storage addr;
+    socklen_t addr_len;
+    uint8_t token[COAP_CLIENT_MAX_TOKEN_LEN];
+    size_t token_len;
+    struct coap_block_context blk_ctx;
+    int sock;
+    int ret;
+    bool first = true;
+
+    k_mutex_lock(&client_mutex, K_FOREVER);
+
+    sock = coap_open_url_socket(url, path, sizeof(path), &addr, &addr_len);
+    if (sock < 0)
     {
-        result = -EIO;
+        k_mutex_unlock(&client_mutex);
+        return sock;
     }
 
-    coap_client_free_response(&response);
+    struct timeval tv = {.tv_sec = 5, .tv_usec = 0};
+    zsock_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    return result;
+    generate_token(token, &token_len);
+    coap_block_transfer_init(&blk_ctx, akira_coap_block_size(), data_len);
+
+    while (true)
+    {
+        uint8_t tx_buf[COAP_BLOCK_BUF_SIZE];
+        uint8_t rx_buf[COAP_BLOCK_BUF_SIZE];
+        struct coap_packet pkt;
+        struct coap_packet reply;
+        int rcvd;
+
+        size_t bytes = coap_block_size_to_bytes(blk_ctx.block_size);
+        size_t remaining = data_len - blk_ctx.current;
+        size_t frag_len = MIN(bytes, remaining);
+        bool last = (blk_ctx.current + frag_len >= data_len);
+
+        ret = coap_packet_init(&pkt, tx_buf, sizeof(tx_buf), COAP_VERSION_1,
+                               COAP_TYPE_CON, token_len, token,
+                               COAP_METHOD_PUT, get_next_message_id());
+        if (ret < 0)
+        {
+            goto out;
+        }
+
+        ret = coap_append_uri_path(&pkt, path);
+        if (ret < 0)
+        {
+            goto out;
+        }
+
+        /* Content-Format (option 12) must precede Block1 (option 27). */
+        uint8_t fmt_buf[2];
+        size_t fmt_len = 1;
+        fmt_buf[0] = format & 0xFF;
+        if (format > 0xFF)
+        {
+            fmt_buf[0] = (format >> 8) & 0xFF;
+            fmt_buf[1] = format & 0xFF;
+            fmt_len = 2;
+        }
+        ret = coap_packet_append_option(&pkt, COAP_OPTION_CONTENT_FORMAT,
+                                        fmt_buf, fmt_len);
+        if (ret < 0)
+        {
+            goto out;
+        }
+
+        /* Block1 option: MORE flag and block number derived from blk_ctx. */
+        ret = coap_append_block1_option(&pkt, &blk_ctx);
+        if (ret < 0)
+        {
+            goto out;
+        }
+
+        /* Advertise the full body size once, on the first block. */
+        if (first)
+        {
+            ret = coap_append_size1_option(&pkt, &blk_ctx);
+            if (ret < 0)
+            {
+                goto out;
+            }
+            first = false;
+        }
+
+        ret = coap_packet_append_payload_marker(&pkt);
+        if (ret < 0)
+        {
+            goto out;
+        }
+
+        ret = coap_packet_append_payload(&pkt, data + blk_ctx.current, frag_len);
+        if (ret < 0)
+        {
+            goto out;
+        }
+
+        ret = zsock_send(sock, pkt.data, pkt.offset, 0);
+        if (ret < 0)
+        {
+            ret = -errno;
+            goto out;
+        }
+
+        rcvd = zsock_recv(sock, rx_buf, sizeof(rx_buf), 0);
+        if (rcvd < 0)
+        {
+            ret = (errno == EAGAIN || errno == EWOULDBLOCK) ? -ETIMEDOUT : -errno;
+            goto out;
+        }
+
+        ret = coap_packet_parse(&reply, rx_buf, rcvd, NULL, 0);
+        if (ret < 0)
+        {
+            goto out;
+        }
+
+        uint8_t code = coap_header_get_code(&reply);
+
+        if (last)
+        {
+            /* Final block must be acknowledged with 2.04 Changed or
+             * 2.01 Created. */
+            if (code != COAP_CODE_CHANGED && code != COAP_CODE_CREATED)
+            {
+                LOG_ERR("Block1 upload final ack unexpected: %s",
+                        coap_code_to_str(code));
+                ret = -EIO;
+                goto out;
+            }
+            ret = 0;
+            goto out;
+        }
+
+        /* Intermediate blocks are acknowledged with 2.31 Continue (some
+         * servers reply 2.04). */
+        if (code != COAP_RESPONSE_CODE_CONTINUE && code != COAP_CODE_CHANGED)
+        {
+            LOG_ERR("Block1 upload block rejected: %s", coap_code_to_str(code));
+            ret = -EIO;
+            goto out;
+        }
+
+        /* Validate the server's Block1 echo and pick up any negotiated
+         * (smaller) block size. */
+        ret = coap_update_from_block(&reply, &blk_ctx);
+        if (ret < 0)
+        {
+            goto out;
+        }
+
+        blk_ctx.current += frag_len;
+    }
+
+out:
+    zsock_close(sock);
+    k_mutex_unlock(&client_mutex);
+    return ret;
 }
 
 void coap_client_free_response(coap_response_t *response)

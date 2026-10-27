@@ -1,6 +1,13 @@
+---
+layout: default
+title: Scheduling & Watchdog
+parent: Architecture
+nav_order: 8
+---
+
 # Cooperative Scheduling Model & Watchdog Contract
 
-_Architecture document · AkiraOS v1.5.4_
+_Architecture document · AkiraOS v1.6.5_
 
 ---
 
@@ -93,12 +100,20 @@ void my_heavy_computation(void) {
 | Startup (`_start`) | `CONFIG_AKIRA_WASM_START_TIMEOUT_MS` (default 15 s) |
 | Shutdown (`_exit`) | `CONFIG_AKIRA_WASM_STOP_TIMEOUT_MS` (default 5 s) |
 
-Exceeding the budget causes `sandbox_watchdog_kill()` to be called, which:
+When invoked, `sandbox_watchdog_kill()`:
 1. Sets `ctx.exec_active = false` and increments `ctx.watchdog_kills`.
 2. Calls `wasm_runtime_terminate()` on the WASM module instance.
 3. Records an audit log entry (if `CONFIG_AKIRA_SECURITY_AUDIT=y`).
 4. The app manager marks the app as `APP_STATE_FAILED` and applies the
    auto-restart policy (`CONFIG_AKIRA_APP_MAX_RETRIES`).
+
+> **Status — enforcement not yet wired.** The kill path above exists and is
+> unit-tested (`tests/src/test_security.c`), but no periodic checker in the
+> runtime currently measures a running call against its yield budget and
+> invokes it. The yield budget is therefore **advisory** today:
+> `sandbox_exec_begin/end` bracket a call for telemetry, but a tight loop
+> that never yields is not force-killed. Wiring a periodic exec-timeout
+> check (or a Zephyr thread/hardware watchdog) is a TODO.
 
 ---
 
@@ -114,9 +129,9 @@ sandbox_exec_begin(&ctx)
     │
     │  WASM function executes ...
     │
-    │  (background timer fires every AKIRA_SANDBOX_CHECK_INTERVAL_MS)
-    │       └─ sandbox_exec_check_timeout(&ctx)
-    │              └─ if elapsed > exec_timeout_ms → sandbox_watchdog_kill()
+    │  (PLANNED, not yet wired: a periodic checker would compare
+    │   elapsed vs exec_timeout_ms here and call sandbox_watchdog_kill();
+    │   see the status note above)
     │
 sandbox_exec_end(&ctx)
 ```
@@ -285,6 +300,10 @@ its maximum.  Never disable both in production firmware.
 
 _See also:_  
 - [`docs/api-stability-policy.md`](../api-stability-policy.md) — API stability rules  
-- [`src/runtime/security/sandbox.h`](../../src/runtime/security/sandbox.h) — sandbox API  
-- [`src/drivers/wdt/akira_wdt.h`](../../src/drivers/wdt/akira_wdt.h) — WDT API  
+- [`src/runtime/security/sandbox.h`](https://github.com/ArturR0k3r/AkiraOS/blob/main/src/runtime/security/sandbox.h) — sandbox API  
+- [`src/drivers/wdt/akira_wdt.h`](https://github.com/ArturR0k3r/AkiraOS/blob/main/src/drivers/wdt/akira_wdt.h) — WDT API  
 - [Zephyr Scheduling docs](https://docs.zephyrproject.org/latest/kernel/scheduling/index.html)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

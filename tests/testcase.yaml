@@ -1,6 +1,6 @@
 tests:
   akiraos.tests:
-    tags: akiraos security ota manifest lifecycle
+    tags: akiraos security ota manifest lifecycle matter
     platform_allow: native_sim
     harness: ztest
     timeout: 120

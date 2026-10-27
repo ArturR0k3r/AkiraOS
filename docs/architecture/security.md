@@ -1,3 +1,10 @@
+---
+layout: default
+title: Security Model
+parent: Architecture
+nav_order: 3
+---
+
 # Security Model
 
 AkiraOS implements a **multi-layered security architecture** combining WASM sandboxing with custom capability-based access control.
@@ -25,47 +32,82 @@ AkiraOS implements a **multi-layered security architecture** combining WASM sand
 
 **Purpose:** Fine-grained permission control for native API access.
 
-**Capability Bits (23 total):**
+**Capability Bits (40 total, bits 0–39, 64-bit mask).** These mirror
+`src/runtime/security.h` (`AKIRA_CAP_MAX_BIT` = 39) — keep the two in sync:
 ```c
-// Hardware Access (Bits 0-4)
-#define AKIRA_CAP_DISPLAY_WRITE  (1U << 0)  // Screen rendering
-#define AKIRA_CAP_INPUT_READ     (1U << 1)  // Button/touch input
-#define AKIRA_CAP_INPUT_WRITE    (1U << 2)  // Input device control
-#define AKIRA_CAP_SENSOR_READ    (1U << 3)  // IMU, temp, etc.
-#define AKIRA_CAP_RF_TRANSCEIVE  (1U << 4)  // WiFi/LoRa send/recv
+// Hardware access (bits 0-4)
+#define AKIRA_CAP_DISPLAY_WRITE  (1ULL << 0)   // Screen rendering
+#define AKIRA_CAP_INPUT_READ     (1ULL << 1)   // Button/touch input
+#define AKIRA_CAP_INPUT_WRITE    (1ULL << 2)   // Input device control
+#define AKIRA_CAP_SENSOR_READ    (1ULL << 3)   // IMU, temp, etc.
+#define AKIRA_CAP_RF_TRANSCEIVE  (1ULL << 4)   // WiFi/LoRa send/recv
 
-// Communication (Bits 5, 8, 15)
-#define AKIRA_CAP_BLE            (1U << 5)  // Bluetooth LE
-#define AKIRA_CAP_NETWORK        (1U << 8)  // TCP/UDP/HTTP
-#define AKIRA_CAP_HID            (1U << 15) // HID devices (ELEVATED)
+// Communication + storage (bits 5-8)
+#define AKIRA_CAP_BLE            (1ULL << 5)   // BLE app service
+#define AKIRA_CAP_STORAGE_READ   (1ULL << 6)   // File system read
+#define AKIRA_CAP_STORAGE_WRITE  (1ULL << 7)   // File system write
+#define AKIRA_CAP_NETWORK        (1ULL << 8)   // TCP/UDP/HTTP
 
-// Storage (Bits 6-7)
-#define AKIRA_CAP_STORAGE_READ   (1U << 6)  // File system read
-#define AKIRA_CAP_STORAGE_WRITE  (1U << 7)  // File system write
+// Peripherals (bits 9-14)
+#define AKIRA_CAP_GPIO_READ      (1ULL << 9)   // GPIO input
+#define AKIRA_CAP_GPIO_WRITE     (1ULL << 10)  // GPIO output
+#define AKIRA_CAP_TIMER          (1ULL << 11)  // Timer APIs
+#define AKIRA_CAP_UART           (1ULL << 12)  // Serial communication
+#define AKIRA_CAP_I2C            (1ULL << 13)  // I2C bus access
+#define AKIRA_CAP_PWM            (1ULL << 14)  // PWM output
 
-// Peripherals (Bits 9-14)
-#define AKIRA_CAP_GPIO_READ      (1U << 9)  // GPIO input
-#define AKIRA_CAP_GPIO_WRITE     (1U << 10) // GPIO output
-#define AKIRA_CAP_TIMER          (1U << 11) // Timer APIs
-#define AKIRA_CAP_UART           (1U << 12) // Serial communication
-#define AKIRA_CAP_I2C            (1U << 13) // I2C bus access
-#define AKIRA_CAP_PWM            (1U << 14) // PWM output
+// System & app control (bits 15-22)
+#define AKIRA_CAP_HID            (1ULL << 15)  // HID devices (ELEVATED)
+#define AKIRA_CAP_APP_CONTROL    (1ULL << 16)  // Start/stop apps (ELEVATED)
+#define AKIRA_CAP_IPC            (1ULL << 17)  // Inter-process messaging
+#define AKIRA_CAP_APP_SWITCH     (1ULL << 18)  // Handoff to another app
+#define AKIRA_CAP_MEMORY         (1ULL << 19)  // Quota-enforced heap APIs
+#define AKIRA_CAP_APP_INFO       (1ULL << 20)  // App status queries
+#define AKIRA_CAP_POWER_READ     (1ULL << 21)  // Battery level queries
+#define AKIRA_CAP_POWER_CTRL     (1ULL << 22)  // Sleep mode control (ELEVATED)
 
-// System & App Control (Bits 16-22) - ELEVATED PRIVILEGES
-#define AKIRA_CAP_APP_CONTROL    (1U << 16) // Start/stop apps (ELEVATED)
-#define AKIRA_CAP_IPC            (1U << 17) // Inter-process messaging
-#define AKIRA_CAP_APP_SWITCH     (1U << 18) // Switch to another app
-#define AKIRA_CAP_MEMORY         (1U << 19) // Heap allocation APIs
-#define AKIRA_CAP_APP_INFO       (1U << 20) // App status queries
-#define AKIRA_CAP_POWER_READ     (1U << 21) // Battery level queries
-#define AKIRA_CAP_POWER_CTRL     (1U << 22) // Sleep mode control (ELEVATED)
+// Services & peripherals (bits 23-30)
+#define AKIRA_CAP_SETTINGS       (1ULL << 23)  // NVS key-value settings
+#define AKIRA_CAP_ADC            (1ULL << 24)  // ADC channel read
+#define AKIRA_CAP_WDT            (1ULL << 25)  // Feed system watchdog
+#define AKIRA_CAP_FS_READ        (1ULL << 26)  // Sandboxed FS read
+#define AKIRA_CAP_FS_WRITE       (1ULL << 27)  // Sandboxed FS write
+#define AKIRA_CAP_CRYPTO         (1ULL << 28)  // Hash/encrypt/random
+#define AKIRA_CAP_RTC_READ       (1ULL << 29)  // RTC read
+#define AKIRA_CAP_RTC_WRITE      (1ULL << 30)  // RTC write / alarm
+
+// Elevated & connectivity (bits 31-39)
+#define AKIRA_CAP_OTA_TRIGGER    (1ULL << 31)  // Trigger OTA (ELEVATED)
+#define AKIRA_CAP_AIINFER        (1ULL << 32)  // TFLite Micro inference
+#define AKIRA_CAP_MATTER         (1ULL << 33)  // Matter/Thread IPC bridge (ELEVATED)
+#define AKIRA_CAP_WIFI_INJECT    (1ULL << 34)  // 802.11 frame injection (ELEVATED)
+#define AKIRA_CAP_MQTT           (1ULL << 35)  // MQTT + Home Assistant (ELEVATED)
+#define AKIRA_CAP_BLE_SCAN       (1ULL << 36)  // BLE observer / passive scan
+#define AKIRA_CAP_BLE_SPAM       (1ULL << 37)  // BLE advertisement spam/spoof (ELEVATED)
+#define AKIRA_CAP_MESH           (1ULL << 38)  // AkiraMesh transport (ELEVATED)
+#define AKIRA_CAP_SYNC           (1ULL << 39)  // AkiraSync ordering (see note below)
+
+#define AKIRA_CAP_MAX_BIT        39
 ```
+
+> **AkiraSync is not built yet.** `AKIRA_CAP_SYNC` and the `CONFIG_AKIRA_SYNC*` options
+> exist, but `src/connectivity/sync/` is not referenced by `CMakeLists.txt` and no
+> `sync_*` native is registered. Treat bit 39 as reserved.
 
 **Elevated Privilege Capabilities:**
 The following capabilities grant significant system control and should **not** be granted to untrusted apps:
 - `AKIRA_CAP_HID` - Can emulate keyboards/mice
 - `AKIRA_CAP_APP_CONTROL` - Can terminate other apps
 - `AKIRA_CAP_POWER_CTRL` - Can modify power state
+- `AKIRA_CAP_OTA_TRIGGER` - Can trigger a firmware update
+- `AKIRA_CAP_WIFI_INJECT` - Can inject raw 802.11 management frames (deauth/disassoc)
+- `AKIRA_CAP_BLE_SPAM` - Can broadcast spoofed BLE advertisements
+- `AKIRA_CAP_MESH` - Can join and relay traffic on the AkiraMesh network
+- `AKIRA_CAP_RF_TRANSCEIVE`, `AKIRA_CAP_BLE`, `AKIRA_CAP_NETWORK`, `AKIRA_CAP_STORAGE_WRITE`,
+  `AKIRA_CAP_FS_WRITE`, `AKIRA_CAP_SETTINGS`, `AKIRA_CAP_CRYPTO`, `AKIRA_CAP_MATTER`,
+  `AKIRA_CAP_MQTT`, `AKIRA_CAP_WDT`
+
+The authoritative set is the `AKIRA_CAP_PRIVILEGED` mask in `src/runtime/security.h`.
 
 **Enforcement:**
 ```c
@@ -233,7 +275,7 @@ Supported capability strings (30+ mappings):
 
 | Threat | Status |
 |--------|--------|
-| **Physical access attacks** | Hardware-dependent (no secure element) |
+| **Physical access attacks** | NXP SE050 secure element where fitted (`CONFIG_AKIRA_SE050`); otherwise hardware-dependent |
 | **Side-channel attacks** | Not mitigated (timing, power analysis) |
 | **Bootloader exploits** | Depends on MCUboot security |
 | **WiFi/BLE stack bugs** | Depends on Zephyr security |
@@ -285,7 +327,7 @@ Supported capability strings (30+ mappings):
 1. **Request Minimal Capabilities** - Only request what you need
 2. **Validate Input** - Check all native API return values
 3. **Handle Quota Limits** - Gracefully handle malloc failures
-4. **No Secrets in Code** - Use secure storage APIs (future)
+4. **No Secrets in Code** - Use the settings API with `CONFIG_AKIRA_SETTINGS_ENCRYPTION=y`; with `CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY` the AES-256 key is derived from the hardware unique ID
 5. **Audit Dependencies** - Review third-party WASM libraries
 
 ### For System Administrators
@@ -294,15 +336,20 @@ Supported capability strings (30+ mappings):
 2. **Monitor Resource Usage** - Track memory consumption
 3. **Update Firmware** - Apply OTA updates for security patches
 4. **Limit Network Exposure** - Firewall HTTP/BLE if not needed
-5. **Verify Signatures** - Only install signed apps (future)
+5. **Verify Signatures** - Only install signed apps; set `CONFIG_AKIRA_REQUIRE_SIGNED_APPS=y` to fail closed on unsigned or unverifiable apps
 
 ## Known Limitations
 
-1. **Limited Storage Isolation** - Per-app directories enforced, but no encryption
+1. **Limited Storage Isolation** - Per-app directories are enforced. Settings encryption is
+   available but off by default (`CONFIG_AKIRA_SETTINGS_ENCRYPTION`, `default n`); app data
+   directories themselves are not encrypted.
 2. **Coarse Capabilities** - All sensors share `AKIRA_CAP_SENSOR_READ`
 3. **No Network Isolation** - Apps share network stack
 4. **Shared Address Space** - All apps run in same kernel context
-5. **No Hardware Security Module** - No TPM/secure element integration
+5. **Secure element is board-dependent** - An NXP SE050 driver ships in-tree
+   (`src/drivers/secure_element/`, `CONFIG_AKIRA_SE050`, enabled by default when the
+   `nxp,se050` DT node is present), but boards without the part fall back to software
+   crypto and have no hardware root of trust.
 
 
 ## Related Documentation
@@ -311,3 +358,7 @@ Supported capability strings (30+ mappings):
 - [Runtime Architecture](runtime.md)
 - [Manifest Format](../api-reference/manifest-format.md)
 - [OTA Updates](../development/ota-updates.md)
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

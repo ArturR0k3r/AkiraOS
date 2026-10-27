@@ -18,6 +18,8 @@
 #include "../drivers/platform_hal.h"
 #include "../settings/settings.h"
 #if defined(CONFIG_BT)
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/uuid.h>
 #include "connectivity/bluetooth/bt_manager.h"
 #if defined(CONFIG_AKIRA_BT_ECHO)
 #include "connectivity/bluetooth/bt_echo.h"
@@ -68,11 +70,21 @@
 #if defined(CONFIG_AKIRA_MATTER)
 #include "connectivity/matter_manager.h"
 #endif
+#if defined(CONFIG_AKIRA_MATTER_ACCESSORY)
+#include "runtime/akira_matter_ipc.h"
+#endif
+#if defined(CONFIG_AKIRA_MATTER_COPROC_MOCK)
+#include "connectivity/matter/matter_coproc_mock.h"
+#endif
+#if defined(CONFIG_AKIRA_MQTT)
+#include "connectivity/mqtt/mqtt_service.h"
+#endif
 #if defined(CONFIG_AKIRA_THREAD)
 #include "connectivity/thread_manager.h"
 #endif
 #if defined(CONFIG_AKIRA_MESH)
 #include "connectivity/akira_mesh.h"
+#include "api/akira_rf_api.h"
 #endif
 
 LOG_MODULE_REGISTER(akira_shell, AKIRA_LOG_LEVEL);
@@ -122,9 +134,9 @@ static void akira_shell_print_internal(const struct shell *sh, const char *text,
 /* App Manager Shell Commands */
 static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
 {
-    app_info_t apps[CONFIG_AKIRA_APP_MAX_INSTALLED];
-    int count = app_manager_list(apps, CONFIG_AKIRA_APP_MAX_INSTALLED);
-    if (count < 0)
+    int count;
+    app_info_t *apps = app_manager_list_alloc(&count);
+    if (!apps)
     {
         AKIRA_SHELL_ERROR(sh, "Failed to list apps");
         return count;
@@ -137,6 +149,7 @@ static int cmd_app_list(const struct shell *sh, size_t argc, char **argv)
                           apps[i].auto_restart ? " [auto-restart]" : "");
     }
     AKIRA_SHELL_PRINT(sh, "Total: %d", count);
+    akira_free_buffer(apps);
     return 0;
 }
 
@@ -238,7 +251,7 @@ static int cmd_app_install(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 3)
     {
-        shell_error(sh, "Usage: app install <name> <sd|usb>");
+        shell_error(sh, "Usage: app install <name> <sd|usb|lfs>");
         return -EINVAL;
     }
     const char *name = argv[1];
@@ -263,9 +276,22 @@ static int cmd_app_install(const struct shell *sh, size_t argc, char **argv)
         return -ENOTSUP;
 #endif
     }
+    else if (strcmp(src, "lfs") == 0)
+    {
+        /* src == "lfs": name is treated as full LittleFS path if it starts with '/',
+         * otherwise /lfs/pkgs/<name>.akpkg is assumed. */
+        char path[80];
+        if (name[0] == '/') {
+            strncpy(path, name, sizeof(path) - 1);
+            path[sizeof(path) - 1] = '\0';
+        } else {
+            snprintf(path, sizeof(path), "/lfs/pkgs/%s.akpkg", name);
+        }
+        ret = app_manager_install_from_path(path);
+    }
     else
     {
-        shell_error(sh, "Unknown source '%s'. Use sd or usb.", src);
+        shell_error(sh, "Unknown source '%s'. Use sd, usb, or lfs.", src);
         return -EINVAL;
     }
 
@@ -1447,6 +1473,35 @@ static int cmd_bt_echo(const struct shell *sh, size_t argc, char **argv)
 }
 #endif
 
+static uint8_t gatt_svc_dump_cb(const struct bt_gatt_attr *attr, uint16_t handle,
+                                void *user_data)
+{
+    const struct shell *sh = user_data;
+    char attr_uuid[BT_UUID_STR_LEN];
+
+    bt_uuid_to_str(attr->uuid, attr_uuid, sizeof(attr_uuid));
+
+    if (bt_uuid_cmp(attr->uuid, BT_UUID_GATT_PRIMARY) == 0 ||
+        bt_uuid_cmp(attr->uuid, BT_UUID_GATT_SECONDARY) == 0) {
+        char svc_uuid[BT_UUID_STR_LEN];
+        bt_uuid_to_str((const struct bt_uuid *)attr->user_data,
+                       svc_uuid, sizeof(svc_uuid));
+        shell_print(sh, "  [0x%04x] SERVICE %s", handle, svc_uuid);
+    } else {
+        shell_print(sh, "  [0x%04x]   attr %s", handle, attr_uuid);
+    }
+    return BT_GATT_ITER_CONTINUE;
+}
+
+static int cmd_bt_gatt(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+    shell_print(sh, "=== Registered GATT services ===");
+    bt_gatt_foreach_attr(0x0001, 0xffff, gatt_svc_dump_cb, (void *)sh);
+    return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(bt_adv_cmds,
                                SHELL_CMD(start, NULL, "Start advertising", cmd_bt_adv_start),
                                SHELL_CMD(stop, NULL, "Stop advertising", cmd_bt_adv_stop),
@@ -1459,6 +1514,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(bt_cmds,
                                SHELL_CMD(addr, NULL, "Show local BT address", cmd_bt_addr),
                                SHELL_CMD(disconnect, NULL, "Disconnect current connection", cmd_bt_disconnect),
                                SHELL_CMD(unpair, NULL, "Delete all bonds", cmd_bt_unpair),
+                               SHELL_CMD(gatt, NULL, "Dump registered GATT services", cmd_bt_gatt),
 #if defined(CONFIG_AKIRA_BT_ECHO)
                                SHELL_CMD(echo, NULL, "Echo service: <on|off|status|send [msg]>", cmd_bt_echo),
 #endif
@@ -1511,11 +1567,21 @@ static int cmd_wifi_status(const struct shell *sh, size_t argc, char **argv)
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
-    struct net_if *iface = net_if_get_default();
+    struct net_if *iface = net_if_get_wifi_sta();
     if (!iface)
     {
         shell_print(sh, "No network interface available");
         return -ENODEV;
+    }
+
+    /* Print the WiFi (STA) MAC — used as the device identifier when
+     * registering with AkiraHub. */
+    struct net_linkaddr *linkaddr = net_if_get_link_addr(iface);
+    if (linkaddr && linkaddr->len == 6)
+    {
+        shell_print(sh, "MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                    linkaddr->addr[0], linkaddr->addr[1], linkaddr->addr[2],
+                    linkaddr->addr[3], linkaddr->addr[4], linkaddr->addr[5]);
     }
 
     struct wifi_iface_status status = {0};
@@ -1589,7 +1655,7 @@ static int cmd_wifi_scan(const struct shell *sh, size_t argc, char **argv)
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
-    struct net_if *iface = net_if_get_default();
+    struct net_if *iface = net_if_get_wifi_sta();
     if (!iface) {
         shell_print(sh, "No network interface available");
         return -ENODEV;
@@ -1835,7 +1901,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(app_cmds,
                                SHELL_CMD(stop, NULL, "Stop app <name>", cmd_app_stop),
                                SHELL_CMD(restart, NULL, "Restart app <name>", cmd_app_restart),
                                SHELL_CMD(uninstall, NULL, "Uninstall app <name>", cmd_app_uninstall),
-                               SHELL_CMD(install, NULL, "Install app from SD/USB: <name> <sd|usb>", cmd_app_install),
+                               SHELL_CMD(install, NULL, "Install app from SD/USB/LFS: <name> <sd|usb|lfs>", cmd_app_install),
                                SHELL_CMD(scan, NULL, "Scan for apps in SD/USB", cmd_app_scan),
 #if defined(CONFIG_AKIRA_SD_XIP)
                                SHELL_CMD(run_sd, NULL, "Run app directly from SD card <name>", cmd_app_run_sd),
@@ -2009,24 +2075,182 @@ static int cmd_matter_reset(const struct shell *sh, size_t argc, char **argv)
 {
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
-    
+
     shell_print(sh, "Performing Matter factory reset...");
     int ret = matter_factory_reset();
     if (ret) {
         shell_error(sh, "Factory reset failed: %d", ret);
         return ret;
     }
-    
+
     shell_print(sh, "Matter factory reset complete");
     return 0;
 }
+
+#ifdef CONFIG_AKIRA_MATTER_ACCESSORY
+static int cmd_matter_pair(const struct shell *sh, size_t argc, char **argv)
+{
+    uint32_t timeout = 300;  /* 5 minutes default */
+    if (argc > 1) {
+        timeout = strtoul(argv[1], NULL, 10);
+    }
+
+    int ret = matter_start_commissioning(timeout);
+    if (ret) {
+        shell_error(sh, "Failed to open pairing window: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "Pairing window open for %u sec.", timeout);
+    shell_print(sh, "Add this device in Home Assistant / Google Home using:");
+
+    char qr_code[AKIRA_MATTER_IPC_QR_LEN];
+    char manual_code[AKIRA_MATTER_IPC_MANUAL_LEN];
+    if (matter_get_qr_code(qr_code, sizeof(qr_code)) == 0) {
+        shell_print(sh, "  QR    : %s", qr_code);
+    }
+    if (matter_get_manual_code(manual_code, sizeof(manual_code)) == 0) {
+        shell_print(sh, "  Manual: %s", manual_code);
+    }
+    return 0;
+}
+
+static int cmd_matter_status(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    int rc = akira_matter_ipc_status();
+    shell_print(sh, "Co-processor: %s", (rc == 0) ? "reachable" : "UNREACHABLE");
+    shell_print(sh, "Commissioning state: %d", matter_get_commissioning_state());
+    return (rc == 0) ? 0 : rc;
+}
+#endif /* CONFIG_AKIRA_MATTER_ACCESSORY */
+
+#ifdef CONFIG_AKIRA_MATTER_COPROC_MOCK
+/* Inject a fabric command through the mock co-processor, simulating a
+ * controller (Home Assistant / Google Home) acting on a local endpoint.
+ * Lets you drive an accessory app (e.g. matter_rgb) with no real co-processor.
+ *   matter inject <ep> on|off|toggle
+ *   matter inject <ep> level <0-254>
+ *   matter inject <ep> color <r> <g> <b>
+ */
+static int cmd_matter_mock_cmd(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 3) {
+        shell_error(sh, "usage: matter inject <ep> <on|off|toggle|level <v>|color <r> <g> <b>>");
+        return -EINVAL;
+    }
+    uint8_t ep = (uint8_t)strtoul(argv[1], NULL, 10);
+    const char *op = argv[2];
+
+    if (strcmp(op, "on") == 0) {
+        matter_coproc_mock_inject_command(ep, 0x0006, 0x0001, NULL, 0);
+    } else if (strcmp(op, "off") == 0) {
+        matter_coproc_mock_inject_command(ep, 0x0006, 0x0000, NULL, 0);
+    } else if (strcmp(op, "toggle") == 0) {
+        matter_coproc_mock_inject_command(ep, 0x0006, 0x0002, NULL, 0);
+    } else if (strcmp(op, "level") == 0 && argc >= 4) {
+        uint8_t lvl = (uint8_t)strtoul(argv[3], NULL, 10);
+        matter_coproc_mock_inject_command(ep, 0x0008, 0x0000, &lvl, 1);
+    } else if (strcmp(op, "color") == 0 && argc >= 6) {
+        uint8_t rgb[3] = { (uint8_t)strtoul(argv[3], NULL, 10),
+                           (uint8_t)strtoul(argv[4], NULL, 10),
+                           (uint8_t)strtoul(argv[5], NULL, 10) };
+        matter_coproc_mock_inject_command(ep, 0x0300, 0x0000, rgb, 3);
+    } else {
+        shell_error(sh, "bad op '%s'", op);
+        return -EINVAL;
+    }
+    shell_print(sh, "mock: injected '%s' to endpoint %u", op, ep);
+    return 0;
+}
+#endif /* CONFIG_AKIRA_MATTER_COPROC_MOCK */
 
 SHELL_STATIC_SUBCMD_SET_CREATE(matter_cmds,
     SHELL_CMD(info, NULL, "Show Matter status", cmd_matter_info),
     SHELL_CMD(commission, NULL, "Start commissioning [timeout_sec]", cmd_matter_commission),
     SHELL_CMD(reset, NULL, "Factory reset", cmd_matter_reset),
+#ifdef CONFIG_AKIRA_MATTER_ACCESSORY
+    SHELL_CMD(pair, NULL, "Open pairing window & print QR/manual code [timeout_sec]", cmd_matter_pair),
+    SHELL_CMD(status, NULL, "Show co-processor reachability & pairing state", cmd_matter_status),
+#endif
+#ifdef CONFIG_AKIRA_MATTER_COPROC_MOCK
+    SHELL_CMD(inject, NULL, "Inject a fabric command via the mock: <ep> <on|off|toggle|level|color> [args]", cmd_matter_mock_cmd),
+#endif
     SHELL_SUBCMD_SET_END);
 SHELL_CMD_REGISTER(matter, &matter_cmds, "Matter protocol commands", NULL);
+#endif
+
+/* ===== MQTT / Home Assistant Commands ===== */
+#if defined(CONFIG_AKIRA_MQTT)
+static int cmd_mqtt_set(const struct shell *sh, size_t argc, char **argv)
+{
+    /* mqtt set <host> <port> [user] [pass] */
+    if (argc < 3) {
+        shell_error(sh, "usage: mqtt set <host> <port> [user] [pass]");
+        return -EINVAL;
+    }
+    const char *host = argv[1];
+    uint16_t port = (uint16_t)strtoul(argv[2], NULL, 10);
+    const char *user = (argc > 3) ? argv[3] : "";
+    const char *pass = (argc > 4) ? argv[4] : "";
+
+    int rc = mqtt_service_set_broker(host, port, user, pass);
+    if (rc) {
+        shell_error(sh, "failed to save broker config: %d", rc);
+        return rc;
+    }
+    shell_print(sh, "Broker set to %s:%u. Run 'mqtt connect' to apply.", host, port);
+    return 0;
+}
+
+static int cmd_mqtt_connect(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc); ARG_UNUSED(argv);
+    shell_print(sh, "Connecting to broker...");
+    return mqtt_service_start();
+}
+
+static int cmd_mqtt_disconnect(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc); ARG_UNUSED(argv);
+    return mqtt_service_stop();
+}
+
+static int cmd_mqtt_status(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc); ARG_UNUSED(argv);
+    static const char *names[] = { "disconnected", "connecting", "connected" };
+    shell_print(sh, "MQTT: %s", names[mqtt_service_get_state()]);
+    shell_print(sh, "Node id: %s", mqtt_service_node_id());
+    return 0;
+}
+
+static int cmd_mqtt_pub(const struct shell *sh, size_t argc, char **argv)
+{
+    /* mqtt pub <topic> <payload> [retain] */
+    if (argc < 3) {
+        shell_error(sh, "usage: mqtt pub <topic> <payload> [retain]");
+        return -EINVAL;
+    }
+    bool retain = (argc > 3) && (strtoul(argv[3], NULL, 10) != 0);
+    int rc = mqtt_service_publish(argv[1], argv[2], strlen(argv[2]), 0, retain);
+    if (rc) {
+        shell_error(sh, "publish failed: %d", rc);
+        return rc;
+    }
+    shell_print(sh, "published to %s", argv[1]);
+    return 0;
+}
+
+SHELL_STATIC_SUBCMD_SET_CREATE(mqtt_cmds,
+    SHELL_CMD(set,        NULL, "Set broker: <host> <port> [user] [pass]", cmd_mqtt_set),
+    SHELL_CMD(connect,    NULL, "Connect to the broker", cmd_mqtt_connect),
+    SHELL_CMD(disconnect, NULL, "Disconnect from the broker", cmd_mqtt_disconnect),
+    SHELL_CMD(status,     NULL, "Show connection state & node id", cmd_mqtt_status),
+    SHELL_CMD(pub,        NULL, "Publish: <topic> <payload> [retain]", cmd_mqtt_pub),
+    SHELL_SUBCMD_SET_END);
+SHELL_CMD_REGISTER(mqtt, &mqtt_cmds, "MQTT / Home Assistant commands", NULL);
 #endif
 
 /* ===== Thread Commands ===== */
@@ -2140,11 +2364,73 @@ static int cmd_mesh_nodes(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+static void mesh_shell_rx_cb(const uint8_t *src_id, const uint8_t *data,
+                             size_t len, void *user_data)
+{
+    ARG_UNUSED(user_data);
+    printk("[mesh] rx from %02x (%zu bytes): %.*s\n",
+           src_id[AKIRA_MESH_NODE_ID_LEN - 1], len, (int)len, data);
+}
+
+static int cmd_mesh_init(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: mesh init <node_id_hex>  (e.g. mesh init 01)");
+        return -EINVAL;
+    }
+
+    uint8_t id = (uint8_t)strtoul(argv[1], NULL, 16);
+
+    akira_mesh_config_t cfg = {0};
+    cfg.node_id[AKIRA_MESH_NODE_ID_LEN - 1] = id;
+    snprintf(cfg.node_name, sizeof(cfg.node_name), "akira-%02x", id);
+    cfg.role = AKIRA_MESH_ROLE_NODE;
+    cfg.transport_caps = RADIO_CAP_TX | RADIO_CAP_RX |
+                         RADIO_CAP_BAND_SUBGHZ;
+    cfg.max_hops = AKIRA_MESH_MAX_HOPS;
+    cfg.beacon_interval_ms = 5000;
+
+    /* Release RF API ownership so mesh can acquire the LR2021. */
+    akira_rf_deinit();
+
+    int ret = akira_mesh_init(&cfg);
+    if (ret) {
+        shell_error(sh, "mesh init failed: %d", ret);
+        return ret;
+    }
+
+    akira_mesh_register_rx_callback(mesh_shell_rx_cb, NULL);
+    shell_print(sh, "mesh init: node %02x (%s), transport=SUBGHZ", id, cfg.node_name);
+    return 0;
+}
+
+static int cmd_mesh_send(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 3) {
+        shell_error(sh, "Usage: mesh send <dest_id_hex> <text>");
+        return -EINVAL;
+    }
+
+    uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
+    dest[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+
+    const char *text = argv[2];
+    int ret = akira_mesh_send(dest, (const uint8_t *)text, strlen(text));
+    if (ret) {
+        shell_error(sh, "mesh send failed: %d", ret);
+        return ret;
+    }
+
+    shell_print(sh, "sent %zu bytes to %02x", strlen(text),
+                dest[AKIRA_MESH_NODE_ID_LEN - 1]);
+    return 0;
+}
+
 static int cmd_mesh_start(const struct shell *sh, size_t argc, char **argv)
 {
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
-    
+
     int ret = akira_mesh_start();
     if (ret) {
         shell_error(sh, "Failed to start mesh: %d", ret);
@@ -2171,6 +2457,8 @@ static int cmd_mesh_stop(const struct shell *sh, size_t argc, char **argv)
 }
 
 SHELL_STATIC_SUBCMD_SET_CREATE(mesh_cmds,
+    SHELL_CMD_ARG(init, NULL, "Init mesh: <node_id_hex>", cmd_mesh_init, 2, 0),
+    SHELL_CMD_ARG(send, NULL, "Send: <dest_id_hex> <text>", cmd_mesh_send, 3, 0),
     SHELL_CMD(info, NULL, "Show mesh statistics", cmd_mesh_info),
     SHELL_CMD(nodes, NULL, "List discovered nodes", cmd_mesh_nodes),
     SHELL_CMD(start, NULL, "Start mesh networking", cmd_mesh_start),

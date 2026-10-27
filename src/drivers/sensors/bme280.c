@@ -87,15 +87,17 @@ static struct
  */
 static int bme280_write_reg(uint8_t reg, uint8_t value)
 {
-    // TODO: Implement I2C write
-    // - Use i2c_reg_write_byte()
-    // - Handle errors
+    /* Single-byte register write over I2C: transmits [reg][value].
+     * bme280_state holds the raw I2C controller device and the 7-bit device
+     * address (no i2c_dt_spec here), so use the non-DT helper. */
+    int ret = i2c_reg_write_byte(bme280_state.i2c_dev,
+                                 bme280_state.i2c_addr, reg, value);
+    if (ret != 0)
+    {
+        LOG_ERR("I2C write reg 0x%02X = 0x%02X failed: %d", reg, value, ret);
+    }
 
-    (void)reg;
-    (void)value;
-
-    LOG_WRN("bme280_write_reg not implemented");
-    return -ENOTSUP;
+    return ret;
 }
 
 /**

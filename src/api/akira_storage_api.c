@@ -152,7 +152,7 @@ int akira_native_storage_open(wasm_exec_env_t exec_env,
                                const char *path, int32_t flags)
 {
     /* Capability check depends on access mode */
-    uint32_t cap = (flags == STORAGE_O_READ) ? AKIRA_CAP_STORAGE_READ
+    uint64_t cap = (flags == STORAGE_O_READ) ? AKIRA_CAP_STORAGE_READ
                                               : AKIRA_CAP_STORAGE_WRITE;
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, cap, -EPERM);
 
@@ -379,3 +379,21 @@ int akira_native_storage_list(wasm_exec_env_t exec_env,
 }
 
 #endif /* CONFIG_AKIRA_WASM_STORAGE */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_STORAGE))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_storage_natives[] = {
+    {"storage_open", (void *)akira_native_storage_open, "($i)i", NULL},
+    {"storage_read", (void *)akira_native_storage_read, "(i*~)i", NULL},
+    {"storage_write", (void *)akira_native_storage_write, "(i*~)i", NULL},
+    {"storage_close", (void *)akira_native_storage_close, "(i)", NULL},
+    {"storage_delete", (void *)akira_native_storage_delete, "($)i", NULL},
+    {"storage_list", (void *)akira_native_storage_list, "($*~)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_storage_api, "env", akira_storage_natives);
+#endif

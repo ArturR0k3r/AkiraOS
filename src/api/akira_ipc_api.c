@@ -160,3 +160,21 @@ int akira_native_msg_pending(wasm_exec_env_t exec_env, const char *topic)
 
     return akira_ipc_pending(topic, caller);
 }
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_IPC))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_ipc_natives[] = {
+    {"msg_subscribe", (void *)akira_native_msg_subscribe, "($)i", NULL},
+    {"msg_unsubscribe", (void *)akira_native_msg_unsubscribe, "($)i", NULL},
+    {"msg_publish", (void *)akira_native_msg_publish, "($ii)i", NULL},
+    {"msg_recv", (void *)akira_native_msg_recv, "($iii)i", NULL},
+    {"msg_try_recv", (void *)akira_native_msg_try_recv, "($ii)i", NULL},
+    {"msg_pending", (void *)akira_native_msg_pending, "($)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_ipc_api, "env", akira_ipc_natives);
+#endif

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2026 AkiraOS Contributors
- * SPDX-License-Identifier: GPL-3.0-only
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 /**
@@ -25,6 +25,8 @@
 #include "companion_service.h"
 #include "bt_manager.h"
 
+#include <zephyr/app_version.h>
+
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/uuid.h>
@@ -33,6 +35,9 @@
 #include <zephyr/fs/fs.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
+#include <zephyr/sys/reboot.h>
+#include <zephyr/sys/base64.h>
+#include <zephyr/shell/shell_dummy.h>
 
 #include <string.h>
 #include <stdio.h>
@@ -44,8 +49,11 @@ LOG_MODULE_REGISTER(companion_svc, CONFIG_AKIRA_LOG_LEVEL);
 
 /* Forward-declared internal headers (pulled in via include paths) */
 #include "../../runtime/app_manager/app_manager.h"
+#include "../../runtime/app_manager/app_cmd_bridge.h"
 #include "../../connectivity/ota/ota_manager.h"
-#include "../../settings/akira_settings.h"
+#include "../../settings/settings.h"
+#include "../../connectivity/cloud/cloud_app_handler.h"
+#include "../../storage/fs_manager.h"
 
 /* --------------------------------------------------------------------------
  * UUID definitions
@@ -64,15 +72,10 @@ static struct bt_uuid_128 status_uuid  = BT_UUID_INIT_128(COMPANION_STATUS_UUID)
 
 #define CHAR_BUF_SIZE 244
 
-static uint8_t s_cmd_buf[CHAR_BUF_SIZE];
-static uint8_t s_resp_buf[CHAR_BUF_SIZE];
-static uint8_t s_data_dn_buf[CHAR_BUF_SIZE];
-static uint8_t s_status_buf[CHAR_BUF_SIZE];
-
-/* CCC descriptors for NOTIFY characteristics */
-static struct bt_gatt_ccc_cfg s_resp_ccc[BT_GATT_CCC_MAX];
-static struct bt_gatt_ccc_cfg s_data_dn_ccc[BT_GATT_CCC_MAX];
-static struct bt_gatt_ccc_cfg s_status_ccc[BT_GATT_CCC_MAX];
+static uint8_t AKIRA_BULK_BSS s_cmd_buf[CHAR_BUF_SIZE];
+static uint8_t AKIRA_BULK_BSS s_resp_buf[CHAR_BUF_SIZE];
+static uint8_t AKIRA_BULK_BSS s_data_dn_buf[CHAR_BUF_SIZE];
+static uint8_t AKIRA_BULK_BSS s_status_buf[CHAR_BUF_SIZE];
 
 /* --------------------------------------------------------------------------
  * State
@@ -82,10 +85,17 @@ static bool s_initialised;
 static struct bt_conn *s_conn;   /* current connection, NULL if not connected */
 
 /* Pending command — written by CMD_CHAR callback, consumed by cmd_work */
-static uint8_t s_pending_cmd[CHAR_BUF_SIZE];
+static uint8_t AKIRA_BULK_BSS s_pending_cmd[CHAR_BUF_SIZE];
 static uint16_t s_pending_cmd_len;
 static struct k_spinlock s_cmd_lock;
 static struct k_work s_cmd_work;
+
+/* apps.cmd blocks this queue up to APPS_CMD_TIMEOUT_MS waiting on the app's
+ * IPC reply — must not run on the system workqueue, or a non-replying app
+ * stalls every other subsystem's k_work_submit() for the same duration. */
+#define CMD_WORKQ_STACK_SIZE 8192
+static K_THREAD_STACK_DEFINE(s_cmd_workq_stack, CMD_WORKQ_STACK_SIZE);
+static struct k_work_q s_cmd_workq;
 
 /* Active bulk transfer state */
 static struct {
@@ -176,7 +186,7 @@ static void send_resp(const char *op, int id, bool ok,
     }
 
     /* attr pointer retrieved from the GATT table via the extern below */
-    extern const struct bt_gatt_attr companion_attrs[];
+    extern const struct bt_gatt_attr *companion_attrs;
     /* RESP_CHAR is at index 3 in the attribute table (svc, cmd_decl, cmd_val,
      * resp_decl, resp_val, resp_ccc, ...) — use bt_gatt_notify with attr=NULL
      * to let Zephyr look it up by CCCD. */
@@ -198,7 +208,7 @@ static void handle_device_info(const char *op, int id, const char *params)
     snprintf(buf, sizeof(buf),
              "{\"fw\":\"%s\",\"model\":\"AkiraConsole\","
              "\"bt_addr\":\"<addr>\"}",
-             akira_version_string());
+             APP_VERSION_STRING);
     send_resp(op, id, true, buf);
 }
 
@@ -210,29 +220,67 @@ static void handle_device_reboot(const char *op, int id, const char *params)
     sys_reboot(SYS_REBOOT_COLD);
 }
 
+static char AKIRA_BULK_BSS s_list_json[2048];
+
+/* Fragments a buffer across DATA_DOWN notifications (COMP_XFER_FILE_DATA
+ * framing) — used when a response exceeds one 244-byte RESP_CHAR notify. */
+static void stream_bytes_down(const uint8_t *data, int len)
+{
+    extern const struct bt_gatt_attr *companion_attrs;
+    uint8_t frame[4 + COMP_DATA_PAYLOAD_MAX];
+    int off = 0;
+    do {
+        int chunk = len - off;
+        if (chunk > COMP_DATA_PAYLOAD_MAX) {
+            chunk = COMP_DATA_PAYLOAD_MAX;
+        }
+        bool last = (off + chunk >= len);
+        frame[0] = COMP_XFER_FILE_DATA;
+        frame[1] = last ? COMP_FLAG_LAST : 0;
+        frame[2] = (uint8_t)(chunk & 0xFF);
+        frame[3] = (uint8_t)((chunk >> 8) & 0xFF);
+        if (chunk > 0) {
+            memcpy(frame + 4, data + off, chunk);
+        }
+        if (bt_gatt_notify(s_conn, &companion_attrs[9], frame, (uint16_t)(4 + chunk))) {
+            break;
+        }
+        off += chunk;
+        if (!last) {
+            k_sleep(K_MSEC(10)); /* let the peer's BLE stack drain */
+        }
+    } while (off < len);
+}
+
 static void handle_apps_list(const char *op, int id, const char *params)
 {
     ARG_UNUSED(params);
-    /* Build JSON array of installed apps */
-    char buf[CHAR_BUF_SIZE];
-    int pos = 0;
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "[");
-
-    int count = app_manager_get_count();
-    for (int i = 0; i < count && (size_t)pos < sizeof(buf) - 40; i++) {
-        app_info_t info;
-        if (app_manager_get_info(i, &info) == 0) {
-            pos += snprintf(buf + pos, sizeof(buf) - pos,
-                            "%s{\"name\":\"%s\",\"state\":\"%s\","
-                            "\"version\":\"%s\"}",
-                            i > 0 ? "," : "",
-                            info.name,
-                            app_state_string(info.state),
-                            info.version);
-        }
+    /* The list can exceed one 244-byte notify (many SD-card apps), so ACK on
+     * RESP and stream the JSON array over DATA_DOWN. */
+    static app_info_t list[32] AKIRA_BULK_BSS;
+    int count = app_manager_list(list, (int)(sizeof(list) / sizeof(list[0])));
+    if (count < 0) {
+        count = 0;
     }
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "]");
-    send_resp(op, id, true, buf);
+
+    int pos = 0;
+    pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos, "[");
+    for (int i = 0; i < count && (size_t)pos < sizeof(s_list_json) - 96; i++) {
+        pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos,
+                        "%s{\"name\":\"%s\",\"state\":\"%s\","
+                        "\"version\":\"%s\",\"has_update\":%s,"
+                        "\"available_version\":\"%s\"}",
+                        i > 0 ? "," : "",
+                        list[i].name,
+                        app_state_to_str(list[i].state),
+                        list[i].version,
+                        list[i].has_update ? "true" : "false",
+                        list[i].available_version);
+    }
+    pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos, "]");
+
+    send_resp(op, id, true, NULL);   /* ACK; array follows on DATA_DOWN */
+    stream_bytes_down((const uint8_t *)s_list_json, pos);
 }
 
 static void handle_apps_start(const char *op, int id, const char *params)
@@ -275,6 +323,101 @@ static void handle_apps_uninstall(const char *op, int id, const char *params)
     }
     int rc = app_manager_uninstall(name);
     send_resp(op, id, rc == 0, rc == 0 ? NULL : "uninstall failed");
+}
+
+/* CONFIG_AKIRA_IPC_MSG_MAX_SIZE-bounded: the bridge forwards these bytes
+ * straight onto the app's IPC topic, which caps a single message at that
+ * Kconfig value. */
+#define APPS_CMD_TIMEOUT_MS 3000
+
+struct apps_cmd_ctx {
+    char op[16];
+    int id;
+};
+
+static void apps_cmd_reply_cb(const char *app_name, const void *reply, size_t reply_len,
+                              app_cmd_reply_status_t status, void *user_data)
+{
+    ARG_UNUSED(app_name);
+    struct apps_cmd_ctx *ctx = user_data;
+
+    if (status == APP_CMD_REPLY_NOT_LISTENING) {
+        send_resp(ctx->op, ctx->id, false, "app not listening");
+        return;
+    }
+    if (status == APP_CMD_REPLY_TIMEOUT) {
+        send_resp(ctx->op, ctx->id, false, "timeout");
+        return;
+    }
+
+    char b64_out[4 * ((CONFIG_AKIRA_IPC_MSG_MAX_SIZE + 2) / 3) + 1];
+    size_t b64_len = 0;
+    if (base64_encode((uint8_t *)b64_out, sizeof(b64_out), &b64_len, reply, reply_len) != 0) {
+        send_resp(ctx->op, ctx->id, false, "reply too large");
+        return;
+    }
+    b64_out[b64_len] = '\0';
+
+    char data[sizeof(b64_out) + 32];
+    snprintf(data, sizeof(data), "{\"payload\":\"%s\"}", b64_out);
+    send_resp(ctx->op, ctx->id, true, data);
+}
+
+static void handle_apps_cmd(const char *op, int id, const char *params)
+{
+    char name[32] = "";
+    char payload_b64[4 * ((CONFIG_AKIRA_IPC_MSG_MAX_SIZE + 2) / 3) + 1] = "";
+    json_get_str(params, "name", name, sizeof(name));
+    json_get_str(params, "payload", payload_b64, sizeof(payload_b64));
+
+    if (!name[0] || !payload_b64[0]) {
+        send_resp(op, id, false, "missing name or payload");
+        return;
+    }
+
+    uint8_t decoded[CONFIG_AKIRA_IPC_MSG_MAX_SIZE];
+    size_t decoded_len = 0;
+    if (base64_decode(decoded, sizeof(decoded), &decoded_len,
+                      (const uint8_t *)payload_b64, strlen(payload_b64)) != 0) {
+        send_resp(op, id, false, "invalid base64 payload");
+        return;
+    }
+
+    static struct apps_cmd_ctx ctx; /* single connection (CONFIG_BT_MAX_CONN=1) — one in flight */
+    strncpy(ctx.op, op, sizeof(ctx.op) - 1);
+    ctx.op[sizeof(ctx.op) - 1] = '\0';
+    ctx.id = id;
+
+    int rc = app_cmd_bridge_send(name, decoded, decoded_len, apps_cmd_reply_cb, &ctx,
+                                 K_MSEC(APPS_CMD_TIMEOUT_MS));
+    if (rc < 0 && rc != -ENOENT) {
+        /* -ENOENT already answered by the callback (not-listening case) */
+        send_resp(op, id, false, "internal error");
+    }
+}
+
+static void handle_apps_update(const char *op, int id, const char *params)
+{
+    char name[32] = "";
+    json_get_str(params, "name", name, sizeof(name));
+    if (!name[0]) {
+        send_resp(op, id, false, "missing name");
+        return;
+    }
+    int rc = cloud_app_update(name, NULL, NULL);
+    send_resp(op, id, rc == 0, rc == 0 ? NULL : "update failed");
+}
+
+static void handle_apps_restart(const char *op, int id, const char *params)
+{
+    char name[32] = "";
+    json_get_str(params, "name", name, sizeof(name));
+    if (!name[0]) {
+        send_resp(op, id, false, "missing name");
+        return;
+    }
+    int rc = app_manager_restart(name);
+    send_resp(op, id, rc == 0, rc == 0 ? NULL : "restart failed");
 }
 
 static void handle_apps_install_begin(const char *op, int id, const char *params)
@@ -331,8 +474,13 @@ static void handle_apps_install_end(const char *op, int id, const char *params)
         return;
     }
 
-    /* Write staged bytes to /tmp/ble_upload.akpkg then install */
-    char tmp_path[] = "/lfs/tmp/ble_upload.akpkg";
+    /* Write staged bytes to a temp file named after the real app — install_akpkg()
+     * only overrides this with the embedded manifest's name when that manifest is
+     * small enough to parse (see app_manager.c), so the fallback must be correct. */
+    char tmp_path[128];
+    snprintf(tmp_path, sizeof(tmp_path), "/lfs/tmp/%s.akpkg", s_xfer.app_name);
+    fs_manager_mkdir("/lfs/tmp");
+
     struct fs_file_t f;
     fs_file_t_init(&f);
 
@@ -401,17 +549,51 @@ static void handle_settings_set(const char *op, int id, const char *params)
         send_resp(op, id, false, "missing key");
         return;
     }
-    int rc = akira_settings_set(key, value);
+    int rc = akira_settings_set(key, value, 0);
     send_resp(op, id, rc == 0, rc == 0 ? NULL : "set failed");
 }
 
 static void handle_settings_list(const char *op, int id, const char *params)
 {
     ARG_UNUSED(params);
-    /* Returns compact JSON array of all settings keys */
+    /* Returns compact JSON array of {"key":...,"value":...} entries */
+    char key_buf[MAX_KEY_LEN];
+    char value_buf[MAX_VALUE_LEN];
+    settings_iterator_t iter = {
+        .index = 0,
+        .count = 0,
+        .key = key_buf,
+        .value = value_buf,
+    };
+
     char buf[CHAR_BUF_SIZE];
-    int rc = akira_settings_list_json(buf, sizeof(buf));
-    send_resp(op, id, rc == 0, rc == 0 ? buf : "list failed");
+    int pos = snprintf(buf, sizeof(buf), "[");
+    bool first = true;
+    while ((size_t)pos < sizeof(buf) - 96 && akira_settings_list(&iter) == 0) {
+        pos += snprintf(buf + pos, sizeof(buf) - pos,
+                        "%s{\"key\":\"%s\",\"value\":\"%s\"}",
+                        first ? "" : ",", iter.key, iter.value);
+        first = false;
+    }
+    snprintf(buf + pos, sizeof(buf) - pos, "]");
+
+    send_resp(op, id, true, buf);
+}
+
+static void akira_shell_exec(const char *cmd, char *out, size_t out_len)
+{
+    const struct shell *sh = shell_backend_dummy_get_ptr();
+
+    shell_backend_dummy_clear_output(sh);
+    shell_execute_cmd(sh, cmd);
+
+    size_t len = 0;
+    const char *output = shell_backend_dummy_get_output(sh, &len);
+    if (len >= out_len) {
+        len = out_len - 1;
+    }
+    memcpy(out, output, len);
+    out[len] = '\0';
 }
 
 static void handle_shell_exec(const char *op, int id, const char *params)
@@ -423,8 +605,6 @@ static void handle_shell_exec(const char *op, int id, const char *params)
         return;
     }
 
-    /* Run command; output streamed via DATA_DOWN SHELL_OUT frames.
-     * For short output that fits in one frame, we also include it in data. */
     char out[CHAR_BUF_SIZE - 64] = "";
     akira_shell_exec(cmd, out, sizeof(out));
 
@@ -488,7 +668,7 @@ static void handle_files_read(const char *op, int id, const char *params)
     }
 
     /* Send data in COMP_DATA_PAYLOAD_MAX chunks via DATA_DOWN notifications */
-    extern const struct bt_gatt_attr companion_attrs[];
+    extern const struct bt_gatt_attr *companion_attrs;
     uint8_t frame[4 + COMP_DATA_PAYLOAD_MAX];
     ssize_t got;
     bool error = false;
@@ -599,44 +779,24 @@ static void handle_files_mkdir(const char *op, int id, const char *params)
 
 static void handle_ota_start(const char *op, int id, const char *params)
 {
-    char url[200]       = "";
-    char version[16]    = "";
-    char signature[132] = "";
-
-    json_get_str(params, "url",       url,       sizeof(url));
-    json_get_str(params, "version",   version,   sizeof(version));
-    json_get_str(params, "signature", signature, sizeof(signature));
-
-    if (!url[0] || !signature[0]) {
-        send_resp(op, id, false, "missing url or signature");
-        return;
-    }
-
-    struct ota_request req = {
-        .url = url,
-        .version = version,
-        .signature_hex = signature,
-    };
-
-    int rc = ota_manager_start(&req);
-    if (rc) {
-        char err[32];
-        snprintf(err, sizeof(err), "ota start failed: %d", rc);
-        send_resp(op, id, false, err);
-    } else {
-        send_resp(op, id, true, NULL);
-    }
+    /* TODO: no native (non-WASM) path exists yet to fetch a firmware image
+     * from an arbitrary URL+signature and feed it through
+     * ota_start_update()/ota_write_chunk()/ota_finalize_update(). The only
+     * existing OTA trigger paths are ota_cloud_check_update() (fixed cloud
+     * server, no caller-supplied URL) and the WASM-only akira_native_ota_*
+     * bridge in akira_ota_api.c. Wire one of those in before enabling this. */
+    ARG_UNUSED(params);
+    send_resp(op, id, false, "ota over BLE not implemented");
 }
 
 static void handle_ota_status(const char *op, int id, const char *params)
 {
     ARG_UNUSED(params);
     char buf[CHAR_BUF_SIZE];
-    struct ota_status st;
-    ota_manager_get_status(&st);
+    const struct ota_progress *progress = ota_get_progress();
     snprintf(buf, sizeof(buf),
-             "{\"state\":\"%s\",\"progress\":%u,\"version\":\"%s\"}",
-             ota_state_string(st.state), st.progress_pct, st.version);
+             "{\"state\":\"%s\",\"progress\":%u}",
+             ota_state_to_string(progress->state), progress->percentage);
     send_resp(op, id, true, buf);
 }
 
@@ -702,6 +862,9 @@ static void cmd_work_handler(struct k_work *work)
     else if (strcmp(op, COMP_OP_APPS_UNINSTALL)      == 0) { handle_apps_uninstall(op, id, params); }
     else if (strcmp(op, COMP_OP_APPS_INSTALL_BEGIN)  == 0) { handle_apps_install_begin(op, id, params); }
     else if (strcmp(op, COMP_OP_APPS_INSTALL_END)    == 0) { handle_apps_install_end(op, id, params); }
+    else if (strcmp(op, COMP_OP_APPS_CMD)            == 0) { handle_apps_cmd(op, id, params); }
+    else if (strcmp(op, COMP_OP_APPS_UPDATE)         == 0) { handle_apps_update(op, id, params); }
+    else if (strcmp(op, COMP_OP_APPS_RESTART)        == 0) { handle_apps_restart(op, id, params); }
     else if (strcmp(op, COMP_OP_SETTINGS_GET)        == 0) { handle_settings_get(op, id, params); }
     else if (strcmp(op, COMP_OP_SETTINGS_SET)        == 0) { handle_settings_set(op, id, params); }
     else if (strcmp(op, COMP_OP_SETTINGS_LIST)       == 0) { handle_settings_list(op, id, params); }
@@ -740,7 +903,7 @@ static ssize_t cmd_write(struct bt_conn *conn,
     s_pending_cmd_len = len;
     k_spin_unlock(&s_cmd_lock, irq_key);
 
-    k_work_submit(&s_cmd_work);
+    k_work_submit_to_queue(&s_cmd_workq, &s_cmd_work);
     return (ssize_t)len;
 }
 
@@ -802,10 +965,11 @@ static ssize_t data_up_write(struct bt_conn *conn,
                     s_xfer.path,
                     rc >= 0 ? "OK" : "FAIL",
                     s_xfer.received);
+            akira_free_buffer(s_xfer.buf);
+            memset(&s_xfer, 0, sizeof(s_xfer));
         }
-        /* For COMP_XFER_APP_DATA the install is triggered by apps.install.end */
-        akira_free_buffer(s_xfer.buf);
-        memset(&s_xfer, 0, sizeof(s_xfer));
+        /* For COMP_XFER_APP_DATA, leave s_xfer active — apps.install.end
+         * uses s_xfer.buf/received and cleans up itself. */
     }
 
     return (ssize_t)len;
@@ -823,19 +987,19 @@ static ssize_t status_read(struct bt_conn *conn,
 static void resp_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
     ARG_UNUSED(attr);
-    LOG_DBG("RESP_CHAR CCC: %s", value == BT_GATT_CCC_NOTIFY ? "notify" : "off");
+    LOG_INF("RESP_CHAR CCC: %s", value == BT_GATT_CCC_NOTIFY ? "notify" : "off");
 }
 
 static void data_dn_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
     ARG_UNUSED(attr);
-    LOG_DBG("DATA_DOWN CCC: %s", value == BT_GATT_CCC_NOTIFY ? "notify" : "off");
+    LOG_INF("DATA_DOWN CCC: %s", value == BT_GATT_CCC_NOTIFY ? "notify" : "off");
 }
 
 static void status_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
     ARG_UNUSED(attr);
-    LOG_DBG("STATUS CCC: %s", value == BT_GATT_CCC_NOTIFY ? "notify" : "off");
+    LOG_INF("STATUS CCC: %s", value == BT_GATT_CCC_NOTIFY ? "notify" : "off");
     if (value == BT_GATT_CCC_NOTIFY) {
         companion_svc_notify_status(); /* push immediately on subscribe */
     }
@@ -865,7 +1029,11 @@ static void status_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 BT_GATT_SERVICE_DEFINE(companion_svc_def,
     BT_GATT_PRIMARY_SERVICE(&svc_uuid),
 
-    /* CMD_CHAR: WRITE */
+    /* CMD_CHAR: WRITE (carries shell/fs/app/OTA commands). No encryption
+     * requirement — iOS CoreBluetooth sets AuthReq.MITM=1 on any pairing it
+     * triggers for an encrypted characteristic, and our NoInputNoOutput IO
+     * capability can only do Just Works, which can never satisfy MITM. That
+     * made every phone connection loop on AUTH_REQUIREMENT and disconnect. */
     BT_GATT_CHARACTERISTIC(&cmd_uuid.uuid,
                             BT_GATT_CHRC_WRITE,
                             BT_GATT_PERM_WRITE,
@@ -876,10 +1044,11 @@ BT_GATT_SERVICE_DEFINE(companion_svc_def,
                             BT_GATT_CHRC_NOTIFY,
                             BT_GATT_PERM_NONE,
                             NULL, NULL, s_resp_buf),
-    BT_GATT_CCC(s_resp_ccc, resp_ccc_changed,
+    BT_GATT_CCC(resp_ccc_changed,
                 BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
-    /* DATA_UP: WRITE_WITHOUT_RSP */
+    /* DATA_UP: WRITE_WITHOUT_RSP (file upload). No encryption requirement —
+     * see CMD_CHAR above. */
     BT_GATT_CHARACTERISTIC(&data_up_uuid.uuid,
                             BT_GATT_CHRC_WRITE_WITHOUT_RESP,
                             BT_GATT_PERM_WRITE,
@@ -890,7 +1059,7 @@ BT_GATT_SERVICE_DEFINE(companion_svc_def,
                             BT_GATT_CHRC_NOTIFY,
                             BT_GATT_PERM_NONE,
                             NULL, NULL, s_data_dn_buf),
-    BT_GATT_CCC(s_data_dn_ccc, data_dn_ccc_changed,
+    BT_GATT_CCC(data_dn_ccc_changed,
                 BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
     /* STATUS: READ + NOTIFY */
@@ -898,7 +1067,7 @@ BT_GATT_SERVICE_DEFINE(companion_svc_def,
                             BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
                             BT_GATT_PERM_READ,
                             status_read, NULL, s_status_buf),
-    BT_GATT_CCC(s_status_ccc, status_ccc_changed,
+    BT_GATT_CCC(status_ccc_changed,
                 BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 );
 
@@ -967,6 +1136,11 @@ int companion_svc_init(void)
         return rc;
     }
 
+    k_work_queue_init(&s_cmd_workq);
+    k_work_queue_start(&s_cmd_workq, s_cmd_workq_stack,
+                       K_THREAD_STACK_SIZEOF(s_cmd_workq_stack),
+                       K_PRIO_PREEMPT(7), NULL);
+
     k_work_init(&s_cmd_work, cmd_work_handler);
     k_work_init_delayable(&s_status_timer, status_timer_handler);
 
@@ -1019,22 +1193,53 @@ void companion_svc_notify_status(void)
         return;
     }
 
-    /* Build the same JSON as cloud device.status */
+    /* running_apps: pulled from the app_manager registry. Heap-allocate the
+     * listing buffer — app_info_t carries a 512B commands_json field per
+     * entry, too large for a stack array on threads that call this function
+     * (BT RX WQ runs near its stack ceiling already). */
+    char running_apps_json[64] = "[]";
+    app_info_t *apps = akira_malloc_buffer(sizeof(app_info_t) * CONFIG_AKIRA_APP_MAX_INSTALLED);
+    if (apps) {
+        int count = app_manager_list(apps, CONFIG_AKIRA_APP_MAX_INSTALLED);
+        size_t off = 0;
+        bool first = true;
+        running_apps_json[off++] = '[';
+        for (int i = 0; i < count && off < sizeof(running_apps_json) - 3; i++) {
+            if (apps[i].state != APP_STATE_RUNNING) {
+                continue;
+            }
+            int written = snprintf(running_apps_json + off, sizeof(running_apps_json) - off,
+                                    "%s\"%s\"", first ? "" : ",", apps[i].name);
+            if (written < 0 || (size_t)written >= sizeof(running_apps_json) - off) {
+                break;
+            }
+            off += (size_t)written;
+            first = false;
+        }
+        running_apps_json[off++] = ']';
+        running_apps_json[off] = '\0';
+        akira_free_buffer(apps);
+    }
+
+    /* Build the same JSON as cloud device.status.
+     * free_heap: TODO — k_mem_slab_num_free_get() takes a specific slab, not
+     * a global query; the system heap object isn't part of Zephyr's public
+     * API here. Calling it with NULL is a provable null-deref, and GCC was
+     * silently compiling this whole function down to a trap instruction
+     * because of it. Reporting 0 until a real heap-stats source is wired. */
     int n = snprintf((char *)s_status_buf, sizeof(s_status_buf),
                      "{\"fw\":\"%s\",\"free_heap\":%u,"
-                     "\"running_apps\":[],\"bt_rssi\":0}",
-                     akira_version_string(),
-                     (unsigned int)k_mem_slab_num_free_get(NULL));
+                     "\"running_apps\":%s,\"bt_rssi\":0}",
+                     APP_VERSION_STRING, 0U, running_apps_json);
 
     if (n <= 0 || (size_t)n >= sizeof(s_status_buf)) {
         return;
     }
 
-    int rc = bt_gatt_notify(s_conn, &companion_svc_def.attrs[12], /* status val */
+    extern const struct bt_gatt_attr *companion_attrs;
+    int rc = bt_gatt_notify(s_conn, &companion_attrs[12], /* status val */
                             s_status_buf, (uint16_t)n);
-    if (rc && rc != -ENOTCONN) {
-        LOG_DBG("status notify failed: %d", rc);
-    }
+    LOG_INF("status notify rc=%d len=%d buf=%s", rc, n, s_status_buf);
 }
 
 bool companion_svc_is_ready(void)

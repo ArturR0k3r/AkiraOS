@@ -13,6 +13,9 @@
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/ieee802154_radio.h>
 #include <string.h>
+#include <zephyr/net/net_pkt.h>
+#include <zephyr/net/ieee802154_pkt.h>
+#include <zephyr/net/promiscuous.h>
 
 LOG_MODULE_REGISTER(radio_802154, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -28,6 +31,10 @@ struct ieee802154_radio_data {
     uint16_t panid;
     uint16_t short_addr;
     bool initialized;
+    /* Per-frame link metadata latched from the most recent recv() frame. */
+    uint8_t last_lqi;    /* 0-255 LQI of last received frame            */
+    int16_t last_rssi;   /* dBm RSSI of last frame (or DBM_UNDEFINED)   */
+    bool have_rx_meta;   /* true once at least one frame has been RX'd  */
 };
 
 static struct ieee802154_radio_data ieee802154_data;
@@ -66,6 +73,23 @@ static int ieee802154_radio_init(radio_handle_t *handle)
     
     data->panid = IEEE802154_BROADCAST_PAN_ID;
     data->short_addr = IEEE802154_SHORT_ADDRESS_NOT_ASSOCIATED;
+    
+    /* No RX frame captured yet: report LQI/RSSI as unavailable until recv()
+     * latches real metadata from the first received frame. */
+    data->have_rx_meta = false;
+    data->last_lqi = 0;
+    data->last_rssi = IEEE802154_MAC_RSSI_DBM_UNDEFINED;
+    
+#if defined(CONFIG_AKIRA_RADIO_802154_PROMISC_RX)
+    /* Enable promiscuous capture so ieee802154_radio_recv() can pull raw
+     * frames (with per-frame LQI/RSSI) off the net stack. Best-effort: if the
+     * L2/driver does not support it, raw recv simply stays unavailable. */
+    int prc = net_promisc_mode_on(data->iface);
+    if (prc < 0 && prc != -EALREADY) {
+        LOG_WRN("802.15.4 promiscuous mode unavailable (%d); raw recv disabled", prc);
+    }
+#endif
+    
     data->initialized = true;
     handle->state = RADIO_STATE_IDLE;
     
@@ -79,6 +103,12 @@ static int ieee802154_radio_init(radio_handle_t *handle)
 static int ieee802154_radio_deinit(radio_handle_t *handle)
 {
     struct ieee802154_radio_data *data = handle->priv_data;
+    
+#if defined(CONFIG_AKIRA_RADIO_802154_PROMISC_RX)
+    if (data->iface) {
+        (void)net_promisc_mode_off(data->iface);
+    }
+#endif
     
     data->initialized = false;
     handle->state = RADIO_STATE_OFF;
@@ -144,9 +174,66 @@ static int ieee802154_radio_send(radio_handle_t *handle, const uint8_t *data, si
 static int ieee802154_radio_recv(radio_handle_t *handle, uint8_t *buf, size_t buf_len,
                                 uint32_t timeout_ms)
 {
-    /* 802.15.4 reception handled by net stack RX path */
-    LOG_WRN("802.15.4 raw recv not implemented - use net stack");
-    return -ENOTSUP;
+#if defined(CONFIG_AKIRA_RADIO_802154_PROMISC_RX)
+    struct ieee802154_radio_data *radio_data = handle->priv_data;
+    struct net_pkt *pkt;
+    size_t frame_len;
+    int ret;
+    
+    if (!buf || buf_len == 0) {
+        return -EINVAL;
+    }
+    
+    /* Block on the promiscuous RX queue for the next raw 802.15.4 frame. The
+     * net L2 feeds every received frame here once promiscuous mode is enabled
+     * (see ieee802154_radio_init). timeout_ms == 0 polls without blocking. */
+    pkt = net_promisc_mode_wait_data(timeout_ms == 0U ? K_NO_WAIT : K_MSEC(timeout_ms));
+    if (!pkt) {
+        return -EAGAIN;  /* timed out, no frame available */
+    }
+    
+    /* The promiscuous queue is shared across all promiscuous interfaces; drop
+     * frames that did not arrive on our 802.15.4 interface. */
+    if (net_pkt_iface(pkt) != radio_data->iface) {
+        net_pkt_unref(pkt);
+        return -EAGAIN;
+    }
+    
+    frame_len = net_pkt_get_len(pkt);
+    if (frame_len > buf_len) {
+        LOG_WRN("802.15.4 RX frame %zu B truncated to %zu B buffer", frame_len, buf_len);
+        frame_len = buf_len;
+    }
+    
+    net_pkt_cursor_init(pkt);
+    ret = net_pkt_read(pkt, buf, frame_len);
+    if (ret < 0) {
+        LOG_ERR("802.15.4 RX frame copy failed: %d", ret);
+        radio_data->stats.rx_errors++;
+        net_pkt_unref(pkt);
+        return ret;
+    }
+    
+    /* Latch per-frame link metadata so get_stats() reports real values. */
+    radio_data->last_lqi = net_pkt_ieee802154_lqi(pkt);
+    radio_data->last_rssi = net_pkt_ieee802154_rssi_dbm(pkt);
+    radio_data->have_rx_meta = true;
+    
+    radio_data->stats.rx_packets++;
+    radio_data->stats.rx_bytes += frame_len;
+    
+    net_pkt_unref(pkt);
+    return (int)frame_len;
+#else
+    ARG_UNUSED(handle);
+    ARG_UNUSED(buf);
+    ARG_UNUSED(buf_len);
+    ARG_UNUSED(timeout_ms);
+    /* Raw RX needs promiscuous-mode capture (CONFIG_NET_PROMISCUOUS_MODE).
+     * Without it there is no in-tree path to pull raw frames from the L2. */
+    LOG_WRN("802.15.4 raw recv unavailable: enable CONFIG_AKIRA_RADIO_802154_PROMISC_RX");
+    return -ENOSYS;
+#endif /* CONFIG_AKIRA_RADIO_802154_PROMISC_RX */
 }
 
 static int ieee802154_radio_scan(radio_handle_t *handle, uint32_t timeout_ms)
@@ -210,8 +297,23 @@ static int ieee802154_radio_get_stats(radio_handle_t *handle, radio_stats_t *sta
     struct ieee802154_radio_data *data = handle->priv_data;
     memcpy(stats, &data->stats, sizeof(*stats));
     
-    /* LQI is typically in range 0-255 in 802.15.4 */
-    stats->lqi = 200;  /* Placeholder - would read from last RX frame */
+    /*
+     * LQI and RSSI are per-frame quantities in 802.15.4 (LQI range 0-255).
+     * Report the values latched from the most recently received frame; if no
+     * frame has been received yet (or its RSSI is undefined) report neutral /
+     * unavailable sentinels instead of a fabricated constant.
+     */
+    if (data->have_rx_meta) {
+        stats->lqi = data->last_lqi;
+        if (data->last_rssi == IEEE802154_MAC_RSSI_DBM_UNDEFINED) {
+            stats->rssi = RADIO_RSSI_UNAVAILABLE;
+        } else {
+            stats->rssi = (int8_t)CLAMP(data->last_rssi, INT8_MIN, INT8_MAX);
+        }
+    } else {
+        stats->lqi = 0;
+        stats->rssi = RADIO_RSSI_UNAVAILABLE;
+    }
     
     return 0;
 }

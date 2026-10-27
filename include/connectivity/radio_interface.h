@@ -34,7 +34,8 @@ typedef enum {
     RADIO_TYPE_WIFI,       /* IEEE 802.11 WiFi (2.4GHz/5GHz) */
     RADIO_TYPE_BLE,        /* Bluetooth Low Energy 5.x */
     RADIO_TYPE_802154,     /* IEEE 802.15.4 (Thread, Zigbee) */
-    RADIO_TYPE_LORA,       /* LoRaWAN (future) */
+    RADIO_TYPE_LORA,       /* LoRaWAN */
+    RADIO_TYPE_SUBGHZ,     /* Sub-GHz transceivers (CC1121, LR2021, etc.) */
     RADIO_TYPE_MAX
 } radio_type_t;
 
@@ -51,6 +52,46 @@ typedef enum {
 #define RADIO_CAP_AUTO_ACK      BIT(9)  /* Automatic acknowledgments */
 #define RADIO_CAP_CSMA_CA       BIT(10) /* CSMA/CA collision avoidance */
 #define RADIO_CAP_RAW_MODE      BIT(11) /* Raw frame access */
+
+/* Modulation capabilities */
+#define RADIO_CAP_MOD_FSK       BIT(16) /* FSK / GFSK */
+#define RADIO_CAP_MOD_LORA      BIT(17) /* LoRa chirp spread spectrum */
+#define RADIO_CAP_MOD_OOK       BIT(18) /* OOK / ASK */
+#define RADIO_CAP_MOD_BPSK      BIT(19) /* BPSK */
+#define RADIO_CAP_MOD_FLRC      BIT(20) /* FLRC */
+#define RADIO_CAP_MOD_BLE_PHY   BIT(21) /* BLE PHY */
+#define RADIO_CAP_MOD_OQPSK     BIT(22) /* O-QPSK */
+#define RADIO_CAP_MOD_MSK       BIT(23) /* MSK */
+
+/* Band capabilities */
+#define RADIO_CAP_BAND_SUBGHZ   BIT(24) /* 150–960 MHz */
+#define RADIO_CAP_BAND_2GHZ4    BIT(25) /* 2.4 GHz ISM */
+#define RADIO_CAP_BAND_5GHZ     BIT(26) /* 5 GHz */
+
+/* Sentinel RSSI value returned when hardware measurement is unavailable */
+#define RADIO_RSSI_UNAVAILABLE  (-100)
+
+/* Radio modulation schemes */
+typedef enum {
+    RADIO_MOD_NONE = 0,
+    RADIO_MOD_FSK,
+    RADIO_MOD_GFSK,
+    RADIO_MOD_OOK,
+    RADIO_MOD_MSK,
+    RADIO_MOD_LORA,
+    RADIO_MOD_BPSK,
+    RADIO_MOD_FLRC,
+    RADIO_MOD_BLE_PHY,
+    RADIO_MOD_OQPSK,
+} radio_modulation_t;
+
+/* Sub-GHz power states */
+typedef enum {
+    RADIO_MODE_SLEEP,
+    RADIO_MODE_STANDBY,
+    RADIO_MODE_RX,
+    RADIO_MODE_TX,
+} radio_mode_t;
 
 /* Radio states */
 typedef enum {
@@ -134,9 +175,18 @@ typedef struct {
     /* Transmit packet */
     int (*send)(struct radio_handle *handle, const uint8_t *data, size_t len);
     
-    /* Receive packet (synchronous) */
+    /* Receive packet (synchronous).
+     * For radios that keep RX continuously armed (see rx_wait), this is a
+     * NON-blocking read: it arms continuous RX on first call and returns any
+     * packet already in the FIFO, or 0 if none. */
     int (*recv)(struct radio_handle *handle, uint8_t *buf, size_t buf_len, uint32_t timeout_ms);
-    
+
+    /* Optional: block (lock-free, no SPI) until a packet is ready or timeout.
+     * Lets a caller wait for RX without holding the chip lock, enabling
+     * interrupt-driven continuous RX. Returns 0 if a packet is ready,
+     * -EAGAIN on timeout. NULL => radio uses the blocking recv() polling model. */
+    int (*rx_wait)(struct radio_handle *handle, uint32_t timeout_ms);
+
     /* Start network scan */
     int (*scan)(struct radio_handle *handle, uint32_t timeout_ms);
     
@@ -157,6 +207,35 @@ typedef struct {
     
     /* Get hardware address (MAC/EUI-64) */
     int (*get_hw_addr)(struct radio_handle *handle, uint8_t *addr, size_t *addr_len);
+
+    /* Sub-GHz PHY control — Sub-GHz radios implement, others return -ENOSYS */
+    int (*set_frequency)(struct radio_handle *handle, uint32_t freq_hz);
+    int (*set_power)(struct radio_handle *handle, int8_t dbm);
+    int (*get_rssi)(struct radio_handle *handle, int16_t *rssi);
+    int (*set_mode)(struct radio_handle *handle, radio_mode_t mode);
+
+    /* Modulation — gated by RADIO_CAP_MOD_* */
+    int (*set_modulation)(struct radio_handle *handle, radio_modulation_t mod);
+    int (*set_bitrate)(struct radio_handle *handle, uint32_t bps);
+    int (*set_spreading_factor)(struct radio_handle *handle, uint8_t sf);
+    int (*set_bandwidth)(struct radio_handle *handle, uint32_t bw_hz);
+    int (*set_coding_rate)(struct radio_handle *handle, uint8_t cr);
+
+    /* Raw OOK capture/replay — gated by RADIO_CAP_RAW_MODE.
+     * raw_capture: stream the hard-sliced OOK bitstream from the RX FIFO into
+     *   buf (8 samples/byte at sample_rate_hz). Returns bytes captured.
+     * raw_replay: gate the carrier from buf's bits at sample_rate_hz, repeat
+     *   times. Returns 0 or <0 errno. NULL on radios without raw support. */
+    int (*raw_capture)(struct radio_handle *handle, uint8_t *buf,
+                       size_t max_bytes, uint32_t sample_rate_hz,
+                       uint32_t timeout_ms);
+    int (*raw_replay)(struct radio_handle *handle, const uint8_t *buf,
+                      size_t len, uint32_t sample_rate_hz, uint32_t repeat);
+
+    /* Max single-frame payload for the radio's *current* config (varies with
+     * modulation/spreading factor/etc). NULL => caller keeps whatever fixed
+     * bound it already assumed. */
+    int (*get_max_payload)(struct radio_handle *handle, size_t *max_payload);
 } radio_ops_t;
 
 /* Radio handle structure */
@@ -226,11 +305,37 @@ int radio_manager_get_all(radio_type_t type, radio_handle_t **handles, size_t ma
 
 /**
  * @brief Check if a radio type is available
- * 
+ *
  * @param type Radio type to check
  * @return true if available, false otherwise
  */
 bool radio_manager_is_available(radio_type_t type);
+
+/**
+ * @brief Get radio by driver name (e.g. "LR2021", "CC1121")
+ *
+ * @param name Driver name string
+ * @return Radio handle or NULL if not found
+ */
+radio_handle_t *radio_manager_get_by_name(const char *name);
+
+/**
+ * @brief Get first radio matching all required capability flags
+ *
+ * @param required_caps Bitmask of RADIO_CAP_* flags that must all be set
+ * @return Radio handle or NULL if none matches
+ */
+radio_handle_t *radio_manager_get_by_caps(uint32_t required_caps);
+
+/**
+ * @brief Get all radios matching required capability flags
+ *
+ * @param required_caps Bitmask of RADIO_CAP_* flags that must all be set
+ * @param handles Array to store matching handles
+ * @param max_handles Maximum number of handles to return
+ * @return Number of handles returned, or negative errno on failure
+ */
+int radio_manager_get_all_by_caps(uint32_t required_caps, radio_handle_t **handles, size_t max_handles);
 
 /**
  * @brief Get radio capabilities
@@ -264,6 +369,24 @@ const char *radio_type_to_string(radio_type_t type);
  * @return String name or "Unknown"
  */
 const char *radio_state_to_string(radio_state_t state);
+
+/* Ownership — the single access primitive. Acquire before driving ops. */
+
+/** Acquire a specific handle exclusively. -EBUSY if owned by another owner.
+ *  Re-acquire by the same owner string is idempotent (returns 0). */
+int radio_manager_acquire(radio_handle_t *handle, const char *owner);
+
+/** Atomic find-first-free + acquire by radio type. NULL if none free. */
+radio_handle_t *radio_manager_acquire_by_type(radio_type_t type, const char *owner);
+
+/** Atomic find-first-free + acquire by capability mask. NULL if none free. */
+radio_handle_t *radio_manager_acquire_by_caps(uint32_t caps, const char *owner);
+
+/** Release ownership. -EPERM if owner string does not match. */
+int radio_manager_release(radio_handle_t *handle, const char *owner);
+
+/** Inspection: owner string, or NULL if unacquired. */
+const char *radio_manager_get_owner(const radio_handle_t *handle);
 
 /* Convenience wrappers for common operations */
 
@@ -336,7 +459,7 @@ static inline int radio_configure(radio_handle_t *handle, const radio_config_t *
 
 /**
  * @brief Get radio statistics
- * 
+ *
  * @param handle Radio handle
  * @param stats Pointer to statistics structure
  * @return 0 on success, negative errno on failure
@@ -346,12 +469,55 @@ static inline int radio_get_stats(radio_handle_t *handle, radio_stats_t *stats)
     if (!handle || !handle->ops || !handle->ops->get_stats) {
         return -ENOTSUP;
     }
-    
     k_mutex_lock(&handle->lock, K_FOREVER);
     int ret = handle->ops->get_stats(handle, stats);
     k_mutex_unlock(&handle->lock);
-    
     return ret;
+}
+
+static inline int radio_set_frequency(radio_handle_t *h, uint32_t hz)
+{
+    return (h && h->ops && h->ops->set_frequency) ? h->ops->set_frequency(h, hz) : -ENOSYS;
+}
+
+static inline int radio_set_power(radio_handle_t *h, int8_t dbm)
+{
+    return (h && h->ops && h->ops->set_power) ? h->ops->set_power(h, dbm) : -ENOSYS;
+}
+
+static inline int radio_get_rssi(radio_handle_t *h, int16_t *rssi)
+{
+    return (h && h->ops && h->ops->get_rssi) ? h->ops->get_rssi(h, rssi) : -ENOSYS;
+}
+
+static inline int radio_set_mode(radio_handle_t *h, radio_mode_t mode)
+{
+    return (h && h->ops && h->ops->set_mode) ? h->ops->set_mode(h, mode) : -ENOSYS;
+}
+
+static inline int radio_set_modulation(radio_handle_t *h, radio_modulation_t mod)
+{
+    return (h && h->ops && h->ops->set_modulation) ? h->ops->set_modulation(h, mod) : -ENOSYS;
+}
+
+static inline int radio_set_bitrate(radio_handle_t *h, uint32_t bps)
+{
+    return (h && h->ops && h->ops->set_bitrate) ? h->ops->set_bitrate(h, bps) : -ENOSYS;
+}
+
+static inline int radio_set_spreading_factor(radio_handle_t *h, uint8_t sf)
+{
+    return (h && h->ops && h->ops->set_spreading_factor) ? h->ops->set_spreading_factor(h, sf) : -ENOSYS;
+}
+
+static inline int radio_set_bandwidth(radio_handle_t *h, uint32_t bw_hz)
+{
+    return (h && h->ops && h->ops->set_bandwidth) ? h->ops->set_bandwidth(h, bw_hz) : -ENOSYS;
+}
+
+static inline int radio_set_coding_rate(radio_handle_t *h, uint8_t cr)
+{
+    return (h && h->ops && h->ops->set_coding_rate) ? h->ops->set_coding_rate(h, cr) : -ENOSYS;
 }
 
 #ifdef __cplusplus

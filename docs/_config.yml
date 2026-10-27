@@ -14,7 +14,7 @@ mermaid:
 title: AkiraOS
 description: High-Performance WebAssembly OS for Embedded Systems
 baseurl: ""
-url: "https://akiraos.pen.engineering"
+url: "https://docs.akiraos.dev"
 
 # Logo and branding
 logo: "/AKIRAOS-LOGO-removebg-preview.png"
@@ -35,6 +35,7 @@ kramdown:
 
 # Plugins
 plugins:
+  - jekyll-remote-theme
   - jekyll-relative-links
   - jekyll-optional-front-matter
   - jekyll-readme-index
@@ -57,34 +58,12 @@ titles_from_headings:
   collections: false
 
 # Exclude from build
+# The GitHub Pages source is this `docs/` folder, so only paths that actually
+# exist inside docs/ are meaningful here.
 exclude:
-  - README.md
-  - LICENSE
-  - CONTRIBUTING.md
-  - CODE_OF_CONDUCT.md
-  - "*.sh"
-  - "*.c"
-  - "*.h"
-  - "*.cpp"
-  - "*.cmake"
-  - CMakeLists.txt
-  - Kconfig
-  - prj.conf
-  - west.yml
-  - build/
-  - modules/
-  - src/
-  - tests/
-  - wasm_sample/
-  - AkiraSDK/wasm_apps/
-  - AkiraSDK/include/
-  - AkiraSDK/scripts/
-  - boards/
-  - include/
-  - .vscode/
-  - .git/
-  - AkiraConsole/
-  - AkiraMicro/
+  - Gemfile
+  - Gemfile.lock
+  - vendor/
 
 # Include
 include:
@@ -98,11 +77,10 @@ aux_links:
 
 # Navigation
 nav_enabled: true
-nav_sort: nav_order
 search_enabled: true
 
 # Footer content
-footer_content: "Copyright &copy; 2025-2026 AkiraOS Project. Licensed under GNU GPL v3."
+footer_content: "Copyright &copy; 2026 PenEngineering S.R.L and the AkiraOS Contributors. Licensed under the Apache License 2.0."
 
 # Enable search
 search_enabled: true
@@ -116,46 +94,20 @@ search:
   button: false
 
 # Defaults
+#
+# Only `layout` is defaulted here. Parent/nav_order are declared explicitly in each
+# page's own front matter.
+#
+# Injecting `parent:` via a path scope (as this file used to do) also hits that
+# directory's own index.md — which declares `has_children: true` — making every
+# section index its own child and corrupting the nav tree. Per-page front matter
+# avoids that and also covers ai/, compliance/, connectivity/, hub/, reference/
+# and release/, which had no scope at all.
 defaults:
   - scope:
       path: ""
     values:
       layout: default
-  - scope:
-      path: "architecture"
-    values:
-      layout: default
-      parent: Architecture
-  - scope:
-      path: "getting-started"
-    values:
-      layout: default
-      parent: Getting Started
-  - scope:
-      path: "api-reference"
-    values:
-      layout: default
-      parent: API Reference
-  - scope:
-      path: "platform"
-    values:
-      layout: default
-      parent: Platform Support
-  - scope:
-      path: "development"
-    values:
-      layout: default
-      parent: Development
-  - scope:
-      path: "hardware"
-    values:
-      layout: default
-      parent: Hardware
-  - scope:
-      path: "resources"
-    values:
-      layout: default
-      parent: Resources
 
 # GitHub metadata
 repository: ArturR0k3r/AkiraOS

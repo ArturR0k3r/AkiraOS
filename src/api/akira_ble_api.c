@@ -24,11 +24,13 @@ LOG_MODULE_REGISTER(akira_ble_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <string.h>
 #include <errno.h>
 #include <zephyr/kernel.h>
+#include "akira_wasm_mem.h"
 #include "connectivity/bluetooth/ble_app_service.h"
 #include "connectivity/bluetooth/bt_manager.h"
 
 #ifdef CONFIG_BT
 #include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
 #endif
 
 /*
@@ -41,20 +43,8 @@ static int g_adv_svc_handle = -1;
 /* Internal helpers                                                    */
 /* ------------------------------------------------------------------ */
 
-/** Resolve WASM pointer to native buffer with length check. */
-static void *wasm_ptr_to_native(wasm_exec_env_t env,
-				uint32_t ptr, uint32_t len)
-{
-	wasm_module_inst_t mi = wasm_runtime_get_module_inst(env);
-
-	if (!mi) {
-		return NULL;
-	}
-	if (!wasm_runtime_validate_app_addr(mi, ptr, len)) {
-		return NULL;
-	}
-	return wasm_runtime_addr_app_to_native(mi, ptr);
-}
+/* WASM pointer validation lives in akira_wasm_mem.h (akira_wasm_ptr_to_native). */
+#define wasm_ptr_to_native(env, ptr, len) akira_wasm_ptr_to_native((env), (ptr), (len))
 
 /* ------------------------------------------------------------------ */
 /* WASM-exported native functions                                      */
@@ -62,7 +52,7 @@ static void *wasm_ptr_to_native(wasm_exec_env_t env,
 
 int akira_native_ble_init(wasm_exec_env_t exec_env)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	int ret = bt_manager_set_mode(BT_MODE_BLE_APP);
 
@@ -70,6 +60,15 @@ int akira_native_ble_init(wasm_exec_env_t exec_env)
 		LOG_ERR("ble_init: set_mode failed: %d", ret);
 		return ret;
 	}
+
+#if defined(CONFIG_BT_SMP)
+	/* A WASM app's GATT services are added dynamically and differ between
+	 * apps/boots. If the peer bonds, it caches this attribute table and will
+	 * not re-discover our service on later connections (the classic "service
+	 * not found" after a service was added). Disable bonding in app mode so
+	 * every connection re-discovers the current GATT. */
+	bt_set_bondable(false);
+#endif
 
 	ret = ble_app_svc_init();
 	if (ret < 0) {
@@ -84,7 +83,7 @@ int akira_native_ble_init(wasm_exec_env_t exec_env)
 
 int akira_native_ble_deinit(wasm_exec_env_t exec_env)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	bt_manager_stop_advertising();
 	ble_app_svc_deinit();
@@ -98,7 +97,7 @@ int akira_native_ble_deinit(wasm_exec_env_t exec_env)
 int akira_native_ble_set_local_name(wasm_exec_env_t exec_env,
 				    const char *name)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	if (!name) {
 		return -EINVAL;
@@ -120,7 +119,7 @@ int akira_native_ble_set_local_name(wasm_exec_env_t exec_env,
 int akira_native_ble_service_create(wasm_exec_env_t exec_env,
 				    const char *uuid128_str)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	if (!uuid128_str) {
 		return -EINVAL;
@@ -134,7 +133,7 @@ int akira_native_ble_char_create(wasm_exec_env_t exec_env,
 				 int32_t props,
 				 int32_t max_len)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	if (!uuid128_str || max_len <= 0) {
 		return -EINVAL;
@@ -148,14 +147,14 @@ int akira_native_ble_char_create(wasm_exec_env_t exec_env,
 int akira_native_ble_service_add_char(wasm_exec_env_t exec_env,
 				      int32_t svc_h, int32_t char_h)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	return ble_app_svc_add_char(svc_h, char_h);
 }
 
 int akira_native_ble_add_service(wasm_exec_env_t exec_env, int32_t svc_h)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	return ble_app_svc_register((int)svc_h);
 }
@@ -163,7 +162,7 @@ int akira_native_ble_add_service(wasm_exec_env_t exec_env, int32_t svc_h)
 int akira_native_ble_set_advertised_service(wasm_exec_env_t exec_env,
 					    int32_t svc_h)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	g_adv_svc_handle = (int)svc_h;
 	LOG_DBG("Advertised service handle set to %d", g_adv_svc_handle);
@@ -172,7 +171,7 @@ int akira_native_ble_set_advertised_service(wasm_exec_env_t exec_env,
 
 int akira_native_ble_advertise(wasm_exec_env_t exec_env)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	if (bt_manager_get_mode() != BT_MODE_BLE_APP) {
 		LOG_ERR("ble_advertise: not in BLE_APP mode (call ble_init first)");
@@ -190,14 +189,14 @@ int akira_native_ble_advertise(wasm_exec_env_t exec_env)
 
 int akira_native_ble_stop_advertise(wasm_exec_env_t exec_env)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	return bt_manager_stop_advertising();
 }
 
 int akira_native_ble_is_connected(wasm_exec_env_t exec_env)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	return bt_manager_is_connected() ? 1 : 0;
 }
@@ -206,7 +205,7 @@ int akira_native_ble_char_write(wasm_exec_env_t exec_env,
 				int32_t char_h,
 				uint32_t data_ptr, uint32_t len)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	if (len == 0) {
 		return -EINVAL;
@@ -228,7 +227,7 @@ int akira_native_ble_char_read(wasm_exec_env_t exec_env,
 			       int32_t char_h,
 			       uint32_t buf_ptr, uint32_t len)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	if (len == 0) {
 		return -EINVAL;
@@ -247,7 +246,7 @@ int akira_native_ble_char_read(wasm_exec_env_t exec_env,
 int akira_native_ble_event_pop(wasm_exec_env_t exec_env,
 			       uint32_t buf_ptr, uint32_t len)
 {
-	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EACCES);
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
 	/* Minimum buffer: 1 (type) + 1 (char_h) + 2 (data_len) = 4 bytes */
 	if (len < 4) {
@@ -323,3 +322,29 @@ int akira_native_ble_event_pop(wasm_exec_env_t e, uint32_t p, uint32_t l)
 { (void)e; (void)p; (void)l; return -ENOTSUP; }
 
 #endif /* CONFIG_AKIRA_WASM_BLE */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_BLE))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_ble_natives[] = {
+    {"ble_init", (void *)akira_native_ble_init, "()i", NULL},
+    {"ble_deinit", (void *)akira_native_ble_deinit, "()i", NULL},
+    {"ble_set_local_name", (void *)akira_native_ble_set_local_name, "($)i", NULL},
+    {"ble_service_create", (void *)akira_native_ble_service_create, "($)i", NULL},
+    {"ble_char_create", (void *)akira_native_ble_char_create, "($ii)i", NULL},
+    {"ble_service_add_char", (void *)akira_native_ble_service_add_char, "(ii)i", NULL},
+    {"ble_add_service", (void *)akira_native_ble_add_service, "(i)i", NULL},
+    {"ble_set_advertised_service", (void *)akira_native_ble_set_advertised_service, "(i)i", NULL},
+    {"ble_advertise", (void *)akira_native_ble_advertise, "()i", NULL},
+    {"ble_stop_advertise", (void *)akira_native_ble_stop_advertise, "()i", NULL},
+    {"ble_is_connected", (void *)akira_native_ble_is_connected, "()i", NULL},
+    {"ble_char_write", (void *)akira_native_ble_char_write, "(iii)i", NULL},
+    {"ble_char_read", (void *)akira_native_ble_char_read, "(iii)i", NULL},
+    {"ble_event_pop", (void *)akira_native_ble_event_pop, "(ii)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_ble_api, "env", akira_ble_natives);
+#endif

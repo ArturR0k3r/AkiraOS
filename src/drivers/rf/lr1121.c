@@ -4,7 +4,7 @@
  */
 
 #include "lr1121.h"
-#include "rf_framework.h"
+#include "connectivity/radio_interface.h"
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/gpio.h>
@@ -48,10 +48,11 @@ static struct {
     struct gpio_dt_spec cs;
     struct gpio_dt_spec reset;
     struct gpio_dt_spec busy;
-    rf_mode_t current_mode;
+    radio_mode_t current_mode;
     uint32_t frequency;
     int8_t tx_power;
-    rf_rx_callback_t rx_callback;
+    radio_event_cb_t event_cb;
+    void *event_user_data;
 } g_lr1121 = {
     .initialized = false,
 };
@@ -335,7 +336,7 @@ static int lr1121_init(void)
         return ret;
     }
 
-    g_lr1121.current_mode = RF_MODE_STANDBY;
+    g_lr1121.current_mode = RADIO_MODE_STANDBY;
     g_lr1121.initialized = true;
 
     LOG_INF("LR1121 initialized successfully");
@@ -357,7 +358,7 @@ static int lr1121_deinit(void)
     return 0;
 }
 
-static int lr1121_set_mode(rf_mode_t mode)
+static int lr1121_set_mode(radio_mode_t mode)
 {
     int ret;
     uint8_t mode_cfg;
@@ -367,22 +368,22 @@ static int lr1121_set_mode(rf_mode_t mode)
     }
 
     switch (mode) {
-    case RF_MODE_SLEEP:
+    case RADIO_MODE_SLEEP:
         mode_cfg = 0x04;  /* Warm start */
         ret = lr1121_write_command(LR1121_CMD_SET_SLEEP, &mode_cfg, 1);
         break;
 
-    case RF_MODE_STANDBY:
+    case RADIO_MODE_STANDBY:
         mode_cfg = LR1121_STANDBY_XOSC;
         ret = lr1121_write_command(LR1121_CMD_SET_STANDBY, &mode_cfg, 1);
         break;
 
-    case RF_MODE_RX:
+    case RADIO_MODE_RX:
         /* Set RX continuous mode */
         ret = lr1121_write_command(LR1121_CMD_SET_RX, NULL, 0);
         break;
 
-    case RF_MODE_TX:
+    case RADIO_MODE_TX:
         /* TX mode is set during transmit */
         ret = 0;
         break;
@@ -458,14 +459,14 @@ static int lr1121_set_power(int8_t dbm)
     return ret;
 }
 
-static int lr1121_set_modulation(rf_modulation_t mod)
+static int lr1121_set_modulation(radio_modulation_t mod)
 {
     if (!g_lr1121.initialized) {
         return -ENODEV;
     }
 
     /* For now, return not supported for non-LoRa modes */
-    if (mod != RF_MOD_LORA) {
+    if (mod != RADIO_MOD_LORA) {
         LOG_WRN("Modulation %d not yet implemented", mod);
         return -ENOSYS;
     }
@@ -545,9 +546,12 @@ static int lr1121_get_rssi(int16_t *rssi)
     return 0;
 }
 
-static void lr1121_set_rx_callback(rf_rx_callback_t callback)
+static int lr1121_set_event_callback(radio_handle_t *handle, radio_event_cb_t cb, void *user_data)
 {
-    g_lr1121.rx_callback = callback;
+    ARG_UNUSED(handle);
+    g_lr1121.event_cb = cb;
+    g_lr1121.event_user_data = user_data;
+    return 0;
 }
 
 static int lr1121_set_spreading_factor(uint8_t sf)
@@ -599,52 +603,66 @@ static int lr1121_set_coding_rate(uint8_t cr)
     return -ENOSYS;
 }
 
-/* Driver structure */
-const struct akira_rf_driver lr1121_driver = {
-    .name = "LR1121",
-    .type = RF_CHIP_LR1121,
-    .init = lr1121_init,
-    .deinit = lr1121_deinit,
-    .set_mode = lr1121_set_mode,
-    .set_frequency = lr1121_set_frequency,
-    .set_power = lr1121_set_power,
-    .set_modulation = lr1121_set_modulation,
-    .set_bitrate = lr1121_set_bitrate,
-    .tx = lr1121_tx,
-    .rx = lr1121_rx,
-    .get_rssi = lr1121_get_rssi,
-    .set_rx_callback = lr1121_set_rx_callback,
-    .set_spreading_factor = lr1121_set_spreading_factor,
-    .set_bandwidth = lr1121_set_bandwidth,
-    .set_coding_rate = lr1121_set_coding_rate,
+/* =========================================================================
+ * radio_ops_t vtable shims
+ * ========================================================================= */
+
+static int lr1121_ops_init(radio_handle_t *h)        { ARG_UNUSED(h); return lr1121_init(); }
+static int lr1121_ops_deinit(radio_handle_t *h)      { ARG_UNUSED(h); return lr1121_deinit(); }
+static int lr1121_ops_send(radio_handle_t *h, const uint8_t *d, size_t l) { ARG_UNUSED(h); return lr1121_tx(d, l); }
+static int lr1121_ops_recv(radio_handle_t *h, uint8_t *b, size_t l, uint32_t t) { ARG_UNUSED(h); return lr1121_rx(b, l, t); }
+static int lr1121_ops_set_frequency(radio_handle_t *h, uint32_t hz) { ARG_UNUSED(h); return lr1121_set_frequency(hz); }
+static int lr1121_ops_set_power(radio_handle_t *h, int8_t dbm)      { ARG_UNUSED(h); return lr1121_set_power(dbm); }
+static int lr1121_ops_get_rssi(radio_handle_t *h, int16_t *r)       { ARG_UNUSED(h); return lr1121_get_rssi(r); }
+static int lr1121_ops_set_mode(radio_handle_t *h, radio_mode_t m)   { ARG_UNUSED(h); return lr1121_set_mode(m); }
+static int lr1121_ops_set_modulation(radio_handle_t *h, radio_modulation_t m) { ARG_UNUSED(h); return lr1121_set_modulation(m); }
+static int lr1121_ops_set_bitrate(radio_handle_t *h, uint32_t bps)  { ARG_UNUSED(h); return lr1121_set_bitrate(bps); }
+static int lr1121_ops_set_sf(radio_handle_t *h, uint8_t sf)         { ARG_UNUSED(h); return lr1121_set_spreading_factor(sf); }
+static int lr1121_ops_set_bw(radio_handle_t *h, uint32_t bw)        { ARG_UNUSED(h); return lr1121_set_bandwidth(bw); }
+static int lr1121_ops_set_cr(radio_handle_t *h, uint8_t cr)         { ARG_UNUSED(h); return lr1121_set_coding_rate(cr); }
+
+static const radio_ops_t lr1121_ops = {
+    .init                = lr1121_ops_init,
+    .deinit              = lr1121_ops_deinit,
+    .send                = lr1121_ops_send,
+    .recv                = lr1121_ops_recv,
+    .set_event_callback  = lr1121_set_event_callback,
+    .set_frequency       = lr1121_ops_set_frequency,
+    .set_power           = lr1121_ops_set_power,
+    .get_rssi            = lr1121_ops_get_rssi,
+    .set_mode            = lr1121_ops_set_mode,
+    .set_modulation      = lr1121_ops_set_modulation,
+    .set_bitrate         = lr1121_ops_set_bitrate,
+    .set_spreading_factor = lr1121_ops_set_sf,
+    .set_bandwidth       = lr1121_ops_set_bw,
+    .set_coding_rate     = lr1121_ops_set_cr,
 };
 
-int lr1121_init_with_config(const struct lr1121_config *config)
+static radio_handle_t lr1121_handle = {
+    .type         = RADIO_TYPE_LORA,
+    .name         = "LR1121",
+    .capabilities = RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_CCA | RADIO_CAP_RAW_MODE |
+                    RADIO_CAP_LOW_POWER | RADIO_CAP_BAND_SUBGHZ | RADIO_CAP_BAND_2GHZ4 |
+                    RADIO_CAP_MOD_FSK | RADIO_CAP_MOD_LORA,
+    .ops          = &lr1121_ops,
+};
+
+radio_handle_t *lr1121_get_handle(void)
 {
-    /* Legacy API - ignore config, use device tree */
-    (void)config;
-    LOG_INF("Using device tree configuration (config parameter ignored)");
-    return lr1121_init();
+    return &lr1121_handle;
 }
 
-const struct akira_rf_driver *lr1121_get_driver(void)
-{
-    return &lr1121_driver;
-}
-
-/**
- * @brief Auto-register LR1121 driver at boot
- */
+#ifdef CONFIG_AKIRA_LR1121
 static int lr1121_auto_register(void)
 {
-    int ret = rf_framework_register_driver(&lr1121_driver);
-    if (ret < 0 && ret != -EEXIST) {
-        LOG_ERR("Failed to auto-register LR1121 driver: %d", ret);
+    int ret = radio_manager_register(&lr1121_handle);
+    if (ret < 0 && ret != -EALREADY) {
+        LOG_ERR("Failed to register LR1121: %d", ret);
         return ret;
     }
-    LOG_INF("LR1121 driver registered with RF framework");
+    LOG_INF("LR1121 registered with radio_manager");
     return 0;
 }
 
-/* Register driver during POST_KERNEL initialization */
 SYS_INIT(lr1121_auto_register, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
+#endif /* CONFIG_AKIRA_LR1121 */

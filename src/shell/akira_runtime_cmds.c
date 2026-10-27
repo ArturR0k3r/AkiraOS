@@ -66,13 +66,14 @@ static int cmd_apps_list(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "App manager not enabled (CONFIG_AKIRA_APP_MANAGER=n)");
     return 0;
 #else
-    app_info_t list[CONFIG_AKIRA_APP_MAX_INSTALLED];
-    int n = app_manager_list(list, CONFIG_AKIRA_APP_MAX_INSTALLED);
-    if (n < 0) {
+    int n;
+    app_info_t *list = app_manager_list_alloc(&n);
+    if (!list) {
         shell_error(sh, "app_manager_list: %d", n);
         return n;
     }
     if (n == 0) {
+        akira_free_buffer(list);
         shell_print(sh, "No apps installed.");
         return 0;
     }
@@ -92,6 +93,7 @@ static int cmd_apps_list(const struct shell *sh, size_t argc, char **argv)
     }
     shell_print(sh, "\nTotal: %d app(s), %d running",
                 n, app_manager_get_running_count());
+    akira_free_buffer(list);
     return 0;
 #endif
 }
@@ -165,9 +167,9 @@ static int cmd_mem_report(const struct shell *sh, size_t argc, char **argv)
 #endif
 
 #ifdef CONFIG_AKIRA_APP_MANAGER
-    app_info_t list[CONFIG_AKIRA_APP_MAX_INSTALLED];
-    int n = app_manager_list(list, CONFIG_AKIRA_APP_MAX_INSTALLED);
-    if (n > 0) {
+    int n;
+    app_info_t *list = app_manager_list_alloc(&n);
+    if (list && n > 0) {
         shell_print(sh, "\nRunning apps:");
         shell_print(sh, "  %-24s %-8s %-8s %-7s", "NAME", "STATE", "HEAP KB", "STACK KB");
         for (int i = 0; i < n; i++) {
@@ -180,6 +182,7 @@ static int cmd_mem_report(const struct shell *sh, size_t argc, char **argv)
             }
         }
     }
+    akira_free_buffer(list);
 #endif
     return 0;
 }
@@ -192,22 +195,33 @@ static int cmd_caps_show(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "App manager not enabled");
     return 0;
 #else
-    app_info_t list[CONFIG_AKIRA_APP_MAX_INSTALLED];
-    int n = app_manager_list(list, CONFIG_AKIRA_APP_MAX_INSTALLED);
-    if (n <= 0) {
+    int n;
+    app_info_t *list = app_manager_list_alloc(&n);
+    if (!list) {
+        shell_error(sh, "app_manager_list: %d", n);
+        return n;
+    }
+    if (n == 0) {
+        akira_free_buffer(list);
         shell_print(sh, "No apps.");
         return 0;
     }
-    shell_print(sh, "%-24s  %-10s  PERMISSIONS", "NAME", "STATE");
+    shell_print(sh, "%-24s  %-10s  CAPABILITIES", "NAME", "STATE");
     for (int i = 0; i < n; i++) {
         if (argc >= 2 && strcmp(list[i].name, argv[1]) != 0) {
             continue;
         }
-        shell_print(sh, "%-24s  %-10s  0x%04x",
+        if (list[i].cap_mask == 0 && list[i].state != APP_STATE_RUNNING) {
+            shell_print(sh, "%-24s  %-10s  - (granted when loaded)",
+                        list[i].name, app_state_name(list[i].state));
+            continue;
+        }
+        shell_print(sh, "%-24s  %-10s  0x%016" PRIx64,
                     list[i].name,
                     app_state_name(list[i].state),
-                    list[i].heap_kb /* placeholder — permissions field */);
+                    list[i].cap_mask);
     }
+    akira_free_buffer(list);
     return 0;
 #endif
 }

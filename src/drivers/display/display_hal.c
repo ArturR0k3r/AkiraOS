@@ -386,6 +386,22 @@ int akira_display_hal_write_raw(int x, int y, int w, int h, const uint16_t *data
     if (display_dev == NULL || data == NULL || w <= 0 || h <= 0)
         return -EINVAL;
 
+    /* Reject anything that does not fit entirely on the panel.
+     *
+     * x/y/w/h are cast to uint16_t below, so without this an out-of-range value
+     * silently wraps (x = -1 becomes 65535) and programs a nonsense column/page
+     * window into the display controller.  Unlike the framebuffer primitives we
+     * reject rather than clip: this path bypasses the framebuffer to hand the
+     * controller exactly w*h packed pixels in one SPI window transaction, and
+     * clipping would break that 1:1 correspondence with the caller's buffer.
+     *
+     * Coordinates arrive straight from WASM apps as attacker-controlled int32_t
+     * (akira_native_display_raw_write), so the full range must be handled. */
+    if (x < 0 || y < 0 ||
+        (int64_t)x + w > (int64_t)display_caps.x_resolution ||
+        (int64_t)y + h > (int64_t)display_caps.y_resolution)
+        return -EINVAL;
+
     struct display_buffer_descriptor desc = {
         .buf_size = (uint32_t)((uint32_t)w * (uint32_t)h * 2U),
         .width = (uint16_t)w,

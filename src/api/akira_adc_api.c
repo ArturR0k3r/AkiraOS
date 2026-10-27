@@ -177,3 +177,17 @@ int akira_native_adc_read_mv(wasm_exec_env_t exec_env, int32_t channel)
 }
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
+
+/* ===== WASM exports =====
+ * Registered with WAMR by the native API registry (akira_native_registry.h).
+ * Import names and signatures are WASM ABI: see docs/api-stability-policy.md. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_AKIRA_WASM_API) && (defined(CONFIG_AKIRA_WASM_ADC))
+#include <akira_native_registry.h>
+
+static const NativeSymbol akira_adc_natives[] = {
+    {"adc_read", (void *)akira_native_adc_read, "(i)i", NULL},
+    {"adc_read_mv", (void *)akira_native_adc_read_mv, "(i)i", NULL},
+};
+
+AKIRA_NATIVE_API_DEFINE(akira_adc_api, "env", akira_adc_natives);
+#endif

@@ -114,6 +114,24 @@ int akira_native_app_stop(wasm_exec_env_t exec_env, const char *name);
  */
 int akira_native_app_switch(wasm_exec_env_t exec_env, const char *name);
 
+/**
+ * @brief Check whether a newer version of the calling app is available.
+ * Reads cached state only (no network round-trip from this call) — kept
+ * fresh via Hub push (MSG_TYPE_APP_AVAILABLE) and periodic polling.
+ * @param ver_buf  Output buffer for the available version string
+ * @param buf_len  Buffer capacity
+ * @return 1 update available, 0 up to date, negative errno
+ */
+int akira_native_app_check_update(wasm_exec_env_t exec_env, uint8_t *ver_buf, uint32_t buf_len);
+
+/**
+ * @brief Fire-and-forget: trigger download+install-in-place of the calling
+ * app's own newer version. App should expect to be stopped and reinstalled
+ * when it lands (app_manager_install() already handles same-name reinstall).
+ * @return 0 queued, negative errno (no update available, no connectivity)
+ */
+int akira_native_app_request_update(wasm_exec_env_t exec_env);
+
 #ifdef __cplusplus
 }
 #endif

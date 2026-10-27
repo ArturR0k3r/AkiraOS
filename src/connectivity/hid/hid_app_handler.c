@@ -131,9 +131,9 @@ static void handle_get_status(uint8_t seq)
 static void handle_get_apps(uint8_t seq)
 {
 #ifdef CONFIG_AKIRA_APP_MANAGER
-    app_info_t apps[8];
-    int count = app_manager_list(apps, ARRAY_SIZE(apps));
-    if (count < 0)
+    int count;
+    app_info_t *apps = app_manager_list_alloc(&count);
+    if (!apps)
         count = 0;
 
     /* First packet: [count:u8] then app entries packed as [id:u8][state:u8][name:24] */
@@ -158,6 +158,7 @@ static void handle_get_apps(uint8_t seq)
     {
         send_response(HID_CMD_GET_APPS, seq, 0, NULL, 0);
     }
+    akira_free_buffer(apps);
 #else
     send_error(HID_CMD_GET_APPS, seq, 0x01);
 #endif

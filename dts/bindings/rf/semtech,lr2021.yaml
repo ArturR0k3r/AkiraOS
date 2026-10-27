@@ -1,0 +1,92 @@
+# Copyright (c) 2025 AkiraOS Project
+# SPDX-License-Identifier: Apache-2.0
+
+description: Semtech LR2021 LoRa/GFSK transceiver
+
+compatible: "semtech,lr2021"
+
+include: spi-device.yaml
+
+properties:
+  cs-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      GPIO pin used for SPI chip select (NSS).
+      This transceiver requires manual CS control.
+
+  reset-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      GPIO pin connected to NRESET pin.
+      Active low reset signal.
+
+  busy-gpios:
+    type: phandle-array
+    required: true
+    description: |
+      GPIO pin connected to BUSY pin.
+      Used to poll command completion status.
+      Should be configured with pull-down resistor.
+
+  irq-gpios:
+    type: phandle-array
+    required: false
+    description: |
+      MCU GPIO pin connected to the LR2021 IRQ line (optional).
+      When present, the driver uses interrupt-driven RX instead of polling.
+
+  irq-dio:
+    type: int
+    required: false
+    default: 5
+    description: |
+      LR2021 DIO pin (5..11) physically routed to the irq-gpios line.
+      The driver maps this DIO to the IRQ output via SetDioIrqConfig.
+      Only meaningful when irq-gpios is present.
+
+  spi-max-frequency:
+    type: int
+    required: true
+    description: |
+      Maximum SPI frequency in Hz.
+      LR2021 supports 1-10 MHz.
+
+  akira,default-frequency-hz:
+    type: int
+    required: false
+    default: 868000000
+    description: |
+      Default carrier frequency in Hz.
+      Used if not changed at runtime via SetRfFrequency.
+
+  akira,default-bitrate-bps:
+    type: int
+    required: false
+    default: 4800
+    description: |
+      Default FSK bitrate in bits per second.
+      Used if not changed at runtime via SetBitrate.
+
+  akira,default-lora-sf:
+    type: int
+    required: false
+    default: 7
+    description: |
+      Default LoRa spreading factor (5..12). Used when modulation is switched
+      to LoRa before any runtime SetSpreadingFactor override.
+
+  akira,default-lora-bw-hz:
+    type: int
+    required: false
+    default: 125000
+    description: |
+      Default LoRa bandwidth in Hz. Supported: 125000, 250000, 500000.
+
+  akira,default-lora-cr:
+    type: int
+    required: false
+    default: 5
+    description: |
+      Default LoRa coding rate as the denominator of 4/N (5..8 => 4/5..4/8).

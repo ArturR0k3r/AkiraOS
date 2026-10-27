@@ -18,7 +18,7 @@
 #   -h, --help      Show this help message
 #
 # Boards:
-#   Automatically discovered from boards/*.conf metadata.
+#   Automatically discovered from snippets/akira-board/boards/*.conf metadata.
 #   Each .conf file declares: BOARD_ZEPHYR, BOARD_CHIP, BOARD_DESC (and optionally BOARD_ALIAS).
 #   Run ./build.sh -h to see all available boards.
 #
@@ -68,16 +68,17 @@ BOLD=$'\033[1m'
 NC=$'\033[0m'
 
 # =============================================================================
-# Board Discovery (auto-loaded from boards/*.conf metadata)
+# Board Discovery (auto-loaded from snippets/akira-board/boards/*.conf metadata)
 # =============================================================================
 declare -A BOARD_MAP=()
 declare -A BOARD_CHIP=()
 declare -A BOARD_DESC=()
 declare -A BOARD_ALIASES=()  # primary_id -> space-separated short aliases
+declare -A BOARD_ID=()       # board id or alias -> primary id (conf file name)
 declare -a BOARD_PRIMARY=()  # ordered list of primary board IDs for display
 
 load_boards() {
-    local boards_dir="$SCRIPT_DIR/boards"
+    local boards_dir="$SCRIPT_DIR/snippets/akira-board/boards"
     local conf board_id zephyr chip desc aliases
     for conf in "$boards_dir"/*.conf; do
         [[ -f "$conf" ]] || continue
@@ -90,6 +91,7 @@ load_boards() {
         BOARD_MAP["$board_id"]="$zephyr"
         BOARD_CHIP["$board_id"]="$chip"
         BOARD_DESC["$board_id"]="${desc:-$board_id}"
+        BOARD_ID["$board_id"]="$board_id"
         BOARD_PRIMARY+=("$board_id")
         if [[ -n "$aliases" ]]; then
             BOARD_ALIASES["$board_id"]="$aliases"
@@ -97,6 +99,7 @@ load_boards() {
                 BOARD_MAP["$alias"]="$zephyr"
                 BOARD_CHIP["$alias"]="$chip"
                 BOARD_DESC["$alias"]="${desc:-$board_id}"
+                BOARD_ID["$alias"]="$board_id"
             done
         fi
     done
@@ -185,7 +188,7 @@ ${BOLD}EXAMPLES:${NC}
         Remove all build directories
 
 ${BOLD}FLASH ADDRESSES (ESP32):${NC}
-    MCUboot:     0x1000
+    MCUboot:     0x0 (0x1000 on the classic ESP32)
     Application: 0x20000
 
 EOF
@@ -264,6 +267,7 @@ clean_build() {
 
 build_mcuboot() {
     local zephyr_board="${BOARD_MAP[$BOARD]}"
+    local board_id="${BOARD_ID[$BOARD]:-$BOARD}"
     local build_dir=$(get_mcuboot_build_dir)
 
     print_step "Building MCUboot bootloader..."
@@ -275,63 +279,63 @@ build_mcuboot() {
     # EXTRA_DTC_OVERLAY_FILE mirrors what sysbuild does automatically — it
     # ensures MCUboot's compiled-in partition layout matches the app's layout.
     local extra_cmake="-DBOARD_ROOT=$SCRIPT_DIR -DDTS_ROOT=$SCRIPT_DIR"
-    # Prefer a board-specific MCUboot overlay (${BOARD}.mcuboot.overlay) when
-    # present; otherwise fall back to the application overlay (${BOARD}.overlay).
-    local mcuboot_overlay="$SCRIPT_DIR/boards/${BOARD}.mcuboot.overlay"
-    local board_overlay="$SCRIPT_DIR/boards/${BOARD}.overlay"
+    # Prefer a board-specific MCUboot overlay (boards/<id>.mcuboot.overlay) when
+    # present; otherwise fall back to the board's AkiraOS overlay in the
+    # akira-board snippet, which defines the partition layout the app uses.
+    local mcuboot_overlay="$SCRIPT_DIR/boards/${board_id}.mcuboot.overlay"
+    local board_overlay="$SCRIPT_DIR/snippets/akira-board/boards/${board_id}.overlay"
     if [[ -f "$mcuboot_overlay" ]]; then
         extra_cmake+=" -DEXTRA_DTC_OVERLAY_FILE=$mcuboot_overlay"
         print_info "MCUboot overlay: $mcuboot_overlay"
     elif [[ -f "$board_overlay" ]]; then
         extra_cmake+=" -DEXTRA_DTC_OVERLAY_FILE=$board_overlay"
         print_info "MCUboot overlay: $board_overlay"
+    else
+        print_warning "No MCUboot or board overlay for ${board_id}: MCUboot uses the board's default partitions"
     fi
 
-    # Pass board-specific MCUboot Kconfig overrides when present.
-    # These live in AkiraOS/boards/<board>.mcuboot.conf so the mcuboot repo
+    # MCUboot Kconfig overrides live in AkiraOS/boards/ so the mcuboot repo
     # stays at its upstream manifest-rev without local commits.
-    local mcuboot_conf="$SCRIPT_DIR/boards/${BOARD}.mcuboot.conf"
+    local mcuboot_confs=()
+    # Espressif SoCs default MCUboot to overwrite-only, which leaves nothing to
+    # roll back to after a bad OTA image. Swap instead, matching the app build.
+    # Xtensa parts only: the RISC-V parts (C3/C6/H2) have no IRAM headroom in
+    # the bootloader and swap mode is not yet validated there.
+    case "${BOARD_CHIP[$BOARD]}" in
+        esp32|esp32s2|esp32s3)
+            mcuboot_confs+=("$SCRIPT_DIR/boards/mcuboot-swap-move.conf") ;;
+    esac
+    # Board-specific overrides (boards/<board>.mcuboot.conf) go last so they win.
+    local mcuboot_conf="$SCRIPT_DIR/boards/${board_id}.mcuboot.conf"
     if [[ -f "$mcuboot_conf" ]]; then
-        extra_cmake+=" -DEXTRA_CONF_FILE=$mcuboot_conf"
-        print_info "MCUboot conf: $mcuboot_conf"
+        mcuboot_confs+=("$mcuboot_conf")
+    fi
+    if [[ ${#mcuboot_confs[@]} -gt 0 ]]; then
+        local conf_list
+        conf_list="$(IFS=';'; echo "${mcuboot_confs[*]}")"
+        extra_cmake+=" -DEXTRA_CONF_FILE=$conf_list"
+        print_info "MCUboot conf: $conf_list"
     fi
 
-    # Some ESP32 SoCs require a patched MCUboot linker script to avoid IRAM
-    # overflow (ESP32-C6) or RISC-V RVC relocation errors (ESP32-H2).  Zephyr's
-    # SOC_LINKER_SCRIPT cmake variable is forced via CACHE INTERNAL and cannot
-    # be overridden from the command line, so we temporarily replace the file in
-    # the Zephyr source tree and restore it via git after the build.
-    local _linker_patched_soc=""
-    _apply_mcuboot_linker_patch() {
-        local soc="$1"
-        local akira_ld="$SCRIPT_DIR/zephyr/soc/espressif/${soc}/mcuboot.ld"
-        local zephyr_ld="$WORKSPACE_ROOT/zephyr/soc/espressif/${soc}/mcuboot.ld"
-        if [[ -f "$akira_ld" && -f "$zephyr_ld" ]]; then
-            cp "$akira_ld" "$zephyr_ld"
-            _linker_patched_soc="$soc"
-            print_info "Applied MCUboot linker patch for $soc"
-        fi
-    }
-    _restore_mcuboot_linker_patch() {
-        if [[ -n "$_linker_patched_soc" ]]; then
-            git -C "$WORKSPACE_ROOT/zephyr" checkout -- \
-                "soc/espressif/${_linker_patched_soc}/mcuboot.ld" 2>/dev/null || true
-            print_info "Restored MCUboot linker for ${_linker_patched_soc}"
-        fi
-    }
-
+    # ESP32-C6 and ESP32-H2 MCUboot images need AkiraOS's patched linker scripts
+    # (IRAM overflow on C6, RISC-V RVC relocation errors on H2). Zephyr gives a
+    # custom linker script precedence over the SoC script, so point at the patched
+    # copy directly; the Zephyr tree is never modified.
+    local mcuboot_ld=""
     case "$zephyr_board" in
-        *esp32c6*) _apply_mcuboot_linker_patch "esp32c6" ;;
-        *esp32h2*) _apply_mcuboot_linker_patch "esp32h2" ;;
+        *esp32c6*) mcuboot_ld="$SCRIPT_DIR/zephyr/soc/espressif/esp32c6/mcuboot.ld" ;;
+        *esp32h2*) mcuboot_ld="$SCRIPT_DIR/zephyr/soc/espressif/esp32h2/mcuboot.ld" ;;
     esac
+    if [[ -n "$mcuboot_ld" && -f "$mcuboot_ld" ]]; then
+        extra_cmake+=" -DCONFIG_HAVE_CUSTOM_LINKER_SCRIPT=y -DCONFIG_CUSTOM_LINKER_SCRIPT=\"$mcuboot_ld\""
+        print_info "MCUboot linker script: $mcuboot_ld"
+    fi
 
     cd "$WORKSPACE_ROOT"
 
     local build_rc=0
     west build --pristine -b "$zephyr_board" bootloader/mcuboot/boot/zephyr -d "$build_dir" \
         -- $extra_cmake || build_rc=$?
-
-    _restore_mcuboot_linker_patch
 
     if [[ $build_rc -eq 0 ]]; then
         print_success "MCUboot build complete!"
@@ -354,7 +358,7 @@ build_application() {
     unset ZEPHYR_BASE
     
     # Build with optional AkiraPlatform modules
-    local extra_cmake="-DMODULE_EXT_ROOT=$WORKSPACE_ROOT/AkiraOS"
+    local extra_cmake=""
     if [[ "$ENABLE_PLATFORM" == true ]]; then
         # Look for akira-platform in workspace (post-west-update) or parent dir
         local platform_path=""
@@ -433,6 +437,8 @@ get_esptool_chip() {
         esp32s3) echo "esp32s3" ;;
         esp32)   echo "esp32" ;;
         esp32c3) echo "esp32c3" ;;
+        esp32c6) echo "esp32c6" ;;
+        esp32h2) echo "esp32h2" ;;
         *)       echo "" ;;
     esac
 }
@@ -653,49 +659,133 @@ flash_board() {
         nrf*)
             flash_nordic
             ;;
-        stm32)
+        stm32*)
             flash_stm32
+            ;;
+        rp2040|rp2350)
+            # The RP2 boot ROM enumerates as USB mass storage; Zephyr emits a
+            # UF2 that is flashed by copying it onto that drive.
+            local uf2="$(get_build_dir)/zephyr/zephyr.uf2"
+            print_error "Automatic flashing is not supported for $chip."
+            echo ""
+            print_info "Hold BOOTSEL while plugging the board in, then copy the UF2:"
+            if [[ -f "$uf2" ]]; then
+                echo "    cp $uf2 /media/\$USER/RPI-RP2/"
+            else
+                echo "    cp <build-dir>/zephyr/zephyr.uf2 /media/\$USER/RPI-RP2/"
+                print_warning "UF2 not found at $uf2 - build first."
+            fi
+            echo ""
+            print_info "Or with a debug probe: picotool load -x <build-dir>/zephyr/zephyr.elf"
+            exit 1
             ;;
         native)
             print_warning "Cannot flash native_sim - use run instead"
             ;;
         *)
             print_error "Flashing not supported for chip: $chip"
+            print_info "Build the image, then flash it with your vendor tool."
             exit 1
             ;;
     esac
 }
 
 # =============================================================================
-# SBOM Generation
+# SBOM Generation (CycloneDX 1.4 — EU CRA 2027 compliance)
 # =============================================================================
 generate_sbom() {
     local build_dir=$(get_build_dir)
-    local sbom_file="$build_dir/sbom.json"
-    
-    print_step "Generating Software Bill of Materials..."
-    
-    # Use west to generate SBOM if available
-    if west blobs --help &> /dev/null; then
-        # Basic SBOM from build info
-        cat > "$sbom_file" << EOF
+    local sbom_file="$build_dir/sbom.cdx.json"
+    local serial_uuid
+    serial_uuid="urn:uuid:$(cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c 'import uuid; print(uuid.uuid4())')"
+    local timestamp
+    timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+    print_step "Generating CycloneDX 1.4 SBOM..."
+
+    # Resolve west-managed module versions from west.yml when possible
+    local zephyr_ver="4.3.0"
+    local wamr_ver="2.3.0"
+    local mcuboot_ver="2.1.0"
+    local mbedtls_ver="3.5.2"
+    if command -v west &>/dev/null && west topdir &>/dev/null; then
+        zephyr_ver=$(west list zephyr -f "{version}" 2>/dev/null | tr -d 'v' || echo "$zephyr_ver")
+        wamr_ver=$(west list wasm-micro-runtime -f "{version}" 2>/dev/null | tr -d 'v' || echo "$wamr_ver")
+        mcuboot_ver=$(west list mcuboot -f "{version}" 2>/dev/null | tr -d 'v' || echo "$mcuboot_ver")
+    fi
+
+    mkdir -p "$build_dir"
+    cat > "$sbom_file" << EOF
 {
-    "name": "AkiraOS",
-    "version": "${AKIRA_VERSION}",
-    "board": "$BOARD",
-    "zephyr_board": "${BOARD_MAP[$BOARD]}",
-    "build_date": "$(date -Iseconds)",
-    "components": [
-        {"name": "Zephyr RTOS", "version": "4.3.0"},
-        {"name": "WASM Micro Runtime", "version": "2.3.0"},
-        {"name": "MCUboot", "version": "2.0.0"}
-    ]
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.4",
+  "serialNumber": "${serial_uuid}",
+  "version": 1,
+  "metadata": {
+    "timestamp": "${timestamp}",
+    "tools": [
+      {
+        "vendor": "PenEngineering S.R.L",
+        "name": "AkiraOS build.sh",
+        "version": "${AKIRA_VERSION}"
+      }
+    ],
+    "component": {
+      "type": "firmware",
+      "name": "AkiraOS",
+      "version": "${AKIRA_VERSION}",
+      "purl": "pkg:generic/penengineering/akiraos@${AKIRA_VERSION}",
+      "properties": [
+        { "name": "akiraos:board", "value": "${BOARD}" },
+        { "name": "akiraos:zephyr_board", "value": "${BOARD_MAP[$BOARD]:-$BOARD}" }
+      ],
+      "licenses": [
+        { "license": { "id": "Apache-2.0" } }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "zephyr",
+      "version": "${zephyr_ver}",
+      "purl": "pkg:github/zephyrproject-rtos/zephyr@v${zephyr_ver}",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }]
+    },
+    {
+      "type": "library",
+      "name": "wasm-micro-runtime",
+      "version": "${wamr_ver}",
+      "purl": "pkg:github/bytecodealliance/wasm-micro-runtime@WAMR-${wamr_ver}",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }]
+    },
+    {
+      "type": "library",
+      "name": "mcuboot",
+      "version": "${mcuboot_ver}",
+      "purl": "pkg:github/mcu-tools/mcuboot@v${mcuboot_ver}",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }]
+    },
+    {
+      "type": "library",
+      "name": "mbedtls",
+      "version": "${mbedtls_ver}",
+      "purl": "pkg:github/Mbed-TLS/mbedtls@v${mbedtls_ver}",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }]
+    },
+    {
+      "type": "library",
+      "name": "picolibc",
+      "version": "bundled",
+      "purl": "pkg:generic/zephyrproject-rtos/picolibc",
+      "licenses": [{ "license": { "id": "BSD-3-Clause" } }]
+    }
+  ],
+  "vulnerabilities": []
 }
 EOF
-        print_success "SBOM generated: $sbom_file"
-    else
-        print_warning "SBOM generation requires west blobs support"
-    fi
+    print_success "SBOM (CycloneDX 1.4) generated: $sbom_file"
+    echo "  Scan for CVEs: grype sbom:${sbom_file}"
 }
 
 # =============================================================================

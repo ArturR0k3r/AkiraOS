@@ -1,3 +1,10 @@
+---
+layout: default
+title: AOT Compilation
+parent: Architecture
+nav_order: 7
+---
+
 # AOT Compilation Architecture
 
 **Ahead-of-Time compilation for high-performance WebAssembly execution.**
@@ -246,10 +253,10 @@ wamrc --target=x86-64 \
 %.aot: %.wasm
 	wamrc --target=xtensa --cpu=esp32s3 --size-level=3 -o $@ $<
 
-# Hybrid deployment
+# Hybrid deployment (app binaries stream raw to the app-manager route)
 deploy: app.wasm app_esp32s3.aot
-	curl -F "file=@app.wasm" http://$(DEVICE_IP)/upload
-	curl -F "file=@app_esp32s3.aot" http://$(DEVICE_IP)/upload
+	curl --data-binary @app.wasm "http://$(DEVICE_IP)/api/apps/install?name=app"
+	curl --data-binary @app_esp32s3.aot "http://$(DEVICE_IP)/api/apps/install?name=app"
 ```
 
 ---
@@ -339,3 +346,7 @@ deploy: app.wasm app_esp32s3.aot
 ---
 
 See [Building Apps Guide](../development/building-apps.md) for the complete build workflow.
+
+---
+
+*Last updated: 2026-09-14 (AkiraOS v1.6.5)*

@@ -1,0 +1,57 @@
+/*
+ * Sharp LS027B7DH01 Memory LCD overlay for AkiraConsole Production ESP32-S3.
+ *
+ * Applied by the akira-display-sharp snippet. The AkiraOS reference firmware
+ * applies it for akiraconsole_prod; products choose a panel snippet themselves.
+ *
+ * Hardware (Sharp LS027B7DH01 400x240 Memory LCD on J4):
+ *   SCS  = GPIO10 = SPI2 cs-gpios[1] (ACTIVE_HIGH — Sharp polarity)
+ *   MOSI = shared SPI2 (no MISO used)
+ *   EXTCOMIN → not used (EXTMODE=LOW, COM inversion via serial command)
+ *   DISP → pulled to +3.3V via R85 (10kΩ); not MCU-controlled
+ *   VDD/VDDA → +5V via LM2750 charge pump (U19)
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/* Override chosen display */
+/ {
+	chosen {
+		zephyr,display = &ls027b7dh01;
+	};
+};
+
+/*
+ * Disable the ST7789V/MIPI-DBI nodes — Sharp shares SPI2 but the
+ * MIPI-DBI parent must not claim the bus.
+ */
+&mipi_dbi_prod {
+	status = "disabled";
+};
+
+&st7789v_prod {
+        status = "disabled";
+};
+
+/* Override SPI2 cs-gpios for Sharp: only cs-gpios[1] changes polarity
+ * (GPIO10 ACTIVE_HIGH for Sharp SCS). LR_CS and CC_CS stay on TCA6408
+ * P6/P3 so the LR2021 and CC1121 transceivers remain selectable.
+ *
+ * NOTE: GPIO33–GPIO37 are PSRAM-internal pins on the WROOM-1-N16R8 module
+ * and must never be used as user GPIOs — they would crash the system
+ * immediately by corrupting the OPI-PSRAM bus.
+ */
+&spi2 {
+        cs-gpios =
+                <&tca6408 6 GPIO_ACTIVE_LOW>,   /* [0] LR_CS  → TCA6408 P6 (LR2021)      */
+                <&gpio0 10 GPIO_ACTIVE_HIGH>,   /* [1] SCS    → GPIO10 Sharp ACTIVE_HIGH */
+                <&gpio0 14 GPIO_ACTIVE_LOW>,    /* [2] SD_CS  → GPIO14                   */
+                <&tca6408 3 GPIO_ACTIVE_LOW>;   /* [3] CC_CS  → TCA6408 P3 (CC1121)      */
+	status = "okay";
+};
+
+&ls027b7dh01 {
+	spi-lsb-first;
+	spi-max-frequency = <2000000>;   /* LS027B7DH01 rated max: 2 MHz */
+	status = "okay";
+};

@@ -1,0 +1,32 @@
+# Codecov configuration for AkiraOS.
+#
+# Absolute line coverage is still low (the src/api native-API layer in
+# particular is thinly tested), so the *project* status is a no-regression
+# gate rather than an absolute floor: it fails only when a change drops
+# overall coverage beyond the tolerance. New and changed code is held to a
+# real *patch* target so coverage ratchets upward over time.
+#
+# To make coverage blocking: set `informational: false` on the patch status
+# and add the "codecov/patch" check to the branch-protection rules.
+coverage:
+  status:
+    project:
+      default:
+        target: auto        # compare against the PR base commit
+        threshold: 1%       # tolerate 1% noise; fail on real regressions
+        informational: false
+    patch:
+      default:
+        target: 50%         # new/changed lines should be at least 50% covered
+        threshold: 0%
+        informational: true # advisory until the team opts in as a required check
+
+comment:
+  layout: "reach, diff, files"
+  require_changes: true
+
+# Coverage of third-party and test scaffolding is not meaningful here.
+ignore:
+  - "modules/**"
+  - "tests/**"
+  - "twister-out/**"

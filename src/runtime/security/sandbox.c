@@ -16,18 +16,27 @@
 #include <string.h>
 #include <stdio.h>
 #include "runtime/security.h"
+#include <lib/mem_helper.h>
+#ifdef CONFIG_AKIRA_AUDIT_LOG_HMAC
+#include <akira_platform/audit_hmac.h>
+#endif
 
 LOG_MODULE_REGISTER(akira_sandbox, CONFIG_AKIRA_LOG_LEVEL);
 
 /* ===== Audit Ring Buffer ===== */
 
+/* The ring buffer is the largest static in this file. Place it in PSRAM
+ * (.ext_ram.bss) on boards that have it, keeping it out of scarce internal
+ * DRAM; it is only written on the slow path (syscall-deny / rate-limit /
+ * watchdog events), never on the <100 ns syscall hot path. Zeroed at boot
+ * like any BSS. AKIRA_BULK_BSS is a no-op on non-PSRAM boards. */
 static struct
 {
     audit_entry_t entries[CONFIG_AKIRA_AUDIT_LOG_SIZE];
     atomic_t write_idx;
     atomic_t count;
     bool initialized;
-} g_audit = {0};
+} g_audit AKIRA_BULK_BSS;
 
 static struct k_spinlock g_audit_lock;
 
@@ -144,7 +153,7 @@ int sandbox_init(void)
 }
 
 void sandbox_ctx_init(sandbox_ctx_t *ctx, akira_trust_level_t trust,
-                      uint32_t cap_mask)
+                      uint64_t cap_mask)
 {
     if (!ctx)
         return;
@@ -183,6 +192,8 @@ void sandbox_ctx_init(sandbox_ctx_t *ctx, akira_trust_level_t trust,
     if (cap_mask & AKIRA_CAP_RF_TRANSCEIVE) /* RF_TRANSCEIVE */
         ctx->allowed_syscalls |= SYSCALL_CAT_RF;
     if (cap_mask & AKIRA_CAP_BLE) /* BLE app API */
+        ctx->allowed_syscalls |= SYSCALL_CAT_BLUETOOTH;
+    if (cap_mask & (AKIRA_CAP_BLE_SCAN | AKIRA_CAP_BLE_SPAM))
         ctx->allowed_syscalls |= SYSCALL_CAT_BLUETOOTH;
 
     /* Initialize rate limit buckets */
@@ -250,6 +261,12 @@ void sandbox_exec_begin(sandbox_ctx_t *ctx)
         return;
     ctx->exec_start_ms = k_uptime_get();
     ctx->exec_active = true;
+
+#ifdef CONFIG_AKIRA_SANDBOX_MPU
+    if (ctx->mpu_ready) {
+        k_mem_domain_add_thread(&ctx->mpu_domain, k_current_get());
+    }
+#endif
 }
 
 void sandbox_exec_end(sandbox_ctx_t *ctx)
@@ -257,7 +274,36 @@ void sandbox_exec_end(sandbox_ctx_t *ctx)
     if (!ctx)
         return;
     ctx->exec_active = false;
+
+#ifdef CONFIG_AKIRA_SANDBOX_MPU
+    if (ctx->mpu_ready) {
+        /* Remove thread from restricted domain, returning it to the default
+         * kernel domain which has access to all kernel memory. */
+        k_mem_domain_remove_thread(k_current_get());
+    }
+#endif
 }
+
+#ifdef CONFIG_AKIRA_SANDBOX_MPU
+void sandbox_mpu_configure(sandbox_ctx_t *ctx, void *wasm_heap, size_t heap_size)
+{
+    if (!ctx || !wasm_heap || heap_size == 0)
+        return;
+
+    ctx->mpu_wasm_partition = (struct k_mem_partition){
+        .start = (uintptr_t)wasm_heap,
+        .size  = heap_size,
+        .attr  = K_MEM_PARTITION_P_RW_U_RW,
+    };
+
+    struct k_mem_partition *parts[] = { &ctx->mpu_wasm_partition };
+    k_mem_domain_init(&ctx->mpu_domain, ARRAY_SIZE(parts), parts);
+    ctx->mpu_ready = true;
+
+    LOG_INF("Sandbox MPU region configured: base=0x%08x size=%zu",
+            (unsigned)wasm_heap, heap_size);
+}
+#endif /* CONFIG_AKIRA_SANDBOX_MPU */
 
 bool sandbox_exec_timed_out(sandbox_ctx_t *ctx)
 {
@@ -310,6 +356,12 @@ void sandbox_audit_log(audit_event_type_t type, const char *app_name,
     {
         entry->app_name[0] = '\0';
     }
+
+#ifdef CONFIG_AKIRA_AUDIT_LOG_HMAC
+    memset(entry->hmac, 0, sizeof(entry->hmac));
+    akira_platform_audit_hmac_sign((uint32_t)entry->type, entry->timestamp_ms,
+                                   entry->app_name, entry->detail, entry->hmac);
+#endif
 
     int32_t count = atomic_get(&g_audit.count);
     if (count < CONFIG_AKIRA_AUDIT_LOG_SIZE)

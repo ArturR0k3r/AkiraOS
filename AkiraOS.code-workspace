@@ -116,7 +116,7 @@
 			{
 				"label": "2. Build for ${input:board}",
 				"type": "shell",
-				"command": "cd .. && unset ZEPHYR_BASE && west build --pristine -b ${input:board} ${workspaceFolder} -d build -- -DMODULE_EXT_ROOT=${workspaceFolder}",
+				"command": "cd .. && unset ZEPHYR_BASE && west build --pristine -b ${input:board} ${workspaceFolder} -d build",
 				"group": {
 					"kind": "build",
 					"isDefault": true

@@ -125,6 +125,16 @@ int ota_manager_init(void);
 enum ota_result ota_start_update(size_t expected_size);
 
 /**
+ * @brief Register the expected SHA-256 of the image about to be received.
+ *
+ * Call after ota_start_update() and before ota_finalize_update(). The finalize
+ * step recomputes the SHA-256 of the written image and refuses to mark it
+ * bootable unless it matches. @p hash must point to 32 bytes.
+ *
+ * @return OTA_OK on success, OTA_ERROR_INVALID_PARAM if @p hash is NULL.
+ */
+enum ota_result ota_set_expected_sha256(const uint8_t *hash);
+/**
  * @brief Write firmware data chunk
  *
  * @param data Firmware data chunk
