@@ -15,8 +15,12 @@
 extern "C" {
 #endif
 
-/** Enter AkiraPlay from the home launcher. Fetches the catalogue over WiFi. */
-void akiraplay_screen_load(void);
+/**
+ * Push AkiraPlay onto the shell's screen stack (from the home launcher).
+ * Fetches the catalogue over WiFi once its loading frame is up; B (or HOME
+ * long-press) pops back to whatever was underneath.
+ */
+void akiraplay_open(void);
 
 #ifdef __cplusplus
 }

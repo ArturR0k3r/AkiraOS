@@ -11,11 +11,14 @@
 #ifndef SETTINGS_DISPLAY_SCREEN_H
 #define SETTINGS_DISPLAY_SCREEN_H
 
+#include "ui/list_screen.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void display_screen_load(void);
+/** Settings → Display (push with list_screen_open()). */
+extern const list_model_t display_page;
 
 #ifdef __cplusplus
 }

@@ -5,17 +5,20 @@
 
 /**
  * @file apps_screen.h
- * @brief Installed app list and uninstall management.
+ * @brief Installed apps — size and uninstall.
  */
 
 #ifndef SETTINGS_APPS_SCREEN_H
 #define SETTINGS_APPS_SCREEN_H
 
+#include "ui/list_screen.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void apps_screen_load(void);
+/** Settings → Apps. */
+extern list_model_t apps_page;
 
 #ifdef __cplusplus
 }

@@ -9,25 +9,25 @@ LOG_MODULE_REGISTER(akira_sd_install, CONFIG_AKIRA_LOG_LEVEL);
 
 /**
  * @file sd_install_screen.c
- * @brief SD card WASM app browser and one-touch installer — Liquid Crystal UI.
+ * @brief SD card WASM app browser — one screen on the shell's screen stack.
  *
- * Scans /SD:/apps/ for *.wasm files, renders a scrollable list panel,
- * and installs via app_manager_install_from_path() on A-press.
- * Pure akira_display_* renderer — no LVGL.
+ * Scans /SD:/apps/ for *.wasm / *.aot files (after extracting any .akpkg
+ * archives in place), lists them, and runs the selected one straight from
+ * the card with app_manager_run_from_sd() (SD XIP) on A-press.
  *
  * Layout (320x240):
- *   y=  0..23   Status bar (dither + title)
- *   y= 24       Hairline separator
- *   y= 25..215  Scrollable file list (ITEM_H=32 px per row)
- *   y=215       Hairline separator
- *   y=216..239  Footer: "A - Install  |  B - Back"
+ *   y=  0..25   Status bar (screen framework)
+ *   y= 30..211  Scrollable list of dither cards (ROW_H=34 px per row)
+ *   y=216..239  Footer hints (screen framework): "A:Run  B:Back"
  */
 
 #include "sd_install_screen.h"
-#include "install_progress_screen.h"
-#include "home_screen.h"
+#include "akira_os_shell.h"
 #include "shell_theme.h"
 #include "ui/akira_ui.h"
+#include "ui/anim.h"
+#include "ui/overlay.h"
+#include "ui/screen.h"
 
 #include <api/akira_display_api.h>
 #include <api/akira_input_api.h>
@@ -36,18 +36,21 @@ LOG_MODULE_REGISTER(akira_sd_install, CONFIG_AKIRA_LOG_LEVEL);
 #include <runtime/app_manager/app_manager.h>
 #include <storage/fs_manager.h>
 #include <storage/sd_card.h>
-#include "display_ownership.h"
-#include "akira_os_shell.h"
+#include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
 
-/* SD install uses slightly different geometry than the standard settings list */
-#undef LIST_Y
-#define LIST_Y 25
-#define LIST_H 190
-#undef ITEM_H
-#define ITEM_H 32
+/* ---- List geometry (same rhythm as ui/list_screen.c) -------------- */
+#define ROW_H 34
+#define ROW_TOP (SCREEN_CONTENT_Y + 2)
+#define ROW_X 12
+#define ROW_W (SCR_W - 30) /* leaves a lane for the scrollbar */
+#define CARD_H (ROW_H - 6)
+#define VISIBLE_ROWS ((SCREEN_CONTENT_B - ROW_TOP) / ROW_H)
+#define BAND_MID ((SCREEN_CONTENT_Y + SCREEN_CONTENT_B) / 2)
+#define SEL_MS 130
 
 /* ---- SD scan state ---------------------------------------------- */
 #define SD_APPS_DIR "/SD:/apps"
@@ -60,14 +63,37 @@ typedef struct
     uint32_t size;
 } sd_entry_t;
 
+typedef enum
+{
+    SD_NOCARD = 0, /* no card at open: message + B */
+    SD_SCANNING,   /* scan queued; tick() runs it once this frame is up */
+    SD_LIST,
+} sd_state_t;
+
 static sd_entry_t g_entries[MAX_SD_APPS] __attribute__((section(".ext_ram.bss")));
 static int g_entry_count;
 static int g_sel;
-static int g_scroll;
-static bool g_active;
+static int g_scroll;       /* first fully visible row */
+static anim_t g_hl;        /* highlight position, px from the list's origin */
+static anim_t g_scroll_px; /* scroll position, px */
+static sd_state_t g_state;
+static bool g_scan_shown; /* the "Reading SD card" frame has been painted */
 
-/* ---- Install work ----------------------------------------------- */
+/* ---- Run work ---------------------------------------------------- */
 static char g_install_path[128] __attribute__((section(".ext_ram.bss")));
+
+/* Set by the work item when the SD run fails, reported by the shell thread
+ * (tick() or leave(), whichever comes first) as an error toast. */
+static volatile int g_run_err;
+
+/* Runs on the system workqueue: the shell thread is dormant (display handed
+ * to the app), so hand the failure back through the shell's thread-safe
+ * go-home event — it reclaims the display and pops us, and leave() toasts. */
+static void sd_run_failed(int err)
+{
+    g_run_err = err;
+    akira_os_shell_go_home();
+}
 
 static void do_install_work(struct k_work *work)
 {
@@ -86,122 +112,163 @@ static void do_install_work(struct k_work *work)
     if (ret < 0)
     {
         LOG_ERR("SD XIP failed: %d", ret);
-        akira_display_claim_shell();
-        home_screen_load();
+        sd_run_failed(ret);
     }
 #else
     LOG_ERR("SD XIP not enabled");
-    akira_display_claim_shell();
-    home_screen_load();
+    sd_run_failed(-ENOTSUP);
 #endif
 }
 
 K_WORK_DEFINE(g_sd_install_work, do_install_work);
 
-/* ---- Draw helpers ----------------------------------------------- */
-static void draw_centred(int x, int y, int w, const char *s, uint16_t fg, uint16_t bg)
+/* errno from app_manager_run_from_sd() → toast second line */
+static const char *run_err_text(int err)
 {
-    int tw = (int)strlen(s) * 8;
-    int lx = x + (tw < w ? (w - tw) / 2 : 0);
-    akira_display_rect(x, y, w, 10, bg);
-    akira_display_text(lx, y, s, fg);
-}
-
-/* Shared chrome: the kit's inverted top bar. */
-static void sd_draw_header(void)
-{
-    akira_ui_status_t sb = {
-        .title = "SD APPS",
-        .clock = NULL,
-        .battery_pct = -1,
-        .show_wifi = false,
-        .show_bt = false,
-    };
-    akira_ui_status_bar(&sb);
-}
-
-static void draw_screen(void)
-{
-    akira_display_clear(C_BLACK);
-
-    /* Status bar */
-    sd_draw_header();
-
-    /* List area */
-    akira_display_rect(0, LIST_Y, SCR_W, LIST_H, C_BLACK);
-
-    int vis = LIST_H / ITEM_H;
-
-    if (g_entry_count == 0)
+    switch (err)
     {
-        draw_centred(0, LIST_Y + LIST_H / 2 - 10, SCR_W,
-                     "No apps found", C_WHITE, C_BLACK);
-        draw_centred(0, LIST_Y + LIST_H / 2 + 4, SCR_W,
-                     "in /SD:/apps/", C_WHITE, C_BLACK);
+    case -EEXIST:
+        return "Installed - start it from Home";
+    case -EBUSY:
+        return "Already running";
+    case -ENOENT:
+        return "Not found on the SD card";
+    case -EFBIG:
+        return "Too large to run from SD";
+    case -ENOMEM:
+    case -ENOSPC:
+        return "Not enough memory";
+    case -ENOTSUP:
+        return "SD apps not in this build";
+    default:
+        return NULL;
+    }
+}
+
+static void report_run_failure(void)
+{
+    int err = g_run_err;
+
+    if (err == 0)
+        return;
+    g_run_err = 0;
+
+    const char *why = run_err_text(err);
+    char buf[24];
+
+    if (!why)
+    {
+        snprintf(buf, sizeof(buf), "Error %d", err);
+        why = buf;
+    }
+    overlay_toast(TOAST_ICON_ERROR, "Couldn't run app", why, 2500);
+}
+
+/* ---- Draw helpers ----------------------------------------------- */
+static void draw_centred(int y, const char *s, uint16_t fg)
+{
+    akira_display_text((SCR_W - akira_ui_text_w(s, AKIRA_UI_FONT_SMALL)) / 2, y, s, fg);
+}
+
+/* Text cut to @p max_w px with a ".." tail. */
+static void draw_clipped(int x, int y, int max_w, const char *s, uint16_t fg)
+{
+    char buf[48];
+    int max_chars = MAX(max_w / AKIRA_UI_CELL_W, 3);
+
+    if ((int)strlen(s) > max_chars)
+    {
+        snprintf(buf, sizeof(buf), "%.*s..", MIN(max_chars - 2, (int)sizeof(buf) - 3), s);
+        s = buf;
+    }
+    akira_display_text(x, y, s, fg);
+}
+
+static bool row_off_band(int y)
+{
+    return y + CARD_H < SCREEN_CONTENT_Y - 4 || y > SCREEN_CONTENT_B;
+}
+
+static void draw_row(int i, int y, bool inverted)
+{
+    uint16_t fg = inverted ? C_BLACK : C_WHITE;
+    int ty = y + (CARD_H - 10) / 2;
+    char sz[16];
+
+    /* Size (right) */
+    if (g_entries[i].size >= 1024)
+    {
+        snprintf(sz, sizeof(sz), "%uKB", (unsigned)(g_entries[i].size / 1024));
     }
     else
     {
-        if (g_scroll > g_entry_count - vis)
-            g_scroll = g_entry_count - vis;
-        if (g_scroll < 0)
-            g_scroll = 0;
+        snprintf(sz, sizeof(sz), "%uB", (unsigned)g_entries[i].size);
+    }
+    int sx = ROW_X + ROW_W - 10 - akira_ui_text_w(sz, AKIRA_UI_FONT_SMALL);
+    akira_display_text(sx, ty, sz, fg);
 
-        for (int i = g_scroll; i < g_entry_count && i < g_scroll + vis; i++)
-        {
-            int iy = LIST_Y + (i - g_scroll) * ITEM_H;
-            bool hi = (i == g_sel);
-            uint16_t ibg = hi ? C_WHITE : C_BLACK;
-            uint16_t ifg = hi ? C_BLACK : C_WHITE;
+    /* Name (left), clipped short of the size */
+    draw_clipped(ROW_X + 10, ty, sx - 8 - (ROW_X + 10), g_entries[i].name, fg);
+}
 
-            akira_display_rounded_rect_fill(ITEM_X, iy + 2, ITEM_W, ITEM_H - 4, 3, ibg);
-            if (hi)
-            {
-                akira_display_rounded_rect(ITEM_X, iy + 2, ITEM_W, ITEM_H - 4, 3, C_BLACK);
-                akira_display_rounded_rect(ITEM_X + 1, iy + 3, ITEM_W - 2, ITEM_H - 6, 2, C_BLACK);
-            }
-            else
-            {
-                akira_display_rounded_rect(ITEM_X, iy + 2, ITEM_W, ITEM_H - 4, 3, C_WHITE);
-            }
-
-            /* Name (left) */
-            akira_display_text(ITEM_X + 6, iy + 2 + (ITEM_H - 4 - 10) / 2,
-                               g_entries[i].name, ifg);
-
-            /* Size (right) */
-            char sz[16];
-            if (g_entries[i].size >= 1024)
-            {
-                snprintf(sz, sizeof(sz), "%uKB", (unsigned)(g_entries[i].size / 1024));
-            }
-            else
-            {
-                snprintf(sz, sizeof(sz), "%uB", (unsigned)g_entries[i].size);
-            }
-            int tw = (int)strlen(sz) * 8;
-            akira_display_text(ITEM_X + ITEM_W - tw - 6,
-                               iy + 2 + (ITEM_H - 4 - 10) / 2,
-                               sz, ifg);
-        }
-
-        /* Scroll indicators */
-        if (g_scroll > 0)
-        {
-            akira_display_text(SCR_W - 12, LIST_Y + 2, "^", C_WHITE);
-        }
-        if (g_scroll + vis < g_entry_count)
-        {
-            akira_display_text(SCR_W - 12, LIST_Y + vis * ITEM_H + 2, "v", C_WHITE);
-        }
+static void draw_list(void)
+{
+    if (g_entry_count == 0)
+    {
+        draw_centred(BAND_MID - 12, "No apps found", C_WHITE);
+        draw_centred(BAND_MID + 2, "in /SD:/apps/", C_WHITE);
+        return;
     }
 
-    /* Footer */
-    akira_display_hline(0, FOOT_Y - 1, SCR_W, C_WHITE);
-    akira_display_hline(0, FOOT_Y - 2, SCR_W, C_WHITE);
-    akira_display_rect(0, FOOT_Y, SCR_W, FOOT_H, C_BLACK);
-    akira_display_text(8, FOOT_Y + 7, "A-Run  |  B-Back", C_WHITE);
+    int scroll = anim_value(&g_scroll_px);
+    int hl = anim_value(&g_hl);
+    int first = MAX(scroll / ROW_H - 1, 0);
+    int last = MIN(first + VISIBLE_ROWS + 2, g_entry_count);
 
-    akira_display_flush();
+    /* Idle cards first, then the sliding highlight over them, then labels. */
+    for (int i = first; i < last; i++)
+    {
+        int y = ROW_TOP + i * ROW_H - scroll;
+        if (!row_off_band(y))
+            akira_ui_dither_card(ROW_X, y, ROW_W, CARD_H, 8, false, 2);
+    }
+    akira_ui_dither_card(ROW_X, ROW_TOP + hl - scroll, ROW_W, CARD_H, 8, true, 3);
+    for (int i = first; i < last; i++)
+    {
+        int y = ROW_TOP + i * ROW_H - scroll;
+        if (!row_off_band(y))
+            draw_row(i, y, abs(hl - i * ROW_H) < ROW_H / 2);
+    }
+
+    /* Scrollbar lane — only when the list overflows */
+    if (g_entry_count > VISIBLE_ROWS)
+    {
+        int track_y = ROW_TOP, track_h = VISIBLE_ROWS * ROW_H - 6;
+        int max_scroll = (g_entry_count - VISIBLE_ROWS) * ROW_H;
+        int knob_h = MAX(track_h * VISIBLE_ROWS / g_entry_count, 12);
+        int knob_y = track_y + (track_h - knob_h) * CLAMP(scroll, 0, max_scroll) / max_scroll;
+
+        akira_display_vline(SCR_W - 9, track_y, track_h, C_DKGRAY);
+        akira_display_rounded_rect_fill(SCR_W - 11, knob_y, 5, knob_h, 2, C_WHITE);
+    }
+}
+
+static void sd_draw(void)
+{
+    switch (g_state)
+    {
+    case SD_NOCARD:
+        draw_centred(BAND_MID - 12, "No SD card detected", C_WHITE);
+        draw_centred(BAND_MID + 2, "Insert card and reboot", C_WHITE);
+        break;
+    case SD_SCANNING:
+        draw_centred(BAND_MID - 5, "Reading SD card...", C_GRAY);
+        g_scan_shown = true; /* tick() may now run the scan */
+        break;
+    case SD_LIST:
+        draw_list();
+        break;
+    }
 }
 
 /* ---- Scan ------------------------------------------------------- */
@@ -247,48 +314,10 @@ static void scan_sd(void)
     LOG_INF("SD scan: %d apps (.wasm/.aot)", g_entry_count);
 }
 
-/* ---- Public API ------------------------------------------------- */
-void sd_install_screen_create(void)
+/* screen_run_busy() body: re-probe the card, then scan it. */
+static void scan_job(void *arg)
 {
-    g_entry_count = 0;
-    g_sel = 0;
-    g_scroll = 0;
-    g_active = false;
-}
-
-void sd_install_screen_load(void)
-{
-    /* Check SD card presence via FS manager before doing anything */
-    if (!fs_manager_sd_available())
-    {
-        akira_display_clear(C_BLACK);
-        sd_draw_header();
-        draw_centred(0, SCR_H / 2 - 10, SCR_W, "No SD card detected", C_WHITE, C_BLACK);
-        draw_centred(0, SCR_H / 2 + 4, SCR_W, "Insert card and reboot", C_WHITE, C_BLACK);
-        akira_display_hline(0, FOOT_Y - 1, SCR_W, C_WHITE);
-        akira_display_hline(0, FOOT_Y - 2, SCR_W, C_WHITE);
-        akira_display_rect(0, FOOT_Y, SCR_W, FOOT_H, C_BLACK);
-        akira_display_text(8, FOOT_Y + 7, "B-Back", C_WHITE);
-        akira_display_flush();
-        /* Wait for B to go back */
-        uint32_t prev = 0;
-        while (true)
-        {
-            k_sleep(K_MSEC(20));
-            uint32_t btns = akira_input_get_bitmask();
-            uint32_t just = btns & ~prev;
-            prev = btns;
-            if (just & BIT(AKIRA_BTN_B))
-            {
-                home_screen_load();
-                return;
-            }
-        }
-    }
-
-    g_active = true;
-    g_sel = 0;
-    g_scroll = 0;
+    ARG_UNUSED(arg);
 
     /* Re-probe SD to recover from SPI state after display activity */
     akira_sd_card_deinit();
@@ -296,63 +325,124 @@ void sd_install_screen_load(void)
     {
         fs_manager_reinit_sd();
     }
-
     scan_sd();
-    draw_screen();
+}
 
-    /* Blocking event loop — returns when B pressed or install triggered */
-    uint32_t prev_btns = akira_input_get_bitmask();
+/* ---- Behaviour -------------------------------------------------- */
+static void set_state(sd_state_t s)
+{
+    g_state = s;
+    if (s == SD_LIST && g_entry_count > 0)
+        screen_set_hints("A:Run", "B:Back");
+    else
+        screen_set_hints(NULL, "B:Back");
+    screen_invalidate();
+}
 
-    while (g_active)
+static void move_sel(int to)
+{
+    if (g_entry_count == 0)
+        return;
+    to = CLAMP(to, 0, g_entry_count - 1);
+    if (to == g_sel)
+        return;
+    g_sel = to;
+    anim_to(&g_hl, to * ROW_H, SEL_MS, ANIM_EASE_OUT);
+
+    int scroll = g_scroll;
+    if (to < scroll)
+        scroll = to;
+    else if (to >= scroll + VISIBLE_ROWS)
+        scroll = to - VISIBLE_ROWS + 1;
+    if (scroll != g_scroll)
     {
-        k_sleep(K_MSEC(20));
-
-        uint32_t btns = akira_input_get_bitmask();
-        uint32_t just = btns & ~prev_btns;
-        prev_btns = btns;
-
-        if (!just)
-            continue;
-
-        int vis = LIST_H / ITEM_H;
-
-        if (just & BIT(AKIRA_BTN_UP))
-        {
-            if (g_sel > 0)
-            {
-                g_sel--;
-                if (g_sel < g_scroll)
-                    g_scroll--;
-                draw_screen();
-            }
-        }
-        if (just & BIT(AKIRA_BTN_DOWN))
-        {
-            if (g_sel < g_entry_count - 1)
-            {
-                g_sel++;
-                if (g_sel >= g_scroll + vis)
-                    g_scroll++;
-                draw_screen();
-            }
-        }
-        if (just & BIT(AKIRA_BTN_A))
-        {
-            if (g_entry_count > 0 && g_sel < g_entry_count)
-            {
-                strncpy(g_install_path, g_entries[g_sel].path,
-                        sizeof(g_install_path) - 1);
-                /* Silence shell before work item fires — prevents home screen
-                 * drawing into the gap between A-press and app start. */
-                akira_shell_set_wasm_launching();
-                k_work_submit(&g_sd_install_work);
-                g_active = false;
-            }
-        }
-        if ((just & BIT(AKIRA_BTN_B)) || (just & BIT(AKIRA_BTN_HOME)))
-        {
-            g_active = false;
-            home_screen_load();
-        }
+        g_scroll = scroll;
+        anim_to(&g_scroll_px, scroll * ROW_H, SEL_MS + 40, ANIM_EASE_OUT);
     }
+    screen_invalidate();
+}
+
+static void run_selected(void)
+{
+    if (g_entry_count == 0 || g_sel >= g_entry_count)
+        return;
+
+    strncpy(g_install_path, g_entries[g_sel].path, sizeof(g_install_path) - 1);
+    g_install_path[sizeof(g_install_path) - 1] = '\0';
+    g_run_err = 0;
+    /* Silence shell before work item fires — prevents the shell drawing
+     * into the gap between A-press and app start. We stay on the stack:
+     * when the app exits the shell resumes with this list on top. */
+    akira_shell_set_wasm_launching();
+    k_work_submit(&g_sd_install_work);
+}
+
+/* A short HOME edge is ignored: HOME long-press is the shell's, and it pops
+ * us (leave() then reports anything pending). */
+static void sd_key(uint32_t just)
+{
+    if (just & BIT(AKIRA_BTN_B))
+    {
+        screen_pop();
+        return;
+    }
+    if (g_state != SD_LIST)
+        return;
+
+    if (just & BIT(AKIRA_BTN_UP))
+        move_sel(g_sel - 1);
+    if (just & BIT(AKIRA_BTN_DOWN))
+        move_sel(g_sel + 1);
+    if (just & BIT(AKIRA_BTN_A))
+        run_selected();
+}
+
+static bool sd_tick(void)
+{
+    report_run_failure();
+
+    if (g_state == SD_SCANNING && g_scan_shown)
+    {
+        screen_run_busy("Scanning SD card", scan_job, NULL);
+        set_state(SD_LIST);
+        return true;
+    }
+    return anim_running(&g_hl) || anim_running(&g_scroll_px);
+}
+
+static void sd_enter(void *arg)
+{
+    ARG_UNUSED(arg);
+    g_entry_count = 0;
+    g_sel = 0;
+    g_scroll = 0;
+    anim_set(&g_hl, 0);
+    anim_set(&g_scroll_px, 0);
+    g_scan_shown = false;
+
+    /* Check SD card presence via FS manager before doing anything */
+    set_state(fs_manager_sd_available() ? SD_SCANNING : SD_NOCARD);
+}
+
+static void sd_leave(void)
+{
+    report_run_failure();
+}
+
+static const shell_screen_t g_sd_screen = {
+    .name = "sd_install",
+    .title = "SD APPS",
+    .flags = SCR_F_STATUSBAR | SCR_F_FOOTER,
+    .hint_r = "B:Back",
+    .enter = sd_enter,
+    .leave = sd_leave,
+    .on_key = sd_key,
+    .tick = sd_tick,
+    .draw = sd_draw,
+};
+
+/* ---- Public API ------------------------------------------------- */
+void sd_install_open(void)
+{
+    screen_push(&g_sd_screen, NULL);
 }

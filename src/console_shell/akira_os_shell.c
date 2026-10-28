@@ -13,8 +13,8 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
  *
  * Boot order:
  *   1. SYS_INIT(APPLICATION) → shell_init() starts the shell thread.
- *   2. Shell thread claims the display, builds the HOME screen, and enters
- *      the main event loop.
+ *   2. Shell thread claims the display, puts the HOME screen at the root of
+ *      the screen stack (ui/screen.c) and enters the main event loop.
  *   3. When the user launches a WASM app the shell releases the display.
  *   4. When the user long-presses (HOME) the shell loop detects the hold
  *      duration and enqueues CMD_GO_HOME.
@@ -25,17 +25,22 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
  * state dots up-to-date without polling.
  *
  * Install progress events from BLE/HTTP are delivered through
- * akira_os_shell_notify_install_progress() → g_install_progress_msgq.
+ * akira_os_shell_notify_install_progress() → g_shell_msgq, battery events
+ * from the power manager's monitor the same way (CMD_POWER_EVENT).
+ *
+ * No screen blocks this thread: screens react to keys and ticks (see
+ * ui/screen.h), so the idle timeout, HOME long-press and this event queue
+ * keep running whatever is on screen.
  */
 
 #include "akira_os_shell.h"
 #include "display_ownership.h"
 #include "home_screen.h"
-#include "settings_screen.h"
 #include "shell_theme.h"
-#include "install_progress_screen.h"
 #include "wait_screen.h"
 #include "ui/akira_ui.h"
+#include "ui/overlay.h"
+#include "ui/screen.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
@@ -51,9 +56,6 @@ LOG_MODULE_REGISTER(akira_os_shell, CONFIG_AKIRA_LOG_LEVEL);
 
 #if defined(CONFIG_DISPLAY)
 #include <zephyr/drivers/display.h>
-#if defined(CONFIG_AKIRA_BOOT_ANIMATION)
-#include "boot_anim.h"
-#endif
 #endif
 
 #include <runtime/akira_ipc.h>
@@ -116,6 +118,8 @@ typedef enum
     CMD_SD_CARD_EVENT,     /* SD card inserted/removed */
     CMD_USB_MSC_EVENT,     /* USB MSC took/released the SD card */
     CMD_USB_TRUST_EVENT,   /* VBUS attached/removed while USB mode is IDLE */
+    CMD_POWER_EVENT,       /* battery monitor: plug/unplug/full/low/level */
+    CMD_LOCK,              /* enter the wait screen now */
 } shell_cmd_t;
 
 typedef struct
@@ -145,6 +149,11 @@ typedef struct
         {
             bool arm; /* true = VBUS attached (arm prompt), false = removed (cancel) */
         } trust;
+        /* CMD_POWER_EVENT */
+        struct
+        {
+            uint32_t events; /* AKIRA_BATT_EVT_* */
+        } power;
     };
 } shell_event_t;
 
@@ -167,10 +176,6 @@ AKIRA_BULK_MSGQ_DEFINE(g_shell_msgq,
 
 static bool g_wasm_active; /* true while a WASM app has the display */
 #if defined(CONFIG_AKIRA_USB_MSC)
-/* true while the USB-storage modal owns the display — CMD_APP_STATE_CHANGED's
- * home_screen_refresh() must not repaint over it (both events land in the
- * same queue drain, refresh's usually processed after the modal is shown). */
-static bool g_msc_modal_active;
 /* Set by shell_usb_event_cb() (USB stack thread) on VBUS attach while IDLE,
  * cleared by VBUS removal or once the shell thread has shown the prompt.
  * Deferred to the shell thread rather than acted on directly — the confirm
@@ -182,130 +187,42 @@ static bool usb_trust_prompt_should_cancel(void);
 #endif
 #endif
 
-/* SD popup state */
-static bool g_sd_popup_active;
-static bool g_sd_popup_inserted;      /* true=insert, false=removal */
-static bool g_sd_popup_apps_ready;    /* apps registered, dismiss when min time elapses */
-static int g_sd_popup_dots;           /* 0-3 cycling dot count */
-static int g_sd_popup_tick;           /* counts 20ms ticks for dot advance */
-static int64_t g_sd_popup_dismiss_ms; /* non-zero = auto-dismiss at this uptime */
-static int64_t g_sd_popup_shown_ms;   /* uptime when popup was shown */
-
-#define SD_POPUP_DOT_TICKS 15   /* advance dots every 300ms */
-#define SD_POPUP_REMOVE_MS 2000 /* removal popup duration */
-#define SD_POPUP_MIN_MS 800     /* minimum visible time before insert popup dismisses */
-#define SD_POPUP_W 240
-#define SD_POPUP_H 70
-#define SD_POPUP_X ((SCR_W - SD_POPUP_W) / 2)
-#define SD_POPUP_Y ((SCR_H - SD_POPUP_H) / 2)
-
-static void sd_popup_draw(void)
-{
-    int px = SD_POPUP_X;
-    int py = SD_POPUP_Y;
-
-    /* Panel: black bg + white double outline (install_progress style) */
-    akira_display_rect(px, py, SD_POPUP_W, SD_POPUP_H, C_BLACK);
-    akira_display_rect_outline(px, py, SD_POPUP_W, SD_POPUP_H, C_WHITE);
-    akira_display_rect_outline(px + 1, py + 1, SD_POPUP_W - 2, SD_POPUP_H - 2, C_WHITE);
-
-    /* Title */
-    akira_display_text(px + 8, py + 8, "SD Card", C_WHITE);
-    akira_display_hline(px + 8, py + 20, SD_POPUP_W - 16, C_WHITE);
-
-    if (g_sd_popup_inserted)
-    {
-        char line[48];
-        snprintf(line, sizeof(line), "Loading apps%.*s", g_sd_popup_dots, "...");
-        akira_display_text(px + 8, py + 30, line, C_WHITE);
-    }
-    else
-    {
-        akira_display_text(px + 8, py + 30, "Removed", C_WHITE);
-    }
-
-    akira_display_flush();
-}
-
-static void sd_popup_show(bool inserted)
-{
-    g_sd_popup_active = true;
-    g_sd_popup_inserted = inserted;
-    g_sd_popup_dots = 0;
-    g_sd_popup_tick = 0;
-    g_sd_popup_shown_ms = k_uptime_get();
-    g_sd_popup_dismiss_ms = inserted ? 0
-                                     : (g_sd_popup_shown_ms + SD_POPUP_REMOVE_MS);
-    sd_popup_draw();
-}
-
-static void sd_popup_dismiss(void)
-{
-    g_sd_popup_active = false;
-    g_sd_popup_dismiss_ms = 0;
-}
-
-static void sd_popup_tick_fn(void)
-{
-    if (!g_sd_popup_active)
-    {
-        return;
-    }
-
-    int64_t now = k_uptime_get();
-
-    /* Deferred dismiss: apps ready but min time hadn't elapsed yet */
-    if (g_sd_popup_inserted && g_sd_popup_apps_ready &&
-        (now - g_sd_popup_shown_ms) >= SD_POPUP_MIN_MS)
-    {
-        g_sd_popup_apps_ready = false;
-        sd_popup_dismiss();
-        home_screen_refresh();
-        return;
-    }
-
-    /* Auto-dismiss removal popup */
-    if (g_sd_popup_dismiss_ms && now >= g_sd_popup_dismiss_ms)
-    {
-        sd_popup_dismiss();
-        home_screen_refresh();
-        return;
-    }
-
-    /* Advance dots every SD_POPUP_DOT_TICKS × 20ms — redraw only on change */
-    if (g_sd_popup_inserted)
-    {
-        g_sd_popup_tick++;
-        if (g_sd_popup_tick >= SD_POPUP_DOT_TICKS)
-        {
-            g_sd_popup_tick = 0;
-            g_sd_popup_dots = (g_sd_popup_dots + 1) % 4;
-            sd_popup_draw();
-        }
-    }
-}
+/* SD insert toast: shown while the SD manager registers the card's apps,
+ * dismissed by the CMD_APP_STATE_CHANGED that follows (or its own timeout). */
+#define SD_TOAST_LOADING_MS 6000
+#define SD_TOAST_REMOVED_MS 2000
+static int g_sd_toast = -1;
 
 #if defined(CONFIG_AKIRA_USB_MSC)
-/* USB MSC lock screen — full-screen takeover like wait_screen, not a small
- * popup: this state locks out the rest of the shell (see g_msc_modal_active
- * gating home_screen_tick/input below), so it should look the part. */
-static void msc_center_text(int y, const char *s, uint16_t color)
+/* USB MSC lock screen — a full-screen takeover like the wait screen, not a
+ * small popup: while the host owns the SD card the rest of the shell is
+ * locked out.  SCR_F_STICKY keeps HOME long-press from popping it. */
+static void msc_lock_draw(void)
 {
-    akira_display_text((SCR_W - (int)strlen(s) * 8) / 2, y, s, color);
+    int cy = SCR_H / 2 - 40;
+    int w = SCR_W - 80, x = 40;
+
+    akira_ui_dither_card(x, cy - 16, w, 108, 14, false, 5);
+    /* USB trident, small */
+    int ux = SCR_W / 2;
+    akira_display_vline(ux, cy - 6, 22, C_WHITE);
+    akira_display_triangle_fill(ux - 4, cy - 2, ux + 4, cy - 2, ux, cy - 8, C_WHITE);
+    akira_display_line(ux, cy + 10, ux - 7, cy + 4, C_WHITE);
+    akira_display_line(ux, cy + 14, ux + 7, cy + 8, C_WHITE);
+    akira_display_circle_fill(ux, cy + 17, 3, C_WHITE);
+
+    const char *l1 = "USB storage", *l2 = "SD card shared with host", *l3 = "Eject on the host first";
+    akira_display_text((SCR_W - akira_ui_text_w(l1, AKIRA_UI_FONT_SMALL)) / 2, cy + 30, l1, C_WHITE);
+    akira_display_text((SCR_W - akira_ui_text_w(l2, AKIRA_UI_FONT_SMALL)) / 2, cy + 50, l2, C_GRAY);
+    akira_display_text((SCR_W - akira_ui_text_w(l3, AKIRA_UI_FONT_SMALL)) / 2, cy + 66, l3, C_GRAY);
 }
 
-static void usb_msc_modal_draw(void)
-{
-    akira_display_rect(0, 0, SCR_W, SCR_H, C_BLACK);
-
-    int cy = SCR_H / 2 - 24;
-    msc_center_text(cy, "USB Storage", C_WHITE);
-    akira_display_hline(SCR_W / 2 - 60, cy + 16, 120, C_WHITE);
-    msc_center_text(cy + 28, "Connected to host", C_WHITE);
-    msc_center_text(cy + 44, "Do not unplug", C_WHITE);
-
-    akira_display_flush();
-}
+static const shell_screen_t msc_lock_screen = {
+    .name = "msc_lock",
+    .flags = SCR_F_STATUSBAR | SCR_F_STICKY,
+    .title = "USB storage",
+    .draw = msc_lock_draw,
+};
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -394,11 +311,19 @@ void akira_os_shell_notify_usb_msc(bool active)
     k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
 }
 
+void akira_os_shell_lock(void)
+{
+    shell_event_t ev = {.type = CMD_LOCK};
+    k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
+}
+
 void akira_shell_set_wasm_launching(void)
 {
     akira_display_clear(C_BLACK);
     akira_display_flush();
     g_wasm_active = true;
+    screen_set_suspended(true);
+    overlay_clear(); /* nothing transient should greet the user on return */
     /* Hand the app an empty edge queue: the launcher's own keystrokes (the A
      * press that started it, its release) are not input for the app. */
     akira_input_flush();
@@ -409,6 +334,7 @@ void akira_shell_abort_wasm_launch(void)
 {
     g_wasm_active = false;
     akira_display_claim_shell();
+    screen_set_suspended(false);
 }
 
 /* ------------------------------------------------------------------ */
@@ -416,7 +342,7 @@ void akira_shell_abort_wasm_launch(void)
 /* ------------------------------------------------------------------ */
 
 /* akiraplay_screen.c runs TLS (catalog_https_get for the catalogue fetch and
- * app download) directly on this thread, which overflows a stack sized only
+ * app download) directly on this thread (via screen_run_busy()), which overflows a stack sized only
  * for UI rendering and file I/O. Zephyr's interactive console
  * (CONFIG_SHELL_STACK_SIZE) needed the same 3072->8192 bump for the same
  * reason: mbedTLS's handshake and close_notify are stack-hungry with
@@ -487,7 +413,7 @@ static bool akira_power_should_stay_awake(void)
     defined(CONFIG_BOOTLOADER_MCUBOOT)
            || ota_is_update_in_progress()
 #endif
-           || settings_screen_is_active()
+           || !screen_is_root()                          /* user is mid-task in a sub-screen */
            || g_wasm_active
            || akira_sd_card_is_transfer_active()         /* false fallback when SD absent */
            /* RF used to be tested here via akira_rf_daemon_is_running(), which
@@ -500,6 +426,76 @@ static bool akira_power_should_stay_awake(void)
            || akira_pm_insomnia_count() > 0;
 }
 #endif /* CONFIG_AKIRA_POWER_DEEP_SLEEP */
+
+#if defined(CONFIG_AKIRA_USB_MSC)
+static void usb_trust_result(bool trusted, void *ctx)
+{
+    ARG_UNUSED(ctx);
+    if (!trusted)
+    {
+        return;
+    }
+    int ret = akira_usb_msc_enter();
+    if (ret != 0)
+    {
+        LOG_WRN("USB MSC enter after trust prompt failed: %d", ret);
+        overlay_toast(TOAST_ICON_ERROR, "Couldn't share SD card", NULL, 2500);
+    }
+    /* success: akira_usb_msc_enter() already queued CMD_USB_MSC_EVENT,
+     * which pushes the lock screen on the next drain. */
+}
+#endif
+
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+/* Battery monitor events (CMD_POWER_EVENT) → what the user sees.  The status
+ * bar and the wait screen follow the cached snapshot on their own; this only
+ * adds the moments worth interrupting for. */
+static void shell_power_event(uint32_t events, bool blanked)
+{
+    akira_battery_snapshot_t b;
+    char line[32];
+
+    if (g_wasm_active)
+    {
+        return; /* the app owns the screen; the status bar catches up later */
+    }
+    if (blanked)
+    {
+        /* Light the dimmed clock up for a moment so a plug-in (or a dying
+         * battery) is acknowledged; other changes repaint quietly. */
+        if (events & (AKIRA_BATT_EVT_PLUGGED | AKIRA_BATT_EVT_CRITICAL))
+        {
+            wait_screen_peek();
+        }
+        return;
+    }
+
+    akira_pm_battery_snapshot(&b);
+    if (events & AKIRA_BATT_EVT_PLUGGED)
+    {
+        overlay_charging_splash();
+    }
+    if (events & AKIRA_BATT_EVT_UNPLUGGED)
+    {
+        snprintf(line, sizeof(line), "%u%% remaining", b.pct);
+        overlay_toast(TOAST_ICON_BATTERY, "On battery", line, 2200);
+    }
+    if ((events & AKIRA_BATT_EVT_FULL) && !(events & AKIRA_BATT_EVT_PLUGGED))
+    {
+        overlay_toast(TOAST_ICON_BATTERY, "Fully charged", "Safe to unplug", 3000);
+    }
+    if (events & AKIRA_BATT_EVT_CRITICAL)
+    {
+        snprintf(line, sizeof(line), "%u%% - plug in now", b.pct);
+        overlay_toast(TOAST_ICON_BATTERY, "Battery critical", line, 5000);
+    }
+    else if (events & AKIRA_BATT_EVT_LOW)
+    {
+        snprintf(line, sizeof(line), "%u%% remaining", b.pct);
+        overlay_toast(TOAST_ICON_BATTERY, "Battery low", line, 3500);
+    }
+}
+#endif
 
 static void shell_thread_fn(void *p1, void *p2, void *p3)
 {
@@ -522,9 +518,6 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
     {
         display_blanking_off(_disp_dev);
         LOG_INF("Display enabled");
-#if defined(CONFIG_AKIRA_BOOT_ANIMATION)
-        boot_anim_run();
-#endif
     }
     else
     {
@@ -532,13 +525,10 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
     }
 #endif
 
-    /* Build the HOME app launcher screen (pure akira_display_* renderer) */
-#if defined(CONFIG_LVGL)
-    shell_theme_init();
-#endif
-    home_screen_create();
-    settings_screen_create();
-    home_screen_refresh();
+    /* HOME launcher at the root of the screen stack; first frame below. */
+    screen_init(&home_screen);
+    screen_status_tick();
+    screen_frame();
 
     /* Start the IPC lifecycle listener thread */
     k_thread_create(&g_lifecycle_thread,
@@ -585,6 +575,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 #endif
     int64_t s_last_input_ms = k_uptime_get();
     bool s_display_blanked = false;
+    bool s_lock_requested = false; /* Settings → Lock screen (CMD_LOCK) */
     /* Seconds on the wait screen before auto deep-sleep.  0 = never (the wait
      * screen stays a live clock forever); set via NVS akira/power/sleep_s,
      * defaulting to CONFIG_AKIRA_DEEP_SLEEP_IDLE_S when that key is unset.
@@ -650,7 +641,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 s_home_held_since_ms = 0;
                 s_home_fired = true;
                 wait_screen_exit(); /* -> notify_blank(false) */
-                home_screen_refresh();
+                screen_set_suspended(false);
                 s_prev_btns = akira_input_get_bitmask();
                 k_sleep(K_MSEC(20));
                 continue;
@@ -688,14 +679,9 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             akira_input_flush();
 
             /* s_prev_btns and just_pressed already computed at loop top.
-             * Guard with !s_display_blanked: keys must not reach the home or
-             * settings screen while the sleep screen is up. Same for the USB
-             * MSC modal — the SD-backed apps it's covering no longer exist. */
-            if (just_pressed && !s_display_blanked
-#if defined(CONFIG_AKIRA_USB_MSC)
-                && !g_msc_modal_active
-#endif
-            )
+             * Guard with !s_display_blanked: keys must not reach the screens
+             * while the wait screen is up (it has its own HOME-hold wake). */
+            if (just_pressed && !s_display_blanked)
             {
                 static const char *const btn_names[] = {
                     [AKIRA_BTN_HOME] = "HOME",
@@ -715,57 +701,30 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                         LOG_INF("BTN: %s", btn_names[_b]);
                     }
                 }
-                if (settings_screen_is_active())
-                {
-                    settings_screen_handle_key(just_pressed);
-                }
-                else
-                {
-                    home_screen_handle_key(just_pressed);
-                }
+                screen_dispatch_key(just_pressed);
             }
 
-            /* Tick home screen animation every 20 ms (skip if SD popup active
-             * or the idle wait screen is up — otherwise the home animation
-             * repaints over the wait screen and flickers). */
-            if (!s_display_blanked && !settings_screen_is_active()
-#ifdef CONFIG_AKIRA_SD_HOTPLUG
-                && !g_sd_popup_active
-#endif
-#if defined(CONFIG_AKIRA_USB_MSC)
-                && !g_msc_modal_active
-#endif
-            )
+            /* One frame: the top screen and overlays tick, and the framework
+             * repaints only what changed (status-bar-only when just the clock
+             * or the charging animation moved).  While blanked the wait screen
+             * owns the panel and decides for itself whether to repaint. */
+            if (!s_display_blanked)
             {
-                home_screen_tick();
+                screen_frame();
             }
-
-#ifdef CONFIG_AKIRA_SD_HOTPLUG
-            sd_popup_tick_fn();
-#endif
+            else
+            {
+                wait_screen_update();
+            }
 
             /* Status strip / wait screen updated every 1 s */
             static int64_t s_last_status_ms;
             if (now_ms - s_last_status_ms >= 1000)
             {
                 s_last_status_ms = now_ms;
-                if (s_display_blanked)
+                if (!s_display_blanked)
                 {
-                    wait_screen_update();
-                }
-                else if (settings_screen_is_active())
-                {
-                    settings_screen_update();
-                }
-#if defined(CONFIG_AKIRA_USB_MSC)
-                else if (g_msc_modal_active)
-                {
-                    /* Static overlay — nothing to refresh */
-                }
-#endif
-                else
-                {
-                    home_screen_update_status();
+                    screen_status_tick();
                 }
 
                 /* Re-read the idle/sleep timeouts only when something actually
@@ -840,18 +799,22 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                     {
                         s_display_blanked = false;
                         wait_screen_exit(); /* -> notify_blank(false) */
-                        home_screen_refresh();
+                        screen_set_suspended(false);
                         s_prev_btns = akira_input_get_bitmask();
                     }
                 }
 
                 /* Idle wait-screen check */
                 static int64_t s_deep_sleep_arm_ms;
-                if (!s_display_blanked && s_display_timeout_ms > 0 &&
-                    (now_ms - s_last_input_ms) >= s_display_timeout_ms)
+                if (!s_display_blanked &&
+                    (s_lock_requested ||
+                     (s_display_timeout_ms > 0 &&
+                      (now_ms - s_last_input_ms) >= s_display_timeout_ms)))
                 {
+                    s_lock_requested = false;
                     s_display_blanked = true;
                     s_deep_sleep_arm_ms = now_ms;
+                    screen_set_suspended(true);
                     wait_screen_enter(); /* -> notify_blank(true) */
                     /* Drain button noise accumulated during wait_screen_enter's
                      * I2C + SPI flush.  Without this, the next loop iteration
@@ -893,7 +856,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
              * still run.  This is the state the device spends most of its life
              * in, so the wake rate here dominates standby battery life —
              * previously a fixed 1 Hz for a frame that changes once a minute.
-             * HOME down falls through to the 20ms poll so the
+             * HOME down falls through to the 33 ms poll so the
              * CONFIG_AKIRA_WAIT_WAKE_HOLD_MS hold detector stays accurate.
              * Gate on the raw pin, not btns: btns lags by debounce_interval_ms,
              * so right after the press edge this would still see HOME up and
@@ -911,11 +874,10 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             }
             else
             {
-                /* Awake tick.  Button input is interrupt-driven (see
+                /* Awake tick (~30 Hz).  Button input is interrupt-driven (see
                  * akira_input_api.c), so this rate only sets animation
-                 * smoothness and the granularity of the HOME hold detector —
-                 * 30 Hz is imperceptible for both and is a third fewer wakes
-                 * than the old 50 Hz. */
+                 * smoothness and the granularity of the HOME hold detector.
+                 * A frame with nothing to repaint costs no SPI traffic. */
                 k_sleep(K_MSEC(33));
             }
         }
@@ -936,22 +898,13 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             case CMD_GO_HOME:
                 LOG_INF("HOME pressed — returning to launcher");
 
-                /* Settings→Sleep blanks the panel independently of the shell's
-                 * own s_display_blanked/wait_screen state, so HOME's long-press
-                 * wake must also unblank it and close the settings screen here —
-                 * otherwise the panel stays blanked and input keeps routing to
-                 * the sleep page's own B-B wake gesture. */
-                if (settings_screen_is_sleeping())
-                {
-                    settings_screen_wake();
-                }
-
                 /* Reclaim display immediately so the home screen is visible
                  * before app_manager_stop() blocks for the abort timeout. */
                 g_wasm_active = false;
                 akira_display_claim_shell();
                 s_prev_btns = akira_input_get_bitmask();
-                home_screen_load();
+                screen_pop_to_root();
+                screen_set_suspended(s_display_blanked);
 
                 /* Stop any running WASM apps (may block up to abort timeout) */
                 {
@@ -989,6 +942,8 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                     {
                         /* App just started — release display to it */
                         g_wasm_active = true;
+                        screen_set_suspended(true);
+                        overlay_clear();
                         akira_input_flush();
                         akira_display_release_to_wasm();
                         LOG_INF("Display released to WASM app");
@@ -1004,34 +959,20 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                         g_wasm_active = false;
                         akira_display_claim_shell();
                         s_prev_btns = akira_input_get_bitmask();
+                        screen_set_suspended(s_display_blanked);
                         home_screen_refresh();
                         LOG_INF("Display reclaimed by shell (all apps stopped)");
                     }
-                    else
+                    else if (!g_wasm_active)
                     {
-                        if (!g_wasm_active)
+                        /* Registry changed under us — most often the SD
+                         * manager finishing a freshly inserted card. */
+                        if (g_sd_toast >= 0)
                         {
-#ifdef CONFIG_AKIRA_SD_HOTPLUG
-                            if (g_sd_popup_active && g_sd_popup_inserted)
-                            {
-                                if ((k_uptime_get() - g_sd_popup_shown_ms) >= SD_POPUP_MIN_MS)
-                                {
-                                    sd_popup_dismiss();
-                                }
-                                else
-                                {
-                                    /* Too soon — let tick dismiss once min time passes */
-                                    g_sd_popup_apps_ready = true;
-                                }
-                            }
-#endif
-#if defined(CONFIG_AKIRA_USB_MSC)
-                            if (!g_msc_modal_active)
-#endif
-                            {
-                                home_screen_refresh();
-                            }
+                            overlay_toast_dismiss(g_sd_toast);
+                            g_sd_toast = -1;
                         }
+                        home_screen_refresh();
                     }
                 }
                 break;
@@ -1039,9 +980,20 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             case CMD_INSTALL_PROGRESS:
                 if (!g_wasm_active)
                 {
-                    install_progress_show(ev.install.name,
-                                          ev.install.pct,
-                                          ev.install.msg);
+                    const char *m = ev.install.msg;
+                    bool failed = strstr(m, "fail") || strstr(m, "Fail") ||
+                                  strstr(m, "error") || strstr(m, "Error");
+
+                    overlay_progress(ev.install.name, ev.install.pct, m);
+                    if (failed)
+                    {
+                        overlay_progress_finish(false, m);
+                    }
+                    else if (ev.install.pct >= 100)
+                    {
+                        overlay_progress_finish(true, m[0] ? m : "Installed");
+                        home_screen_refresh();
+                    }
                 }
                 break;
 
@@ -1049,27 +1001,40 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
             case CMD_SD_CARD_EVENT:
                 if (!g_wasm_active)
                 {
-                    sd_popup_show(ev.sd.present);
+                    if (g_sd_toast >= 0)
+                    {
+                        overlay_toast_dismiss(g_sd_toast);
+                    }
+                    if (ev.sd.present)
+                    {
+                        g_sd_toast = overlay_toast(TOAST_ICON_SD, "SD card inserted",
+                                                   "Loading apps", SD_TOAST_LOADING_MS);
+                        overlay_toast_set_busy(g_sd_toast, true);
+                    }
+                    else
+                    {
+                        g_sd_toast = -1;
+                        overlay_toast(TOAST_ICON_SD, "SD card removed", NULL,
+                                      SD_TOAST_REMOVED_MS);
+                        home_screen_refresh();
+                    }
                 }
                 break;
 #endif
 
 #if defined(CONFIG_AKIRA_USB_MSC)
             case CMD_USB_MSC_EVENT:
-                g_msc_modal_active = ev.msc.active;
                 if (ev.msc.active)
                 {
-                    if (!g_wasm_active)
+                    if (!screen_is_open(&msc_lock_screen))
                     {
-                        usb_msc_modal_draw();
+                        screen_push(&msc_lock_screen, NULL);
                     }
                 }
                 else
                 {
-                    if (!g_wasm_active)
-                    {
-                        home_screen_refresh();
-                    }
+                    screen_close(&msc_lock_screen);
+                    home_screen_refresh();
                 }
                 break;
 
@@ -1081,11 +1046,22 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                      * user on the lock screen with the SD card stuck
                      * unavailable; hand it back safely. Runs on this
                      * thread (ample stack, same as the confirm-then-enter
-                     * path above), not the FUSB302 poller's workqueue. */
+                     * path), not the FUSB302 poller's workqueue. */
                     akira_usb_msc_exit();
                 }
                 break;
 #endif
+
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+            case CMD_POWER_EVENT:
+                shell_power_event(ev.power.events, s_display_blanked);
+                break;
+#endif
+
+            case CMD_LOCK:
+                /* Taken by the idle check in the 1 s block above. */
+                s_lock_requested = true;
+                break;
 
             default:
                 break;
@@ -1094,43 +1070,20 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 
 #if defined(CONFIG_AKIRA_USB_MSC)
         /* Show the deferred USB trust prompt once we're actually sitting
-         * idle at HOME — never interrupts a running app, settings, the SD
-         * popup, or a blanked screen. */
-        if (g_msc_trust_pending && !g_wasm_active && !settings_screen_is_active()
-            && !s_display_blanked && !g_msc_modal_active
-#ifdef CONFIG_AKIRA_SD_HOTPLUG
-            && !g_sd_popup_active
-#endif
-            && usb_manager_get_mode() != USB_MODE_MSC)
+         * idle at HOME — never interrupts a running app, a sub-screen, another
+         * dialog, or a blanked screen.  The answer arrives in
+         * usb_trust_result() once the dialog has closed. */
+        if (g_msc_trust_pending && !g_wasm_active && !s_display_blanked &&
+            screen_is_root() && usb_manager_get_mode() != USB_MODE_MSC)
         {
             g_msc_trust_pending = false;
-            akira_input_flush();
-
+            akira_ui_confirm_open("USB", "Share SD card with host?",
 #if defined(CONFIG_AKIRA_FUSB302_VBUS)
-            bool trusted = akira_ui_confirm_dialog_cancelable(
-                "USB", "Share SD card with host?", usb_trust_prompt_should_cancel);
+                                  usb_trust_prompt_should_cancel,
 #else
-            bool trusted = akira_ui_confirm_dialog(
-                "USB", "Share SD card with host?");
+                                  NULL,
 #endif
-
-            if (trusted)
-            {
-                int ret = akira_usb_msc_enter();
-                if (ret != 0)
-                {
-                    LOG_WRN("USB MSC enter after trust prompt failed: %d", ret);
-                    home_screen_load(); /* dialog is gone, restore what's under it */
-                }
-                /* success: akira_usb_msc_enter() already queued
-                 * CMD_USB_MSC_EVENT, which draws the MSC modal over this
-                 * dialog on the next drain. */
-            }
-            else
-            {
-                home_screen_load();
-            }
-            s_prev_btns = akira_input_get_bitmask();
+                                  usb_trust_result, NULL);
         }
 #endif
     }
@@ -1179,6 +1132,11 @@ static void shell_usb_event_cb(usb_manager_event_t event, void *user_data)
     ARG_UNUSED(user_data);
     if (event == USB_EVENT_VBUS_ATTACH_IDLE)
     {
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+        /* Same cable usually means a charger: re-read the battery now so the
+         * charging animation starts with the plug, not on the next poll. */
+        akira_pm_battery_poll_now();
+#endif
         shell_event_t ev = {.type = CMD_USB_TRUST_EVENT, .trust = {.arm = true}};
         k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
     }
@@ -1190,15 +1148,27 @@ static void shell_usb_event_cb(usb_manager_event_t event, void *user_data)
 }
 
 #if defined(CONFIG_AKIRA_FUSB302_VBUS)
-/* The confirm dialog below blocks the shell thread in its own input loop —
- * it never drains g_shell_msgq, so a queued CMD_USB_TRUST_EVENT can't reach
- * it while it's up. Poll the FUSB302's live reading directly instead of
- * relying on that event. */
+/* Polled by the trust dialog every frame: answer "cancel" the moment the
+ * cable goes, straight from the FUSB302's live reading rather than waiting
+ * for the queued CMD_USB_TRUST_EVENT. */
 static bool usb_trust_prompt_should_cancel(void)
 {
     return !akira_fusb302_vbus_present();
 }
 #endif
+#endif
+
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+/* Battery monitor listener — runs on the system workqueue. */
+static void shell_battery_cb(uint32_t events, const akira_battery_snapshot_t *snap,
+                             void *user)
+{
+    ARG_UNUSED(snap);
+    ARG_UNUSED(user);
+    shell_event_t ev = {.type = CMD_POWER_EVENT, .power = {.events = events}};
+    k_msgq_put(&g_shell_msgq, &ev, K_NO_WAIT);
+    k_sem_give(&home_wake_sem); /* a blanked shell loop is parked on this */
+}
 #endif
 
 static int shell_init(void)
@@ -1210,6 +1180,10 @@ static int shell_init(void)
 #if defined(CONFIG_AKIRA_USB_MSC)
     akira_usb_msc_register_state_cb(shell_usb_msc_cb, NULL);
     usb_manager_register_callback(shell_usb_event_cb, NULL);
+#endif
+
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+    akira_pm_battery_register_cb(shell_battery_cb, NULL);
 #endif
 
     k_thread_create(&g_shell_thread,

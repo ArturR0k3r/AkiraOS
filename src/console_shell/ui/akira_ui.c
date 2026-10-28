@@ -9,11 +9,15 @@
  *
  * Four primitives, escalating pixel weight, zero colour:
  *   outline < solid fill < dither < 3px heavy stroke.
- * The 3px stroke is reserved for akira_ui_confirm_dialog() so a user knows a
+ * The 3px stroke is reserved for akira_ui_confirm_open() so a user knows a
  * guarded syscall is being gated without reading the text.
+ *
+ * Colour appears in exactly one place: the battery widget's semantic accents.
  */
 
 #include "akira_ui.h"
+#include "screen.h"
+#include "../shell_theme.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -26,6 +30,45 @@
 /* ---- helpers ---------------------------------------------------------- */
 
 static inline int text_w(const char *s) { return (int)strlen(s) * AKIRA_UI_CELL_W; }
+
+int akira_ui_text_w(const char *s, int font)
+{
+    static const uint8_t advance[] = { 8, 12, 17 };
+
+    if (!s || font < 0 || font >= (int)ARRAY_SIZE(advance)) {
+        return 0;
+    }
+    return (int)strlen(s) * advance[font];
+}
+
+/* Status glyphs, 1-bit, bit31 = leftmost. */
+#define GLYPH_ROWS 16
+
+static const uint32_t ICON_WIFI[GLYPH_ROWS] = {
+    0b00001111111111110000000000000000u,
+    0b00111000000000011100000000000000u,
+    0b01100000000000000110000000000000u,
+    0b10000111111111100001000000000000u,
+    0b00001100000001100000000000000000u,
+    0b00000011111110000000000000000000u,
+    0b00000000110000000000000000000000u,
+    0b00000001111000000000000000000000u,
+    0b00000001111000000000000000000000u,
+};
+#define ICON_WIFI_W 20
+
+static const uint32_t ICON_BT[GLYPH_ROWS] = {
+    0b00110000000000000000000000000000u,
+    0b00101000000000000000000000000000u,
+    0b10100100000000000000000000000000u,
+    0b01101000000000000000000000000000u,
+    0b00110000000000000000000000000000u,
+    0b01101000000000000000000000000000u,
+    0b10100100000000000000000000000000u,
+    0b00101000000000000000000000000000u,
+    0b00110000000000000000000000000000u,
+};
+#define ICON_BT_W 7
 
 /* ---- icon blit -------------------------------------------------------- */
 
@@ -65,58 +108,270 @@ void akira_ui_icon_1bpp(int x, int y, int scale, const uint32_t *icon,
     }
 }
 
+/* ---- battery widget ---------------------------------------------------- */
+
+#define BATT_SEGS          5
+#define BATT_SWEEP_MS      320  /* one charging-sweep step */
+#define BATT_PULSE_MS      500  /* critical outline blink half-period */
+#ifdef CONFIG_AKIRA_BATTERY_LOW_THRESHOLD
+#define BATT_LOW_PCT       CONFIG_AKIRA_BATTERY_LOW_THRESHOLD
+#define BATT_CRIT_PCT      CONFIG_AKIRA_BATTERY_CRITICAL_THRESHOLD
+#else
+#define BATT_LOW_PCT       15
+#define BATT_CRIT_PCT      5
+#endif
+
+static int batt_lit(int pct)
+{
+    pct = CLAMP(pct, 0, 100);
+    return (pct + (100 / BATT_SEGS) - 1) / (100 / BATT_SEGS); /* ceil */
+}
+
+int akira_ui_battery_frame(int pct, akira_ui_batt_t state, int64_t now_ms)
+{
+    int lit = batt_lit(pct);
+
+    if (state == AKIRA_UI_BATT_CHARGING && lit < BATT_SEGS) {
+        return 1 + (int)((now_ms / BATT_SWEEP_MS) % (BATT_SEGS - lit + 1));
+    }
+    if (state != AKIRA_UI_BATT_CHARGING && state != AKIRA_UI_BATT_FULL &&
+        state != AKIRA_UI_BATT_NOT_CHARGING && pct <= BATT_CRIT_PCT) {
+        return 1 + (int)((now_ms / BATT_PULSE_MS) & 1);
+    }
+    return 0;
+}
+
+void akira_ui_bolt(int x, int y, int scale, uint16_t color)
+{
+    int s = scale;
+
+    akira_display_triangle_fill(x + 5 * s, y, x, y + 6 * s, x + 4 * s, y + 6 * s, color);
+    akira_display_triangle_fill(x + 3 * s, y + 4 * s, x + 7 * s, y + 4 * s,
+                                x + 2 * s, y + 11 * s, color);
+}
+
+int akira_ui_battery(int x, int y, int scale, int pct, akira_ui_batt_t state,
+                     int64_t now_ms)
+{
+    const int s = MAX(scale, 1);
+    const int bw = 23 * s, bh = AKIRA_UI_BATT_H(s);
+    const bool external = state == AKIRA_UI_BATT_CHARGING ||
+                          state == AKIRA_UI_BATT_FULL ||
+                          state == AKIRA_UI_BATT_NOT_CHARGING;
+    int frame = akira_ui_battery_frame(pct, state, now_ms);
+    int lit = batt_lit(pct);
+    uint16_t seg_c, frame_c = AKIRA_UI_PAPER;
+
+    if (state == AKIRA_UI_BATT_CHARGING || state == AKIRA_UI_BATT_FULL) {
+        seg_c = SHELL_C_CHARGE;
+    } else if (!external && pct <= BATT_CRIT_PCT) {
+        seg_c = SHELL_C_CRIT;
+        frame_c = (frame == 2) ? SHELL_C_CRIT : AKIRA_UI_PAPER;
+    } else if (!external && pct <= BATT_LOW_PCT) {
+        seg_c = SHELL_C_WARN;
+    } else {
+        seg_c = AKIRA_UI_PAPER;
+    }
+
+    if (state == AKIRA_UI_BATT_FULL) {
+        lit = BATT_SEGS;
+    } else if (state == AKIRA_UI_BATT_CHARGING && frame > 0) {
+        lit += frame - 1; /* sweep: one more segment per step, then restart */
+    }
+
+    /* Body: s-px outline, rounded, with the terminal nub on the right. */
+    akira_display_rounded_rect_fill(x, y, bw, bh, 2 * s, AKIRA_UI_INK);
+    for (int i = 0; i < s; i++) {
+        akira_display_rounded_rect(x + i, y + i, bw - 2 * i, bh - 2 * i,
+                                   MAX(2 * s - i, 1), frame_c);
+    }
+    akira_display_rect(x + bw, y + 3 * s, 2 * s, bh - 6 * s, frame_c);
+
+    /* Five 3s-wide segments with 1s gaps fill the 19s-wide interior. */
+    for (int i = 0; i < BATT_SEGS; i++) {
+        akira_display_rect(x + 2 * s + i * 4 * s, y + 2 * s, 3 * s, bh - 4 * s,
+                           i < lit ? seg_c : AKIRA_UI_INK);
+    }
+
+    /* Big icons carry the bolt inside the body: ink with a paper outline so
+     * it reads over lit and unlit segments alike. */
+    if (s >= 2 && (state == AKIRA_UI_BATT_CHARGING ||
+                   state == AKIRA_UI_BATT_NOT_CHARGING)) {
+        int bs = MAX(s * 2 / 3, 1);
+        int gx = x + (bw - 7 * bs) / 2, gy = y + (bh - 11 * bs) / 2;
+
+        akira_ui_bolt(gx - 1, gy, bs, AKIRA_UI_PAPER);
+        akira_ui_bolt(gx + 1, gy, bs, AKIRA_UI_PAPER);
+        akira_ui_bolt(gx, gy - 1, bs, AKIRA_UI_PAPER);
+        akira_ui_bolt(gx, gy + 1, bs, AKIRA_UI_PAPER);
+        akira_ui_bolt(gx, gy, bs,
+                      state == AKIRA_UI_BATT_CHARGING ? AKIRA_UI_INK : SHELL_C_GRAY);
+    }
+    return frame;
+}
+
+/* ---- spinner ------------------------------------------------------------ */
+
+void akira_ui_spinner(int cx, int cy, int r, int64_t now_ms)
+{
+    /* 8 dots on a ring; the head is solid, the tail fades through the grays. */
+    static const int8_t ring[8][2] = {
+        { 0, -10 }, { 7, -7 }, { 10, 0 }, { 7, 7 },
+        { 0, 10 }, { -7, 7 }, { -10, 0 }, { -7, -7 },
+    };
+    int head = (int)((now_ms / 90) % 8);
+
+    for (int i = 0; i < 8; i++) {
+        int age = (head - i + 8) % 8;
+        uint16_t c = age == 0 ? AKIRA_UI_PAPER
+                   : age < 3 ? SHELL_C_GRAY
+                   : SHELL_C_DKGRAY;
+        int dr = age == 0 ? MAX(r / 4, 2) : MAX(r / 6, 1);
+
+        akira_display_circle_fill(cx + ring[i][0] * r / 10, cy + ring[i][1] * r / 10,
+                                  dr, c);
+    }
+}
+
 /* ---- status bar ------------------------------------------------------- */
 
 void akira_ui_status_bar(const akira_ui_status_t *s)
 {
-    int W, H;
-    akira_display_get_size(&W, &H);
+    /* Shell geometry, not the panel: the shell lays out SCR_W x SCR_H. */
+    const int W = SCR_W;
     const int bar_h = AKIRA_UI_STATUSBAR_H;
     const int txt_y = (bar_h - 10) / 2;
+    const int64_t now = k_uptime_get();
 
-    /* Rounded pill near the top (ink interior + paper outline, content paper). */
+    /* Clear the band (content may have scrolled under it), then the pill. */
+    akira_display_rect(0, 0, W, bar_h + 2, AKIRA_UI_INK);
     int pill_h = bar_h - 2, pr = pill_h / 2;
     akira_display_rounded_rect_fill(2, 1, W - 4, pill_h, pr, AKIRA_UI_INK);
     akira_display_rounded_rect(2, 1, W - 4, pill_h, pr, AKIRA_UI_PAPER);
 
-    /* --- left slot: title, else battery gauge --- */
-    if (s->title && s->title[0]) {
-        akira_display_text(10, txt_y, s->title, AKIRA_UI_PAPER);
-    } else if (s->battery_pct >= 0) {
-        int bx = 8, by = txt_y;
-        akira_display_rounded_rect(bx, by, 22, 10, 2, AKIRA_UI_PAPER);
-        akira_display_rect(bx + 22, by + 3, 2, 4, AKIRA_UI_PAPER); /* nub */
-        int pct = s->battery_pct > 100 ? 100 : s->battery_pct;
-        int segs = (pct * 5 + 50) / 100;
-        for (int i = 0; i < 5; i++) {
-            akira_display_rect(bx + 2 + i * 4, by + 2, 3, 6,
-                               (i < segs) ? AKIRA_UI_PAPER : AKIRA_UI_INK);
-        }
-        char buf[8];
-        snprintf(buf, sizeof(buf), "%d%%", pct);
-        akira_display_text(bx + 28, txt_y, buf, AKIRA_UI_PAPER);
-    }
+    /* --- right cluster, laid out right-to-left --- */
+    int x = W - 12;
 
-    /* --- right slot: clock, then wifi/bt cluster to its left --- */
-    int right = W - 8;
     if (s->clock && s->clock[0]) {
-        akira_display_text(W - text_w(s->clock) - 10, txt_y, s->clock, AKIRA_UI_PAPER);
-        right = W - text_w(s->clock) - 14;
+        x -= text_w(s->clock);
+        akira_display_text(x, txt_y, s->clock, AKIRA_UI_PAPER);
+        x -= 10;
     }
 
-    int icon_y = (bar_h - 16) / 2;
-    if (s->show_bt && s->icon_bt) {
-        right -= 22;
-        akira_ui_icon_1bpp(right, icon_y, 1, s->icon_bt, 20, 16,
+    if (s->battery_pct >= 0) {
+        char buf[8];
+        int pct = MIN(s->battery_pct, 100);
+
+        snprintf(buf, sizeof(buf), "%d%%", pct);
+        x -= text_w(buf);
+        akira_display_text(x, txt_y, buf, AKIRA_UI_PAPER);
+        x -= 4 + AKIRA_UI_BATT_W(1);
+        akira_ui_battery(x, (bar_h - AKIRA_UI_BATT_H(1)) / 2, 1, pct,
+                         s->battery_state, now);
+        if (s->battery_state == AKIRA_UI_BATT_CHARGING ||
+            s->battery_state == AKIRA_UI_BATT_NOT_CHARGING) {
+            x -= 9;
+            akira_ui_bolt(x, (bar_h - 11) / 2, 1,
+                          s->battery_state == AKIRA_UI_BATT_CHARGING
+                              ? SHELL_C_CHARGE : SHELL_C_GRAY);
+        }
+        x -= 8;
+    }
+
+    int icon_y = (bar_h - 9) / 2;
+    if (s->show_bt) {
+        x -= ICON_BT_W;
+        akira_ui_icon_1bpp(x, icon_y, 1, ICON_BT, ICON_BT_W, 9,
                            AKIRA_UI_PAPER, AKIRA_UI_INK,
                            s->bt_on ? AKIRA_UI_TRANSPARENT : AKIRA_UI_DITHER);
+        x -= 8;
     }
-    if (s->show_wifi && s->icon_wifi) {
-        right -= 22;
-        akira_ui_icon_1bpp(right, icon_y, 1, s->icon_wifi, 20, 16,
+    if (s->show_wifi) {
+        x -= ICON_WIFI_W;
+        akira_ui_icon_1bpp(x, icon_y, 1, ICON_WIFI, ICON_WIFI_W, 9,
                            AKIRA_UI_PAPER, AKIRA_UI_INK,
                            s->wifi_on ? AKIRA_UI_TRANSPARENT : AKIRA_UI_DITHER);
+        x -= 8;
     }
+
+    /* --- title on the left, clipped to what the cluster left free --- */
+    if (s->title && s->title[0]) {
+        char t[40];
+        int max_chars = MAX((x - 12) / AKIRA_UI_CELL_W, 1);
+
+        strncpy(t, s->title, sizeof(t) - 1);
+        t[sizeof(t) - 1] = '\0';
+        if ((int)strlen(t) > max_chars) {
+            t[max_chars] = '\0';
+            if (max_chars > 2) {
+                t[max_chars - 1] = '.';
+                t[max_chars - 2] = '.';
+            }
+        }
+        akira_display_text(12, txt_y, t, AKIRA_UI_PAPER);
+    }
+}
+
+/* ---- footer hint bar -------------------------------------------------- */
+
+/* Draws one "KEY:Label" hint at x, returns its width. */
+static int footer_hint(int x, int y, const char *hint, int len, bool measure)
+{
+    const char *colon = memchr(hint, ':', len);
+    char key[8] = "", label[24] = "";
+
+    if (colon) {
+        snprintf(key, sizeof(key), "%.*s", (int)(colon - hint), hint);
+        snprintf(label, sizeof(label), "%.*s", (int)(len - (colon - hint) - 1), colon + 1);
+    } else {
+        snprintf(label, sizeof(label), "%.*s", len, hint);
+    }
+
+    int kw = key[0] ? text_w(key) + 8 : 0;
+    int w = kw + (key[0] && label[0] ? 4 : 0) + text_w(label);
+
+    if (!measure) {
+        if (key[0]) {
+            akira_display_rounded_rect_fill(x, y + 5, kw, 14, 7, AKIRA_UI_PAPER);
+            akira_display_text(x + 4, y + 7, key, AKIRA_UI_INK);
+        }
+        if (label[0]) {
+            akira_display_text(x + w - text_w(label), y + 7, label, AKIRA_UI_PAPER);
+        }
+    }
+    return w;
+}
+
+/* Walks a '|'-separated hint list; returns total width. */
+static int footer_side(int x, int y, const char *hints, bool measure)
+{
+    int total = 0;
+
+    while (hints && *hints) {
+        const char *bar = strchr(hints, '|');
+        int len = bar ? (int)(bar - hints) : (int)strlen(hints);
+
+        if (total) {
+            total += 12;
+        }
+        total += footer_hint(x + total, y, hints, len, measure);
+        hints = bar ? bar + 1 : NULL;
+    }
+    return total;
+}
+
+void akira_ui_footer(const char *left, const char *right)
+{
+    /* Shell geometry, not the panel: the shell lays out SCR_W x SCR_H. */
+    const int W = SCR_W, H = SCR_H;
+    const int y = H - 24;
+
+    akira_display_rect(0, y, W, 24, AKIRA_UI_INK);
+    for (int x = 0; x < W; x += 2) {
+        akira_display_pixel(x, y, AKIRA_UI_PAPER); /* dotted hairline */
+    }
+    footer_side(10, y, left, false);
+    footer_side(W - 10 - footer_side(0, y, right, true), y, right, false);
 }
 
 /* ---- list row --------------------------------------------------------- */
@@ -124,8 +379,8 @@ void akira_ui_status_bar(const akira_ui_status_t *s)
 void akira_ui_list_row(int y, int h, const char *text, const char *meta,
                        int meter_0_5, bool selected)
 {
-    int W, H;
-    akira_display_get_size(&W, &H);
+    /* Shell geometry, not the panel: the shell lays out SCR_W x SCR_H. */
+    const int W = SCR_W;
     uint16_t fg = selected ? AKIRA_UI_INK : AKIRA_UI_PAPER;
 
     /* Each row is its own rounded dither-shadow card with side margins. */
@@ -292,45 +547,36 @@ void akira_ui_tag(int x, int y, const char *text, bool dithered)
     }
 }
 
-/* ---- alert ------------------------------------------------------------ */
-
-void akira_ui_alert(const char *title, const char *subtitle)
-{
-    int W, H;
-    akira_display_get_size(&W, &H);
-    akira_display_clear(AKIRA_UI_INK);
-
-    /* Non-actionable message inside an elevated rounded dither-shadow card. */
-    int bw = W - 80, bh = 130;
-    int bx = (W - bw) / 2, by = (H - bh) / 2;
-    akira_ui_dither_card(bx, by, bw, bh, 12, /*selected=*/false, /*shadow=*/5);
-
-    int cx = bx + bw / 2;
-    int apex_y = by + 18, ts = 16;
-    akira_display_triangle(cx, apex_y, cx - ts, apex_y + ts * 2,
-                           cx + ts, apex_y + ts * 2, AKIRA_UI_PAPER);
-    akira_display_vline(cx, apex_y + 8, ts - 6, AKIRA_UI_PAPER);
-    akira_display_rect(cx - 1, apex_y + ts + 2, 2, 2, AKIRA_UI_PAPER);
-
-    if (title && title[0]) {
-        akira_display_text(cx - text_w(title) / 2, by + bh / 2 + 6, title, AKIRA_UI_PAPER);
-    }
-    if (subtitle && subtitle[0]) {
-        akira_display_text(cx - text_w(subtitle) / 2, by + bh / 2 + 22, subtitle,
-                           AKIRA_UI_PAPER);
-    }
-    akira_display_flush();
-}
-
 /* ---- confirm dialog (the only 3px element) ---------------------------- */
 
-static void confirm_render(int bx, int by, int bw, int bh,
-                           const char *capability_name, const char *question,
-                           int sel)
-{
-    int cx = bx + bw / 2;
+static struct {
+    char cap[32];
+    char question[64];
+    int sel;
+    bool (*should_cancel)(void);
+    void (*on_result)(bool confirmed, void *ctx);
+    void *ctx;
+} g_confirm;
 
-    akira_display_clear(AKIRA_UI_INK);
+static void confirm_finish(bool confirmed)
+{
+    void (*cb)(bool, void *) = g_confirm.on_result;
+    void *ctx = g_confirm.ctx;
+
+    g_confirm.on_result = NULL;
+    screen_pop(); /* first, so the callback may push its own screen */
+    if (cb) {
+        cb(confirmed, ctx);
+    }
+}
+
+static void confirm_draw(void)
+{
+    /* Shell geometry, not the panel: the shell lays out SCR_W x SCR_H. */
+    const int W = SCR_W, H = SCR_H;
+    int bw = W - 64, bh = 156;
+    int bx = (W - bw) / 2, by = (H - bh) / 2 + 6;
+    int cx = bx + bw / 2;
 
     /* The reserved Capability-Guard marker: the system's largest dither-shadow
      * offset (6px) + a rounded card + a heavy 3px outline. Weight = stakes. */
@@ -345,80 +591,94 @@ static void confirm_render(int bx, int by, int bw, int bh,
     int gy = by + 14, gs = 12;
     akira_display_triangle(cx, gy, cx - gs, gy + gs, cx + gs, gy + gs,
                            AKIRA_UI_PAPER);
-    akira_display_vline(cx, gy + 4, gs - 4, AKIRA_UI_PAPER);
+    akira_display_vline(cx, gy + 4, gs - 6, AKIRA_UI_PAPER);
+    akira_display_rect(cx, gy + gs - 2, 1, 1, AKIRA_UI_PAPER);
 
-    if (question && question[0]) {
-        akira_display_text(cx - text_w(question) / 2, by + 44, question,
-                           AKIRA_UI_PAPER);
-    }
+    akira_display_text(cx - text_w(g_confirm.question) / 2, by + 42,
+                       g_confirm.question, AKIRA_UI_PAPER);
 
     char cap[64];
-    snprintf(cap, sizeof(cap), "capability: %s - restricted",
-             capability_name ? capability_name : "?");
-    akira_display_text(cx - text_w(cap) / 2, by + 64, cap, AKIRA_UI_PAPER);
+    snprintf(cap, sizeof(cap), "capability: %s", g_confirm.cap);
+    akira_display_text(cx - text_w(cap) / 2, by + 60, cap, SHELL_C_GRAY);
+    akira_display_text(cx - text_w("restricted action") / 2, by + 74,
+                       "restricted action", SHELL_C_GRAY);
 
-    /* Both buttons use the same selected/unselected language: filled +
-     * inverted text when selected, outline-only when not — a hardcoded
-     * fill or a bare outline alone doesn't reliably show which is chosen. */
-    int btn_y = by + bh - 44;
-    const char *cancel = "cancel";
-    int clw = text_w(cancel) + 20;
-    int cxl = bx + bw / 4 - clw / 2;
-    akira_ui_dither_card(cxl, btn_y - 4, clw, 28, 8, /*selected=*/sel == 0,
-                         /*shadow=*/sel == 0 ? 3 : 0);
-    akira_display_text(cxl + (clw - text_w(cancel)) / 2, btn_y + 5, cancel,
-                       sel == 0 ? AKIRA_UI_INK : AKIRA_UI_PAPER);
+    /* Two equal buttons; the selected one is filled + elevated. */
+    const int btn_w = (bw - 48) / 2, btn_h = 28, btn_y = by + bh - 44;
+    static const char *const labels[2] = { "Cancel", "Confirm" };
 
-    int cbx = bx + bw / 2 + 8, cbw = bw / 2 - 24, cbh = 28;
-    akira_ui_dither_card(cbx, btn_y, cbw, cbh, 8, /*selected=*/sel == 1,
-                         /*shadow=*/sel == 1 ? 3 : 0);
-    akira_display_text(cbx + (cbw - text_w("confirm")) / 2, btn_y + 5, "confirm",
-                       sel == 1 ? AKIRA_UI_INK : AKIRA_UI_PAPER);
+    for (int i = 0; i < 2; i++) {
+        int bxi = bx + 16 + i * (btn_w + 16);
+        bool sel = (g_confirm.sel == i);
 
-    akira_display_flush();
-}
-
-static bool confirm_dialog_loop(const char *capability_name, const char *question,
-                                bool (*should_cancel)(void))
-{
-    int W, H;
-    akira_display_get_size(&W, &H);
-    int bw = W - 80, bh = 160;
-    int bx = (W - bw) / 2, by = (H - bh) / 2;
-
-    int sel = 0; /* default to cancel — safest for a guarded action */
-    confirm_render(bx, by, bw, bh, capability_name, question, sel);
-
-    uint32_t prev = akira_input_get_bitmask();
-    while (true) {
-        if (should_cancel && should_cancel()) {
-            return false;
-        }
-        k_sleep(K_MSEC(20));
-        uint32_t now = akira_input_get_bitmask();
-        uint32_t pressed = now & ~prev; /* rising edges only */
-        prev = now;
-
-        if (pressed & (BIT(AKIRA_BTN_LEFT) | BIT(AKIRA_BTN_RIGHT))) {
-            sel ^= 1;
-            confirm_render(bx, by, bw, bh, capability_name, question, sel);
-        }
-        if (pressed & BIT(AKIRA_BTN_A)) {
-            return sel == 1;
-        }
-        if (pressed & BIT(AKIRA_BTN_B)) {
-            return false;
-        }
+        akira_ui_dither_card(bxi, btn_y, btn_w, btn_h, 8, sel, sel ? 3 : 1);
+        akira_display_text(bxi + (btn_w - text_w(labels[i])) / 2,
+                           btn_y + (btn_h - 10) / 2, labels[i],
+                           sel ? AKIRA_UI_INK : AKIRA_UI_PAPER);
     }
 }
 
-bool akira_ui_confirm_dialog(const char *capability_name, const char *question)
+static void confirm_key(uint32_t just)
 {
-    return confirm_dialog_loop(capability_name, question, NULL);
+    if (just & (BIT(AKIRA_BTN_LEFT) | BIT(AKIRA_BTN_RIGHT) |
+                BIT(AKIRA_BTN_UP) | BIT(AKIRA_BTN_DOWN))) {
+        g_confirm.sel ^= 1;
+        screen_invalidate();
+    }
+    if (just & BIT(AKIRA_BTN_A)) {
+        confirm_finish(g_confirm.sel == 1);
+    } else if (just & BIT(AKIRA_BTN_B)) {
+        confirm_finish(false);
+    }
 }
 
-bool akira_ui_confirm_dialog_cancelable(const char *capability_name, const char *question,
-                                        bool (*should_cancel)(void))
+static bool confirm_tick(void)
 {
-    return confirm_dialog_loop(capability_name, question, should_cancel);
+    if (g_confirm.should_cancel && g_confirm.should_cancel()) {
+        confirm_finish(false);
+    }
+    return false;
+}
+
+static void confirm_leave(void)
+{
+    /* Popped from outside (e.g. HOME long-press): answer "cancel". */
+    if (g_confirm.on_result) {
+        void (*cb)(bool, void *) = g_confirm.on_result;
+
+        g_confirm.on_result = NULL;
+        cb(false, g_confirm.ctx);
+    }
+}
+
+static const shell_screen_t g_confirm_screen = {
+    .name = "confirm",
+    .flags = SCR_F_MODAL,
+    .leave = confirm_leave,
+    .on_key = confirm_key,
+    .tick = confirm_tick,
+    .draw = confirm_draw,
+};
+
+void akira_ui_confirm_open(const char *capability_name, const char *question,
+                           bool (*should_cancel)(void),
+                           void (*on_result)(bool confirmed, void *ctx),
+                           void *ctx)
+{
+    if (screen_is_open(&g_confirm_screen)) {
+        /* One guarded question at a time: refuse the newcomer. */
+        if (on_result) {
+            on_result(false, ctx);
+        }
+        return;
+    }
+    snprintf(g_confirm.cap, sizeof(g_confirm.cap), "%s",
+             capability_name ? capability_name : "?");
+    snprintf(g_confirm.question, sizeof(g_confirm.question), "%s",
+             question ? question : "");
+    g_confirm.sel = 0; /* default to cancel — safest for a guarded action */
+    g_confirm.should_cancel = should_cancel;
+    g_confirm.on_result = on_result;
+    g_confirm.ctx = ctx;
+    screen_push(&g_confirm_screen, NULL);
 }

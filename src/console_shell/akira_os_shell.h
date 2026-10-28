@@ -11,7 +11,7 @@
  * display at boot and provides:
  *   - App launcher (home_screen)
  *   - App installation from SD card, BLE, and HTTP (sd_install_screen,
- *     install_progress_screen)
+ *     progress card in ui/overlay)
  *   - System settings (settings_screen and sub-screens)
  *   - Display ownership arbitration with WASM apps
  *   - HOME button (X, GPIO17) handler to return from any running WASM app
@@ -59,8 +59,8 @@ void akira_os_shell_notify_app_changed(void);
 /**
  * @brief Notify the shell that USB Mass Storage took/released the SD card.
  *
- * Shows/hides a blocking "USB Storage Connected" overlay so the user can't
- * try to launch a game the host currently owns.
+ * Shows/hides the "USB storage" lock screen so the user can't try to launch
+ * a game the host currently owns.
  * Safe to call from any thread.
  *
  * @param active true once MSC has taken the SD card, false once released.
@@ -88,6 +88,13 @@ void akira_shell_set_wasm_launching(void);
  * Must be called from the shell thread.
  */
 void akira_shell_abort_wasm_launch(void);
+
+/**
+ * @brief Lock now: enter the idle wait screen as if the idle timeout expired.
+ *
+ * Safe to call from any thread (posts to the shell's queue).
+ */
+void akira_os_shell_lock(void);
 
 #ifdef __cplusplus
 }

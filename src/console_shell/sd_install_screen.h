@@ -5,7 +5,7 @@
 
 /**
  * @file sd_install_screen.h
- * @brief SD card app browser and on-device installer.
+ * @brief SD card app browser and on-device runner.
  */
 
 #ifndef SD_INSTALL_SCREEN_H
@@ -16,14 +16,10 @@ extern "C" {
 #endif
 
 /**
- * @brief Build the SD install screen (call once at boot).
+ * @brief Push the SD app browser onto the shell's screen stack and scan
+ *        /SD:/apps/. B (or HOME long-press) pops back.
  */
-void sd_install_screen_create(void);
-
-/**
- * @brief Navigate to the SD install screen and scan /SD:/apps/.
- */
-void sd_install_screen_load(void);
+void sd_install_open(void);
 
 #ifdef __cplusplus
 }

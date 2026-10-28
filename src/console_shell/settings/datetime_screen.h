@@ -15,7 +15,8 @@
 extern "C" {
 #endif
 
-void datetime_screen_load(void);
+/** Settings → Date & time: push the screen on the shell's stack. */
+void datetime_open(void);
 
 #ifdef __cplusplus
 }

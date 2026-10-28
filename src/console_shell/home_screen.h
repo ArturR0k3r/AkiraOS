@@ -5,55 +5,23 @@
 
 /**
  * @file home_screen.h
- * @brief AkiraConsole OS Shell — HOME screen (app launcher).
- *
- * Pure akira_display_* renderer.  No LVGL dependency.
+ * @brief AkiraOS home launcher — the root screen of the shell's stack.
  */
 
 #ifndef HOME_SCREEN_H
 #define HOME_SCREEN_H
 
-#include <stdint.h>
+#include "ui/screen.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/**
- * @brief Initialise home screen state.  Call once at shell startup.
- */
-void home_screen_create(void);
+/** The launcher; pass to screen_init() as the root. */
+extern const shell_screen_t home_screen;
 
-/**
- * @brief Reload app list from app_manager and redraw the full screen.
- *
- * Safe to call any time the OS shell holds the display.
- */
+/** Re-read the installed-app list and repaint (app installed/removed/started). */
 void home_screen_refresh(void);
-
-/**
- * @brief Redraw the home screen (same as refresh but does not re-query apps).
- */
-void home_screen_load(void);
-
-/**
- * @brief Update the clock / battery strip.  Call every ~1 s from the shell loop.
- */
-void home_screen_update_status(void);
-
-/**
- * @brief Animation + dirty-flag tick.  Call every 20 ms from the shell loop.
- *        Internally gates the 1-second status refresh.
- */
-void home_screen_tick(void);
-
-/**
- * @brief Forward a button edge-bitmask for carousel / options navigation.
- *
- * @param just_pressed  Bits that just transitioned pressed this tick.
- *                      Bit N = BIT(AKIRA_BTN_*).
- */
-void home_screen_handle_key(uint32_t just_pressed);
 
 #ifdef __cplusplus
 }

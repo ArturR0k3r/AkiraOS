@@ -9,30 +9,33 @@ LOG_MODULE_REGISTER(akira_home_screen, CONFIG_AKIRA_LOG_LEVEL);
 
 /**
  * @file home_screen.c
- * @brief AkiraOS "Liquid Crystal" Home Screen.
+ * @brief AkiraOS home launcher — the root of the shell's screen stack.
  *
- * PS5-inspired horizontal carousel + slide-up options panel.
- * Pure akira_display_* renderer — no LVGL.
+ * Vertical carousel of Playdate-style dither cards + a slide-up options panel.
  *
  * Layout (320x240 landscape):
- *   y=  0..23   Status bar: segmented battery (left) | WiFi/BT icons (centre) | HH:MM:SS (right)
- *   y= 24       1 px white hairline separator
- *   y= 25..214  Carousel zone (190 px, idle)
- *   y=215       1 px white hairline separator
- *   y=216..239  Footer: "A-Open | B-Back | HOME-Options"
+ *   y=  0..25   status bar (screen framework)
+ *   y= 26..215  carousel band: focused card centred, neighbours above/below
+ *   y=216..239  footer hints (screen framework) — or the options panel,
+ *               which slides up over the lower part of the band
  *
- * Options panel (DOWN or HOME):
- *   Carousel compresses to y=25..94  (70 px, ~40%)
- *   Panel slides up from off-screen to y=95..239
- *
- * Animation: cubic ease-in-out, 10 frames x 20 ms = 200 ms.
+ * Moving the selection slides the whole stack one slot and pops the focused
+ * card; opening options shrinks the band while the panel rises.  All motion
+ * is time-based (ui/anim.h), so it runs at the same speed however fast the
+ * shell manages to draw.
  */
 
 #include "home_screen.h"
+#include "akiraplay_screen.h"
+#include "sd_install_screen.h"
 #include "settings_screen.h"
 #include "shell_theme.h"
+#include "status_model.h"
 #include "akira_os_shell.h"
 #include "ui/akira_ui.h"
+#include "ui/anim.h"
+#include "ui/overlay.h"
+#include "ui/screen.h"
 
 #include <zephyr/kernel.h>
 #include <string.h>
@@ -41,86 +44,33 @@ LOG_MODULE_REGISTER(akira_home_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include <api/akira_display_api.h>
 #include <api/akira_input_api.h>
 #include <runtime/app_manager/app_manager.h>
-#include <lib/akira_time.h>
 
-#if defined(CONFIG_SNTP)
-#include <zephyr/net/sntp.h>
-#endif
+/* ---- Geometry ------------------------------------------------------ */
+#define CAR_Y 26
+#define CAR_H_IDLE (FOOT_Y - CAR_Y)  /* 190 */
+#define CAR_H_OPT 88                 /* carousel height when options open */
 
-#if defined(CONFIG_WIFI) && defined(CONFIG_NET_MGMT)
-#include <zephyr/net/net_if.h>
-#include <zephyr/net/wifi_mgmt.h>
-#include <zephyr/net/net_mgmt.h>
-#endif
-
-#ifdef CONFIG_BT
-#include <connectivity/bluetooth/bt_manager.h>
-#endif
-
-#ifdef CONFIG_AKIRA_POWER_MANAGER
-#include <drivers/power/power_manager.h>
-#endif
-
-/* ---- Screen geometry (home-screen specific) --------------------- */
-#define SBAR_Y 0
-
-#define CAR_Y 25
-#define CAR_H_IDLE 190
-#define CAR_H_OPT 120 /* carousel height when options open */
-
-#define FOOT_Y 216
-#define FOOT_H 24
-
-/* options panel always starts at CAR_Y + CAR_H_OPT */
-#define OPT_PANEL_Y (CAR_Y + CAR_H_OPT) /* 83 */
-#define OPT_HDR_H 4                     /* hairline gap only, no title */
-#define OPT_ITEM_H 40
+/* options panel top when fully open */
+#define OPT_PANEL_Y (CAR_Y + CAR_H_OPT) /* 114 */
+#define OPT_ITEM_H 32
 
 /* options panel button geometry (leave right strip for scrollbar) */
 #define OPT_BTN_X 8
-#define OPT_BTN_W (SCR_W - 30)  /* 290 px — leaves 22 px for scrollbar */
-#define OPT_TXT_PAD 10          /* inner horizontal text padding */
-#define OPT_SBAR_X (SCR_W - 14) /* scrollbar track x */
-#define OPT_SBAR_W 7            /* scrollbar track width */
+#define OPT_BTN_W (SCR_W - 30)
+#define OPT_SBAR_X (SCR_W - 14)
+#define OPT_SBAR_W 7
 
-/* ---- Animation --------------------------------------------------- */
-#define ANIM_FRAMES 10
+/* carousel cards */
+#define CARD_SEL_H 58
+#define CARD_ADJ_H 40
+#define CARD_GAP 8
+#define CARD_STRIDE (CARD_ADJ_H + CARD_GAP)
 
-typedef struct
-{
-    int start, end, frame;
-} anim_t;
-
-static int ease_inout(int t)
-{
-    int t2 = t * t / 256;
-    int t3 = t2 * t / 256;
-    int v = 3 * t2 - 2 * t3;
-    return (v > 255) ? 255 : (v < 0 ? 0 : v);
-}
-
-static int anim_value(const anim_t *a)
-{
-    if (a->frame >= ANIM_FRAMES)
-        return a->end;
-    if (a->frame <= 0)
-        return a->start;
-    int t = a->frame * 255 / (ANIM_FRAMES - 1);
-    return a->start + (a->end - a->start) * ease_inout(t) / 255;
-}
-
-static bool anim_running(const anim_t *a) { return a->frame < ANIM_FRAMES; }
-static void anim_start(anim_t *a, int s, int e)
-{
-    a->start = s;
-    a->end = e;
-    a->frame = 0;
-}
-static void anim_step(anim_t *a)
-{
-    if (a->frame < ANIM_FRAMES)
-        a->frame++;
-}
+/* ---- Motion -------------------------------------------------------- */
+#define PANEL_MS 260
+#define SLIDE_MS 200
+#define POP_MS 220
+#define POP_PX 8
 
 /* ---- Icons (20x16 px, 1-bit, bit31=leftmost) -------------------- */
 #define ICON_W 20
@@ -198,7 +148,7 @@ static const uint32_t ICON_GAMES[ICON_H] = {
     0b00000000000000000000000000000000u,
     0b00000000000000000000000000000000u,
 };
-static const uint32_t ICON_STORE[ICON_H] = {
+static const uint32_t ICON_STORE[ICON_H] __maybe_unused = {
     0b00000000111100000000000000000000u,
     0b00000001000010000000000000000000u,
     0b00000001000010000000000000000000u,
@@ -270,60 +220,6 @@ static const uint32_t ICON_INFO[ICON_H] = {
     0b00000000000000000000000000000000u,
     0b00000000000000000000000000000000u,
 };
-static const uint32_t ICON_WIFI[ICON_H] = {
-    0b00001111111111110000000000000000u,
-    0b00111000000000011100000000000000u,
-    0b01100000000000000110000000000000u,
-    0b10000111111111100001000000000000u,
-    0b00001100000001100000000000000000u,
-    0b00000011111110000000000000000000u,
-    0b00000000110000000000000000000000u,
-    0b00000001111000000000000000000000u,
-    0b00000001111000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-};
-static const uint32_t ICON_BT[ICON_H] = {
-    0b00000011000000000000000000000000u,
-    0b00000101000000000000000000000000u,
-    0b00010011000000000000000000000000u,
-    0b00001101000000000000000000000000u,
-    0b00000011000000000000000000000000u,
-    0b00001101000000000000000000000000u,
-    0b00010011000000000000000000000000u,
-    0b00000101000000000000000000000000u,
-    0b00000011000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-};
-static const uint32_t ICON_BATTERY[ICON_H] = {
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b11111111111111110000000000000000u,
-    0b10000000000000010110000000000000u,
-    0b10111111111111010110000000000000u,
-    0b10111111111111010110000000000000u,
-    0b10000000000000010000000000000000u,
-    0b11111111111111110000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-    0b00000000000000000000000000000000u,
-};
 
 /* ---- Tile model -------------------------------------------------- */
 typedef enum
@@ -336,48 +232,34 @@ typedef struct
 {
     tile_type_t type;
     char name[APP_NAME_MAX_LEN];
+    const char *blurb;
     const uint32_t *icon;
     app_state_t state;
     void (*action)(void);
 } ui_tile_t;
 
-static void action_settings(void);
-static void action_sdcard(void);
 static void action_sysinfo(void);
-#if defined(CONFIG_AKIRA_WIFI_MANAGER)
-static void action_akiraplay(void);
-#endif
 
+static const ui_tile_t BUILTINS[] = {
+    {TILE_BUILTIN, "SETTINGS", "Wi-Fi, display, power", ICON_SETTINGS, 0, settings_open},
+    {TILE_BUILTIN, "SD CARD", "Install apps from SD", ICON_SDCARD, 0, sd_install_open},
+    {TILE_BUILTIN, "SYS INFO", "About this console", ICON_INFO, 0, action_sysinfo},
 #if defined(CONFIG_AKIRA_WIFI_MANAGER)
-#define BUILTIN_COUNT 4
-#else
-#define BUILTIN_COUNT 3
-#endif
-static const ui_tile_t BUILTINS[BUILTIN_COUNT] = {
-    {TILE_BUILTIN, "SETTINGS", ICON_SETTINGS, 0, action_settings},
-    {TILE_BUILTIN, "SD CARD", ICON_SDCARD, 0, action_sdcard},
-    {TILE_BUILTIN, "SYS INFO", ICON_INFO, 0, action_sysinfo},
-#if defined(CONFIG_AKIRA_WIFI_MANAGER)
-    {TILE_BUILTIN, "AKIRA PLAY", ICON_STORE, 0, action_akiraplay},
+    {TILE_BUILTIN, "AKIRA PLAY", "Browse the app store", ICON_STORE, 0, akiraplay_open},
 #endif
 };
+#define BUILTIN_COUNT ARRAY_SIZE(BUILTINS)
 
 #define MAX_ALL_TILES (CONFIG_AKIRA_APP_MAX_INSTALLED + BUILTIN_COUNT)
 static ui_tile_t g_all_tiles[MAX_ALL_TILES] __attribute__((section(".ext_ram.bss")));
 static int g_total_tiles;
-static int g_last_n_installed;
+static int g_last_n_installed = -1;
 
 /* ---- Carousel state --------------------------------------------- */
 static int g_sel;
-static bool g_visible;
 
 /* ---- Options panel state ---------------------------------------- */
-typedef enum
-{
-    UI_HOME,
-    UI_OPTIONS
-} ui_state_t;
-static ui_state_t g_ui_state;
+static bool g_opts_open;
 static int g_opts_focused;
 static int g_opts_scroll;
 static int g_opts_count;
@@ -388,584 +270,193 @@ static const char *s_opts_wasm[OPTS_WASM_COUNT] = {"START", "UNINSTALL", "CANCEL
 static const char *s_opts_builtin[OPTS_BUILTIN_COUNT] = {"OPEN", "CANCEL"};
 
 /* ---- Animation state -------------------------------------------- */
-static anim_t g_anim_car_h;
-static anim_t g_anim_panel_y;
-static anim_t g_anim_focus_pop; /* focus tile vertical pop (px below → 0) */
-static bool g_dirty;
-
-/* ---- XMB ribbon -------------------------------------------------- */
-/* 64-entry full-period sine, amplitude ±20 px */
-static const int8_t XMB_SINE[64] = {
-    0, 2, 4, 6, 8, 9, 11, 13, 14, 15, 17, 18, 18, 19, 20, 20,
-    20, 20, 20, 19, 18, 18, 17, 15, 14, 13, 11, 9, 8, 6, 4, 2,
-    0, -2, -4, -6, -8, -9, -11, -13, -14, -15, -17, -18, -18, -19, -20, -20,
-    -20, -20, -20, -19, -18, -18, -17, -15, -14, -13, -11, -9, -8, -6, -4, -2};
-static uint8_t g_xmb_phase; /* 0..63, slowly advances each tick */
-static uint8_t g_xmb_tick;  /* sub-tick counter for phase rate */
-#define XMB_TICK_DIV 2      /* advance phase every N ticks (~100 ms/step, ~6.4 s/cycle) */
-
-/* Ambient-animation idle gate.
- *
- * The ribbon is decorative, but advancing its phase sets g_dirty, and every
- * dirty tick costs a full_redraw(): ~192 KB of writes into the PSRAM
- * framebuffer, then a full re-read + bit-pack + 12 KB memcmp + a full-width SPI
- * flush in akira_display_hal_flush().  At 10 Hz, forever, that is the single
- * largest power draw while the screen is on — and nobody is watching it.
- *
- * So we freeze the ribbon after CONFIG_AKIRA_XMB_IDLE_FREEZE_S with no input
- * and resume on the next keypress.  Transition animations (car_h, panel_y,
- * focus_pop) are untouched: they are user-triggered and last a few hundred ms.
- */
-static int64_t g_last_activity_ms;
-
-static inline void home_note_activity(void)
-{
-    g_last_activity_ms = k_uptime_get();
-}
-
-static inline bool home_ambient_anim_enabled(void)
-{
-#if CONFIG_AKIRA_XMB_IDLE_FREEZE_S > 0
-    return (k_uptime_get() - g_last_activity_ms) <
-           ((int64_t)CONFIG_AKIRA_XMB_IDLE_FREEZE_S * 1000);
-#else
-    return true;
-#endif
-}
-
-#define POP_PX 8 /* max drop distance for the focus pop */
-/* Start mid-curve so the pop only runs the ease-out tail (~6 frames, 120 ms) */
-static void anim_start_pop(anim_t *a)
-{
-    a->start = POP_PX;
-    a->end = 0;
-    a->frame = ANIM_FRAMES - 6;
-}
-
-/* ---- Clock / battery / connectivity ----------------------------- */
-static char g_time_str[10] = "00:00:00";
-static char g_batt_str[8] = "--";
-static bool g_wifi_conn;
-static bool g_bt_conn;
-static bool g_sntp_done; /* true once SNTP sync succeeded or gave up   */
-
-#if defined(CONFIG_SNTP)
-/* Wait 8 s after WiFi connect — gives DHCP + DNS time to settle fully */
-#define SNTP_INITIAL_DELAY_S 8
-#define SNTP_MAX_RETRIES 5
-
-/* Fallback NTP server IP (Google) used when DNS resolution of the
- * hostname fails (-ENOENT from sntp_simple).  No DNS needed for this. */
-#define SNTP_FALLBACK_IP "216.239.35.0"
-
-static struct k_work_delayable g_sntp_work;
-static uint8_t g_sntp_retries;
-
-static void sntp_work_handler(struct k_work *work)
-{
-    ARG_UNUSED(work);
-    if (g_sntp_done)
-    {
-        return;
-    }
-    struct sntp_time st;
-
-    /* First try the hostname; if DNS fails fall back to IP immediately */
-    int r = sntp_simple("pool.ntp.org", 4000, &st);
-    if (r == -ENOENT)
-    {
-        LOG_WRN("SNTP DNS failed, trying fallback IP " SNTP_FALLBACK_IP);
-        r = sntp_simple(SNTP_FALLBACK_IP, 4000, &st);
-    }
-
-    if (r == 0)
-    {
-        akira_time_set_epoch((int64_t)st.seconds);
-        LOG_INF("SNTP sync OK: epoch %lld", (long long)st.seconds);
-        g_sntp_done = true;
-    }
-    else
-    {
-        g_sntp_retries++;
-        LOG_WRN("SNTP sync failed (%u/%u): %d",
-                g_sntp_retries, SNTP_MAX_RETRIES, r);
-        if (g_sntp_retries < SNTP_MAX_RETRIES)
-        {
-            /* Exponential backoff: 10 s, 20 s, 40 s, 60 s */
-            static const uint8_t delays_s[] = {10, 20, 40, 60};
-            uint8_t idx = g_sntp_retries - 1;
-            if (idx >= ARRAY_SIZE(delays_s))
-            {
-                idx = ARRAY_SIZE(delays_s) - 1;
-            }
-            k_work_reschedule(&g_sntp_work, K_SECONDS(delays_s[idx]));
-        }
-        else
-        {
-            g_sntp_done = true; /* give up after max retries */
-        }
-    }
-}
-#endif /* CONFIG_SNTP */
+static anim_t g_anim_car_h;   /* carousel band height */
+static anim_t g_anim_panel_y; /* options panel top */
+static anim_t g_anim_slide;   /* stack offset after a selection move (px → 0) */
+static anim_t g_anim_pop;     /* focused card drop (px → 0) */
 
 /* ================================================================== */
 /* Draw helpers                                                        */
 /* ================================================================== */
 
-static void draw_icon_nx(int x, int y, int scale,
-                         const uint32_t *icon, uint16_t fg, uint16_t bg)
-{
-    for (int r = 0; r < ICON_H; r++)
-    {
-        uint32_t bits = icon[r];
-        for (int c = 0; c < ICON_W; c++)
-        {
-            uint16_t pc = (bits & (1u << (31 - c))) ? fg : bg;
-            akira_display_rect(x + c * scale, y + r * scale, scale, scale, pc);
-        }
-    }
-}
-
-static void draw_centred_text(int x, int y, int w, const char *s,
-                              uint16_t fg, uint16_t bg)
+static void draw_centred_text(int x, int y, int w, const char *s, uint16_t fg)
 {
     char clipped[64];
-    int max_chars = w / 8;
-    if (max_chars < 1)
-        max_chars = 1;
+    int max_chars = MAX(w / 8, 1);
     int slen = (int)strlen(s);
+
     if (slen > max_chars)
     {
         int keep = max_chars > 2 ? max_chars - 2 : max_chars;
-        strncpy(clipped, s, keep);
-        if (max_chars > 2)
-        {
-            clipped[keep] = '.';
-            clipped[keep + 1] = '.';
-            clipped[keep + 2] = '\0';
-        }
-        else
-            clipped[keep] = '\0';
+        snprintf(clipped, sizeof(clipped), "%.*s%s", keep, s, max_chars > 2 ? ".." : "");
         s = clipped;
     }
     int tw = (int)strlen(s) * 8;
-    int lx = x + (tw < w ? (w - tw) / 2 : 0);
-    akira_display_rect(x, y, w, 10, bg);
-    akira_display_text(lx, y, s, fg);
-}
-
-/*
- * glass_rect — Liquid Glass panel (reference-matched).
- *
- * Layers (outer → inner):
- *   1. Frosted gray body fill
- *   2. Outer white rim  — bright lit glass edge
- *   3. Inner dark rim   — glass wall depth/shadow
- *   4. Top highlight    — horizontal sheen across top third
- *   5. Top-left glint   — bright white oval, like the reference image
- */
-static void glass_rect(int x, int y, int w, int h, int r)
-{
-    /* 1. Black fill (transparent/glass look on black bg) */
-    akira_display_rounded_rect_fill(x, y, w, h, r, C_BLACK);
-    /* 2. Outer bright rim */
-    akira_display_rounded_rect(x, y, w, h, r, C_WHITE);
-    /* 3. Inner dark rim */
-    if (w > 4 && h > 4)
-    {
-        int ri = (r > 1) ? r - 1 : 0;
-        akira_display_rounded_rect(x + 1, y + 1, w - 2, h - 2, ri, C_DKGRAY);
-    }
-    /* 4. Top sheen — inset by r to follow corner curve */
-    int ti = r + 2;
-    if (w > ti * 2 && h > 6)
-    {
-        akira_display_hline(x + ti, y + 3, w - ti * 2, C_GLASS_HILIT);
-    }
-    /* 5. Top-left corner glint */
-    if (w > 12 && h > 7)
-    {
-        int gw = w / 5;
-        if (gw > 14)
-            gw = 14;
-        akira_display_rect(x + ti, y + 3, gw, 2, C_WHITE);
-        if (gw > 4)
-            akira_display_hline(x + ti, y + 5, gw / 2, C_GLASS_HILIT);
-    }
-    /* 6. Bottom reflection sheen — inset by r */
-    if (w > ti * 2 && h > 8)
-    {
-        akira_display_hline(x + ti, y + h - 4, w - ti * 2, C_DKGRAY);
-    }
-    /* 7. Bottom-right glint */
-    if (w > 12 && h > 9)
-    {
-        int gw = w / 6;
-        if (gw > 10)
-            gw = 10;
-        akira_display_hline(x + w - ti - gw, y + h - 4, gw, C_GLASS_HILIT);
-    }
-}
-
-/*
- * glass_rect_focus — Selected/active Liquid Glass panel.
- * Double white rim (thicker bright edge) + all body layers.
- */
-static void glass_rect_focus(int x, int y, int w, int h, int r)
-{
-    /* 1. Black fill (glass look) */
-    akira_display_rounded_rect_fill(x, y, w, h, r, C_BLACK);
-    /* 2. Outer rim */
-    akira_display_rounded_rect(x, y, w, h, r, C_WHITE);
-    /* 3. Second white rim — thick lit glass wall */
-    if (w > 2 && h > 2)
-    {
-        int r1 = (r > 0) ? r - 1 : 0;
-        akira_display_rounded_rect(x + 1, y + 1, w - 2, h - 2, r1, C_WHITE);
-    }
-    /* 4. Inner dark depth rim */
-    if (w > 6 && h > 6)
-    {
-        int r2 = (r > 1) ? r - 2 : 0;
-        akira_display_rounded_rect(x + 2, y + 2, w - 4, h - 4, r2, C_DKGRAY);
-    }
-    /* 5. Top sheen — inset by r to follow corner curve */
-    int ti = r + 3;
-    if (w > ti * 2 && h > 8)
-    {
-        akira_display_hline(x + ti, y + 4, w - ti * 2, C_GLASS_HILIT);
-    }
-    /* 6. Top-left glint */
-    if (w > 14 && h > 9)
-    {
-        int gw = w / 5;
-        if (gw > 16)
-            gw = 16;
-        akira_display_rect(x + ti, y + 4, gw, 2, C_WHITE);
-        if (gw > 4)
-            akira_display_hline(x + ti, y + 6, gw / 2, C_GLASS_HILIT);
-    }
-    /* 7. Bottom reflection sheen — inset by r */
-    if (w > ti * 2 && h > 10)
-    {
-        akira_display_hline(x + ti, y + h - 5, w - ti * 2, C_DKGRAY);
-    }
-    /* 8. Bottom-right glint */
-    if (w > 14 && h > 11)
-    {
-        int gw = w / 6;
-        if (gw > 12)
-            gw = 12;
-        akira_display_hline(x + w - ti - gw, y + h - 5, gw, C_WHITE);
-        akira_display_hline(x + w - ti - gw, y + h - 4, gw / 2, C_GLASS_HILIT);
-    }
-}
-
-/*
- * glass_rect_dim — Dimmed Liquid Glass panel (non-focused / adjacent tiles).
- * Same shape as glass_rect but uses dark rim and a subtle dim glint.
- */
-static void glass_rect_dim(int x, int y, int w, int h, int r)
-{
-    /* 1. Black fill */
-    akira_display_rounded_rect_fill(x, y, w, h, r, C_BLACK);
-    /* 2. Dark outer rim */
-    akira_display_rounded_rect(x, y, w, h, r, C_DKGRAY);
-    /* 3. Inner shadow rim */
-    if (w > 4 && h > 4)
-    {
-        int ri = (r > 1) ? r - 1 : 0;
-        akira_display_rounded_rect(x + 1, y + 1, w - 2, h - 2, ri, C_BLACK);
-    }
-    /* 4. Dim top sheen — inset by r */
-    int ti = r + 2;
-    if (w > ti * 2 && h > 6)
-    {
-        akira_display_hline(x + ti, y + 3, w - ti * 2, C_DKGRAY);
-    }
-    /* 5. Dim glint strip */
-    if (w > 12 && h > 7)
-    {
-        int gw = w / 5;
-        if (gw > 14)
-            gw = 14;
-        akira_display_hline(x + ti, y + 3, gw, C_GRAY);
-    }
-    /* 6. Bottom dim reflection — inset by r */
-    if (w > ti * 2 && h > 8)
-    {
-        akira_display_hline(x + ti, y + h - 4, w - ti * 2, C_BLACK);
-    }
-    /* 7. Bottom-right dim glint */
-    if (w > 12 && h > 9)
-    {
-        int gw = w / 6;
-        if (gw > 10)
-            gw = 10;
-        akira_display_hline(x + w - ti - gw, y + h - 4, gw, C_DKGRAY);
-    }
-}
-
-/* ================================================================== */
-/* Status bar                                                          */
-/* ================================================================== */
-
-static void draw_status_bar(void)
-{
-    /* Shared chrome: the kit's one inverted top bar (akira_ui). The carousel
-     * below stays a bespoke screen — only this chrome is migrated. */
-    int batt_pct = -1;
-    if (g_batt_str[0] && g_batt_str[0] != '-')
-    {
-        batt_pct = 0;
-        for (int i = 0; g_batt_str[i] && g_batt_str[i] != '%'; i++)
-        {
-            if (g_batt_str[i] >= '0' && g_batt_str[i] <= '9')
-            {
-                batt_pct = batt_pct * 10 + (g_batt_str[i] - '0');
-            }
-        }
-        if (batt_pct > 100)
-            batt_pct = 100;
-    }
-
-    akira_ui_status_t sb = {
-        .title = NULL,
-        .clock = g_time_str,
-        .battery_pct = batt_pct,
-        .show_wifi = true,
-        .wifi_on = g_wifi_conn,
-        .show_bt = true,
-        .bt_on = g_bt_conn,
-        .icon_wifi = ICON_WIFI,
-        .icon_bt = ICON_BT,
-    };
-    akira_ui_status_bar(&sb);
-}
-
-/* ================================================================== */
-/* Footer                                                              */
-/* ================================================================== */
-
-static void draw_footer(void)
-{
-    akira_display_hline(0, FOOT_Y - 1, SCR_W, C_WHITE);
-    akira_display_rect(0, FOOT_Y, SCR_W, FOOT_H, C_BLACK);
-    akira_display_text(8, FOOT_Y + 7, "A-Open", C_WHITE);
-    const char *right = "B-Back";
-    int rw = (int)strlen(right) * 8;
-    akira_display_text(SCR_W - rw - 8, FOOT_Y + 7, right, C_WHITE);
+    akira_display_text(x + (tw < w ? (w - tw) / 2 : 0), y, s, fg);
 }
 
 /* ================================================================== */
 /* Carousel                                                            */
 /* ================================================================== */
 
-#define CAR_SLOT_W 108    /* centre-to-adjacent spacing */
-#define CAR_FOCUS_SCALE 4 /* 80x64 icon at full height */
-#define CAR_ADJ_SCALE 2
-#define CAR_ADJ_SINK 10 /* px: neighbours sink below focus baseline (perspective) */
-#define CAR_LABEL_H 10
-
 /*
- * draw_xmb_ribbon — curved glowing horizon, PS3/XMB style.
- * Draws 7-row glow (±3 px) following a sine curve; slowly drifts via g_xmb_phase.
- * Each of 64 LUT segments maps to ~5 px of screen width → drawn as short hlines.
+ * draw_carousel — the focused tile centred in the band, neighbours stacked
+ * above and below.  Cards may extend past the band edges mid-slide: the
+ * status bar, the footer and the options panel are all painted afterwards
+ * and mask them.
  */
-static void draw_xmb_ribbon(int cy, int car_bot)
+static void draw_carousel(int car_h)
 {
-    for (int seg = 0; seg < 64; seg++)
-    {
-        int lut_i = (seg + g_xmb_phase) & 63;
-        int ry = cy + XMB_SINE[lut_i];
-        int x0 = seg * SCR_W / 64;
-        int x1 = (seg + 1) * SCR_W / 64;
-        int w = x1 - x0;
-        if (ry - 3 >= CAR_Y && ry - 3 < car_bot)
-            akira_display_hline(x0, ry - 3, w, C_DKGRAY);
-        if (ry - 2 >= CAR_Y && ry - 2 < car_bot)
-            akira_display_hline(x0, ry - 2, w, C_DKGRAY);
-        if (ry - 1 >= CAR_Y && ry - 1 < car_bot)
-            akira_display_hline(x0, ry - 1, w, C_GRAY);
-        if (ry >= CAR_Y && ry < car_bot)
-            akira_display_hline(x0, ry, w, C_WHITE);
-        if (ry + 1 >= CAR_Y && ry + 1 < car_bot)
-            akira_display_hline(x0, ry + 1, w, C_GRAY);
-        if (ry + 2 >= CAR_Y && ry + 2 < car_bot)
-            akira_display_hline(x0, ry + 2, w, C_DKGRAY);
-        if (ry + 3 >= CAR_Y && ry + 3 < car_bot)
-            akira_display_hline(x0, ry + 3, w, C_DKGRAY);
-    }
-}
-
-/*
- * draw_carousel — only 3 tiles visible: -1, 0, +1.
- * Focus scale shrinks automatically when car_h is compressed.
- * dimmed = true when options panel is open (no white focus bg).
- */
-static void draw_carousel(int car_h, bool dimmed)
-{
-    akira_display_rect(0, CAR_Y, SCR_W, car_h, C_BLACK);
-
     if (g_total_tiles == 0)
     {
-        draw_centred_text(0, CAR_Y + car_h / 2 - 5, SCR_W, "NO APPS", C_GRAY, C_BLACK);
+        draw_centred_text(0, CAR_Y + car_h / 2 - 5, SCR_W, "NO APPS", C_GRAY);
         return;
     }
 
-    /* Vertical carousel of Playdate dither-shadow cards: the focused app is a
-     * large filled card centred in the band, neighbours are smaller idle cards
-     * stacked above/below. */
     int cx = SCR_W / 2;
     int cy = CAR_Y + car_h / 2;
-    int focus_pop_y = anim_value(&g_anim_focus_pop);
-
-    const int sel_h = 58, adj_h = 40, gap = 8;
-    const int card_w = SCR_W - 40;
+    int slide = anim_value(&g_anim_slide);
+    int pop = anim_value(&g_anim_pop);
+    const int card_w = SCR_W - 52;
 
     /* Draw neighbours first, focus last so its shadow sits on top. */
     for (int pass = 0; pass < 2; pass++)
     {
-        for (int slot = -2; slot <= 2; slot++)
+        for (int slot = -3; slot <= 3; slot++)
         {
             bool is_focus = (slot == 0);
             if ((pass == 0) == is_focus)
                 continue;
-
-            int idx = ((g_sel + slot) % g_total_tiles + g_total_tiles) % g_total_tiles;
-            int ch = is_focus ? sel_h : adj_h;
-            int cw = is_focus ? card_w : card_w - 28;
-            int cardx = cx - cw / 2;
-            int cardy = cy - ch / 2 + slot * (adj_h + gap);
-            if (is_focus)
-                cardy += focus_pop_y;
-            /* Only draw cards fully inside the band so nothing overlaps the
-             * status-bar header (above CAR_Y) or the footer. */
-            if (cardy < CAR_Y || cardy + ch > CAR_Y + car_h)
+            if (g_total_tiles < 2 && !is_focus)
                 continue;
 
-            akira_ui_dither_card(cardx, cardy, cw, ch, 12, is_focus,
-                                 is_focus ? 5 : 2);
+            int idx = ((g_sel + slot) % g_total_tiles + g_total_tiles) % g_total_tiles;
+            int ch = is_focus ? CARD_SEL_H : CARD_ADJ_H;
+            int cw = is_focus ? card_w : card_w - 28;
+            int cardx = cx - cw / 2 - 6;
+            /* Neighbours sit a selected-card's half-height away from centre. */
+            int base = (slot == 0) ? -ch / 2
+                     : (slot < 0) ? -CARD_SEL_H / 2 - CARD_GAP + slot * CARD_STRIDE + CARD_GAP
+                                  : CARD_SEL_H / 2 + CARD_GAP + (slot - 1) * CARD_STRIDE;
+            int cardy = cy + base + slide + (is_focus ? pop : 0);
+
+            if (cardy > CAR_Y + car_h || cardy + ch < CAR_Y - 4)
+                continue;
+
+            akira_ui_dither_card(cardx, cardy, cw, ch, 12, is_focus, is_focus ? 5 : 2);
 
             uint16_t fg = is_focus ? C_BLACK : C_WHITE; /* content on the card */
             uint16_t bg = is_focus ? C_WHITE : C_BLACK;
 
             int isc = is_focus ? 2 : 1;
             int iw = ICON_W * isc, ih = ICON_H * isc;
-            int iy = cardy + (ch - ih) / 2;
-            akira_ui_icon_1bpp(cardx + 18, iy, isc, g_all_tiles[idx].icon,
-                               ICON_W, ICON_H, fg, bg, AKIRA_UI_TRANSPARENT);
+            akira_ui_icon_1bpp(cardx + 16, cardy + (ch - ih) / 2, isc,
+                               g_all_tiles[idx].icon, ICON_W, ICON_H, fg, bg,
+                               AKIRA_UI_TRANSPARENT);
 
             char upper[32] = {0};
             for (int i = 0; g_all_tiles[idx].name[i] && i < 31; i++)
             {
                 upper[i] = (char)toupper((unsigned char)g_all_tiles[idx].name[i]);
             }
-            akira_display_text(cardx + 18 + iw + 14, cardy + (ch - 10) / 2,
-                               upper, fg);
+            int tx = cardx + 16 + iw + 14;
+            if (is_focus)
+            {
+                const char *blurb = g_all_tiles[idx].blurb
+                                        ? g_all_tiles[idx].blurb
+                                        : (g_all_tiles[idx].state == APP_STATE_RUNNING
+                                               ? "Running"
+                                               : "Installed app");
+                akira_display_text(tx, cardy + ch / 2 - 12, upper, fg);
+                akira_display_text(tx, cardy + ch / 2 + 3, blurb, SHELL_C_DKGRAY);
+            }
+            else
+            {
+                akira_display_text(tx, cardy + (ch - 10) / 2, upper, fg);
+            }
         }
     }
-    (void)dimmed;
+
+    /* Position dots down the right edge — where am I in the list. */
+    if (g_total_tiles > 1 && g_total_tiles <= 16)
+    {
+        int dot_gap = 9;
+        int top = cy - (g_total_tiles - 1) * dot_gap / 2;
+        for (int i = 0; i < g_total_tiles; i++)
+        {
+            int dy = top + i * dot_gap;
+            if (i == g_sel)
+                akira_display_rounded_rect_fill(SCR_W - 13, dy - 4, 6, 8, 3, C_WHITE);
+            else
+                akira_display_circle_fill(SCR_W - 10, dy, 1, C_GRAY);
+        }
+    }
 }
 
 /* ================================================================== */
 /* Options panel                                                       */
 /* ================================================================== */
 
+static const char **opts_labels(void)
+{
+    if (g_sel >= 0 && g_sel < g_total_tiles && g_all_tiles[g_sel].type == TILE_BUILTIN)
+    {
+        return s_opts_builtin;
+    }
+    s_opts_wasm[0] = (g_sel >= 0 && g_sel < g_total_tiles &&
+                      g_all_tiles[g_sel].state == APP_STATE_RUNNING)
+                         ? "STOP"
+                         : "START";
+    return s_opts_wasm;
+}
+
+static int opts_visible(void)
+{
+    /* The panel ends where the footer hint bar begins. */
+    return MAX((FOOT_Y - OPT_PANEL_Y - 4) / OPT_ITEM_H, 1);
+}
+
 static void draw_options_panel(int panel_y)
 {
     if (panel_y >= SCR_H)
         return;
 
-    const char **labels;
-    if (g_sel >= 0 && g_sel < g_total_tiles &&
-        g_all_tiles[g_sel].type == TILE_BUILTIN)
-    {
-        labels = s_opts_builtin;
-    }
-    else
-    {
-        labels = s_opts_wasm;
-        s_opts_wasm[0] = (g_sel >= 0 && g_sel < g_total_tiles &&
-                          g_all_tiles[g_sel].state == APP_STATE_RUNNING)
-                             ? "STOP"
-                             : "START";
-    }
+    const char **labels = opts_labels();
+    int vis = opts_visible();
 
-    int ph = SCR_H - panel_y;
+    /* Panel: background up from panel_y with a dotted rule on top. */
+    akira_display_rect(0, panel_y, SCR_W, SCR_H - panel_y, C_BLACK);
+    for (int x = 0; x < SCR_W; x += 2)
+        akira_display_pixel(x, panel_y, C_WHITE);
 
-    /* Double hairline at panel top, black fill below */
-    akira_display_hline(0, panel_y, SCR_W, C_WHITE);
-    akira_display_hline(0, panel_y + 1, SCR_W, C_WHITE);
-    akira_display_rect(0, panel_y + OPT_HDR_H, SCR_W, ph - OPT_HDR_H, C_BLACK);
-
-    /* Items */
-    int items_y = panel_y + OPT_HDR_H + 6;
-    int content_h = SCR_H - items_y - 4;
-    int vis = content_h / OPT_ITEM_H;
-    if (vis < 1)
-        vis = 1;
-
-    if (g_opts_scroll > g_opts_count - vis)
-        g_opts_scroll = g_opts_count - vis;
-    if (g_opts_scroll < 0)
-        g_opts_scroll = 0;
+    int items_y = panel_y + 4;
 
     for (int i = g_opts_scroll; i < g_opts_count && i < g_opts_scroll + vis; i++)
     {
         int iy = items_y + (i - g_opts_scroll) * OPT_ITEM_H;
         bool hi = (i == g_opts_focused);
-        int ty = iy + 3 + (OPT_ITEM_H - 6 - 10) / 2;
 
-        akira_ui_dither_card(OPT_BTN_X, iy + 3, OPT_BTN_W, OPT_ITEM_H - 6, 8, hi,
-                             hi ? 3 : 2);
-        draw_centred_text(OPT_BTN_X + OPT_TXT_PAD, ty,
-                          OPT_BTN_W - OPT_TXT_PAD * 2, labels[i],
-                          hi ? C_BLACK : C_WHITE, hi ? C_WHITE : C_BLACK);
+        akira_ui_dither_card(OPT_BTN_X, iy + 2, OPT_BTN_W, OPT_ITEM_H - 6, 8, hi, hi ? 3 : 2);
+        draw_centred_text(OPT_BTN_X + 10, iy + 2 + (OPT_ITEM_H - 6 - 10) / 2,
+                          OPT_BTN_W - 20, labels[i], hi ? C_BLACK : C_WHITE);
     }
 
     /* Scrollbar — only shown when content overflows */
     if (g_opts_count > vis)
     {
-        int track_y = items_y;
         int track_h = vis * OPT_ITEM_H;
-        akira_display_rect(OPT_SBAR_X, track_y, OPT_SBAR_W, track_h, C_BLACK);
-        int thumb_h = track_h * vis / g_opts_count;
-        if (thumb_h < 8)
-            thumb_h = 8;
-        int max_off = g_opts_count - vis;
-        int thumb_y = track_y +
-                      (track_h - thumb_h) * g_opts_scroll / max_off;
-        akira_display_rect(OPT_SBAR_X, thumb_y, OPT_SBAR_W, thumb_h, C_WHITE);
+        int thumb_h = MAX(track_h * vis / g_opts_count, 8);
+        int thumb_y = items_y + (track_h - thumb_h) * g_opts_scroll / (g_opts_count - vis);
+
+        akira_display_vline(OPT_SBAR_X + OPT_SBAR_W / 2, items_y, track_h, C_DKGRAY);
+        akira_display_rounded_rect_fill(OPT_SBAR_X, thumb_y, OPT_SBAR_W, thumb_h, 3, C_WHITE);
     }
 }
 
-/* ================================================================== */
-/* Full redraw                                                         */
-/* ================================================================== */
-
-static void full_redraw(void)
+static void home_draw(void)
 {
-    int car_h = anim_value(&g_anim_car_h);
-    int panel_y = anim_value(&g_anim_panel_y);
-
-    bool panel_visible = (panel_y < SCR_H);
-
-    akira_display_clear(C_BLACK);
-    draw_status_bar();
-    draw_carousel(car_h, panel_visible);
-
-    if (panel_visible)
-    {
-        draw_options_panel(panel_y);
-    }
-    else
-    {
-        draw_footer();
-    }
-
-    akira_display_flush();
-    g_dirty = false;
+    draw_carousel(anim_value(&g_anim_car_h));
+    draw_options_panel(anim_value(&g_anim_panel_y));
 }
 
 /* ================================================================== */
@@ -1006,11 +497,12 @@ static void rebuild_tiles(void)
         g_all_tiles[i].type = TILE_WASM;
         strncpy(g_all_tiles[i].name, wasm[i].name, sizeof(g_all_tiles[i].name) - 1);
         g_all_tiles[i].name[sizeof(g_all_tiles[i].name) - 1] = '\0';
+        g_all_tiles[i].blurb = NULL;
         g_all_tiles[i].icon = name_to_icon(wasm[i].name);
         g_all_tiles[i].state = wasm[i].state;
         g_all_tiles[i].action = NULL;
     }
-    for (int i = 0; i < BUILTIN_COUNT; i++)
+    for (int i = 0; i < (int)BUILTIN_COUNT; i++)
     {
         g_all_tiles[n + i] = BUILTINS[i];
     }
@@ -1024,29 +516,55 @@ static void rebuild_tiles(void)
 }
 
 /* ================================================================== */
-/* Options helpers                                                     */
+/* Options panel behaviour                                             */
 /* ================================================================== */
 
 static void opts_open(void)
 {
-    g_ui_state = UI_OPTIONS;
+    g_opts_open = true;
     g_opts_focused = 0;
     g_opts_scroll = 0;
     g_opts_count = (g_sel >= 0 && g_sel < g_total_tiles &&
                     g_all_tiles[g_sel].type == TILE_BUILTIN)
                        ? OPTS_BUILTIN_COUNT
                        : OPTS_WASM_COUNT;
-    anim_start(&g_anim_car_h, CAR_H_IDLE, CAR_H_OPT);
-    anim_start(&g_anim_panel_y, SCR_H, OPT_PANEL_Y);
-    g_dirty = true;
+    anim_to(&g_anim_car_h, CAR_H_OPT, PANEL_MS, ANIM_EASE_INOUT);
+    anim_to(&g_anim_panel_y, OPT_PANEL_Y, PANEL_MS, ANIM_EASE_INOUT);
+    screen_set_hints("A:Select", "B:Close");
 }
 
 static void opts_close(void)
 {
-    g_ui_state = UI_HOME;
-    anim_start(&g_anim_car_h, CAR_H_OPT, CAR_H_IDLE);
-    anim_start(&g_anim_panel_y, OPT_PANEL_Y, SCR_H);
-    g_dirty = true;
+    g_opts_open = false;
+    anim_to(&g_anim_car_h, CAR_H_IDLE, PANEL_MS, ANIM_EASE_INOUT);
+    anim_to(&g_anim_panel_y, SCR_H, PANEL_MS, ANIM_EASE_INOUT);
+    screen_set_hints("A:Open", "HOME:Options");
+}
+
+static void launch_app(const char *name)
+{
+    akira_shell_set_wasm_launching();
+    if (app_manager_start(name) < 0)
+    {
+        akira_shell_abort_wasm_launch();
+        overlay_toast(TOAST_ICON_ERROR, "Couldn't start app", name, 2500);
+        home_screen_refresh();
+    }
+}
+
+static void uninstall_confirmed(bool confirmed, void *ctx)
+{
+    ARG_UNUSED(ctx);
+    if (!confirmed || g_sel < 0 || g_sel >= g_total_tiles)
+        return;
+
+    char name[APP_NAME_MAX_LEN];
+    snprintf(name, sizeof(name), "%s", g_all_tiles[g_sel].name);
+    if (app_manager_uninstall(name) == 0)
+        overlay_toast(TOAST_ICON_OK, "Uninstalled", name, 2000);
+    else
+        overlay_toast(TOAST_ICON_ERROR, "Uninstall failed", name, 2500);
+    home_screen_refresh();
 }
 
 static void opts_confirm(void)
@@ -1057,301 +575,48 @@ static void opts_confirm(void)
         return;
     }
     ui_tile_t *t = &g_all_tiles[g_sel];
+    int choice = g_opts_focused;
 
+    opts_close();
     if (t->type == TILE_BUILTIN)
     {
-        if (g_opts_focused == 0 && t->action)
-        {
-            opts_close();
+        if (choice == 0 && t->action)
             t->action();
-            return;
-        }
-    }
-    else
-    {
-        switch (g_opts_focused)
-        {
-        case 0:
-            if (t->state == APP_STATE_RUNNING)
-            {
-                app_manager_stop(t->name);
-            }
-            else
-            {
-                akira_shell_set_wasm_launching();
-                if (app_manager_start(t->name) < 0) {
-                    akira_shell_abort_wasm_launch();
-                    home_screen_refresh();
-                }
-            }
-            break;
-        case 1:
-            app_manager_uninstall(t->name);
-            break;
-        default:
-            break;
-        }
-    }
-    opts_close();
-}
-
-/* ================================================================== */
-/* Built-in actions                                                    */
-/* ================================================================== */
-
-static void action_settings(void)
-{
-    settings_screen_load();
-}
-
-static void action_sdcard(void)
-{
-    extern void sd_install_screen_load(void);
-    sd_install_screen_load();
-}
-
-#if defined(CONFIG_AKIRA_WIFI_MANAGER)
-static void action_akiraplay(void)
-{
-    extern void akiraplay_screen_load(void);
-    akiraplay_screen_load();
-}
-#endif
-
-static void action_sysinfo(void)
-{
-    uint32_t uptime_s = (uint32_t)(k_uptime_get() / 1000U);
-    char lines[5][56];
-    snprintf(lines[0], 56, "AkiraOS %s", CONFIG_AKIRA_OS_VERSION);
-    snprintf(lines[1], 56, "Board:  %s", CONFIG_BOARD);
-    snprintf(lines[2], 56, "Uptime: %02u:%02u:%02u",
-             uptime_s / 3600, (uptime_s % 3600) / 60, uptime_s % 60);
-    snprintf(lines[3], 56, "Apps:   %d / %d",
-             g_total_tiles - BUILTIN_COUNT, CONFIG_AKIRA_APP_MAX_INSTALLED);
-    snprintf(lines[4], 56, "Built:  %s", __DATE__);
-
-    int pw = 288, ph = 110;
-    int px = (SCR_W - pw) / 2;
-    int py = (SCR_H - ph) / 2;
-
-    akira_display_rect(px, py, pw, ph, C_BLACK);
-    akira_display_rect_outline(px, py, pw, ph, C_WHITE);
-    akira_display_rect_outline(px + 1, py + 1, pw - 2, ph - 2, C_WHITE);
-    draw_centred_text(px + 4, py + 6, pw - 8, "SYSTEM INFO", C_WHITE, C_BLACK);
-    akira_display_hline(px + 4, py + 18, pw - 8, C_WHITE);
-
-    for (int i = 0; i < 5; i++)
-    {
-        akira_display_text(px + 8, py + 22 + i * 16, lines[i], C_WHITE);
-    }
-    draw_centred_text(px + 4, py + ph - 14, pw - 8, "[B] CLOSE", C_WHITE, C_BLACK);
-    akira_display_flush();
-
-    while (true)
-    {
-        k_sleep(K_MSEC(50));
-        uint32_t btns = akira_input_get_bitmask();
-        if (btns & BIT(AKIRA_BTN_B))
-        {
-            while (akira_input_get_bitmask() & BIT(AKIRA_BTN_B))
-            {
-                k_sleep(K_MSEC(20));
-            }
-            break;
-        }
-    }
-    g_dirty = true;
-}
-
-/* ================================================================== */
-/* Public API                                                          */
-/* ================================================================== */
-
-void home_screen_create(void)
-{
-    g_total_tiles = 0;
-    g_sel = 0;
-    g_last_n_installed = -1;
-    g_ui_state = UI_HOME;
-    g_opts_focused = 0;
-    g_opts_scroll = 0;
-    g_opts_count = OPTS_WASM_COUNT;
-    g_visible = false;
-    g_dirty = false;
-    memset(g_all_tiles, 0, sizeof(g_all_tiles));
-
-    g_anim_car_h = (anim_t){CAR_H_IDLE, CAR_H_IDLE, ANIM_FRAMES};
-    g_anim_panel_y = (anim_t){SCR_H, SCR_H, ANIM_FRAMES};
-    g_anim_focus_pop = (anim_t){0, 0, ANIM_FRAMES};
-    g_xmb_phase = 0;
-    g_xmb_tick = 0;
-    g_sntp_done = false;
-#if defined(CONFIG_SNTP)
-    g_sntp_retries = 0;
-    k_work_init_delayable(&g_sntp_work, sntp_work_handler);
-#endif
-
-    LOG_INF("Liquid Crystal home screen initialised");
-}
-
-void home_screen_refresh(void)
-{
-    rebuild_tiles();
-    g_ui_state = UI_HOME;
-    g_anim_car_h = (anim_t){CAR_H_IDLE, CAR_H_IDLE, ANIM_FRAMES};
-    g_anim_panel_y = (anim_t){SCR_H, SCR_H, ANIM_FRAMES};
-    g_anim_focus_pop = (anim_t){0, 0, ANIM_FRAMES};
-    g_xmb_phase = 0;
-    g_xmb_tick = 0;
-    g_sntp_done = false;
-#if defined(CONFIG_SNTP)
-    k_work_cancel_delayable(&g_sntp_work);
-    g_sntp_retries = 0;
-#endif
-    g_visible = true;
-    home_note_activity(); /* returning to HOME counts as activity — animate */
-    /* Read battery, clock, and connectivity now so first frame is accurate. */
-    home_screen_update_status();
-    g_dirty = true;
-    full_redraw();
-}
-
-void home_screen_load(void)
-{
-    g_visible = true;
-    home_note_activity();
-    g_dirty = true;
-    full_redraw();
-}
-
-void home_screen_update_status(void)
-{
-    if (!g_visible)
         return;
-
-    app_info_t tmp[CONFIG_AKIRA_APP_MAX_INSTALLED];
-    int n = app_manager_list(tmp, CONFIG_AKIRA_APP_MAX_INSTALLED);
-    if (n < 0)
-        n = 0;
-    if (n != g_last_n_installed)
-    {
-        rebuild_tiles();
-        g_dirty = true;
     }
 
-    /* Clock — use akira_time subsystem; show uptime if real time not yet set */
+    switch (choice)
     {
-        int64_t epoch = akira_time_get_epoch();
-        if (akira_time_is_set())
+    case 0:
+        if (t->state == APP_STATE_RUNNING)
         {
-            /* Apply stored UTC offset so display shows local time */
-            int64_t local = epoch + (int64_t)akira_time_get_tz_offset_s();
-            int64_t day_sec = local % 86400;
-            if (day_sec < 0)
-                day_sec += 86400;
-            snprintf(g_time_str, sizeof(g_time_str), "%02u:%02u:%02u",
-                     (unsigned)(day_sec / 3600),
-                     (unsigned)((day_sec % 3600) / 60),
-                     (unsigned)(day_sec % 60));
+            app_manager_stop(t->name);
+            home_screen_refresh();
         }
         else
         {
-            uint32_t s = (uint32_t)epoch;
-            snprintf(g_time_str, sizeof(g_time_str), "%02u:%02u:%02u",
-                     (s / 3600U) % 24U, (s % 3600U) / 60U, s % 60U);
+            launch_app(t->name);
         }
-    }
-
-    /* WiFi connectivity status */
-#if defined(CONFIG_WIFI) && defined(CONFIG_NET_MGMT)
+        break;
+    case 1:
     {
-        bool prev_wifi = g_wifi_conn;
-        struct net_if *iface = net_if_get_default();
-        struct wifi_iface_status wst = {0};
-        g_wifi_conn = iface &&
-                      net_mgmt(NET_REQUEST_WIFI_IFACE_STATUS, iface,
-                               &wst, sizeof(wst)) == 0 &&
-                      wst.state >= WIFI_STATE_ASSOCIATED;
-
-        /* Auto SNTP: schedule async when WiFi first connects and time not set */
-        if (g_wifi_conn && !prev_wifi && !g_sntp_done && !akira_time_is_set())
-        {
-#if defined(CONFIG_SNTP)
-            g_sntp_retries = 0;
-            k_work_reschedule(&g_sntp_work, K_SECONDS(SNTP_INITIAL_DELAY_S));
-#endif
-        }
-        /* Reset on disconnect so we retry on the next connection */
-        if (!g_wifi_conn && prev_wifi)
-        {
-#if defined(CONFIG_SNTP)
-            k_work_cancel_delayable(&g_sntp_work);
-            if (!g_sntp_done)
-            {
-                g_sntp_retries = 0;
-            }
-#endif
-        }
+        static char q[48];
+        snprintf(q, sizeof(q), "Uninstall %s?", t->name);
+        akira_ui_confirm_open("APP_UNINSTALL", q, NULL, uninstall_confirmed, NULL);
+        break;
     }
-#endif
-    /* BT connectivity status */
-#ifdef CONFIG_BT
-    {
-        bt_state_t bts = bt_manager_get_state();
-        g_bt_conn = (bts == BT_STATE_CONNECTED);
-    }
-#endif
-
-    /* Battery level */
-#ifdef CONFIG_AKIRA_POWER_MANAGER
-    {
-        uint8_t pct = 0;
-        if (akira_pm_get_battery_level(&pct) == 0)
-        {
-            snprintf(g_batt_str, sizeof(g_batt_str), "%u%%", (unsigned)pct);
-            g_dirty = true;
-        }
-    }
-#endif
-}
-
-void home_screen_tick(void)
-{
-    if (!g_visible)
-        return;
-
-    bool was = anim_running(&g_anim_car_h) || anim_running(&g_anim_panel_y) || anim_running(&g_anim_focus_pop);
-    anim_step(&g_anim_car_h);
-    anim_step(&g_anim_panel_y);
-    anim_step(&g_anim_focus_pop);
-    bool now = anim_running(&g_anim_car_h) || anim_running(&g_anim_panel_y) || anim_running(&g_anim_focus_pop);
-
-    /* Advance XMB ribbon phase — one step every XMB_TICK_DIV ticks, but only
-     * while the user is actually present.  Once frozen this stops setting
-     * g_dirty, so full_redraw() below stops running and the home screen costs
-     * nothing until the next keypress. */
-    if (home_ambient_anim_enabled() && ++g_xmb_tick >= XMB_TICK_DIV)
-    {
-        g_xmb_tick = 0;
-        g_xmb_phase = (g_xmb_phase + 1) & 63;
-        g_dirty = true;
-    }
-
-    if (was || now || g_dirty)
-    {
-        full_redraw();
+    default:
+        break;
     }
 }
 
-void home_screen_handle_key(uint32_t just_pressed)
+/* ================================================================== */
+/* Screen callbacks                                                    */
+/* ================================================================== */
+
+static void home_key(uint32_t just_pressed)
 {
-    if (!g_visible)
-        return;
-
-    /* User is present — un-freeze the ambient ribbon. */
-    home_note_activity();
-
-    if (g_ui_state == UI_OPTIONS)
+    if (g_opts_open)
     {
         if (just_pressed & BIT(AKIRA_BTN_UP))
         {
@@ -1360,7 +625,7 @@ void home_screen_handle_key(uint32_t just_pressed)
                 g_opts_focused--;
                 if (g_opts_focused < g_opts_scroll)
                     g_opts_scroll--;
-                g_dirty = true;
+                screen_invalidate();
             }
             else
             {
@@ -1373,68 +638,166 @@ void home_screen_handle_key(uint32_t just_pressed)
             if (g_opts_focused < g_opts_count - 1)
             {
                 g_opts_focused++;
-                int vis_h = SCR_H - OPT_PANEL_Y - OPT_HDR_H - 6;
-                int vis = vis_h / OPT_ITEM_H;
-                if (vis < 1)
-                    vis = 1;
-                if (g_opts_focused >= g_opts_scroll + vis)
+                if (g_opts_focused >= g_opts_scroll + opts_visible())
                     g_opts_scroll++;
+                screen_invalidate();
             }
-            g_dirty = true;
         }
         if (just_pressed & BIT(AKIRA_BTN_A))
         {
             opts_confirm();
-            /* Skip home_screen_refresh if a sub-screen took over display */
-            if (!settings_screen_is_active())
-            {
-                home_screen_refresh();
-            }
             return;
         }
-        if (just_pressed & BIT(AKIRA_BTN_B))
+        if (just_pressed & (BIT(AKIRA_BTN_B) | BIT(AKIRA_BTN_HOME)))
         {
             opts_close();
         }
         return;
     }
 
-    /* IDLE — vertical carousel navigation: UP = previous app, DOWN = next. */
-    if (just_pressed & BIT(AKIRA_BTN_UP))
+    if (g_total_tiles == 0)
+        return;
+
+    /* Vertical carousel navigation: UP = previous app, DOWN = next. */
+    if (just_pressed & (BIT(AKIRA_BTN_UP) | BIT(AKIRA_BTN_DOWN)))
     {
-        g_sel = (g_sel - 1 + g_total_tiles) % g_total_tiles;
-        anim_start_pop(&g_anim_focus_pop);
-        g_dirty = true;
+        int dir = (just_pressed & BIT(AKIRA_BTN_UP)) ? -1 : 1;
+
+        g_sel = (g_sel + dir + g_total_tiles) % g_total_tiles;
+        /* Start the stack one slot back and let it glide into place. */
+        anim_start(&g_anim_slide, dir * CARD_STRIDE, 0, SLIDE_MS, ANIM_EASE_OUT);
+        anim_start(&g_anim_pop, POP_PX, 0, POP_MS, ANIM_EASE_OUT_BACK);
     }
-    if (just_pressed & BIT(AKIRA_BTN_DOWN))
-    {
-        g_sel = (g_sel + 1) % g_total_tiles;
-        anim_start_pop(&g_anim_focus_pop);
-        g_dirty = true;
-    }
-    if (just_pressed & BIT(AKIRA_BTN_HOME))
+    if (just_pressed & (BIT(AKIRA_BTN_HOME) | BIT(AKIRA_BTN_X)))
     {
         opts_open();
         return;
     }
     if (just_pressed & BIT(AKIRA_BTN_A))
     {
-        if (g_sel >= 0 && g_sel < g_total_tiles)
+        ui_tile_t *t = &g_all_tiles[g_sel];
+        if (t->type == TILE_BUILTIN && t->action)
         {
-            ui_tile_t *t = &g_all_tiles[g_sel];
-            if (t->type == TILE_BUILTIN && t->action)
-            {
-                t->action();
-            }
-            else if (t->type == TILE_WASM)
-            {
-                akira_shell_set_wasm_launching();
-                if (app_manager_start(t->name) < 0) {
-                    akira_shell_abort_wasm_launch();
-                    home_screen_refresh();
-                }
-            }
+            t->action();
+        }
+        else if (t->type == TILE_WASM)
+        {
+            launch_app(t->name);
         }
     }
-    /* B in idle = no-op (nothing to go back to on the root screen) */
+    /* B on the root screen: nothing to go back to. */
+}
+
+static bool home_tick(void)
+{
+    return anim_running(&g_anim_car_h) || anim_running(&g_anim_panel_y) ||
+           anim_running(&g_anim_slide) || anim_running(&g_anim_pop);
+}
+
+static void home_status(void)
+{
+    app_info_t tmp[CONFIG_AKIRA_APP_MAX_INSTALLED];
+    int n = app_manager_list(tmp, CONFIG_AKIRA_APP_MAX_INSTALLED);
+
+    if (MAX(n, 0) != g_last_n_installed)
+    {
+        rebuild_tiles();
+        screen_invalidate();
+    }
+}
+
+static void home_enter(void *arg)
+{
+    ARG_UNUSED(arg);
+    g_sel = 0;
+    g_opts_open = false;
+    anim_set(&g_anim_car_h, CAR_H_IDLE);
+    anim_set(&g_anim_panel_y, SCR_H);
+    anim_set(&g_anim_slide, 0);
+    anim_set(&g_anim_pop, 0);
+    rebuild_tiles();
+}
+
+static void home_resume(void)
+{
+    /* Back from a sub-screen: it may have installed or removed apps. */
+    rebuild_tiles();
+}
+
+const shell_screen_t home_screen = {
+    .name = "home",
+    .title = NULL,
+    .flags = SCR_F_STATUSBAR | SCR_F_FOOTER,
+    .hint_l = "A:Open",
+    .hint_r = "HOME:Options",
+    .enter = home_enter,
+    .resume = home_resume,
+    .on_key = home_key,
+    .tick = home_tick,
+    .draw = home_draw,
+    .on_status = home_status,
+};
+
+void home_screen_refresh(void)
+{
+    rebuild_tiles();
+    screen_invalidate();
+}
+
+/* ================================================================== */
+/* System info (modal)                                                 */
+/* ================================================================== */
+
+static void sysinfo_draw(void)
+{
+    const shell_status_t *st = status_model_get();
+    uint32_t uptime_s = (uint32_t)(k_uptime_get() / 1000U);
+    char lines[6][48];
+
+    snprintf(lines[0], sizeof(lines[0]), "AkiraOS  v%s", CONFIG_AKIRA_OS_VERSION);
+    snprintf(lines[1], sizeof(lines[1]), "Board    %s", CONFIG_BOARD);
+    snprintf(lines[2], sizeof(lines[2]), "Uptime   %02u:%02u:%02u",
+             uptime_s / 3600, (uptime_s % 3600) / 60, uptime_s % 60);
+    snprintf(lines[3], sizeof(lines[3]), "Apps     %d / %d",
+             g_total_tiles - (int)BUILTIN_COUNT, CONFIG_AKIRA_APP_MAX_INSTALLED);
+    if (st->batt_valid)
+        snprintf(lines[4], sizeof(lines[4]), "Battery  %u%%  %d mV", st->batt_pct,
+                 (int)st->batt_mv);
+    else
+        snprintf(lines[4], sizeof(lines[4]), "Battery  --");
+    snprintf(lines[5], sizeof(lines[5]), "Built    %s", __DATE__);
+
+    int pw = SCR_W - 48, ph = 156;
+    int px = (SCR_W - pw) / 2, py = (SCR_H - ph) / 2 + 4;
+
+    akira_ui_dither_card(px, py, pw, ph, 14, false, 5);
+    akira_display_text(px + 16, py + 12, "SYSTEM INFO", C_WHITE);
+    for (int x = px + 16; x < px + pw - 16; x += 2)
+        akira_display_pixel(x, py + 27, C_GRAY);
+    for (int i = 0; i < 6; i++)
+        akira_display_text(px + 16, py + 36 + i * 17, lines[i], C_WHITE);
+}
+
+static void sysinfo_key(uint32_t just)
+{
+    if (just & (BIT(AKIRA_BTN_A) | BIT(AKIRA_BTN_B)))
+        screen_pop();
+}
+
+static void sysinfo_status(void)
+{
+    screen_invalidate(); /* uptime ticks */
+}
+
+static const shell_screen_t sysinfo_screen = {
+    .name = "sysinfo",
+    .flags = SCR_F_MODAL,
+    .on_key = sysinfo_key,
+    .draw = sysinfo_draw,
+    .on_status = sysinfo_status,
+};
+
+static void action_sysinfo(void)
+{
+    screen_push(&sysinfo_screen, NULL);
 }

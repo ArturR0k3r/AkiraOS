@@ -280,13 +280,6 @@ target_sources(app PRIVATE
     src/ui/ui_framework.c
 )
 
-# Boot logo animation (only compiled when the boot animation is enabled)
-if(CONFIG_AKIRA_BOOT_ANIMATION)
-    target_sources(app PRIVATE
-        src/console_shell/boot_anim.c
-    )
-endif()
-
 # App Loader/Manager are implemented under src/runtime (loader/ and manager/) — included above
 
 # ===== Core Libraries =====
@@ -878,18 +871,20 @@ endif()
 if(CONFIG_AKIRA_OS_SHELL)
     target_sources(app PRIVATE
         src/console_shell/ui/akira_ui.c
+        src/console_shell/ui/anim.c
+        src/console_shell/ui/list_screen.c
+        src/console_shell/ui/overlay.c
+        src/console_shell/ui/screen.c
         src/console_shell/akira_os_shell.c
+        src/console_shell/status_model.c
         src/console_shell/wait_screen.c
         src/console_shell/display_ownership.c
         src/console_shell/home_screen.c
-        src/console_shell/shell_theme.c
         src/console_shell/sd_install_screen.c
         src/console_shell/catalog_net.c
         src/console_shell/catalogue_parser.c
-        src/console_shell/install_progress_screen.c
         src/console_shell/settings_screen.c
         src/console_shell/settings/display_screen.c
-        src/console_shell/settings/ble_screen.c
         src/console_shell/settings/power_screen.c
         src/console_shell/settings/ota_screen.c
         src/console_shell/settings/datetime_screen.c

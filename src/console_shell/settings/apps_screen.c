@@ -2,138 +2,90 @@
  * Copyright (c) 2025 AkiraOS Contributors
  * SPDX-License-Identifier: GPL-3.0-only
  */
+
 #define LOG_MODULE_NAME akira_apps_screen
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(akira_apps_screen, CONFIG_AKIRA_LOG_LEVEL);
 
+/**
+ * @file apps_screen.c
+ * @brief Settings → Apps: installed apps with their size; A uninstalls
+ *        (through the Capability-Guard confirmation).
+ */
+
 #include <zephyr/kernel.h>
-#include <string.h>
+#include <stdint.h>
 #include <stdio.h>
-#include <api/akira_display_api.h>
-#include <api/akira_input_api.h>
+
 #include <runtime/app_manager/app_manager.h>
 #include "apps_screen.h"
-#include "../settings_shared.h"
+#include "home_screen.h"
 #include "ui/akira_ui.h"
+#include "ui/overlay.h"
 
 #define MAX_APPS CONFIG_AKIRA_APP_MAX_INSTALLED
 
 static app_info_t g_apps[MAX_APPS] __attribute__((section(".ext_ram.bss")));
-static int g_count;
-static int g_sel, g_scroll;
+static list_item_t g_items[MAX_APPS + 1] __attribute__((section(".ext_ram.bss")));
+static char g_question[48];
 
-/* Draw one app item at visual row `row` with focus flag `hi`. */
-static void draw_app_item(int row, bool hi, const char *name, const char *sz)
+static void apps_rebuild(void);
+
+static void val_size(const list_item_t *it, char *buf, size_t len)
 {
-    int bx = SS_MENU_X;
-    int by = SS_CONT_Y + row * SS_MENU_ITH + 2;
-    int bw = SS_MENU_W;
-    int bh = SS_MENU_ITH - 4;
+    const app_info_t *a = &g_apps[(intptr_t)it->arg];
 
-    akira_ui_dither_card(bx, by, bw, bh, 8, hi, hi ? 3 : 2);
-    int ty = by + (bh - 10) / 2;
-    uint16_t fg = hi ? SS_C_BLACK : SS_C_WHITE;
-    akira_display_text(bx + 10, ty, name, fg);
-    if (sz && sz[0]) {
-        int szlen = (int)strlen(sz);
-        akira_display_text(bx + bw - szlen * 8 - 10, ty, sz, fg);
-    }
+    snprintf(buf, len, "%uKB", (unsigned)((a->size + 1023) / 1024));
 }
 
-static void draw(void)
+static void uninstall_done(bool confirmed, void *ctx)
 {
-    akira_display_clear(SS_C_BLACK);
-    ss_draw_header("APPS");
+    const app_info_t *a = &g_apps[(intptr_t)ctx];
 
-    int vis = ss_menu_vis_count(SS_CONT_Y);
-    if (g_scroll > g_count - vis) g_scroll = g_count - vis;
-    if (g_scroll < 0)             g_scroll = 0;
-
-    akira_display_rect(0, SS_CONT_Y, SS_SCR_W, SS_RIB_Y - SS_CONT_Y, SS_C_BLACK);
-
-    if (g_count == 0) {
-        /* Centred placeholder */
-        int ty = SS_CONT_Y + (SS_RIB_Y - SS_CONT_Y - 10) / 2;
-        int msg_len = (int)strlen("No apps installed") * 8;
-        akira_display_text((SS_SCR_W - msg_len) / 2, ty, "No apps installed", SS_C_GRAY);
+    if (!confirmed) {
+        return;
+    }
+    if (app_manager_uninstall(a->name) == 0) {
+        overlay_toast(TOAST_ICON_OK, "Uninstalled", a->name, 2000);
     } else {
-        for (int i = g_scroll; i < g_count && i < g_scroll + vis; i++) {
-            char sz[16];
-            snprintf(sz, sizeof(sz), "%uKB",
-                     (unsigned)((g_apps[i].size + 1023) / 1024));
-            char nm[25];
-            strncpy(nm, g_apps[i].name, 24);
-            nm[24] = '\0';
-            draw_app_item(i - g_scroll, (i == g_sel), nm, sz);
-        }
-        /* Scroll indicators */
-        if (g_scroll > 0) {
-            akira_display_text(SS_SCR_W - 10, SS_CONT_Y + 2, "^", SS_C_GRAY);
-        }
-        if (g_scroll + vis < g_count) {
-            int bot_y = SS_CONT_Y + vis * SS_MENU_ITH + 2;
-            if (bot_y < SS_RIB_Y - 10) {
-                akira_display_text(SS_SCR_W - 10, bot_y, "v", SS_C_GRAY);
-            }
-        }
+        overlay_toast(TOAST_ICON_ERROR, "Uninstall failed", a->name, 2500);
     }
-
-    ss_draw_ribbon("[A] Uninstall", "[B] Back");
-    akira_display_flush();
+    apps_rebuild();
+    home_screen_refresh();
+    screen_invalidate();
 }
 
-void apps_screen_load(void)
+static void act_uninstall(const list_item_t *it)
 {
-    extern void settings_screen_load(void);
-    g_count = app_manager_list(g_apps, MAX_APPS);
-    if (g_count < 0) g_count = 0;
-    g_sel = 0; g_scroll = 0;
-    draw();
-    uint32_t prev = akira_input_get_bitmask();
-    while (true) {
-        k_sleep(K_MSEC(20));
-        uint32_t btns = akira_input_get_bitmask(), just = btns & ~prev;
-        prev = btns;
-        if (!just) continue;
-
-        int vis = ss_menu_vis_count(SS_CONT_Y);
-
-        if (just & BIT(AKIRA_BTN_UP)) {
-            if (g_sel > 0) {
-                g_sel--;
-                g_scroll = ss_scroll_clamp(g_sel, g_scroll, g_count, SS_CONT_Y);
-                draw();
-            }
-        }
-        if (just & BIT(AKIRA_BTN_DOWN)) {
-            if (g_sel < g_count - 1) {
-                g_sel++;
-                g_scroll = ss_scroll_clamp(g_sel, g_scroll, g_count, SS_CONT_Y);
-                draw();
-            }
-        }
-
-        if ((just & BIT(AKIRA_BTN_A)) && g_count > 0) {
-            /* Uninstalling an installed app is a guarded action — route it
-             * through the shared 3px Capability-Guard confirmation. */
-            char q[48];
-            snprintf(q, sizeof(q), "Uninstall %s?", g_apps[g_sel].name);
-            if (akira_ui_confirm_dialog("APP_UNINSTALL", q)) {
-                app_manager_uninstall(g_apps[g_sel].name);
-                g_count = app_manager_list(g_apps, MAX_APPS);
-                if (g_count < 0) g_count = 0;
-                if (g_sel >= g_count) g_sel = g_count > 0 ? g_count - 1 : 0;
-                g_scroll = 0;
-            }
-            prev = akira_input_get_bitmask();  /* swallow buttons held from dialog */
-            draw();
-        }
-
-        if ((just & BIT(AKIRA_BTN_B)) || (just & BIT(AKIRA_BTN_HOME))) {
-            settings_screen_load();
-            return;
-        }
-
-        (void)vis;
-    }
+    snprintf(g_question, sizeof(g_question), "Uninstall %s?",
+             g_apps[(intptr_t)it->arg].name);
+    akira_ui_confirm_open("APP_UNINSTALL", g_question, NULL, uninstall_done, it->arg);
 }
+
+static void apps_rebuild(void)
+{
+    int n = app_manager_list(g_apps, MAX_APPS);
+
+    n = MAX(n, 0);
+    for (int i = 0; i < n; i++) {
+        g_items[i] = (list_item_t){
+            .kind = LI_ACTION,
+            .label = g_apps[i].name,
+            .arg = (void *)(intptr_t)i,
+            .action = act_uninstall,
+            .value = val_size,
+        };
+    }
+    if (n == 0) {
+        g_items[0] = (list_item_t){ .kind = LI_INFO, .label = "No apps installed" };
+    }
+    apps_page.count = MAX(n, 1);
+}
+
+list_model_t apps_page = {
+    .title = "Apps",
+    .items = g_items,
+    .count = 0,
+    .on_enter = apps_rebuild,
+    .hint_l = "A:Uninstall",
+};

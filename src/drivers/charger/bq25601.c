@@ -13,8 +13,13 @@
  *   CHARGER_PROP_CHARGE_TYPE             (read)
  *   CHARGER_PROP_HEALTH                  (read)
  *   CHARGER_PROP_CONSTANT_CHARGE_CURRENT_UA  (read/write, 0–3000 mA)
- *   CHARGER_PROP_CONSTANT_CHARGE_VOLTAGE_UV  (read/write, 3840–4608 mV)
+ *   CHARGER_PROP_CONSTANT_CHARGE_VOLTAGE_UV  (read/write, 3856–4624 mV)
  *   CHARGER_PROP_INPUT_REGULATION_CURRENT_UA (read/write, 100–3200 mA)
+ *
+ * Register layout per the BQ25601 datasheet (cross-checked against Linux
+ * bq256xx_charger.c).  An earlier version used a BQ24190-style map: it read
+ * the part number from REG0A, so init failed with -ENODEV and the OS never
+ * knew whether it was charging.
  */
 
 #define DT_DRV_COMPAT ti_bq25601
@@ -27,32 +32,36 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
 
+#include "bq25601.h"
+
 LOG_MODULE_REGISTER(bq25601, CONFIG_CHARGER_LOG_LEVEL);
 
 /* =========================================================================
  * Register map
  * ========================================================================= */
-#define BQ25601_REG00  0x00  /* InputSource Control           */
-#define BQ25601_REG01  0x01  /* Power-On Configuration        */
-#define BQ25601_REG02  0x02  /* Charge Current Control        */
+#define BQ25601_REG00  0x00  /* Input Current Limit           */
+#define BQ25601_REG01  0x01  /* Charger Control 0             */
+#define BQ25601_REG02  0x02  /* Charge Current Limit          */
 #define BQ25601_REG03  0x03  /* Pre-Charge / Term Current     */
-#define BQ25601_REG04  0x04  /* Charge Voltage Control        */
-#define BQ25601_REG05  0x05  /* Charge Term / Timer Control   */
-#define BQ25601_REG06  0x06  /* Boost Voltage / Thermal Reg   */
-#define BQ25601_REG07  0x07  /* Miscellaneous Operations      */
-#define BQ25601_REG08  0x08  /* System Status Register        */
-#define BQ25601_REG09  0x09  /* Fault Register                */
-#define BQ25601_REG0A  0x0A  /* Vendor / Part / Revision      */
+#define BQ25601_REG04  0x04  /* Battery Voltage Limit         */
+#define BQ25601_REG05  0x05  /* Charger Control 1             */
+#define BQ25601_REG06  0x06  /* Charger Control 2             */
+#define BQ25601_REG07  0x07  /* Charger Control 3             */
+#define BQ25601_REG08  0x08  /* Charger Status 0              */
+#define BQ25601_REG09  0x09  /* Charger Status 1 (faults)     */
+#define BQ25601_REG0A  0x0A  /* Charger Status 2              */
+#define BQ25601_REG0B  0x0B  /* Part Information              */
 
 /* REG00 bits */
-#define BQ25601_REG00_EN_HIZ    BIT(7)
-#define BQ25601_REG00_EN_ILIM   BIT(6)
-#define BQ25601_REG00_IINLIM_MASK  GENMASK(5, 0)
-/* IINLIM: 000000=100mA .. step 50mA .. 111111=3200mA */
-#define BQ25601_IINLIM_OFFSET_MA   100
-#define BQ25601_IINLIM_STEP_MA     50
+#define BQ25601_REG00_EN_HIZ       BIT(7)
+#define BQ25601_REG00_IINDPM_MASK  GENMASK(4, 0)
+/* IINDPM: 00000=100mA .. step 100mA .. 11111=3200mA */
+#define BQ25601_IINDPM_OFFSET_MA   100
+#define BQ25601_IINDPM_STEP_MA     100
+#define BQ25601_IINDPM_MAX_MA      3200
 
 /* REG01 bits */
+#define BQ25601_REG01_WD_RST     BIT(6)
 #define BQ25601_REG01_OTG_CONFIG BIT(5)
 #define BQ25601_REG01_CHG_CONFIG BIT(4)
 #define BQ25601_REG01_SYS_MIN_MASK  GENMASK(3, 1)
@@ -62,11 +71,18 @@ LOG_MODULE_REGISTER(bq25601, CONFIG_CHARGER_LOG_LEVEL);
 /* ICHG: 000000=0mA .. step 60mA .. (3000mA max) */
 #define BQ25601_ICHG_STEP_MA   60
 
-/* REG04 bits */
-#define BQ25601_REG04_VREG_MASK GENMASK(7, 2)
-/* VREG: 000000=3840mV .. step 16mV .. 110000=4608mV */
-#define BQ25601_VREG_OFFSET_MV  3840
-#define BQ25601_VREG_STEP_MV    16
+/* REG04 bits — VRECHG (bit 0) and TOPOFF_TIMER (bits 2:1) are preserved */
+#define BQ25601_REG04_VREG_MASK  GENMASK(7, 3)
+#define BQ25601_REG04_VREG_SHIFT 3
+/* VREG: 00000=3856mV .. step 32mV .. 11000=4624mV (default 01011 = 4208mV) */
+#define BQ25601_VREG_OFFSET_MV  3856
+#define BQ25601_VREG_STEP_MV    32
+#define BQ25601_VREG_MAX_MV     4624
+
+/* REG05 bits */
+#define BQ25601_REG05_EN_TERM        BIT(7)
+#define BQ25601_REG05_WATCHDOG_MASK  GENMASK(5, 4) /* 00 = disabled, 01 = 40 s */
+#define BQ25601_REG05_EN_TIMER       BIT(3)
 
 /* REG08: System Status */
 #define BQ25601_REG08_VBUS_STAT_MASK  GENMASK(7, 5)
@@ -76,8 +92,9 @@ LOG_MODULE_REGISTER(bq25601, CONFIG_CHARGER_LOG_LEVEL);
 #define BQ25601_REG08_VSYS_STAT       BIT(0)
 
 #define BQ25601_VBUS_NO_INPUT   0x00
-#define BQ25601_VBUS_USB_HOST   0x20
-#define BQ25601_VBUS_ADAPTER    0x40
+#define BQ25601_VBUS_USB_SDP    0x20
+#define BQ25601_VBUS_USB_CDP    0x40
+#define BQ25601_VBUS_USB_DCP    0x60
 #define BQ25601_VBUS_OTG        0xE0
 
 #define BQ25601_CHG_NOT_CHARGING 0x00
@@ -92,8 +109,16 @@ LOG_MODULE_REGISTER(bq25601, CONFIG_CHARGER_LOG_LEVEL);
 #define BQ25601_REG09_BAT_FAULT       BIT(3)
 #define BQ25601_REG09_NTC_FAULT_MASK  GENMASK(2, 0)
 
-/* REG0A: Part number should be 0x02 for BQ25601 */
-#define BQ25601_REG0A_PN_MASK   GENMASK(5, 3)
+#define BQ25601_CHG_FAULT_THERMAL     0x20
+#define BQ25601_CHG_FAULT_TIMER       0x30
+#define BQ25601_NTC_WARM              0x02
+#define BQ25601_NTC_COOL              0x03
+#define BQ25601_NTC_COLD              0x05
+#define BQ25601_NTC_HOT               0x06
+
+/* REG0B: Part number 0010 = BQ25601 */
+#define BQ25601_REG0B_PN_MASK   GENMASK(6, 3)
+#define BQ25601_REG0B_PN_SHIFT  3
 #define BQ25601_PART_NUMBER     0x02
 
 /* =========================================================================
@@ -132,6 +157,23 @@ static inline int bq25601_update(const struct device *dev, uint8_t reg,
     return i2c_reg_update_byte_dt(&cfg->i2c, reg, mask, val);
 }
 
+/* External power is present: power-good, or any VBUS source except our own
+ * OTG boost output. */
+static inline bool bq25601_input_present(uint8_t reg08)
+{
+    uint8_t vbus = reg08 & BQ25601_REG08_VBUS_STAT_MASK;
+
+    return (reg08 & BQ25601_REG08_PG_STAT) ||
+           (vbus != BQ25601_VBUS_NO_INPUT && vbus != BQ25601_VBUS_OTG);
+}
+
+int bq25601_read_regs(const struct device *dev, uint8_t regs[BQ25601_NUM_REGS])
+{
+    const struct bq25601_config *cfg = dev->config;
+
+    return i2c_burst_read_dt(&cfg->i2c, BQ25601_REG00, regs, BQ25601_NUM_REGS);
+}
+
 /* =========================================================================
  * Charger API
  * ========================================================================= */
@@ -155,13 +197,13 @@ static int bq25601_get_prop(const struct device *dev,
 
     switch (prop) {
     case CHARGER_PROP_ONLINE:
-        val->online = ((reg08 & BQ25601_REG08_VBUS_STAT_MASK) != BQ25601_VBUS_NO_INPUT)
+        val->online = bq25601_input_present(reg08)
                       ? CHARGER_ONLINE_FIXED : CHARGER_ONLINE_OFFLINE;
         return 0;
 
     case CHARGER_PROP_STATUS: {
         uint8_t chg_stat = reg08 & BQ25601_REG08_CHG_STAT_MASK;
-        if ((reg08 & BQ25601_REG08_VBUS_STAT_MASK) == BQ25601_VBUS_NO_INPUT) {
+        if (!bq25601_input_present(reg08)) {
             val->status = CHARGER_STATUS_DISCHARGING;
         } else if (chg_stat == BQ25601_CHG_DONE) {
             val->status = CHARGER_STATUS_FULL;
@@ -190,11 +232,22 @@ static int bq25601_get_prop(const struct device *dev,
         if (ret < 0) {
             return ret;
         }
+        uint8_t ntc = reg09 & BQ25601_REG09_NTC_FAULT_MASK;
+        uint8_t chg_fault = reg09 & BQ25601_REG09_CHG_FAULT_MASK;
         if (reg09 & BQ25601_REG09_BAT_FAULT) {
             val->health = CHARGER_HEALTH_OVERVOLTAGE;
-        } else if (reg09 & BQ25601_REG09_NTC_FAULT_MASK) {
+        } else if (ntc == BQ25601_NTC_HOT) {
+            val->health = CHARGER_HEALTH_OVERHEAT;
+        } else if (ntc == BQ25601_NTC_COLD) {
             val->health = CHARGER_HEALTH_COLD;
-        } else if (reg08 & BQ25601_REG08_THERM_STAT) {
+        } else if (ntc == BQ25601_NTC_WARM) {
+            val->health = CHARGER_HEALTH_WARM;
+        } else if (ntc == BQ25601_NTC_COOL) {
+            val->health = CHARGER_HEALTH_COOL;
+        } else if (chg_fault == BQ25601_CHG_FAULT_TIMER) {
+            val->health = CHARGER_HEALTH_SAFETY_TIMER_EXPIRE;
+        } else if (chg_fault == BQ25601_CHG_FAULT_THERMAL ||
+                   (reg08 & BQ25601_REG08_THERM_STAT)) {
             val->health = CHARGER_HEALTH_WARM;
         } else {
             val->health = CHARGER_HEALTH_GOOD;
@@ -219,7 +272,7 @@ static int bq25601_get_prop(const struct device *dev,
         if (ret < 0) {
             return ret;
         }
-        uint8_t vreg = (reg04 & BQ25601_REG04_VREG_MASK) >> 2;
+        uint8_t vreg = (reg04 & BQ25601_REG04_VREG_MASK) >> BQ25601_REG04_VREG_SHIFT;
         val->const_charge_voltage_uv =
             (BQ25601_VREG_OFFSET_MV + vreg * BQ25601_VREG_STEP_MV) * 1000;
         return 0;
@@ -231,9 +284,9 @@ static int bq25601_get_prop(const struct device *dev,
         if (ret < 0) {
             return ret;
         }
-        uint8_t iinlim = reg00 & BQ25601_REG00_IINLIM_MASK;
+        uint8_t iindpm = reg00 & BQ25601_REG00_IINDPM_MASK;
         val->input_current_regulation_current_ua =
-            (BQ25601_IINLIM_OFFSET_MA + iinlim * BQ25601_IINLIM_STEP_MA) * 1000;
+            (BQ25601_IINDPM_OFFSET_MA + iindpm * BQ25601_IINDPM_STEP_MA) * 1000;
         return 0;
     }
 
@@ -256,17 +309,17 @@ static int bq25601_set_prop(const struct device *dev,
 
     case CHARGER_PROP_CONSTANT_CHARGE_VOLTAGE_UV: {
         uint32_t mv = val->const_charge_voltage_uv / 1000;
-        mv = CLAMP(mv, (uint32_t)BQ25601_VREG_OFFSET_MV, 4608U);
+        mv = CLAMP(mv, (uint32_t)BQ25601_VREG_OFFSET_MV, (uint32_t)BQ25601_VREG_MAX_MV);
         uint8_t vreg = (uint8_t)((mv - BQ25601_VREG_OFFSET_MV) / BQ25601_VREG_STEP_MV);
         return bq25601_update(dev, BQ25601_REG04, BQ25601_REG04_VREG_MASK,
-                              (uint8_t)(vreg << 2));
+                              (uint8_t)(vreg << BQ25601_REG04_VREG_SHIFT));
     }
 
     case CHARGER_PROP_INPUT_REGULATION_CURRENT_UA: {
         uint32_t ma = val->input_current_regulation_current_ua / 1000;
-        ma = CLAMP(ma, (uint32_t)BQ25601_IINLIM_OFFSET_MA, 3200U);
-        uint8_t iinlim = (uint8_t)((ma - BQ25601_IINLIM_OFFSET_MA) / BQ25601_IINLIM_STEP_MA);
-        return bq25601_update(dev, BQ25601_REG00, BQ25601_REG00_IINLIM_MASK, iinlim);
+        ma = CLAMP(ma, (uint32_t)BQ25601_IINDPM_OFFSET_MA, (uint32_t)BQ25601_IINDPM_MAX_MA);
+        uint8_t iindpm = (uint8_t)((ma - BQ25601_IINDPM_OFFSET_MA) / BQ25601_IINDPM_STEP_MA);
+        return bq25601_update(dev, BQ25601_REG00, BQ25601_REG00_IINDPM_MASK, iindpm);
     }
 
     default:
@@ -287,17 +340,35 @@ static int bq25601_init(const struct device *dev)
         return -ENODEV;
     }
 
-    /* Verify part number */
+    /* Verify part number.  A mismatch is only a warning: the device answered
+     * at its address, and refusing to bind would hide the charge state. */
     uint8_t pn_reg = 0;
-    int ret = bq25601_read(dev, BQ25601_REG0A, &pn_reg);
+    int ret = bq25601_read(dev, BQ25601_REG0B, &pn_reg);
     if (ret < 0) {
         LOG_ERR("Failed to read part register: %d", ret);
         return ret;
     }
-    uint8_t pn = (pn_reg & BQ25601_REG0A_PN_MASK) >> 3;
+    uint8_t pn = (pn_reg & BQ25601_REG0B_PN_MASK) >> BQ25601_REG0B_PN_SHIFT;
     if (pn != BQ25601_PART_NUMBER) {
-        LOG_ERR("Unexpected part number: 0x%02X (expected 0x%02X)", pn, BQ25601_PART_NUMBER);
-        return -ENODEV;
+        LOG_WRN("Unexpected part number: 0x%02X (expected 0x%02X) — continuing",
+                pn, BQ25601_PART_NUMBER);
+    }
+
+    /* Host mode with the I2C watchdog disabled.  Left at its 40 s default the
+     * watchdog expires (nothing kicks it) and resets the charge current and
+     * voltage below back to the chip defaults.  Termination stays enabled so
+     * a full charge reports CHARGER_STATUS_FULL. */
+    ret = bq25601_update(dev, BQ25601_REG05,
+                         BQ25601_REG05_WATCHDOG_MASK | BQ25601_REG05_EN_TERM,
+                         BQ25601_REG05_EN_TERM);
+    if (ret < 0) {
+        LOG_WRN("Failed to disable watchdog: %d", ret);
+    }
+    ret = bq25601_update(dev, BQ25601_REG01,
+                         BQ25601_REG01_CHG_CONFIG | BQ25601_REG01_WD_RST,
+                         BQ25601_REG01_CHG_CONFIG | BQ25601_REG01_WD_RST);
+    if (ret < 0) {
+        LOG_WRN("Failed to enable charging: %d", ret);
     }
 
     /* Apply initial charge current from DTS property */

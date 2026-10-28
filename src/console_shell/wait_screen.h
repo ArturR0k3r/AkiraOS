@@ -20,8 +20,17 @@
 /** Enter wait screen: dim display, enable low-power mode, draw first frame. */
 void wait_screen_enter(void);
 
-/** Refresh the clock and battery reading; only repaints on minute rollover. */
+/**
+ * Repaint if needed: minute rollover, a battery change, the charging
+ * animation's next step, or the end of a peek.  Call on every blanked wake.
+ */
 void wait_screen_update(void);
+
+/**
+ * Briefly restore the user's brightness (a few seconds) and repaint — used on
+ * charger plug-in and critical battery so the state change is seen.
+ */
+void wait_screen_peek(void);
 
 /**
  * Upper bound on the blanked-state wake interval, in ms.
@@ -35,9 +44,9 @@ void wait_screen_update(void);
 #define WAIT_SCREEN_UPDATE_MAX_MS 10000u
 
 /**
- * Milliseconds until the wait screen's next required repaint (the next
- * wall-clock minute boundary), clamped to at most WAIT_SCREEN_UPDATE_MAX_MS by
- * the caller.  Lets the blanked shell loop block for seconds at a time instead
+ * Milliseconds until the wait screen's next required repaint — the next
+ * wall-clock minute boundary, or the next charging-animation step while on a
+ * charger — clamped to at most WAIT_SCREEN_UPDATE_MAX_MS by the caller.  Lets the blanked shell loop block for seconds at a time instead
  * of waking at 1 Hz for a frame that is identical 59 times out of 60.
  */
 uint32_t wait_screen_ms_to_next_update(void);

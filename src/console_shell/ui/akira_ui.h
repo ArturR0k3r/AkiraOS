@@ -17,6 +17,10 @@
  * True 1-bit: the only two colours permitted are AKIRA_UI_INK and
  * AKIRA_UI_PAPER. No grayscale, no hues — every state is a pixel-weight signal.
  *
+ * One deliberate exception: the battery widget (akira_ui_battery) uses
+ * semantic accents — green while charging / full, amber when low, red when
+ * critical — because power state is the one thing worth a colour glance.
+ *
  * This is the native/shell half. A WASM-app mirror with identical signatures
  * (wrapping the akira_api.h subset) lives under AkiraSDK/wasm_apps/common/.
  */
@@ -56,19 +60,32 @@ typedef enum {
     AKIRA_UI_DITHER,      /* set bits → fg on 50% checker (caution/disabled)*/
 } akira_ui_fill_t;
 
-/* Status-bar model. Icons are the shell's native 1-bit format:
- * uint32_t[rows], bit31 = leftmost pixel, up to 32 px wide. */
+/* Battery state for the widget.  Values match akira_batt_state_t in
+ * power_manager.h so the shell can cast straight across. */
+typedef enum {
+    AKIRA_UI_BATT_UNKNOWN = 0,
+    AKIRA_UI_BATT_DISCHARGING,
+    AKIRA_UI_BATT_CHARGING,
+    AKIRA_UI_BATT_FULL,
+    AKIRA_UI_BATT_NOT_CHARGING, /* on external power, charger idle/fault */
+} akira_ui_batt_t;
+
+/* Status-bar model. */
 typedef struct {
-    const char     *title;       /* left label; NULL → show battery gauge   */
-    const char     *clock;       /* right-aligned text (e.g. "12:00:00")    */
+    const char     *title;       /* left label; NULL/"" → none              */
+    const char     *clock;       /* right-aligned text (e.g. "12:00")       */
     int             battery_pct; /* 0..100; <0 to hide the gauge            */
+    akira_ui_batt_t battery_state;
     bool            show_wifi;
     bool            wifi_on;      /* off → drawn dithered (present but idle) */
     bool            show_bt;
     bool            bt_on;
-    const uint32_t *icon_wifi;   /* 20x16 glyph, or NULL                    */
-    const uint32_t *icon_bt;     /* 20x16 glyph, or NULL                    */
 } akira_ui_status_t;
+
+/* Font ids for akira_ui_text_w(). */
+#define AKIRA_UI_FONT_SMALL 0 /* akira_display_text       — 8 px advance  */
+#define AKIRA_UI_FONT_LARGE 1 /* akira_display_text_large — 12 px advance */
+#define AKIRA_UI_FONT_HUGE  2 /* akira_display_text_huge  — 17 px advance */
 
 /* ---- Primitives ------------------------------------------------------- */
 
@@ -77,8 +94,41 @@ void akira_ui_icon_1bpp(int x, int y, int scale, const uint32_t *icon,
                         int w, int rows, uint16_t fg, uint16_t bg,
                         akira_ui_fill_t fill);
 
-/** The one inverted top bar — app title left, status cluster right. */
+/** Pixel width of @p s in one of the AKIRA_UI_FONT_* faces. */
+int akira_ui_text_w(const char *s, int font);
+
+/** The top bar — title left; Wi-Fi, BT, battery and clock right. */
 void akira_ui_status_bar(const akira_ui_status_t *s);
+
+/**
+ * Battery icon at integer @p scale (scale 1 = 25x10 incl. terminal nub).
+ * Five segments, coloured by state; while charging the segments sweep from
+ * the current level to full and a lightning bolt is drawn (inside the body
+ * from scale 2 up).  @p now_ms drives the animation — pass k_uptime_get().
+ * @return frame index of the animation (changes when a repaint is due).
+ */
+int akira_ui_battery(int x, int y, int scale, int pct, akira_ui_batt_t state,
+                     int64_t now_ms);
+
+/** Width / height of akira_ui_battery() at @p scale. */
+#define AKIRA_UI_BATT_W(scale) (25 * (scale))
+#define AKIRA_UI_BATT_H(scale) (10 * (scale))
+
+/** Animation frame akira_ui_battery() would draw now (to detect repaints). */
+int akira_ui_battery_frame(int pct, akira_ui_batt_t state, int64_t now_ms);
+
+/** Lightning bolt, 7x11 px at scale 1. */
+void akira_ui_bolt(int x, int y, int scale, uint16_t color);
+
+/**
+ * Footer hint bar across the bottom 24 px.  Each side is a '|'-separated
+ * list of "KEY:Label" hints, e.g. "A:Open|HOME:Options"; the key is drawn
+ * as an inverted pill.  NULL or "" leaves that side empty.
+ */
+void akira_ui_footer(const char *left, const char *right);
+
+/** Small animated busy spinner (8 dots on a ring), radius @p r. */
+void akira_ui_spinner(int cx, int cy, int r, int64_t now_ms);
 
 /** List row with optional right-aligned meta and a 0..5 block meter.
  *  Selected row inverts (PAPER fill / INK text) — never underline/tint. */
@@ -114,27 +164,24 @@ void akira_ui_meter(int x, int y, int w, int h, int value, int max);
 /** Inline classifier badge; dithered flags a caution/non-replayable tag. */
 void akira_ui_tag(int x, int y, const char *text, bool dithered);
 
-/** Full-screen non-actionable system message (e.g. rolling-code alert). */
-void akira_ui_alert(const char *title, const char *subtitle);
-
 /**
  * Capability-Guard confirmation dialog — the ONLY 3px-stroke element in the
- * kit. Blocking: draws over the current frame, drives the button input loop,
- * and returns true (confirm) / false (cancel). Route every restricted-syscall
- * gate (RF_RAW_TX, WIFI_DEAUTH, CRED_EXPORT, OTA_TRIGGER, …) through this.
+ * kit.  Pushed as a modal screen over whatever is showing; LEFT/RIGHT pick,
+ * A answers, B cancels.  Route every restricted-syscall gate (RF_RAW_TX,
+ * WIFI_DEAUTH, CRED_EXPORT, OTA_TRIGGER, APP_INSTALL, …) through this.
+ *
+ * Non-blocking: @p on_result runs on the shell thread once the user answers,
+ * after the dialog has been popped (so it may push another screen).
  *
  * @param capability_name  shown literally, e.g. "RF_RAW_TX"
- * @param question         plain-language prompt, e.g. "confirm TX at 433.92 MHz?"
+ * @param question         plain-language prompt (copied)
+ * @param should_cancel    optional; polled every frame — returning true
+ *                         answers "cancel" (e.g. USB cable pulled mid-prompt)
+ * @param on_result        receives true for confirm, false for cancel
  */
-bool akira_ui_confirm_dialog(const char *capability_name, const char *question);
-
-/**
- * Same as akira_ui_confirm_dialog(), but polls should_cancel() every tick and
- * returns false (cancel) the instant it does — for a decision whose premise
- * can disappear while it's still on screen (e.g. cable pulled while a USB
- * trust prompt is up and unanswered).
- */
-bool akira_ui_confirm_dialog_cancelable(const char *capability_name, const char *question,
-                                        bool (*should_cancel)(void));
+void akira_ui_confirm_open(const char *capability_name, const char *question,
+                           bool (*should_cancel)(void),
+                           void (*on_result)(bool confirmed, void *ctx),
+                           void *ctx);
 
 #endif /* AKIRA_UI_H */

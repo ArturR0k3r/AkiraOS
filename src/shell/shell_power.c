@@ -11,6 +11,8 @@
  *   power status          — show battery, current idle timeout, deep-sleep config
  *   power timeout <s>     — set idle-to-sleep timeout in seconds (0 = disable)
  *   power deep <s>        — set Phase-2 deep-sleep delay in seconds (0 = disable)
+ *   power battery         — battery monitor snapshot + raw gauge/charger registers
+ *   power sim <pct> <st>  — fake battery readings for UI testing (BATTERY_SIM)
  *
  * All settings are persisted to NVS and take effect on the next idle cycle.
  * The running shell thread re-reads timeout from NVS when settings change,
@@ -29,6 +31,14 @@
 
 #ifdef CONFIG_AKIRA_POWER_MANAGER
 #include "drivers/power/power_manager.h"
+#endif
+#ifdef CONFIG_FUEL_GAUGE_STC3115
+#include <zephyr/device.h>
+#include "drivers/power/stc3115.h"
+#endif
+#ifdef CONFIG_CHARGER_BQ25601
+#include <zephyr/device.h>
+#include "drivers/charger/bq25601.h"
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -341,11 +351,154 @@ static int cmd_power_stats(const struct shell *sh, size_t argc, char **argv)
 
 /* ------------------------------------------------------------------ */
 
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+static const char *batt_state_name(akira_batt_state_t st)
+{
+    switch (st) {
+    case AKIRA_BATT_DISCHARGING:  return "discharging";
+    case AKIRA_BATT_CHARGING:     return "charging";
+    case AKIRA_BATT_FULL:         return "full";
+    case AKIRA_BATT_NOT_CHARGING: return "plugged in, not charging";
+    default:                      return "unknown";
+    }
+}
+#endif
+
+/* The first thing to run on hardware when the battery % looks wrong: shows
+ * what the UI sees, then the chips' own registers so a stopped gauge, a
+ * latched fault or an unbound charger is visible at a glance. */
+static int cmd_power_battery(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+    akira_battery_snapshot_t b;
+
+    akira_pm_battery_snapshot(&b);
+    shell_print(sh, "--- monitor (what the UI shows) ---");
+    shell_print(sh, "valid=%d  %u%%  %s  external power=%s",
+                b.valid, b.pct, batt_state_name(b.state), b.online ? "yes" : "no");
+    shell_print(sh, "%d mV  %d mA  seq=%u", (int)b.voltage_mv, (int)b.current_ma,
+                (unsigned)b.seq);
+#endif
+
+#ifdef CONFIG_FUEL_GAUGE_STC3115
+    {
+        const struct device *fg = DEVICE_DT_GET_ANY(st_stc3115);
+        struct stc3115_regs r;
+
+        shell_print(sh, "--- STC3115 fuel gauge ---");
+        if (!fg || !device_is_ready(fg)) {
+            shell_error(sh, "not ready");
+        } else if (stc3115_read_regs(fg, &r) != 0) {
+            shell_error(sh, "I2C read failed");
+        } else {
+            shell_print(sh, "ID=0x%02x present=%d restarts=%u", r.id, r.present,
+                        (unsigned)r.restarts);
+            shell_print(sh, "MODE=0x%02x  GG_RUN=%d VMODE=%d ALM_ENA=%d",
+                        r.mode, !!(r.mode & BIT(4)), !!(r.mode & BIT(0)),
+                        !!(r.mode & BIT(3)));
+            shell_print(sh, "CTRL=0x%02x  PORDET=%d BATFAIL=%d GG_VM=%d IO0=%d",
+                        r.ctrl, !!(r.ctrl & BIT(4)), !!(r.ctrl & BIT(3)),
+                        !!(r.ctrl & BIT(2)), !!(r.ctrl & BIT(0)));
+            shell_print(sh, "SOC=%u.%02u%% (raw %u)  COUNTER=%u",
+                        r.soc_raw / 512, (r.soc_raw % 512) * 100 / 512,
+                        r.soc_raw, r.counter);
+            shell_print(sh, "V=%d mV  I=%d mA  OCV=%d mV  T=%d C",
+                        (int)r.voltage_mv, (int)r.current_ma, (int)r.ocv_mv,
+                        r.temperature_c);
+            shell_print(sh, "CC_CNF=%u (want %u)  VM_CNF=%u (want %u)",
+                        r.cc_cnf, r.cc_cnf_want, r.vm_cnf, r.vm_cnf_want);
+            shell_print(sh, "RAM backup: %s, SOC %u%%",
+                        r.ram_valid ? "valid" : "invalid", r.ram_soc_raw / 512);
+        }
+    }
+#endif
+
+#ifdef CONFIG_CHARGER_BQ25601
+    {
+        const struct device *chg = DEVICE_DT_GET_ANY(ti_bq25601);
+        uint8_t r[BQ25601_NUM_REGS];
+        static const char *const vbus[] = {
+            "none", "USB SDP", "USB CDP", "USB DCP", "?", "?", "?", "OTG",
+        };
+        static const char *const chrg[] = {
+            "not charging", "pre-charge", "fast charge", "done",
+        };
+
+        shell_print(sh, "--- BQ25601 charger ---");
+        if (!chg || !device_is_ready(chg)) {
+            shell_error(sh, "not ready (driver failed to bind)");
+        } else if (bq25601_read_regs(chg, r) != 0) {
+            shell_error(sh, "I2C read failed");
+        } else {
+            shell_print(sh, "REG00..0B: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                        r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9],
+                        r[10], r[11]);
+            shell_print(sh, "VBUS=%s  CHRG=%s  PG=%d  THERM=%d",
+                        vbus[r[8] >> 5], chrg[(r[8] >> 3) & 3], !!(r[8] & BIT(2)),
+                        !!(r[8] & BIT(1)));
+            shell_print(sh, "faults=0x%02x (WDT=%d CHRG=%d BAT=%d NTC=%d)", r[9],
+                        !!(r[9] & BIT(7)), (r[9] >> 4) & 3, !!(r[9] & BIT(3)),
+                        r[9] & 7);
+            shell_print(sh, "HIZ=%d CHG_EN=%d  IINDPM=%u mA  ICHG=%u mA  VREG=%u mV",
+                        !!(r[0] & BIT(7)), !!(r[1] & BIT(4)),
+                        100U + (r[0] & 0x1F) * 100U, (r[2] & 0x3F) * 60U,
+                        3856U + (r[4] >> 3) * 32U);
+            shell_print(sh, "EN_TERM=%d  watchdog=%s  PN=0x%x (BQ25601 = 0x2)",
+                        !!(r[5] & BIT(7)), ((r[5] >> 4) & 3) ? "ON" : "off",
+                        (r[11] >> 3) & 0xF);
+        }
+    }
+#endif
+    return 0;
+}
+
+static int cmd_power_sim(const struct shell *sh, size_t argc, char **argv)
+{
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+    if (argc < 2 || strcmp(argv[1], "off") == 0) {
+        akira_pm_battery_simulate(-1, AKIRA_BATT_UNKNOWN);
+        shell_print(sh, "Battery simulation off");
+        return 0;
+    }
+
+    int pct = atoi(argv[1]);
+    const char *st = (argc > 2) ? argv[2] : "dis";
+    akira_batt_state_t state;
+
+    if (strcmp(st, "chg") == 0) {
+        state = AKIRA_BATT_CHARGING;
+    } else if (strcmp(st, "full") == 0) {
+        state = AKIRA_BATT_FULL;
+        pct = 100;
+    } else if (strcmp(st, "nochg") == 0) {
+        state = AKIRA_BATT_NOT_CHARGING;
+    } else {
+        state = AKIRA_BATT_DISCHARGING;
+    }
+    if (akira_pm_battery_simulate(pct, state) != 0) {
+        shell_error(sh, "Needs CONFIG_AKIRA_BATTERY_SIM=y");
+        return -ENOTSUP;
+    }
+    shell_print(sh, "Simulating %d%% %s", pct, batt_state_name(state));
+    return 0;
+#else
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+    shell_error(sh, "Power manager disabled");
+    return -ENOTSUP;
+#endif
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_power,
     SHELL_CMD(status,  NULL, "Show power state and settings", cmd_power_status),
     SHELL_CMD(stats,   NULL, "CPU duty cycle since last call (battery proxy)", cmd_power_stats),
     SHELL_CMD(timeout, NULL, "Get/set idle timeout: power timeout [<s>]", cmd_power_timeout),
     SHELL_CMD(deep,    NULL, "Get/set auto deep-sleep delay: power deep [<s>]", cmd_power_deep),
+    SHELL_CMD(battery, NULL, "Battery monitor + raw fuel gauge / charger registers", cmd_power_battery),
+    SHELL_CMD(sim,     NULL, "Fake battery: power sim <pct> <chg|dis|full|nochg> | off", cmd_power_sim),
     SHELL_SUBCMD_SET_END
 );
 

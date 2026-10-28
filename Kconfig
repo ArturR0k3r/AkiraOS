@@ -1955,20 +1955,6 @@ config AKIRA_WAIT_WAKE_HOLD_MS
       How long the HOME button must be held to exit the Phase 1 idle
       wait screen.  Prevents accidental wakes from brief button contact.
 
-config AKIRA_XMB_IDLE_FREEZE_S
-    int "Freeze the home-screen ribbon animation after N seconds idle"
-    default 8
-    range 0 300
-    depends on AKIRA_OS_SHELL
-    help
-      The XMB ribbon on the home screen advances its phase 10x/s, and each
-      step forces a full framebuffer redraw plus a full-width SPI flush to the
-      panel.  Left running it is the largest power consumer while the screen is
-      on, for an animation nobody is looking at.  After this many seconds with
-      no button press the ribbon freezes; the next keypress resumes it.
-
-      Set to 0 to animate forever (the old behaviour).
-
 config AKIRA_DEEP_SLEEP_IDLE_S
     int "Seconds on wait screen before entering deep sleep"
     default 1800
@@ -1998,6 +1984,24 @@ config AKIRA_BATTERY_LOW_THRESHOLD
     depends on AKIRA_POWER_MANAGER
     help
       State-of-charge percentage below which low_battery is flagged.
+
+config AKIRA_BATTERY_CRITICAL_THRESHOLD
+    int "Critical battery threshold (%)"
+    default 5
+    range 1 50
+    depends on AKIRA_POWER_MANAGER
+    help
+      State-of-charge percentage at which the shell raises its second,
+      critical low-battery warning.  Must be below the low threshold.
+
+config AKIRA_BATTERY_SIM
+    bool "Battery simulation for UI testing"
+    default y if BOARD_NATIVE_SIM
+    depends on AKIRA_POWER_MANAGER
+    help
+      Adds `power sim <pct> <chg|dis|full|off>`, which overrides the battery
+      monitor's readings so the charging / low-battery UI can be exercised
+      without a cell or charger.  On by default only on native_sim.
 
 config AKIRA_BATTERY_ADC
     bool "Enable ADC battery voltage measurement"

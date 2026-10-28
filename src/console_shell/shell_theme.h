@@ -14,16 +14,6 @@
 #ifndef SHELL_THEME_H
 #define SHELL_THEME_H
 
-
-/* ------------------------------------------------------------------ */
-/* Screen geometry (landscape — width set by CONFIG_AKIRA_OS_SHELL_SCREEN_W) */
-/* ------------------------------------------------------------------ */
-#define SHELL_SCREEN_W   CONFIG_AKIRA_OS_SHELL_SCREEN_W
-#define SHELL_SCREEN_H   240
-#define SHELL_HEADER_H    32   /* Black top bar (title + nav hints)  */
-#define SHELL_FOOTER_H    30   /* Black bottom bar (button hints)    */
-#define SHELL_CONTENT_H  (SHELL_SCREEN_H - SHELL_HEADER_H - SHELL_FOOTER_H)
-
 /* ------------------------------------------------------------------ */
 /* RGB565 colour palette                                               */
 /* ------------------------------------------------------------------ */
@@ -44,44 +34,27 @@
 #define SHELL_C_LTGRAY   0x2945u   /* separator, high contrast (was 0xD6BA) */
 #define SHELL_C_RED      0xF800u   /* error indicator — unchanged     */
 
+/* Battery semantic accents — the only hues in the shell.  Everything else
+ * stays 1-bit; colour is reserved for the one state worth a glance: power.
+ * Picked dark enough to read on the white background. */
+#define SHELL_C_CHARGE   0x0549u   /* green  #00A848 — charging / full     */
+#define SHELL_C_WARN     0xE480u   /* amber  #E09000 — low battery         */
+#define SHELL_C_CRIT     0xF800u   /* red    #FF0000 — critical battery    */
+
 /* Flat short aliases (used by all Liquid Crystal screens) */
 #define C_BLACK       SHELL_C_BLACK
 #define C_WHITE       SHELL_C_WHITE
 #define C_GRAY        SHELL_C_GRAY
 #define C_DKGRAY      SHELL_C_DKGRAY
-#define C_GLASS       0xDEFBu   /* dither pixel (unused — no dithering) */
-#define C_GLASS_BODY  0xFFFFu   /* glass fill = background (transparent) */
-#define C_GLASS_HILIT 0x8410u   /* glass top-sheen highlight          */
 
 /* ------------------------------------------------------------------ */
 /* Screen geometry (landscape — width from CONFIG_AKIRA_OS_SHELL_SCREEN_W) */
 /* ------------------------------------------------------------------ */
 #define SCR_W    CONFIG_AKIRA_OS_SHELL_SCREEN_W
 #define SCR_H    240
-#define SBAR_H   24    /* status / header bar height                  */
-#define LIST_Y   26    /* content list start y                        */
-#define FOOT_Y   216   /* footer bar start y                          */
-#define FOOT_H   24    /* footer bar height                           */
-#define ITEM_H   36    /* settings list item height                   */
-#define ITEM_X   12    /* settings list item left margin              */
-#define ITEM_W   (SCR_W - 24)  /* settings list item width            */
-
-/* Semantic aliases */
-#define SHELL_COLOR_BG           SHELL_C_WHITE
-#define SHELL_COLOR_FG           SHELL_C_BLACK
-#define SHELL_COLOR_HEADER_BG    SHELL_C_BLACK
-#define SHELL_COLOR_HEADER_TXT   SHELL_C_WHITE
-#define SHELL_COLOR_FOOTER_BG    SHELL_C_BLACK
-#define SHELL_COLOR_FOOTER_TXT   SHELL_C_WHITE
-#define SHELL_COLOR_SELECTED_BG  SHELL_C_BLACK
-#define SHELL_COLOR_SELECTED_TXT SHELL_C_WHITE
-#define SHELL_COLOR_SEPARATOR    SHELL_C_LTGRAY
-#define SHELL_COLOR_DOT_RUN      SHELL_C_BLACK
-#define SHELL_COLOR_DOT_STOP     SHELL_C_GRAY
-#define SHELL_COLOR_DOT_ERR      SHELL_C_RED
-
-/* ------------------------------------------------------------------ */
-/* LVGL styles (shared across all settings sub-screens)                */
-/* ------------------------------------------------------------------ */
+#define SBAR_H   24    /* status bar height (akira_ui status pill)    */
+#define CONT_Y   26    /* content area start y                        */
+#define FOOT_Y   216   /* footer hint bar start y                     */
+#define FOOT_H   24    /* footer hint bar height                      */
 
 #endif /* SHELL_THEME_H */

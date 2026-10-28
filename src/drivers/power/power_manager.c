@@ -26,6 +26,7 @@ LOG_MODULE_REGISTER(akira_power_manager, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/init.h>
 #include <zephyr/pm/pm.h>
 #include <zephyr/pm/state.h>
+#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 
@@ -120,6 +121,11 @@ static struct {
     int16_t adc_buf;
 #endif
 } g_pm AKIRA_BULK_BSS;
+
+/* Battery monitor (see "cached battery monitor" below); declared here because
+ * power_manager_init() arms it. */
+static struct k_work_delayable g_batt_work;
+static void batt_monitor_work_fn(struct k_work *work);
 
 /* ---------- helpers ---------- */
 
@@ -241,6 +247,10 @@ int power_manager_init(void)
 #endif
 
     g_pm.initialized = true;
+
+    k_work_init_delayable(&g_batt_work, batt_monitor_work_fn);
+    k_work_schedule(&g_batt_work, K_MSEC(200));
+
     LOG_INF("Power manager initialized (mode=ACTIVE)");
     return 0;
 }
@@ -472,9 +482,11 @@ static int battery_status_read(akira_battery_status_t *status)
             /* Fuel-gauge returns µV and µA — convert to mV and mA. */
             status->voltage_mv    = (int32_t)(volt.voltage / 1000);
             status->current_ma    = (int32_t)(curr.current / 1000);
-            /* Positive current = discharge, negative = charging.
-             * BQ28Z610 reports charge current as negative. */
-            status->charging      = (status->current_ma < 0);
+            /* Zephyr fuel_gauge convention: positive = charging.  The
+             * charger IC overrides this whenever it is bound (see
+             * akira_pm_get_battery_status); the margin keeps a near-zero
+             * idle current from flickering the flag. */
+            status->charging      = (status->current_ma > 20);
             status->low_battery   = (status->level_percent < CONFIG_AKIRA_BATTERY_LOW_THRESHOLD);
             /* Temperature is best-effort: not every fuel gauge implements
              * it, so it doesn't gate the rest of the status read. */
@@ -560,6 +572,281 @@ int akira_pm_get_battery_status(akira_battery_status_t *status)
     return ret;
 }
 
+/* ---------- cached battery monitor ---------- */
+
+/*
+ * One delayable work item on the system workqueue reads the charger and the
+ * gauge, smooths the percentage for display, and tells listeners what
+ * changed.  The UI reads the cached snapshot, so it never touches I2C.
+ *
+ * Kernel objects stay in internal RAM (the timer ISR walks the work item);
+ * only the plain data goes to PSRAM.
+ */
+#define BATT_POLL_ONLINE_MS     2000   /* on a charger: track the % closely   */
+#define BATT_POLL_AWAKE_MS      5000   /* on battery, screen on                */
+#define BATT_POLL_BLANKED_MS    60000  /* on battery, screen off: save power   */
+#define BATT_SMOOTH_JUMP_PCT    5      /* bigger moves bypass the smoothing    */
+#define BATT_MAX_LISTENERS      4
+
+static struct k_spinlock g_batt_lock;
+
+static struct {
+    akira_battery_snapshot_t snap;
+    bool have_snap;
+    bool blanked;
+    bool full_snapped;   /* SOC forced to 100 % for this charge cycle */
+    bool low_fired;
+    bool crit_fired;
+    int listener_count;
+    struct {
+        akira_battery_cb_t cb;
+        void *user;
+    } listeners[BATT_MAX_LISTENERS];
+#ifdef CONFIG_AKIRA_BATTERY_SIM
+    bool sim_active;
+    uint8_t sim_pct;
+    akira_batt_state_t sim_state;
+#endif
+} g_batt AKIRA_BULK_BSS;
+
+/* Raw (unsmoothed) reading of the hardware. */
+static void batt_read(akira_battery_snapshot_t *out)
+{
+    akira_battery_status_t st;
+
+    memset(out, 0, sizeof(*out));
+    out->temperature_c = INT32_MIN;
+
+#ifdef CONFIG_AKIRA_BATTERY_SIM
+    if (g_batt.sim_active) {
+        out->valid = true;
+        out->pct = g_batt.sim_pct;
+        out->state = g_batt.sim_state;
+        out->online = (g_batt.sim_state != AKIRA_BATT_DISCHARGING);
+        out->voltage_mv = 3300 + g_batt.sim_pct * 9;
+        out->current_ma = (g_batt.sim_state == AKIRA_BATT_CHARGING) ? 480
+                        : (g_batt.sim_state == AKIRA_BATT_DISCHARGING) ? -180 : 0;
+        out->temperature_c = 27;
+        return;
+    }
+#endif
+
+    if (battery_status_read(&st) == 0) {
+        out->valid = true;
+        out->pct = st.level_percent;
+        out->voltage_mv = st.voltage_mv;
+        out->current_ma = st.current_ma;
+        out->temperature_c = st.temperature_c;
+    }
+
+#ifdef CONFIG_CHARGER
+    if (g_pm.charger) {
+        union charger_propval online, status;
+
+        if (charger_get_prop(g_pm.charger, CHARGER_PROP_ONLINE, &online) == 0 &&
+            charger_get_prop(g_pm.charger, CHARGER_PROP_STATUS, &status) == 0) {
+            out->online = (online.online != CHARGER_ONLINE_OFFLINE);
+            if (!out->online) {
+                out->state = AKIRA_BATT_DISCHARGING;
+            } else if (status.status == CHARGER_STATUS_CHARGING) {
+                out->state = AKIRA_BATT_CHARGING;
+            } else if (status.status == CHARGER_STATUS_FULL) {
+                out->state = AKIRA_BATT_FULL;
+            } else {
+                out->state = AKIRA_BATT_NOT_CHARGING;
+            }
+            return;
+        }
+    }
+#endif
+
+    /* No charger IC: infer from the pack current. */
+    if (out->valid) {
+        out->state = st.charging ? AKIRA_BATT_CHARGING : AKIRA_BATT_DISCHARGING;
+        out->online = st.charging;
+    }
+}
+
+/*
+ * Display percentage: the gauge wanders by a percent either way under a
+ * changing load, which reads as a bug on a status bar.  While charging the
+ * number may only go up, while discharging only down — unless the state
+ * changed or the gauge moved by a real step (restart, re-estimate).
+ */
+static uint8_t batt_smooth(const akira_battery_snapshot_t *prev,
+                           const akira_battery_snapshot_t *now)
+{
+    if (now->state == AKIRA_BATT_FULL) {
+        return 100;
+    }
+    if (!prev->valid || prev->state != now->state ||
+        abs((int)now->pct - (int)prev->pct) >= BATT_SMOOTH_JUMP_PCT) {
+        return now->pct;
+    }
+    if (now->state == AKIRA_BATT_CHARGING) {
+        return MAX(prev->pct, now->pct);
+    }
+    if (now->state == AKIRA_BATT_DISCHARGING) {
+        return MIN(prev->pct, now->pct);
+    }
+    return now->pct;
+}
+
+static void batt_monitor_work_fn(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    akira_battery_snapshot_t now, prev;
+    uint32_t events = 0;
+
+    batt_read(&now);
+
+    k_spinlock_key_t key = k_spin_lock(&g_batt_lock);
+    prev = g_batt.snap;
+    bool first = !g_batt.have_snap;
+    k_spin_unlock(&g_batt_lock, key);
+
+    if (now.valid) {
+        now.pct = batt_smooth(&prev, &now);
+    }
+
+    if (first) {
+        events |= AKIRA_BATT_EVT_STATE | AKIRA_BATT_EVT_LEVEL;
+    } else {
+        if (!prev.online && now.online) {
+            events |= AKIRA_BATT_EVT_PLUGGED;
+        }
+        if (prev.online && !now.online) {
+            events |= AKIRA_BATT_EVT_UNPLUGGED;
+        }
+        if (prev.state != AKIRA_BATT_FULL && now.state == AKIRA_BATT_FULL) {
+            events |= AKIRA_BATT_EVT_FULL;
+        }
+        if (prev.pct != now.pct) {
+            events |= AKIRA_BATT_EVT_LEVEL;
+        }
+        if (prev.state != now.state || prev.online != now.online ||
+            prev.valid != now.valid) {
+            events |= AKIRA_BATT_EVT_STATE;
+        }
+    }
+
+    /* One warning per discharge for each threshold; plugging in re-arms. */
+    if (now.online) {
+        g_batt.low_fired = false;
+        g_batt.crit_fired = false;
+    } else if (now.valid && now.state == AKIRA_BATT_DISCHARGING) {
+        if (!g_batt.crit_fired && now.pct <= CONFIG_AKIRA_BATTERY_CRITICAL_THRESHOLD) {
+            g_batt.crit_fired = true;
+            g_batt.low_fired = true;
+            events |= AKIRA_BATT_EVT_CRITICAL;
+        } else if (!g_batt.low_fired && now.pct <= CONFIG_AKIRA_BATTERY_LOW_THRESHOLD) {
+            g_batt.low_fired = true;
+            events |= AKIRA_BATT_EVT_LOW;
+        }
+    }
+
+#ifdef CONFIG_FUEL_GAUGE
+    /* The charger has terminated: the cell is full whatever the gauge has
+     * drifted to.  Tell the gauge once per charge cycle so the % it tracks
+     * from here on starts at 100. */
+    if (now.state == AKIRA_BATT_FULL && !g_batt.full_snapped && g_pm.fuel_gauge
+# ifdef CONFIG_AKIRA_BATTERY_SIM
+        && !g_batt.sim_active
+# endif
+    ) {
+        union fuel_gauge_prop_val v = { .relative_state_of_charge = 100 };
+
+        if (fuel_gauge_set_prop(g_pm.fuel_gauge,
+                                FUEL_GAUGE_RELATIVE_STATE_OF_CHARGE, v) == 0) {
+            LOG_INF("Charge complete — gauge set to 100%%");
+        }
+        g_batt.full_snapped = true;
+    } else if (now.state == AKIRA_BATT_DISCHARGING) {
+        g_batt.full_snapped = false;
+    }
+#endif
+
+    now.seq = prev.seq + (events ? 1 : 0);
+
+    key = k_spin_lock(&g_batt_lock);
+    g_batt.snap = now;
+    g_batt.have_snap = true;
+    int n = g_batt.listener_count;
+    k_spin_unlock(&g_batt_lock, key);
+
+    if (events & (AKIRA_BATT_EVT_PLUGGED | AKIRA_BATT_EVT_UNPLUGGED |
+                  AKIRA_BATT_EVT_FULL)) {
+        LOG_INF("Battery: %u%% %s (%s, %d mV, %d mA)", now.pct,
+                now.state == AKIRA_BATT_CHARGING ? "charging" :
+                now.state == AKIRA_BATT_FULL ? "full" :
+                now.state == AKIRA_BATT_NOT_CHARGING ? "not charging" :
+                "discharging",
+                now.online ? "external power" : "battery",
+                (int)now.voltage_mv, (int)now.current_ma);
+    }
+
+    if (events) {
+        for (int i = 0; i < n; i++) {
+            g_batt.listeners[i].cb(events, &now, g_batt.listeners[i].user);
+        }
+    }
+
+    int period = now.online ? BATT_POLL_ONLINE_MS
+               : g_batt.blanked ? BATT_POLL_BLANKED_MS : BATT_POLL_AWAKE_MS;
+    k_work_reschedule(&g_batt_work, K_MSEC(period));
+}
+
+void akira_pm_battery_snapshot(akira_battery_snapshot_t *out)
+{
+    if (!out) {
+        return;
+    }
+    k_spinlock_key_t key = k_spin_lock(&g_batt_lock);
+    *out = g_batt.snap;
+    k_spin_unlock(&g_batt_lock, key);
+}
+
+void akira_pm_battery_poll_now(void)
+{
+    if (g_pm.initialized) {
+        k_work_reschedule(&g_batt_work, K_NO_WAIT);
+    }
+}
+
+int akira_pm_battery_register_cb(akira_battery_cb_t cb, void *user)
+{
+    int ret = -ENOMEM;
+
+    if (!cb) {
+        return -EINVAL;
+    }
+    k_spinlock_key_t key = k_spin_lock(&g_batt_lock);
+    if (g_batt.listener_count < BATT_MAX_LISTENERS) {
+        g_batt.listeners[g_batt.listener_count].cb = cb;
+        g_batt.listeners[g_batt.listener_count].user = user;
+        g_batt.listener_count++;
+        ret = 0;
+    }
+    k_spin_unlock(&g_batt_lock, key);
+    return ret;
+}
+
+int akira_pm_battery_simulate(int pct, akira_batt_state_t state)
+{
+#ifdef CONFIG_AKIRA_BATTERY_SIM
+    g_batt.sim_pct = (uint8_t)CLAMP(pct, 0, 100);
+    g_batt.sim_state = state;
+    g_batt.sim_active = (pct >= 0);
+    akira_pm_battery_poll_now();
+    return 0;
+#else
+    ARG_UNUSED(pct);
+    ARG_UNUSED(state);
+    return -ENOTSUP;
+#endif
+}
+
 /* ---------- low-power auto-management ---------- */
 
 int akira_pm_enable_low_power_mode(bool enable)
@@ -640,6 +927,13 @@ static void akira_pm_gate_peripherals(bool suspending)
 void akira_pm_notify_blank(bool entering)
 {
     akira_pm_gate_peripherals(entering);
+
+    /* Slow the battery poll while the screen is off; take a fresh reading on
+     * wake so the first frame isn't up to a minute stale. */
+    g_batt.blanked = entering;
+    if (!entering) {
+        akira_pm_battery_poll_now();
+    }
 
     if (entering) {
         akira_pm_enable_low_power_mode(true);

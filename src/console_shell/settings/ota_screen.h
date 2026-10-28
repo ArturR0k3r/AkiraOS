@@ -5,17 +5,20 @@
 
 /**
  * @file ota_screen.h
- * @brief OTA firmware update screen.
+ * @brief Firmware version / update information.
  */
 
 #ifndef SETTINGS_OTA_SCREEN_H
 #define SETTINGS_OTA_SCREEN_H
 
+#include "ui/list_screen.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void ota_screen_load(void);
+/** Settings → Software update. */
+extern const list_model_t ota_page;
 
 #ifdef __cplusplus
 }

@@ -15,7 +15,8 @@
 extern "C" {
 #endif
 
-void wifi_screen_load(void);
+/** Settings → Wi-Fi: push the network list (starts a scan). */
+void wifi_open(void);
 
 #ifdef __cplusplus
 }

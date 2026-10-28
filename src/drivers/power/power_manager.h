@@ -123,6 +123,73 @@ int akira_pm_get_battery_status(akira_battery_status_t *status);
  */
 bool akira_pm_is_charging(void);
 
+/* ---------- cached battery monitor (UI-facing) ---------- */
+
+/** @brief Charge state as the UI should present it. */
+typedef enum {
+    AKIRA_BATT_UNKNOWN = 0,   /**< No reading yet, or no battery hardware.          */
+    AKIRA_BATT_DISCHARGING,   /**< Running from the cell.                           */
+    AKIRA_BATT_CHARGING,      /**< External power, charge cycle active.             */
+    AKIRA_BATT_FULL,          /**< External power, charge terminated.               */
+    AKIRA_BATT_NOT_CHARGING,  /**< External power, not charging (fault, temp, ...). */
+} akira_batt_state_t;
+
+/**
+ * @brief Battery snapshot maintained by a background poll.
+ *
+ * Reading it costs no I2C traffic, so UI code may call
+ * akira_pm_battery_snapshot() every frame.
+ */
+typedef struct {
+    bool     valid;          /**< pct / voltage / current come from a real gauge reading. */
+    bool     online;         /**< External power present.                                 */
+    akira_batt_state_t state;
+    uint8_t  pct;            /**< Display SoC 0-100 %, smoothed (see power_manager.c).    */
+    int32_t  voltage_mv;
+    int32_t  current_ma;     /**< Charge(+) / discharge(-).                               */
+    int32_t  temperature_c;  /**< INT32_MIN if unavailable.                               */
+    uint32_t seq;            /**< Bumps whenever anything above changes.                  */
+} akira_battery_snapshot_t;
+
+/** @name Battery listener event bits
+ * @{ */
+#define AKIRA_BATT_EVT_PLUGGED   (1U << 0) /**< External power connected.           */
+#define AKIRA_BATT_EVT_UNPLUGGED (1U << 1) /**< External power removed.             */
+#define AKIRA_BATT_EVT_FULL      (1U << 2) /**< Charger terminated: battery full.   */
+#define AKIRA_BATT_EVT_LEVEL     (1U << 3) /**< Display % changed.                  */
+#define AKIRA_BATT_EVT_LOW       (1U << 4) /**< Reached LOW threshold, discharging. */
+#define AKIRA_BATT_EVT_CRITICAL  (1U << 5) /**< Reached CRITICAL threshold.         */
+#define AKIRA_BATT_EVT_STATE     (1U << 6) /**< state / online / validity changed.  */
+/** @} */
+
+/**
+ * @brief Battery listener.  Runs on the system workqueue — keep it short
+ *        (post to your own queue, don't draw).
+ */
+typedef void (*akira_battery_cb_t)(uint32_t events,
+                                   const akira_battery_snapshot_t *snap,
+                                   void *user);
+
+/** @brief Copy the latest cached battery snapshot (no I2C). */
+void akira_pm_battery_snapshot(akira_battery_snapshot_t *out);
+
+/** @brief Re-poll the battery now (e.g. on a VBUS attach interrupt). */
+void akira_pm_battery_poll_now(void);
+
+/**
+ * @brief Register a listener for battery events.
+ * @return 0 on success, -ENOMEM if the listener table is full.
+ */
+int akira_pm_battery_register_cb(akira_battery_cb_t cb, void *user);
+
+/**
+ * @brief Override the monitor's readings for UI testing.
+ * @param pct   0-100, or negative to stop simulating.
+ * @param state Simulated charge state (online is derived from it).
+ * @return 0, or -ENOTSUP when built without CONFIG_AKIRA_BATTERY_SIM.
+ */
+int akira_pm_battery_simulate(int pct, akira_batt_state_t state);
+
 /**
  * @brief Enable or disable automatic low-power idle management.
  * @return 0 always.

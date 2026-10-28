@@ -5,17 +5,23 @@
 
 /**
  * @file power_screen.h
- * @brief Sleep and display-off timeout settings.
+ * @brief Battery status and auto power-off.
  */
 
 #ifndef SETTINGS_POWER_SCREEN_H
 #define SETTINGS_POWER_SCREEN_H
 
+#include "ui/list_screen.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void power_screen_load(void);
+/** Settings → Power & battery. */
+extern const list_model_t power_page;
+
+/** Full-screen battery details (also opened from the home status area). */
+void battery_screen_open(void);
 
 #ifdef __cplusplus
 }
