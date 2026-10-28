@@ -712,10 +712,35 @@ static int lr2021_flrc_apply(void) {
     return lr2021_write_command(LR2021_CMD_SET_FLRC_SYNCWORD, sync_args, 5);
 }
 
+/* Wake the chip from RAM-retention SLEEP. The LR2021 wakes on an NSS (CS)
+ * falling edge; it then re-boots from retained RAM with BUSY held high until
+ * ready. Pulse CS, wait out BUSY, then re-enter Standby XOSC. Config and
+ * front-end calibration survive because SET_SLEEP was issued with the
+ * RAM-retention flag, so no re-init / re-calibration is needed here.
+ * (Not yet hardware-validated — see the driver sleep/wake note.) */
+static void lr2021_wake_from_sleep(void) {
+    lr2021_spi_lock();
+    lr2021_cs_low();          /* NSS low edge = wake trigger */
+    k_usleep(200);
+    lr2021_cs_high();
+    lr2021_spi_unlock();
+    k_msleep(1);              /* let the chip raise BUSY before we poll it */
+    lr2021_wait_busy();       /* retention wake-up completes when BUSY drops */
+    uint8_t m = LR2021_STANDBY_XOSC;
+    lr2021_write_command(LR2021_CMD_SET_STANDBY, &m, 1);
+    g_lr2021.current_mode = RADIO_MODE_STANDBY;
+    g_lr2021.rx_armed = false;
+}
+
 static int lr2021_init(void) {
     int ret;
 
     if (g_lr2021.initialized) {
+        /* Already brought up once (e.g. parked asleep at boot). Guarantee the
+         * caller gets a ready chip: wake from retention sleep back to Standby. */
+        if (g_lr2021.current_mode == RADIO_MODE_SLEEP) {
+            lr2021_wake_from_sleep();
+        }
         return 0;
     }
 
@@ -955,10 +980,27 @@ static int lr2021_set_mode(radio_mode_t mode) {
         return -ENODEV;
     }
 
+    /* Any transition out of SLEEP must wake the chip first — it ignores
+     * commands until NSS has pulsed it awake and BUSY has dropped. */
+    if (g_lr2021.current_mode == RADIO_MODE_SLEEP && mode != RADIO_MODE_SLEEP) {
+        lr2021_wake_from_sleep();
+    }
+
     int ret = 0;
 
     switch (mode) {
     case RADIO_MODE_SLEEP: {
+        /* SET_SLEEP issued straight from continuous RX wedges BUSY high
+         * permanently (see lr2021_deinit) and the shared RF_RST only pulses
+         * once per boot, so there's no recovery. Drop RX → Standby first, let
+         * it settle, then sleep with RAM retention. */
+        if (g_lr2021.current_mode == RADIO_MODE_RX || g_lr2021.rx_armed) {
+            uint8_t sb = LR2021_STANDBY_XOSC;
+            lr2021_write_command(LR2021_CMD_SET_STANDBY, &sb, 1);
+            g_lr2021.rx_armed = false;
+            g_lr2021.current_mode = RADIO_MODE_STANDBY;
+            k_msleep(1);
+        }
         uint8_t args[5] = { LR2021_SLEEP_RAM_RETENTION, 0, 0, 0, 0 };
         ret = lr2021_write_command(LR2021_CMD_SET_SLEEP, args, 5);
         break;
@@ -966,6 +1008,10 @@ static int lr2021_set_mode(radio_mode_t mode) {
     case RADIO_MODE_STANDBY: {
         uint8_t m = LR2021_STANDBY_XOSC;
         ret = lr2021_write_command(LR2021_CMD_SET_STANDBY, &m, 1);
+        /* Clear rx_armed so a later recv() re-arms continuous RX instead of
+         * assuming the chip is still listening (it is now in Standby) — same
+         * staleness guard as the set_frequency/CalibFE path. */
+        g_lr2021.rx_armed = false;
         break;
     }
     case RADIO_MODE_RX: {
@@ -997,6 +1043,12 @@ static int lr2021_set_mode(radio_mode_t mode) {
 static int lr2021_set_frequency(uint32_t freq_hz) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
+    }
+
+    /* Wake first if parked in retention SLEEP — a consumer may set frequency
+     * before anything else brings the chip out of its boot-time low-power state. */
+    if (g_lr2021.current_mode == RADIO_MODE_SLEEP) {
+        lr2021_wake_from_sleep();
     }
 
     /* Synthesizer covers 150MHz-2.5GHz (datasheet §1091): LF path 150-960MHz,
@@ -1119,6 +1171,13 @@ static int lr2021_set_power(int8_t dbm) {
 static int lr2021_set_modulation(radio_modulation_t mod) {
     if (!g_lr2021.initialized) {
         return -ENODEV;
+    }
+
+    /* Mesh (and any direct radio_* consumer) may configure the chip while it is
+     * still parked in retention SLEEP from boot — wake it first or the commands
+     * below are issued into a sleeping chip. */
+    if (g_lr2021.current_mode == RADIO_MODE_SLEEP) {
+        lr2021_wake_from_sleep();
     }
 
     /* Config commands are rejected from RX/TX — force STANDBY first. */

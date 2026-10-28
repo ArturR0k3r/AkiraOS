@@ -18,8 +18,29 @@
 #include <string.h>
 #include <errno.h>
 #include "lib/mem_helper.h"
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+#include <drivers/power/power_manager.h>
+#endif
 
 LOG_MODULE_REGISTER(akira_mesh_mac, CONFIG_AKIRA_LOG_LEVEL);
+
+/* TX thread wake: given when a frame is enqueued and when mesh starts/stops, so
+ * the thread blocks (zero wake-ups) instead of polling at 100 Hz while idle.
+ * A plain k_sem lives in internal RAM (.bss) as required for kernel objects. */
+static K_SEM_DEFINE(s_mac_tx_wake, 0, 1);
+
+/* Deep-sleep keep-awake while mesh is running (it needs the radio in continuous
+ * RX — sys_poweroff would drop mesh traffic). Held across start..stop, renewed
+ * from the RX thread so a long-running mesh isn't dropped at the max_hold
+ * deadline. */
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+#if defined(CONFIG_AKIRA_RF_INSOMNIA_MAX_HOLD_S)
+#define MESH_MAC_INSOMNIA_HOLD_S CONFIG_AKIRA_RF_INSOMNIA_MAX_HOLD_S
+#else
+#define MESH_MAC_INSOMNIA_HOLD_S 3600
+#endif
+static int s_mac_insomnia = -1;
+#endif
 
 struct mac_frame {
     uint16_t len;
@@ -85,6 +106,13 @@ int mesh_mac_init(radio_handle_t *radio)
                 CONFIG_AKIRA_MESH_MAC_TXQ_LOW_LEN);
     s_mac.radio = radio;
     s_mac.running = true;
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+    if (s_mac_insomnia < 0) {
+        s_mac_insomnia = akira_pm_insomnia_enter(
+            "mesh", (uint32_t)MESH_MAC_INSOMNIA_HOLD_S * 1000U);
+    }
+#endif
+    k_sem_give(&s_mac_tx_wake);   /* release the TX thread from its idle block */
     return 0;
 }
 
@@ -95,6 +123,15 @@ int mesh_mac_deinit(void)
     for (size_t i = 0; i < ARRAY_SIZE(s_txq_lanes); i++) {
         k_msgq_purge(s_txq_lanes[i]);
     }
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+    if (s_mac_insomnia >= 0) {
+        akira_pm_insomnia_exit(s_mac_insomnia);
+        s_mac_insomnia = -1;
+    }
+#endif
+    /* Wake the TX thread so it observes !running and re-blocks on K_FOREVER
+     * instead of lingering on a stale CCA-backoff timeout. */
+    k_sem_give(&s_mac_tx_wake);
     return 0;
 }
 
@@ -167,7 +204,11 @@ int mesh_mac_send(mesh_mac_prio_t prio, const uint8_t *buf, size_t len)
     struct mac_frame f = { .len = (uint16_t)len, .retry_at = 0, .cca_attempts = 0,
                            .queued_at = k_uptime_get() };
     memcpy(f.data, buf, len);
-    return (k_msgq_put(s_txq_lanes[prio], &f, K_NO_WAIT) == 0) ? 0 : -EBUSY;
+    if (k_msgq_put(s_txq_lanes[prio], &f, K_NO_WAIT) != 0) {
+        return -EBUSY;
+    }
+    k_sem_give(&s_mac_tx_wake);   /* wake the TX thread to send it now */
+    return 0;
 }
 
 mesh_mac_prio_t mesh_mac_prio_for_msg_type(uint8_t msg_type)
@@ -220,7 +261,9 @@ static void mesh_mac_tx_thread_fn(void *a, void *b, void *c)
     ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
     while (1) {
         if (!s_mac.running || !s_mac.radio || !s_mac.radio->ops || !s_mac.radio->ops->send) {
-            k_msleep(CONFIG_AKIRA_MESH_MAC_POLL_MS);
+            /* Mesh not running: block indefinitely — zero wake-ups. The
+             * semaphore is given by mesh_mac_init() when mesh (re)starts. */
+            k_sem_take(&s_mac_tx_wake, K_FOREVER);
             continue;
         }
         radio_handle_t *r = s_mac.radio; /* latch: deinit() can NULL s_mac.radio concurrently */
@@ -229,6 +272,7 @@ static void mesh_mac_tx_thread_fn(void *a, void *b, void *c)
         struct k_msgq *from = NULL;
         bool ready = false;
         int64_t now = k_uptime_get();
+        int64_t earliest_retry = 0;   /* 0 = no frame waiting on a CCA backoff */
 
         /* Top-down over all 4 lanes every pass, not just the first non-empty
          * one — a CRITICAL frame mid-backoff must not block a ready LOW
@@ -240,6 +284,9 @@ static void mesh_mac_tx_thread_fn(void *a, void *b, void *c)
             from = s_txq_lanes[i];
 
             if (f.retry_at && now < f.retry_at) {
+                if (earliest_retry == 0 || f.retry_at < earliest_retry) {
+                    earliest_retry = f.retry_at;
+                }
                 if (k_msgq_put(from, &f, K_NO_WAIT) != 0) {
                     LOG_ERR("mesh_mac: frame dropped, lane %zu full re-queuing backoff wait", i);
                 }
@@ -253,6 +300,9 @@ static void mesh_mac_tx_thread_fn(void *a, void *b, void *c)
             if (f.cca_attempts < CONFIG_AKIRA_MESH_CCA_MAX_RETRIES && mesh_cca_busy(r)) {
                 f.cca_attempts++;
                 f.retry_at = now + (sys_rand32_get() % (CONFIG_AKIRA_MESH_CCA_BACKOFF_MAX_MS + 1));
+                if (earliest_retry == 0 || f.retry_at < earliest_retry) {
+                    earliest_retry = f.retry_at;
+                }
                 if (k_msgq_put(from, &f, K_NO_WAIT) != 0) {
                     LOG_ERR("mesh_mac: frame dropped, lane %zu full re-queuing CCA backoff", i);
                 }
@@ -263,7 +313,17 @@ static void mesh_mac_tx_thread_fn(void *a, void *b, void *c)
         }
 
         if (!ready) {
-            k_msleep(CONFIG_AKIRA_MESH_MAC_POLL_MS);
+            /* Nothing sendable right now. If frames are parked on a CCA
+             * backoff, sleep only until the earliest retry_at; otherwise block
+             * until a new frame is enqueued (mesh_mac_send gives the sem). A
+             * give arriving before the take is remembered, so no wakeup is
+             * lost. */
+            k_timeout_t wait = K_FOREVER;
+            if (earliest_retry != 0) {
+                int64_t dt = earliest_retry - k_uptime_get();
+                wait = (dt > 0) ? K_MSEC(dt) : K_NO_WAIT;
+            }
+            k_sem_take(&s_mac_tx_wake, wait);
             continue;
         }
 
@@ -272,7 +332,7 @@ static void mesh_mac_tx_thread_fn(void *a, void *b, void *c)
             LOG_ERR("mesh_mac: radio lock timeout, frame dropped (len=%u)", f.len);
             continue;
         }
-        LOG_INF("mesh_mac TX: len=%u queue_delay=%lldms cca_attempts=%u",
+        LOG_DBG("mesh_mac TX: len=%u queue_delay=%lldms cca_attempts=%u",
                f.len, k_uptime_get() - f.queued_at, f.cca_attempts);
         int ret = r->ops->send(r, f.data, f.len);
         k_mutex_unlock(&r->lock);
@@ -294,6 +354,12 @@ static void mesh_mac_rx_thread_fn(void *a, void *b, void *c)
             k_msleep(CONFIG_AKIRA_MESH_RX_POLL_MS);
             continue;
         }
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+        /* Keep the mesh keep-awake deadline fresh while mesh is running. */
+        if (s_mac_insomnia >= 0) {
+            akira_pm_insomnia_renew(s_mac_insomnia);
+        }
+#endif
         radio_handle_t *r = s_mac.radio;
         int n = -ENODEV;
         int16_t rssi = 0;
@@ -316,7 +382,7 @@ static void mesh_mac_rx_thread_fn(void *a, void *b, void *c)
             }
         }
         if (n > 0) {
-            LOG_INF("mesh_mac RX: %d bytes, rssi=%d dBm", n, rssi);
+            LOG_DBG("mesh_mac RX: %d bytes, rssi=%d dBm", n, rssi);
             if (s_mac.rx_cb) {
                 s_mac.rx_cb(s_rx_buf, (size_t)n, rssi, s_mac.rx_ctx);
             }

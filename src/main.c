@@ -206,16 +206,13 @@ int main(void)
 
 #ifdef CONFIG_AKIRA_MODULE_RF
     LOG_INF("RF module enabled");
-#ifdef CONFIG_AKIRA_CC1121
-    if (akira_rf_init(AKIRA_RF_CHIP_CC1121) < 0) {
-        LOG_ERR("CC1121 init failed");
+    /* Bring up every configured sub-GHz chip so `rf` commands and apps can find
+     * them, then park each in its lowest-power state. No default active radio,
+     * RX daemon stays idle, and NO deep-sleep keep-awake lock is taken — the
+     * device can deep-sleep until something actually uses a radio. */
+    if (akira_rf_boot_init() < 0) {
+        LOG_ERR("RF boot init failed");
     }
-#endif
-#ifdef CONFIG_AKIRA_LR2021
-    if (akira_rf_init(AKIRA_RF_CHIP_LR2021) < 0) {
-        LOG_ERR("LR2021 init failed");
-    }
-#endif
 #endif
 
 #if defined(CONFIG_AKIRA_OTA)

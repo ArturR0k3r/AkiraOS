@@ -67,21 +67,49 @@ __attribute__((section(".ext_ram.bss"), aligned(4))) static uint16_t hw_framebuf
  * credit per real frame it consumed). */
 #if defined(AKIRA_HAS_HW_FRAMEBUFFER)
 static uint8_t fb_write_idx;           /* buffer the app is currently drawing into */
+/* Active panel geometry (set by the display HAL).  Until then, assume the
+ * buffer's full capacity as one 400-px-wide frame. */
+static uint16_t fb_width = 400;
+static uint16_t fb_height = AKIRA_FB_MAX_PIXELS / 400;
 #endif
 static const uint16_t *fb_present_buf; /* buffer handed to the compositor */
+static uint16_t fb_present_y0;         /* dirty row band handed with it      */
+static uint16_t fb_present_y1;
 static struct k_sem fb_sem_frame_ready = Z_SEM_INITIALIZER(fb_sem_frame_ready, 0, 1);
 static struct k_sem fb_sem_buffer_free = Z_SEM_INITIALIZER(fb_sem_buffer_free, 1, 1);
 K_MUTEX_DEFINE(fb_present_mutex);
 
-void akira_framebuffer_present(void)
+void akira_framebuffer_set_geometry(uint16_t width, uint16_t height)
+{
+#if defined(AKIRA_HAS_HW_FRAMEBUFFER)
+    if ((uint32_t)width * height <= AKIRA_FB_MAX_PIXELS && width && height) {
+        fb_width = width;
+        fb_height = height;
+    }
+#else
+    ARG_UNUSED(width);
+    ARG_UNUSED(height);
+#endif
+}
+
+void akira_framebuffer_present_rows(int y0, int y1)
 {
 #if !defined(AKIRA_HAS_HW_FRAMEBUFFER)
     /* No framebuffer to hand over, and no compositor consuming one — giving
      * frame_ready here would strand the next caller in take(buffer_free). */
+    ARG_UNUSED(y0);
+    ARG_UNUSED(y1);
     return;
 #else
+    y0 = CLAMP(y0, 0, fb_height);
+    y1 = CLAMP(y1, y0, fb_height);
+    if (y1 == y0) {
+        return;
+    }
     k_mutex_lock(&fb_present_mutex, K_FOREVER);
     fb_present_buf = hw_framebuffer[fb_write_idx];
+    fb_present_y0 = (uint16_t)y0;
+    fb_present_y1 = (uint16_t)y1;
     k_sem_give(&fb_sem_frame_ready);
     /* Blocks only if the compositor hasn't finished the previous buffer yet
      * — bounds producers to at most one frame ahead of the blit. */
@@ -90,9 +118,39 @@ void akira_framebuffer_present(void)
     fb_write_idx ^= 1U;
     /* Seed the new write buffer with the frame just presented so apps that
      * draw deltas (not a full redraw every frame) don't alternate onto a
-     * stale/uninitialized buffer every other present(). */
-    memcpy(hw_framebuffer[fb_write_idx], hw_framebuffer[presented_idx],
-           sizeof(hw_framebuffer[0]));
+     * stale/uninitialized buffer every other present().  The buffers only
+     * differ inside the presented band (the caller's contract), so that is
+     * all that needs copying — and only the active panel's rows, not the
+     * 400x240 capacity. */
+    size_t off = (size_t)y0 * fb_width;
+    memcpy(&hw_framebuffer[fb_write_idx][off], &hw_framebuffer[presented_idx][off],
+           (size_t)(y1 - y0) * fb_width * sizeof(uint16_t));
+    k_mutex_unlock(&fb_present_mutex);
+#endif
+}
+
+void akira_framebuffer_present(void)
+{
+#if defined(AKIRA_HAS_HW_FRAMEBUFFER)
+    akira_framebuffer_present_rows(0, fb_height);
+#endif
+}
+
+void akira_framebuffer_presented_rows(uint16_t *y0, uint16_t *y1)
+{
+    *y0 = fb_present_y0;
+    *y1 = fb_present_y1;
+}
+
+void akira_framebuffer_wait_idle(void)
+{
+#if defined(AKIRA_HAS_HW_FRAMEBUFFER)
+    /* The compositor gives buffer_free back once the last blit is on the
+     * panel; borrowing that credit proves the SPI bus is quiet. */
+    k_mutex_lock(&fb_present_mutex, K_FOREVER);
+    if (k_sem_take(&fb_sem_buffer_free, K_MSEC(200)) == 0) {
+        k_sem_give(&fb_sem_buffer_free);
+    }
     k_mutex_unlock(&fb_present_mutex);
 #endif
 }

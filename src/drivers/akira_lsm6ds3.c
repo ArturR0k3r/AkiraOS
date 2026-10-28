@@ -16,9 +16,17 @@ LOG_MODULE_REGISTER(akira_lsm6ds3, CONFIG_AKIRA_LOG_LEVEL);
  * The Zephyr upstream lsm6dsl driver only accepts WHO_AM_I = 0x6A
  * (LSM6DSL / LSM6DS3TR-C). The original LSM6DS3 reports 0x69 and is
  * therefore rejected by that driver. This minimal driver accepts 0x69,
- * brings up accel + gyro at 104 Hz / ±2g / ±245 dps, and exposes the
- * standard Zephyr sensor_driver_api so it integrates with the generic
+ * configures accel + gyro for ±2g / ±245 dps, and exposes the standard
+ * Zephyr sensor_driver_api so it integrates with the generic
  * akira_sensor_api without any chip-specific code there.
+ *
+ * Battery-life: the part boots powered DOWN (ODR=0, ~6 µA) rather than
+ * free-running at 104 Hz (~0.9 mA for both blocks).  It is brought to
+ * 104 Hz on demand — the first sample_fetch() from a consumer (the generic
+ * akira_sensor_api read path is the only one) powers it up, and an inactivity
+ * timer powers it back down LSM6DS3_IDLE_POWERDOWN_S seconds after the last
+ * read.  On a battery handheld the IMU is idle the vast majority of the time,
+ * so this is the state it should default to.
  *
  * Compatible: "akira,lsm6ds3"
  */
@@ -71,6 +79,16 @@ LOG_MODULE_REGISTER(akira_lsm6ds3, CONFIG_AKIRA_LOG_LEVEL);
 #define ACCEL_SENS_UM_PER_LSB   598LL       /* µm/s² per LSB  → val2 in µ */
 #define GYRO_SENS_NRAD_PER_LSB  152716LL    /* nrad/s per LSB             */
 
+/*
+ * Seconds of no reads after which the idle_work handler powers the sensors
+ * back down.  Kept small so the ~0.9 mA active draw is reclaimed almost as
+ * soon as an app stops polling, yet long enough to span the per-frame read
+ * cadence of a tilt-controlled app (which reads on every UI refresh).  A plain
+ * constant rather than a Kconfig — it is an internal power heuristic with no
+ * reason for a per-board knob.
+ */
+#define LSM6DS3_IDLE_POWERDOWN_S 5
+
 /* ── Driver structs ───────────────────────────────────────────────────────── */
 
 struct lsm6ds3_config {
@@ -80,7 +98,11 @@ struct lsm6ds3_config {
 struct lsm6ds3_data {
 	int16_t accel[3];	/* raw accel X, Y, Z */
 	int16_t gyro[3];	/* raw gyro  X, Y, Z */
-	bool    initialized;	/* hardware configured on first fetch */
+	bool    initialized;	/* CTRL3_C/WHO_AM_I done on first fetch */
+	bool    powered;	/* accel+gyro currently at active ODR */
+	bool    consumer_on;	/* a consumer wants sampling (survives a blank) */
+	const struct device *dev;	/* back-pointer for the idle work handler */
+	struct k_work_delayable idle_work; /* powers down after inactivity */
 };
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
@@ -104,6 +126,58 @@ static int write_reg(const struct device *dev, uint8_t reg, uint8_t val)
 	uint8_t buf[2] = { reg, val };
 
 	return i2c_write_dt(&cfg->i2c, buf, sizeof(buf));
+}
+
+/* ── Power up / down (ODR fields only; CTRL3_C/FS survive) ─────────────────── */
+
+static int lsm6ds3_power_up(const struct device *dev)
+{
+	struct lsm6ds3_data *data = dev->data;
+	int ret;
+
+	ret = write_reg(dev, LSM6DS3_REG_CTRL1_XL, CTRL1_XL_104HZ_2G);
+	if (ret < 0) {
+		return ret;
+	}
+	ret = write_reg(dev, LSM6DS3_REG_CTRL2_G, CTRL2_G_104HZ_245DPS);
+	if (ret < 0) {
+		return ret;
+	}
+	data->powered = true;
+	return 0;
+}
+
+static int lsm6ds3_power_down(const struct device *dev)
+{
+	struct lsm6ds3_data *data = dev->data;
+	int ret;
+
+	/* ODR=0 is the part's power-down state — accel and gyro both ~off. */
+	ret = write_reg(dev, LSM6DS3_REG_CTRL1_XL, 0x00);
+	if (ret < 0) {
+		return ret;
+	}
+	ret = write_reg(dev, LSM6DS3_REG_CTRL2_G, 0x00);
+	if (ret < 0) {
+		return ret;
+	}
+	data->powered = false;
+	return 0;
+}
+
+/* Inactivity timer: no reads for LSM6DS3_IDLE_POWERDOWN_S → power down and drop
+ * the consumer flag.  A later read powers back up and re-arms this. */
+static void lsm6ds3_idle_work_handler(struct k_work *work)
+{
+	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+	struct lsm6ds3_data *data =
+		CONTAINER_OF(dwork, struct lsm6ds3_data, idle_work);
+
+	if (data->powered) {
+		(void)lsm6ds3_power_down(data->dev);
+	}
+	data->consumer_on = false;
+	LOG_DBG("%s: idle power-down", data->dev->name);
 }
 
 /* ── sensor_driver_api ────────────────────────────────────────────────────── */
@@ -134,14 +208,18 @@ static int lsm6ds3_hw_init(const struct device *dev)
 	ret = write_reg(dev, LSM6DS3_REG_CTRL3_C, CTRL3_C_INIT);
 	if (ret < 0) { LOG_ERR("%s: CTRL3_C write failed: %d", dev->name, ret); return ret; }
 
-	ret = write_reg(dev, LSM6DS3_REG_CTRL1_XL, CTRL1_XL_104HZ_2G);
+	/* Leave accel + gyro powered DOWN (ODR=0); the first sample_fetch() brings
+	 * them to 104 Hz via lsm6ds3_power_up().  CTRL3_C (BDU/IF_INC) and the FS
+	 * fields survive power-down, so a power-up only re-writes the ODR fields. */
+	ret = write_reg(dev, LSM6DS3_REG_CTRL1_XL, 0x00);
 	if (ret < 0) { LOG_ERR("%s: CTRL1_XL write failed: %d", dev->name, ret); return ret; }
 
-	ret = write_reg(dev, LSM6DS3_REG_CTRL2_G, CTRL2_G_104HZ_245DPS);
+	ret = write_reg(dev, LSM6DS3_REG_CTRL2_G, 0x00);
 	if (ret < 0) { LOG_ERR("%s: CTRL2_G write failed: %d", dev->name, ret); return ret; }
 
 	ARG_UNUSED(cfg);
-	LOG_INF("%s: ready (WHO_AM_I=0x%02x, 104Hz/±2g/±245dps)", dev->name, chip_id);
+	LOG_INF("%s: ready (WHO_AM_I=0x%02x, powered down until first read)",
+		dev->name, chip_id);
 	return 0;
 }
 
@@ -171,8 +249,23 @@ static int lsm6ds3_sample_fetch(const struct device *dev,
 			    chan == SENSOR_CHAN_ACCEL_Z);
 
 	if (!fetch_gyro && !fetch_accel) {
+		/* Not our channel — do NOT power the part up just because the
+		 * generic sensor API probed us for an unrelated reading. */
 		return -ENOTSUP;
 	}
+
+	/* First use (or first read after an idle power-down) brings the sensors
+	 * to active ODR.  consumer_on is latched so a screen-blank suspend can be
+	 * undone by RESUME only if a consumer was actually using the IMU. */
+	if (!data->powered) {
+		ret = lsm6ds3_power_up(dev);
+		if (ret < 0) {
+			LOG_ERR("%s: power-up failed: %d", dev->name, ret);
+			return ret;
+		}
+	}
+	data->consumer_on = true;
+	k_work_reschedule(&data->idle_work, K_SECONDS(LSM6DS3_IDLE_POWERDOWN_S));
 
 	if (fetch_gyro) {
 		ret = read_regs(dev, LSM6DS3_REG_OUTX_L_G, buf, 6);
@@ -263,6 +356,10 @@ static int lsm6ds3_init(const struct device *dev)
 	/* Mark initialized=false so first sample_fetch does hw setup */
 	struct lsm6ds3_data *data = dev->data;
 	data->initialized = false;
+	data->powered = false;
+	data->consumer_on = false;
+	data->dev = dev;
+	k_work_init_delayable(&data->idle_work, lsm6ds3_idle_work_handler);
 	return 0;
 }
 
@@ -270,23 +367,26 @@ static int lsm6ds3_init(const struct device *dev)
 
 #ifdef CONFIG_PM_DEVICE
 /*
- * Writing ODR=0 to CTRL1_XL/CTRL2_G is the part's power-down state — worth a
- * few hundred µA while the console is blanked, which on a battery-powered
- * handheld is the state it spends most of its life in.  Full-scale and BDU
- * settings are held in registers that survive power-down, so RESUME only needs
- * to restore the ODR fields.
+ * Screen-blank gating from power_manager (akira_pm_gate_peripherals()).
  *
- * Note the driver's lazy-init contract: hardware is not touched until the first
- * sample_fetch().  If we are suspended before that has happened there is
- * nothing configured to power down, and no I2C traffic should be attempted
- * (the bus may still be unusable this early on ESP32) — so both actions become
- * no-ops until data->initialized is set.
+ * The part is already demand-powered: it idles at ODR=0 unless a consumer is
+ * actively reading (see sample_fetch + idle_work).  So SUSPEND only forces a
+ * power-down if a consumer currently has it on, and — crucially — RESUME must
+ * NOT blindly power the sensors back up: it does so ONLY when consumer_on shows
+ * a reader had them running before the blank.  Otherwise an unused IMU would be
+ * woken to 104 Hz on every screen-on, defeating the whole scheme.
+ *
+ * consumer_on is preserved across SUSPEND (the idle_work that would otherwise
+ * clear it is cancelled) so RESUME can make the right decision.
+ *
+ * Lazy-init contract: nothing is touched until the first sample_fetch() has run
+ * (I2C may still be unusable this early on ESP32), so both actions are no-ops
+ * until data->initialized is set.
  */
 static int lsm6ds3_pm_action(const struct device *dev,
 			     enum pm_device_action action)
 {
 	struct lsm6ds3_data *data = dev->data;
-	int ret;
 
 	if (!data->initialized) {
 		return 0;
@@ -294,18 +394,27 @@ static int lsm6ds3_pm_action(const struct device *dev,
 
 	switch (action) {
 	case PM_DEVICE_ACTION_SUSPEND:
-		ret = write_reg(dev, LSM6DS3_REG_CTRL1_XL, 0x00);
-		if (ret < 0) {
-			return ret;
+		/* Keep consumer_on intact for RESUME; stop the idle timer so it
+		 * cannot clear it while blanked. */
+		k_work_cancel_delayable(&data->idle_work);
+		if (data->powered) {
+			return lsm6ds3_power_down(dev);
 		}
-		return write_reg(dev, LSM6DS3_REG_CTRL2_G, 0x00);
+		return 0;
 
 	case PM_DEVICE_ACTION_RESUME:
-		ret = write_reg(dev, LSM6DS3_REG_CTRL1_XL, CTRL1_XL_104HZ_2G);
-		if (ret < 0) {
-			return ret;
+		if (!data->consumer_on) {
+			return 0; /* nobody was using it — leave it asleep */
 		}
-		return write_reg(dev, LSM6DS3_REG_CTRL2_G, CTRL2_G_104HZ_245DPS);
+		if (!data->powered) {
+			int ret = lsm6ds3_power_up(dev);
+			if (ret < 0) {
+				return ret;
+			}
+		}
+		k_work_reschedule(&data->idle_work,
+				  K_SECONDS(LSM6DS3_IDLE_POWERDOWN_S));
+		return 0;
 
 	default:
 		return -ENOTSUP;

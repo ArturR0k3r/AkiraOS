@@ -19,6 +19,16 @@
 #endif
 #include "../lib/mem_helper.h"
 
+#ifdef CONFIG_PM_DEVICE
+#include <zephyr/pm/device.h>
+#endif
+
+/* Backlight level at boot, before the shell applies the saved setting. */
+#define AKIRA_BOOT_BRIGHTNESS 128
+
+/* Last non-zero brightness, restored when the panel is un-blanked. */
+static uint8_t s_last_brightness = AKIRA_BOOT_BRIGHTNESS;
+
 LOG_MODULE_REGISTER(display_hal, LOG_LEVEL_INF);
 
 /* Conversion buffer for displays whose native format differs from RGB565.
@@ -64,7 +74,10 @@ static void compositor_thread_fn(void *p1, void *p2, void *p3)
     for (;;)
     {
         const uint16_t *fb = akira_framebuffer_wait_present();
-        akira_display_hal_flush_buf(fb);
+        uint16_t y0, y1;
+
+        akira_framebuffer_presented_rows(&y0, &y1);
+        akira_display_hal_flush_rows(fb, y0, y1);
         akira_framebuffer_present_done();
     }
 }
@@ -89,15 +102,17 @@ int akira_display_hal_init(void)
         return -ENODEV;
     }
 
-    /* Force max backlight at startup. */
+    /* Light the panel at boot.  Half scale, not full: settings aren't loaded
+     * this early, and the OS shell applies the user's saved brightness a
+     * moment later — no reason to spend ~75 mA on the boot screen first. */
 #ifdef CONFIG_AKIRA_LP5817
     /* AkiraConsole Prod: the panel backlight is an LP5817 I2C LED driver
      * (U7), not a PWM GPIO.  It powers up with every register cleared, so
      * without this the panel is completely dark no matter what is drawn. */
     if (akira_lp5817_init() == 0)
     {
-        akira_display_hal_set_brightness(255);
-        LOG_INF("LP5817 backlight set to max (255)");
+        akira_display_hal_set_brightness(AKIRA_BOOT_BRIGHTNESS);
+        LOG_INF("LP5817 backlight on (%u)", AKIRA_BOOT_BRIGHTNESS);
     }
     else
     {
@@ -106,8 +121,8 @@ int akira_display_hal_init(void)
 #elif DT_NODE_EXISTS(BACKLIGHT_NODE)
     if (pwm_is_ready_dt(&bl_pwm))
     {
-        akira_display_hal_set_brightness(255);
-        LOG_INF("Backlight PWM set to max (255)");
+        akira_display_hal_set_brightness(AKIRA_BOOT_BRIGHTNESS);
+        LOG_INF("Backlight PWM on (%u)", AKIRA_BOOT_BRIGHTNESS);
     }
     else
     {
@@ -117,6 +132,9 @@ int akira_display_hal_init(void)
 
     /* Get display capabilities and store them */
     display_get_capabilities(display_dev, &display_caps);
+
+    akira_framebuffer_set_geometry(display_caps.x_resolution,
+                                   display_caps.y_resolution);
 
     LOG_INF("Display ready: %dx%d fmt=%d",
             display_caps.x_resolution, display_caps.y_resolution,
@@ -390,6 +408,53 @@ void akira_display_hal_flush_buf(const uint16_t *fb)
 #endif /* DT_NODE_EXISTS(DT_CHOSEN(zephyr_display)) */
 }
 
+void akira_display_hal_flush_rows(const uint16_t *fb, int y0, int y1)
+{
+#if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
+    const int w = display_caps.x_resolution;
+    const int h = display_caps.y_resolution;
+
+    if (display_dev == NULL || fb == NULL)
+    {
+        return;
+    }
+    y0 = CLAMP(y0, 0, h);
+    y1 = CLAMP(y1, y0, h);
+
+    /* Full frame, or a panel format that needs conversion: the full path
+     * (which diffs rows itself for MONO panels). */
+    if ((y0 == 0 && y1 == h) ||
+        display_caps.current_pixel_format == PIXEL_FORMAT_MONO01 ||
+        display_caps.current_pixel_format == PIXEL_FORMAT_MONO10)
+    {
+        akira_display_hal_flush_buf(fb);
+        return;
+    }
+    if (y1 == y0)
+    {
+        return;
+    }
+
+    /* Rows are packed at panel width, so the band is one contiguous window:
+     * CASET/RASET to it and stream just those rows. */
+    struct display_buffer_descriptor desc = {
+        .buf_size = (uint32_t)w * (uint32_t)(y1 - y0) * 2U,
+        .width = (uint16_t)w,
+        .height = (uint16_t)(y1 - y0),
+        .pitch = (uint16_t)w,
+    };
+    int ret = display_write(display_dev, 0, (uint16_t)y0, &desc, &fb[(size_t)y0 * w]);
+    if (ret < 0)
+    {
+        LOG_ERR("display_write(rows %d..%d) -> %d", y0, y1, ret);
+    }
+#else
+    ARG_UNUSED(fb);
+    ARG_UNUSED(y0);
+    ARG_UNUSED(y1);
+#endif
+}
+
 /**
  * @brief Flush framebuffer to physical display
  *
@@ -455,6 +520,10 @@ int akira_display_hal_get_capabilities(struct display_capabilities *caps)
  */
 void akira_display_hal_set_brightness(uint8_t brightness)
 {
+    if (brightness != 0)
+    {
+        s_last_brightness = brightness;
+    }
 #ifdef CONFIG_AKIRA_LP5817
     (void)akira_lp5817_set_brightness(brightness);
 #elif DT_NODE_EXISTS(BACKLIGHT_NODE)
@@ -530,8 +599,41 @@ void akira_display_hal_set_blank(bool blank)
     else
     {
         display_blanking_off(display_dev);
-        akira_display_hal_set_brightness(255);
+        akira_display_hal_set_brightness(s_last_brightness);
     }
+#endif
+}
+
+void akira_display_hal_sleep(bool sleep)
+{
+#if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
+    if (!display_dev)
+        return;
+    if (sleep)
+    {
+        /* Backlight first so the user never sees the panel go dark-grey,
+         * then let any in-flight blit finish before SLEEP_IN on the bus. */
+        uint8_t keep = s_last_brightness;
+
+        akira_display_hal_set_brightness(0);
+        s_last_brightness = keep;
+        akira_framebuffer_wait_idle();
+#ifdef CONFIG_PM_DEVICE
+        (void)pm_device_action_run(display_dev, PM_DEVICE_ACTION_SUSPEND);
+#else
+        display_blanking_on(display_dev);
+#endif
+    }
+    else
+    {
+#ifdef CONFIG_PM_DEVICE
+        (void)pm_device_action_run(display_dev, PM_DEVICE_ACTION_RESUME);
+#else
+        display_blanking_off(display_dev);
+#endif
+    }
+#else
+    ARG_UNUSED(sleep);
 #endif
 }
 

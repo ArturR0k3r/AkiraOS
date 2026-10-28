@@ -222,6 +222,22 @@ uint16_t *akira_framebuffer_get(void);
 void akira_framebuffer_present(void);
 
 /**
+ * @brief Like akira_framebuffer_present(), but only rows [y0, y1) changed
+ * since the previous present: only that band is blitted and re-seeded.
+ * The caller must not have touched any row outside the band.
+ */
+void akira_framebuffer_present_rows(int y0, int y1);
+
+/** @brief Display HAL: active panel size, so copies cover only real rows. */
+void akira_framebuffer_set_geometry(uint16_t width, uint16_t height);
+
+/** @brief Compositor-side: dirty row band of the buffer just presented. */
+void akira_framebuffer_presented_rows(uint16_t *y0, uint16_t *y1);
+
+/** @brief Block until the compositor has finished the last blit (max 200 ms). */
+void akira_framebuffer_wait_idle(void);
+
+/**
  * @brief Compositor-side: block until a frame is presented.
  * @return Buffer to blit. Valid until akira_framebuffer_present_done().
  */
@@ -250,6 +266,18 @@ void akira_display_hal_flush(void);
  * convenience wrapper around this for callers with no double buffer.
  */
 void akira_display_hal_flush_buf(const uint16_t *fb);
+
+/**
+ * @brief Blit only rows [y0, y1) of @p fb (RGB565 panels); other formats fall
+ * back to a full flush, which does its own dirty-row detection.
+ */
+void akira_display_hal_flush_rows(const uint16_t *fb, int y0, int y1);
+
+/**
+ * @brief Panel + backlight sleep.  true: backlight off (LP5817 standby) and
+ * ST7789V SLEEP_IN; false: SLEEP_OUT only — the caller restores brightness.
+ */
+void akira_display_hal_sleep(bool sleep);
 
 /**
  * @brief Clear framebuffer to black and flush to display

@@ -70,6 +70,19 @@ static void rf_insomnia_release(void)
 #endif
 }
 
+/* Push the max_hold deadline back while RX is legitimately armed, so a
+ * receiver listening for longer than CONFIG_AKIRA_RF_INSOMNIA_MAX_HOLD_S
+ * isn't dropped into deep sleep mid-capture. Called from the RX daemon
+ * (so unused when the daemon is compiled out). */
+static __maybe_unused void rf_insomnia_renew(void)
+{
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+    if (s_rf_insomnia >= 0) {
+        akira_pm_insomnia_renew(s_rf_insomnia);
+    }
+#endif
+}
+
 /* Serializes init/select/deinit AND data-path bus ops (single operator). */
 static K_MUTEX_DEFINE(s_chip_lock);
 
@@ -118,6 +131,40 @@ static radio_handle_t *g_active_handle = NULL;
 /* Per-chip init tracking: init hardware once, then just swap active handle. */
 static bool s_inited[AKIRA_RF_CHIP_MAX];
 
+/* Handle that akira_rf_sleep_if_idle() actually slept — wake() must target
+ * this, not g_active_handle at wake time, which may have changed via a shell
+ * `rf select`. */
+static radio_handle_t *s_rf_slept_handle;
+
+/* A client (receiver) currently needs the active radio in continuous RX.
+ * The RX daemon only arms the chip and runs while this is set, and the
+ * deep-sleep keep-awake lock is held only across the 0->1..1->0 window — so a
+ * merely-selected (but silent) radio neither receives forever nor blocks deep
+ * sleep. This is what "idle" means for akira_rf_sleep_if_idle(). */
+static atomic_t s_rf_rx_armed = ATOMIC_INIT(0);
+
+/* Mark the active radio as needing continuous RX (idempotent). Takes the
+ * keep-awake lock and wakes the daemon only on the 0->1 edge. */
+static void rf_rx_arm(void)
+{
+    if (!g_active_handle) {
+        return;  /* nothing selected — a recv with no radio can't arm anything */
+    }
+    if (atomic_set(&s_rf_rx_armed, 1) == 0) {   /* 0 -> 1 edge */
+        rf_insomnia_acquire();
+        rf_daemon_kick();
+    }
+}
+
+/* Drop the RX-needed state (idempotent). Releases the keep-awake lock on the
+ * 1->0 edge; the daemon parks itself at the top of its loop on the next pass. */
+static void rf_rx_disarm(void)
+{
+    if (atomic_set(&s_rf_rx_armed, 0) == 1) {   /* 1 -> 0 edge */
+        rf_insomnia_release();
+    }
+}
+
 static radio_handle_t *map_chip_to_handle(akira_rf_chip_t chip)
 {
     switch (chip) {
@@ -139,6 +186,50 @@ static radio_handle_t *map_chip_to_handle(akira_rf_chip_t chip)
     default:                      return NULL;
     }
 }
+
+/* Caller holds s_chip_lock. Put a handle into its lowest-power sleep state
+ * (CC1121 SPWD / LR2021 Standby→Sleep-with-retention — the driver decides). */
+static void rf_park_locked(radio_handle_t *h)
+{
+    if (h && h->ops && h->ops->set_mode) {
+        h->ops->set_mode(h, RADIO_MODE_SLEEP);
+    }
+}
+
+/* Caller holds s_chip_lock. If this handle was put to SLEEP by
+ * akira_rf_sleep_if_idle() (screen blank), bring it back to STANDBY before it
+ * is driven, so TX/RX don't hit a sleeping chip. */
+static void rf_wake_if_slept_locked(radio_handle_t *h)
+{
+    if (h && h == s_rf_slept_handle) {
+        if (h->ops && h->ops->set_mode) {
+            h->ops->set_mode(h, RADIO_MODE_STANDBY);
+        }
+        s_rf_slept_handle = NULL;
+    }
+}
+
+#if defined(CONFIG_AKIRA_CC1121) || defined(CONFIG_AKIRA_LR2021)
+/* Caller holds s_chip_lock. Hardware-init a chip (idempotent), keep "rf"
+ * ownership of it, and park it in its lowest-power state — no select/arm. */
+static void rf_boot_park_chip_locked(akira_rf_chip_t chip)
+{
+    radio_handle_t *h = map_chip_to_handle(chip);
+    if (!h || !h->ops) {
+        return;
+    }
+    if (h->ops->init && h->ops->init(h) < 0) {
+        LOG_ERR("RF boot: '%s' init failed", h->name);
+        return;
+    }
+    s_inited[chip] = true;
+    /* Keep the historical "rf owns the boot-inited chips" model so
+     * akira_rf_release_all() can hand them to the mesh later. */
+    (void)radio_manager_acquire(h, "rf");
+    rf_park_locked(h);    /* lowest-power state immediately */
+    LOG_INF("RF boot: '%s' up and parked", h->name);
+}
+#endif /* CC1121 || LR2021 */
 
 int akira_rf_init(akira_rf_chip_t chip)
 {
@@ -168,6 +259,8 @@ int akira_rf_init(akira_rf_chip_t chip)
         return -ENODEV;
     }
 
+    /* ops->init is idempotent and, for an already-inited chip parked asleep at
+     * boot, also wakes it back to Standby. */
     int ret = 0;
     if (handle->ops->init) {
         ret = handle->ops->init(handle);
@@ -184,14 +277,61 @@ int akira_rf_init(akira_rf_chip_t chip)
         k_mutex_unlock(&s_chip_lock);
         return aret;
     }
+
+    bool was_active = (g_active_handle == handle);
+
+    /* Switching active radio: stop any RX on the old one and park it. */
+    if (g_active_handle && !was_active) {
+        rf_rx_disarm();
+        rf_park_locked(g_active_handle);
+    }
     s_inited[chip] = true;
     g_active_chip = chip;
     g_active_handle = handle;
 
+    /* Make the selected radio ready (Standby) but do NOT arm continuous RX or
+     * take the keep-awake lock — those happen only when a client actually
+     * receives (akira_rf_receive/recv_pop) or mesh starts. Leave an already-
+     * active, actively-receiving chip alone so re-init doesn't drop its RX. */
+    if (!(was_active && atomic_get(&s_rf_rx_armed))) {
+        rf_wake_if_slept_locked(handle);
+        if (handle->ops->set_mode) {
+            handle->ops->set_mode(handle, RADIO_MODE_STANDBY);
+        }
+    }
+
     k_mutex_unlock(&s_chip_lock);
-    rf_daemon_kick();      /* g_active_handle became non-NULL — release the daemon */
-    rf_insomnia_acquire(); /* a live radio inhibits deep sleep (with a deadline) */
-    LOG_INF("RF radio '%s' initialized", handle->name);
+    LOG_INF("RF radio '%s' initialized (standby, RX idle)", handle->name);
+    return 0;
+}
+
+int akira_rf_boot_init(void)
+{
+    LOG_INF("RF boot init: bring up + park all chips");
+
+#if defined(CONFIG_SPIRAM)
+    if (!s_rf_rx_msgq_inited) {
+        k_msgq_init(&s_rf_rx_msgq, (char *)s_rf_rx_buf,
+                    sizeof(struct rf_rx_packet), CONFIG_AKIRA_RF_RX_QUEUE_DEPTH);
+        s_rf_rx_msgq_inited = 1;
+    }
+#endif
+
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) {
+        return -EBUSY;
+    }
+
+    /* Same chips main() used to init one-by-one, now brought up and parked. */
+#if defined(CONFIG_AKIRA_CC1121)
+    rf_boot_park_chip_locked(AKIRA_RF_CHIP_CC1121);
+#endif
+#if defined(CONFIG_AKIRA_LR2021)
+    rf_boot_park_chip_locked(AKIRA_RF_CHIP_LR2021);
+#endif
+
+    /* Deliberately leave g_active_chip/g_active_handle unset: no default active
+     * radio, daemon stays blocked, no insomnia lock. */
+    k_mutex_unlock(&s_chip_lock);
     return 0;
 }
 
@@ -215,9 +355,10 @@ int akira_rf_deinit(void)
         g_active_handle = NULL;
     }
     g_active_chip = AKIRA_RF_CHIP_NONE;
+    s_rf_slept_handle = NULL;
 
     k_mutex_unlock(&s_chip_lock);
-    rf_insomnia_release();
+    rf_rx_disarm();  /* stop RX intent + drop the keep-awake lock */
     return 0;
 }
 
@@ -238,9 +379,10 @@ int akira_rf_release_all(void)
     }
     g_active_handle = NULL;
     g_active_chip = AKIRA_RF_CHIP_NONE;
+    s_rf_slept_handle = NULL;
 
     k_mutex_unlock(&s_chip_lock);
-    rf_insomnia_release();
+    rf_rx_disarm();  /* stop RX intent + drop the keep-awake lock */
     return 0;
 }
 
@@ -263,6 +405,11 @@ int akira_rf_select(akira_rf_chip_t chip)
     }
 
     if (chip == g_active_chip) {
+        /* Re-selecting the active radio: just make sure it is awake. */
+        if (handle->ops && handle->ops->set_mode) {
+            rf_wake_if_slept_locked(handle);
+            handle->ops->set_mode(handle, RADIO_MODE_STANDBY);
+        }
         k_mutex_unlock(&s_chip_lock);
         return 0;
     }
@@ -282,6 +429,9 @@ int akira_rf_select(akira_rf_chip_t chip)
     }
 
     if (g_active_handle && g_active_handle != handle) {
+        /* Deselect the previous radio: stop its RX, drop the lock, park it. */
+        rf_rx_disarm();
+        rf_park_locked(g_active_handle);
         radio_manager_release(g_active_handle, "rf");
         g_active_handle = NULL;
         g_active_chip = AKIRA_RF_CHIP_NONE;
@@ -293,11 +443,16 @@ int akira_rf_select(akira_rf_chip_t chip)
     }
     g_active_handle = handle;
     g_active_chip = chip;
+    s_rf_slept_handle = NULL;
+
+    /* Wake the chosen radio to Standby — ready for TX or for a client to arm
+     * RX, but not receiving (and not blocking deep sleep) until it does. */
+    if (handle->ops && handle->ops->set_mode) {
+        handle->ops->set_mode(handle, RADIO_MODE_STANDBY);
+    }
 
     k_mutex_unlock(&s_chip_lock);
-    rf_daemon_kick();      /* g_active_handle became non-NULL — release the daemon */
-    rf_insomnia_acquire(); /* a live radio inhibits deep sleep (with a deadline) */
-    LOG_INF("RF active radio set to chip=%d (%s)", chip, handle->name);
+    LOG_INF("RF active radio set to chip=%d (%s), standby", chip, handle->name);
     return 0;
 }
 
@@ -306,6 +461,7 @@ int akira_rf_send(const uint8_t *data, size_t len)
     if (!data || len == 0) return -EINVAL;
     if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
     radio_handle_t *h = g_active_handle;
+    rf_wake_if_slept_locked(h);  /* a TX on a blank-slept radio must wake it first */
     int ret = (h && h->ops && h->ops->send) ? h->ops->send(h, data, len) : -ENODEV;
     k_mutex_unlock(&s_chip_lock);
     return ret;
@@ -314,6 +470,9 @@ int akira_rf_send(const uint8_t *data, size_t len)
 int akira_rf_receive(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
 {
     if (!buf || max_len == 0) return -EINVAL;
+    /* A caller waiting for packets is a receiver: arm continuous RX (idempotent)
+     * and hold off deep sleep while it listens. */
+    rf_rx_arm();
     /* Pull from the daemon's RX queue rather than touching the chip directly —
      * the daemon owns the (continuous) RX path. Avoids racing the daemon for
      * the chip and works for both interrupt-driven and polling radios. */
@@ -445,25 +604,28 @@ radio_handle_t *akira_rf_get_active_handle(void)
 bool akira_rf_daemon_is_running(void)
 {
 #ifdef CONFIG_AKIRA_RF_RX_DAEMON
-    return (g_active_handle != NULL) && !atomic_get(&s_rf_daemon_paused);
+    /* "Running" == a client has RX armed on the active radio. */
+    return (g_active_handle != NULL) && atomic_get(&s_rf_rx_armed) &&
+           !atomic_get(&s_rf_daemon_paused);
 #else
     return false;
 #endif
 }
 
-/* Handle actually slept — wake() must target this, not g_active_handle at
- * wake time, which may have changed via a shell `rf select`. */
-static radio_handle_t *s_rf_slept_handle;
-
 int akira_rf_sleep_if_idle(void)
 {
     if (!g_active_handle) return -ENODEV;
-    if (akira_rf_daemon_is_running()) return -EBUSY; /* re-checked under lock below (TOCTOU) */
+    /* "Idle" == no client currently needs RX. If one does, leave the radio in
+     * continuous RX so blanking doesn't drop its packets. (TOCTOU: re-checked
+     * under the lock below.) */
+    if (atomic_get(&s_rf_rx_armed)) return -EBUSY;
     if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
-    if (akira_rf_daemon_is_running()) {
+    if (atomic_get(&s_rf_rx_armed)) {
         k_mutex_unlock(&s_chip_lock);
         return -EBUSY;
     }
+    /* Holding s_chip_lock also means no TX is in flight (akira_rf_send holds it
+     * for the whole send), so this is genuinely idle. */
     radio_handle_t *h = g_active_handle;
     int ret = (h && h->ops && h->ops->set_mode) ? h->ops->set_mode(h, RADIO_MODE_SLEEP) : -ENODEV;
     if (ret == 0) s_rf_slept_handle = h;
@@ -476,9 +638,46 @@ int akira_rf_wake(void)
     if (!s_rf_slept_handle) return 0;
     if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
     radio_handle_t *h = s_rf_slept_handle;
-    int ret = (h && h->ops && h->ops->set_mode) ? h->ops->set_mode(h, RADIO_MODE_STANDBY) : -ENODEV;
     s_rf_slept_handle = NULL;
+    int ret = (h && h->ops && h->ops->set_mode) ? h->ops->set_mode(h, RADIO_MODE_STANDBY) : -ENODEV;
+    /* Only sleep_if_idle() (RX not armed) could have slept it, so the restored
+     * state is Standby. If a client armed RX meanwhile, hand it back to the
+     * daemon to re-arm continuous RX. */
+    if (ret == 0 && atomic_get(&s_rf_rx_armed)) {
+        rf_daemon_kick();
+    }
     k_mutex_unlock(&s_chip_lock);
+    return ret;
+}
+
+int akira_rf_sleep_all(void)
+{
+    LOG_INF("RF sleep all (pre-deep-sleep park)");
+
+    /* Stop the daemon re-arming and drop the keep-awake first, so nothing
+     * re-arms RX behind us. The daemon parks cooperatively at the top of its
+     * loop; it never holds s_chip_lock while idle. */
+    akira_rf_daemon_pause();
+    atomic_set(&s_rf_rx_armed, 0);
+    rf_insomnia_release();
+
+    /* Generous timeout: the daemon may own the lock for one in-flight recv
+     * (up to ~2 s) — same reasoning as akira_rf_raw_capture(). */
+    int ret = 0;
+    if (k_mutex_lock(&s_chip_lock, K_MSEC(5000)) == 0) {
+        for (int c = AKIRA_RF_CHIP_NONE + 1; c < AKIRA_RF_CHIP_MAX; c++) {
+            if (!s_inited[c]) continue;
+            rf_park_locked(map_chip_to_handle((akira_rf_chip_t)c));
+        }
+        s_rf_slept_handle = NULL;
+        k_mutex_unlock(&s_chip_lock);
+    } else {
+        LOG_WRN("RF sleep all: chip lock timeout — radios may stay powered");
+        ret = -EBUSY;
+    }
+
+    /* Leave the daemon paused: we are going down anyway, and on ESP32 deep
+     * sleep the chip reboots, re-running akira_rf_boot_init() fresh. */
     return ret;
 }
 
@@ -502,10 +701,18 @@ static void rf_rx_daemon_fn(void *p1, void *p2, void *p3)
          * would otherwise wake 10x/s for the entire life of the device. */
         radio_handle_t *h = g_active_handle;
         if (!h || !h->ops || !h->ops->recv ||
-            atomic_get(&s_rf_daemon_paused)) {
+            atomic_get(&s_rf_daemon_paused) ||
+            !atomic_get(&s_rf_rx_armed)) {
+            /* No radio selected, paused for a raw capture, or no client wants
+             * RX right now — block until a path that changes that kicks us. */
             k_sem_take(&s_rf_daemon_wake, K_FOREVER);
             continue;  /* re-read g_active_handle; conditions may still hold */
         }
+
+        /* RX is wanted: keep the keep-awake deadline fresh for long listens,
+         * and make sure the chip wasn't left asleep by a blank that raced the
+         * arm. */
+        rf_insomnia_renew();
 
         int n;
         if (h->ops->rx_wait) {
@@ -517,6 +724,7 @@ static void rf_rx_daemon_fn(void *p1, void *p2, void *p3)
             if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) {
                 k_msleep(RF_DAEMON_SLEEP_MS); continue;
             }
+            rf_wake_if_slept_locked(h);  /* a blank may have slept it before arm */
             n = h->ops->recv(h, s_rf_poll_buf.data, RF_RX_MAX_PACKET, 0);
             k_mutex_unlock(&s_chip_lock);
             if (n <= 0) { h->ops->rx_wait(h, 1000); continue; }  /* wait next IRQ */
@@ -525,11 +733,12 @@ static void rf_rx_daemon_fn(void *p1, void *p2, void *p3)
             if (k_mutex_lock(&s_chip_lock, K_NO_WAIT) != 0) {
                 k_msleep(RF_DAEMON_SLEEP_MS); continue;
             }
+            rf_wake_if_slept_locked(h);  /* a blank may have slept it before arm */
             n = h->ops->recv(h, s_rf_poll_buf.data, RF_RX_MAX_PACKET, 2000);
             k_mutex_unlock(&s_chip_lock);
             if (n <= 0) { k_msleep(RF_DAEMON_SLEEP_MS); continue; }
         }
-        LOG_INF("RF RX %d bytes: %02x %02x %02x %02x %02x %02x %02x %02x",
+        LOG_DBG("RF RX %d bytes: %02x %02x %02x %02x %02x %02x %02x %02x",
                 n,
                 n > 0 ? s_rf_poll_buf.data[0] : 0, n > 1 ? s_rf_poll_buf.data[1] : 0,
                 n > 2 ? s_rf_poll_buf.data[2] : 0, n > 3 ? s_rf_poll_buf.data[3] : 0,
@@ -588,6 +797,9 @@ int akira_rf_raw_replay(const uint8_t *buf, size_t len,
 int akira_rf_recv_pop(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
 {
     if (!buf || max_len == 0) return -EINVAL;
+    /* A caller draining the RX queue is a receiver: arm continuous RX
+     * (idempotent) so the daemon fills the queue and the keep-awake holds. */
+    rf_rx_arm();
     struct rf_rx_packet pkt;
     k_timeout_t t = (timeout_ms == 0) ? K_NO_WAIT : K_MSEC(timeout_ms);
     int ret = k_msgq_get(&s_rf_rx_msgq, &pkt, t);

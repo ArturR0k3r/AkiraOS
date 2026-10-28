@@ -28,6 +28,8 @@ LOG_MODULE_REGISTER(akira_power_screen, CONFIG_AKIRA_LOG_LEVEL);
 #include "shell_theme.h"
 #include "status_model.h"
 #include "ui/akira_ui.h"
+#include "ui/overlay.h"
+#include <drivers/power/power_manager.h>
 
 /* ---- Power page --------------------------------------------------------- */
 
@@ -114,15 +116,36 @@ static void val_source(const list_item_t *it, char *buf, size_t len)
     snprintf(buf, len, "%s", status_model_get()->batt_online ? "USB power" : "Battery");
 }
 
+static void power_off_done(bool confirmed, void *ctx)
+{
+    ARG_UNUSED(ctx);
+    if (!confirmed) {
+        return;
+    }
+    /* Does not return on success; the battery is cut ~10 s later. */
+    if (akira_pm_ship_mode() != 0) {
+        overlay_toast(TOAST_ICON_ERROR, "Couldn't power off", "Charger not found", 2500);
+    }
+}
+
+static void act_power_off(const list_item_t *it)
+{
+    ARG_UNUSED(it);
+    /* No power button on this board: only USB brings it back. */
+    akira_ui_confirm_open("POWER_OFF", "Off until USB is plugged in?", NULL,
+                          power_off_done, NULL);
+}
+
 static const shell_screen_t battery_screen;
 
 static const list_item_t g_items[] = {
     { .kind = LI_NAV, .label = "Battery", .screen = &battery_screen,
       .value = val_battery },
     { .kind = LI_INFO, .label = "Power source", .value = val_source },
-    { .kind = LI_CHOICE, .label = "Auto power-off", .get = get_sleep,
+    { .kind = LI_CHOICE, .label = "Deep sleep after", .get = get_sleep,
       .set = set_sleep, .choices = g_sleep_labels,
       .n_choices = ARRAY_SIZE(g_sleep_labels), .enabled = sleep_supported },
+    { .kind = LI_ACTION, .label = "Turn off completely", .action = act_power_off },
 };
 
 const list_model_t power_page = {

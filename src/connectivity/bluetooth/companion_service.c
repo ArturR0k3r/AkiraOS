@@ -98,6 +98,10 @@ static uint8_t s_status_buf[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss"
 
 static bool s_initialised;
 static struct bt_conn *s_conn;   /* current connection, NULL if not connected */
+/* True while the phone is subscribed to STATUS notifications. The periodic
+ * heartbeat runs only then (and only while connected) — otherwise it would be
+ * radio/CPU wake-ups building a notify nobody receives. */
+static bool s_status_subscribed;
 
 /* Pending command — written by CMD_CHAR callback, consumed by cmd_work */
 static uint8_t s_pending_cmd[CHAR_BUF_SIZE] __attribute__((section(".ext_ram.bss")));
@@ -1368,9 +1372,17 @@ static void data_dn_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 static void status_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
     ARG_UNUSED(attr);
-    LOG_DBG("STATUS CCC: %s", value == BT_GATT_CCC_NOTIFY ? "notify" : "off");
-    if (value == BT_GATT_CCC_NOTIFY) {
+    bool on = (value == BT_GATT_CCC_NOTIFY);
+    LOG_DBG("STATUS CCC: %s", on ? "notify" : "off");
+
+    s_status_subscribed = on;
+    if (on) {
         companion_svc_notify_status(); /* push immediately on subscribe */
+        /* Start the periodic heartbeat now that someone is listening. */
+        k_work_reschedule(&s_status_timer,
+                          K_MSEC(CONFIG_AKIRA_BT_COMPANION_STATUS_INTERVAL_MS));
+    } else {
+        k_work_cancel_delayable(&s_status_timer);
     }
 }
 
@@ -1485,6 +1497,10 @@ static void conn_cb_disconnected(struct bt_conn *conn, uint8_t reason)
     s_conn = NULL;
     LOG_INF("Companion: phone disconnected (reason 0x%02x)", reason);
 
+    /* Stop the status heartbeat — restarted when the next phone subscribes. */
+    s_status_subscribed = false;
+    k_work_cancel_delayable(&s_status_timer);
+
     /* Clean up any in-progress transfer */
 #ifdef CONFIG_AKIRA_OTA
     fw_abort();
@@ -1512,6 +1528,7 @@ static struct bt_gatt_cb companion_gatt_cb = {
 
 /* Last RSSI of the companion link in dBm, 0 when the controller can't report it. */
 static int8_t s_rssi;
+
 
 /* Runs on the system workqueue only: a synchronous HCI command from the BT RX
  * thread (e.g. the CCC callback) would deadlock waiting for its own event. */
@@ -1542,10 +1559,14 @@ static void refresh_rssi(void)
 
 static void status_timer_handler(struct k_work *work)
 {
+    ARG_UNUSED(work);
     refresh_rssi();
     companion_svc_notify_status();
-    k_work_reschedule(&s_status_timer,
-                      K_MSEC(CONFIG_AKIRA_BT_COMPANION_STATUS_INTERVAL_MS));
+    /* Keep going only while a subscribed phone is connected. */
+    if (s_conn && s_status_subscribed) {
+        k_work_reschedule(&s_status_timer,
+                          K_MSEC(CONFIG_AKIRA_BT_COMPANION_STATUS_INTERVAL_MS));
+    }
 }
 
 /* --------------------------------------------------------------------------
@@ -1573,9 +1594,9 @@ int companion_svc_init(void)
 
     bt_gatt_cb_register(&companion_gatt_cb);
 
-    /* Start periodic status notifications */
-    k_work_reschedule(&s_status_timer,
-                      K_MSEC(CONFIG_AKIRA_BT_COMPANION_STATUS_INTERVAL_MS));
+    /* The periodic status heartbeat is NOT started here — it runs only while a
+     * phone is connected and subscribed to STATUS notifications (started from
+     * status_ccc_changed(), stopped on unsubscribe/disconnect). */
 
     s_initialised = true;
     LOG_INF("Companion GATT service initialised");
@@ -1598,6 +1619,7 @@ int companion_svc_deinit(void)
     }
 
     k_work_cancel_delayable(&s_status_timer);
+    s_status_subscribed = false;
 
     if (s_conn) {
         bt_conn_disconnect(s_conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);

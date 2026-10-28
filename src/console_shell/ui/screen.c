@@ -328,7 +328,9 @@ static void paint_status_only(void)
         return;
     }
     screen_draw_status_bar(owner->title);
-    akira_display_flush();
+    /* Only the bar's band changed: ~17 KB over SPI instead of the 154 KB
+     * frame — this is the charging sweep and the minute tick. */
+    akira_display_flush_rows(0, SBAR_H + 2);
 }
 
 /* ---- frame loop ----------------------------------------------------------- */

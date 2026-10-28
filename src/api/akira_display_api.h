@@ -30,6 +30,9 @@ void akira_display_text(int x, int y, const char *text, uint16_t color);
 void akira_display_text_large(int x, int y, const char *text, uint16_t color);
 void akira_display_text_huge(int x, int y, const char *text, uint16_t color);
 void akira_display_flush(void);
+/** Flush only rows [y0, y1): nothing outside that band may have been drawn
+ *  since the previous flush (e.g. a status-bar-only repaint). */
+void akira_display_flush_rows(int y0, int y1);
 void akira_display_get_size(int *width, int *height);
 
 /* Phase 3.5 — Additional primitives */

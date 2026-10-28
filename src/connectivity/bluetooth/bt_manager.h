@@ -196,6 +196,37 @@ extern "C"
     int bt_manager_conn_params_active(void);
 
     /**
+     * @brief Notify the BT manager that the screen blanked or woke.
+     *
+     * Call from the power manager's blank/wake hook (replaces the direct calls
+     * to bt_manager_conn_params_idle()/_active()).
+     *
+     * blanked=true: if connected, applies idle connection parameters; if not
+     * connected, keeps advertising for CONFIG_AKIRA_BT_ADV_AFTER_BLANK_S and
+     * then stops it (whatever mode's advert). A connection arriving in the grace
+     * period cancels the stop.
+     *
+     * blanked=false: cancels the pending stop; if connected, restores active
+     * connection parameters; if advertising had been stopped (and not
+     * connected), restarts it in the current mode's normal fast→slow scheme.
+     *
+     * @param blanked true when the screen just blanked, false when it woke.
+     */
+    void bt_manager_on_blank(bool blanked);
+
+    /**
+     * @brief Whether BT genuinely needs the device kept awake (no deep sleep).
+     *
+     * True only when a host is connected or a user-started radio activity is
+     * running (active scan, spam/spoof advertiser, or mesh participation).
+     * Advertising alone, HID mode idle, and companion mode with nothing
+     * connected all return false, so they no longer block deep sleep.
+     *
+     * @return true if the device must stay awake for BT, false otherwise.
+     */
+    bool bt_manager_keeps_awake(void);
+
+    /**
      * @brief Register event callback
      * @param callback Callback function
      * @param user_data User data

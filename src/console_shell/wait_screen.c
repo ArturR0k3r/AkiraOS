@@ -18,7 +18,9 @@ LOG_MODULE_REGISTER(akira_wait_screen, CONFIG_AKIRA_LOG_LEVEL);
  *     changes, nothing else;
  *   - on a charger: the battery animates (power is not a concern);
  *   - plug-in or a critical battery: "peek" — the backlight comes back to
- *     the user's level for a few seconds while the animation plays.
+ *     the user's level for a few seconds while the animation plays;
+ *   - after CONFIG_AKIRA_WAIT_CLOCK_S on the clock: "screen off" — LP5817
+ *     standby + ST7789V SLEEP_IN, no repaints at all until HOME (or a peek).
  *
  * Layout (SCR_W x 240):
  *   y= 22        "Akira Console" wordmark, large font, centred
@@ -78,6 +80,8 @@ LOG_MODULE_REGISTER(akira_wait_screen, CONFIG_AKIRA_LOG_LEVEL);
 static uint8_t s_saved_brightness = 255; /* restored on exit */
 static int s_last_min = -1;              /* last drawn minute; -1 forces redraw */
 static bool s_active;
+static bool s_screen_off;                /* panel asleep, backlight off   */
+static int64_t s_off_at;                 /* when the clock turns off; 0 = never */
 static int64_t s_peek_until;             /* 0 = not peeking */
 static uint32_t s_last_batt_seq;
 static int s_last_batt_frame = -1;
@@ -281,7 +285,10 @@ void wait_screen_enter(void)
 #endif
 
     s_active = true;
+    s_screen_off = false;
     s_peek_until = 0;
+    s_off_at = CONFIG_AKIRA_WAIT_CLOCK_S > 0
+                   ? k_uptime_get() + (int64_t)CONFIG_AKIRA_WAIT_CLOCK_S * 1000 : 0;
     s_last_min = -1; /* force a fresh draw */
     draw_frame();
     LOG_INF("Wait screen entered");
@@ -295,11 +302,27 @@ void wait_screen_update(void)
     int64_t now = k_uptime_get();
     bool redraw = false;
 
-    /* End of a peek: back to the dim standby level. */
+    /* End of a peek: back to wherever we were — off, or the dim clock. */
     if (s_peek_until && now >= s_peek_until) {
         s_peek_until = 0;
+        if (s_screen_off) {
+            akira_display_hal_sleep(true);
+            return;
+        }
         akira_display_hal_set_brightness((uint8_t)((WAIT_BRIGHT_PCT * 255 + 50) / 100));
         redraw = true;
+    }
+
+    if (s_screen_off && !s_peek_until) {
+        return; /* dark until HOME or the next peek: nothing to paint */
+    }
+
+    /* The clock has been up long enough: panel and backlight fully off. */
+    if (!s_peek_until && s_off_at && now >= s_off_at) {
+        s_screen_off = true;
+        akira_display_hal_sleep(true);
+        LOG_INF("Wait screen: display off");
+        return;
     }
 
     struct wall_clock wc = wait_now();
@@ -330,9 +353,12 @@ void wait_screen_peek(void)
     if (!s_active) {
         return;
     }
+    if (s_screen_off && !s_peek_until) {
+        akira_display_hal_sleep(false); /* SLEEP_OUT before painting */
+    }
     s_peek_until = k_uptime_get() + PEEK_MS;
-    akira_display_hal_set_brightness(user_brightness());
     draw_frame();
+    akira_display_hal_set_brightness(user_brightness());
 }
 
 uint32_t wait_screen_ms_to_next_update(void)
@@ -342,6 +368,14 @@ uint32_t wait_screen_ms_to_next_update(void)
     if (s_peek_until) {
         return PEEK_FRAME_MS;
     }
+    if (s_screen_off) {
+        return WAIT_SCREEN_UPDATE_MAX_MS; /* only HOME / a battery event wake us */
+    }
+    uint32_t to_off = UINT32_MAX;
+
+    if (s_off_at) {
+        to_off = (uint32_t)MAX(s_off_at - now, 0) + 5u;
+    }
 #ifdef CONFIG_AKIRA_POWER_MANAGER
     {
         akira_battery_snapshot_t b;
@@ -349,7 +383,7 @@ uint32_t wait_screen_ms_to_next_update(void)
         akira_pm_battery_snapshot(&b);
         if (battery_animating(&b)) {
             /* On a charger: step the animation; power is not a concern. */
-            return (uint32_t)(CHARGE_FRAME_MS - (now % CHARGE_FRAME_MS)) + 5u;
+            return MIN((uint32_t)(CHARGE_FRAME_MS - (now % CHARGE_FRAME_MS)) + 5u, to_off);
         }
     }
 #endif
@@ -358,7 +392,7 @@ uint32_t wait_screen_ms_to_next_update(void)
     {
         /* No wall clock — draw_frame() shows a placeholder that never changes,
          * so there is nothing to refresh on a schedule. */
-        return WAIT_SCREEN_UPDATE_MAX_MS;
+        return MIN(WAIT_SCREEN_UPDATE_MAX_MS, to_off);
     }
 
     int64_t epoch = akira_time_get_epoch() + akira_time_get_tz_offset_s();
@@ -368,12 +402,16 @@ uint32_t wait_screen_ms_to_next_update(void)
      * burn a second wake.  Epoch resolution is 1 s, so a slightly early wake is
      * harmless anyway: update() sees the same minute, skips the repaint, and
      * the caller recomputes a short timeout. */
-    return (uint32_t)((60 - sec_into_min) * 1000) + 50u;
+    return MIN((uint32_t)((60 - sec_into_min) * 1000) + 50u, to_off);
 }
 
 void wait_screen_exit(void)
 {
+    if (s_screen_off && !s_peek_until) {
+        akira_display_hal_sleep(false); /* SLEEP_OUT; the shell repaints next */
+    }
     s_active = false;
+    s_screen_off = false;
     s_peek_until = 0;
 
 #ifdef CONFIG_AKIRA_POWER_MANAGER
@@ -390,18 +428,16 @@ void wait_screen_prepare_deep_sleep(void)
 {
     /* Paint the panel blank before sleeping — a bistable (Sharp) panel would
      * otherwise hold the last clock frame. Wakes on HOME hold. */
+    if (s_screen_off) {
+        akira_display_hal_sleep(false);
+    }
     akira_display_clear(C_BLACK);
     akira_display_flush();
 
-    /* Blank backlit displays before cutting power.
-     * Sharp LS0XX is a bistable reflective display — it holds the image
-     * without power and does not support display_blanking_on(). Skip it. */
-#if defined(CONFIG_DISPLAY) && !defined(CONFIG_LS0XX)
-    const struct device *disp = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
-    if (device_is_ready(disp))
-    {
-        display_blanking_on(disp);
-    }
+    /* Radios, secure element, USB-C controller, backlight and panel all stay
+     * powered through deep sleep unless each is parked first. */
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+    akira_pm_prepare_poweroff();
 #endif
 
 #ifdef CONFIG_AKIRA_POWER_DEEP_SLEEP

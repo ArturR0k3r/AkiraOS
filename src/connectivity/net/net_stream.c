@@ -120,6 +120,12 @@ static void net_poll_thread_fn(void *a, void *b, void *c);
 K_THREAD_STACK_DEFINE(g_poll_stack, CONFIG_AKIRA_NET_POLL_STACK_SIZE);
 static struct k_thread g_poll_thread;
 
+/* Given whenever a stream becomes pollable (open / connected / listening) so
+ * the poll thread blocks (zero wake-ups) while no stream is open instead of
+ * spinning at 100 Hz. A give that arrives before the take is remembered, so a
+ * stream opened in the gap is never missed. */
+static K_SEM_DEFINE(g_poll_wake, 0, 1);
+
 /* =========================================================================
  * Ring buffer helpers
  * ======================================================================= */
@@ -372,6 +378,7 @@ static void connect_work_fn(struct k_work *work)
 
 	ctx->state = NET_STATE_CONNECTED;
 	k_mutex_unlock(&g_mutex);
+	k_sem_give(&g_poll_wake);  /* resume polling: this stream can carry data now */
 
 	/* zsock_send() in ring_drain_tx() is a plain blocking call with no
 	 * per-call timeout of its own — every other wait in this file (connect,
@@ -437,7 +444,10 @@ static void net_poll_thread_fn(void *a, void *b, void *c)
 		k_mutex_unlock(&g_mutex);
 
 		if (nfds == 0) {
-			k_sleep(K_MSEC(10));
+			/* No open stream: block until one opens (net_stream_open /
+			 * connect completion / listen give the semaphore) rather than
+			 * waking every 10 ms forever. */
+			k_sem_take(&g_poll_wake, K_FOREVER);
 			continue;
 		}
 
@@ -724,6 +734,7 @@ int net_stream_open(int type)
 			g_streams[i].state = NET_STATE_OPEN;
 			k_work_init(&g_streams[i].connect_work, connect_work_fn);
 			k_mutex_unlock(&g_mutex);
+			k_sem_give(&g_poll_wake);  /* a pollable stream now exists */
 			LOG_INF("stream %d opened (%s fd=%d)", i, type_name, fd);
 			return i;
 		}
@@ -837,6 +848,7 @@ int net_stream_listen(int handle, int backlog)
 
 	ctx->state = NET_STATE_LISTENING;
 	k_mutex_unlock(&g_mutex);
+	k_sem_give(&g_poll_wake);  /* a listening socket is pollable for accepts */
 
 	LOG_INF("stream %d: listening (backlog=%d)", handle, backlog);
 	return 0;

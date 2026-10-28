@@ -27,6 +27,15 @@ extern "C" {
  */
 int bq25601_read_regs(const struct device *dev, uint8_t regs[BQ25601_NUM_REGS]);
 
+/**
+ * @brief Ship mode: disconnect the battery (BATFET off) after ~10 s.
+ *
+ * Battery drain drops to microamps.  The charger re-closes the BATFET only
+ * when VBUS appears (or on ~QON, if wired).
+ * @return 0 on success, negative errno on I2C failure.
+ */
+int bq25601_ship_mode(const struct device *dev);
+
 #ifdef __cplusplus
 }
 #endif

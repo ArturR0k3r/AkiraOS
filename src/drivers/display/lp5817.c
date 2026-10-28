@@ -61,10 +61,43 @@ bool akira_lp5817_is_ready(void)
     return lp5817_ready;
 }
 
+/* CHIP_EN currently set.  Brightness 0 clears it: with every PWM at zero the
+ * strings are dark anyway, but an enabled LP5817 still burns ~0.3-0.5 mA in
+ * its oscillator and references — on the wait screen and through deep sleep. */
+static bool lp5817_enabled;
+
+/* Bring the device back from standby.  Registers survive CHIP_EN=0, but the
+ * output/current setup is cheap to repeat and makes this robust against a
+ * brown-out reset of the LP5817 alone. */
+static int lp5817_enable(void)
+{
+    int ret = lp5817_write(LP5817_REG_CHIP_EN, LP5817_CHIP_EN);
+
+    if (ret == 0) {
+        ret = lp5817_write(LP5817_REG_DEV_CONFIG1, LP5817_OUT_ALL);
+    }
+    for (uint8_t ch = 0; ret == 0 && ch < LP5817_NUM_CHANNELS; ch++) {
+        ret = lp5817_write(LP5817_REG_OUT0_DC + ch, 0xFF);
+    }
+    if (ret == 0) {
+        lp5817_enabled = true;
+    }
+    return ret;
+}
+
 int akira_lp5817_set_brightness(uint8_t brightness)
 {
     if (!lp5817_ready) {
         return -ENODEV;
+    }
+
+    if (brightness != 0 && !lp5817_enabled) {
+        int ret = lp5817_enable();
+
+        if (ret < 0) {
+            LOG_ERR("LP5817 re-enable failed: %d", ret);
+            return ret;
+        }
     }
 
     for (uint8_t ch = 0; ch < LP5817_NUM_CHANNELS; ch++) {
@@ -76,7 +109,15 @@ int akira_lp5817_set_brightness(uint8_t brightness)
     }
 
     /* Latch the new PWM values. */
-    return lp5817_write(LP5817_REG_UPDATE_CMD, LP5817_CMD_UPDATE);
+    int ret = lp5817_write(LP5817_REG_UPDATE_CMD, LP5817_CMD_UPDATE);
+
+    if (ret == 0 && brightness == 0 && lp5817_enabled) {
+        ret = lp5817_write(LP5817_REG_CHIP_EN, 0);
+        if (ret == 0) {
+            lp5817_enabled = false;
+        }
+    }
+    return ret;
 }
 
 int akira_lp5817_init(void)
@@ -143,6 +184,7 @@ int akira_lp5817_init(void)
         return ret;
     }
 
+    lp5817_enabled = true;
     lp5817_ready = true;
     LOG_INF("LP5817 backlight ready (I2C 0x%02x, 3 channels)", LP5817_I2C_ADDR);
     return 0;

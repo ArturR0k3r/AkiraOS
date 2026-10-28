@@ -747,6 +747,25 @@ int stc3115_read_regs(const struct device *dev, struct stc3115_regs *out)
     return ret;
 }
 
+int stc3115_standby(const struct device *dev)
+{
+    struct stc3115_data *data = dev->data;
+    uint16_t soc = 0;
+    int ret;
+
+    k_mutex_lock(&data->lock, K_FOREVER);
+    /* Save where we are, then stop converting.  At the next boot
+     * stc3115_bring_up() finds GG_RUN=0 with a valid RAM backup and restores
+     * this SOC rather than re-estimating it from a fresh OCV. */
+    ret = stc3115_read16(dev, STC3115_REG_SOC, &soc);
+    if (ret == 0) {
+        (void)stc3115_ram_write(dev, soc, true);
+        ret = stc3115_write8(dev, STC3115_REG_MODE, STC3115_MODE_VMODE);
+    }
+    k_mutex_unlock(&data->lock);
+    return ret;
+}
+
 static DEVICE_API(fuel_gauge, stc3115_api) = {
     .get_property = stc3115_get_prop,
     .set_property = stc3115_set_prop,

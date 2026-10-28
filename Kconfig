@@ -666,6 +666,18 @@ config AKIRA_BT_HID
       Enable HID over Bluetooth Low Energy (BLE).
       Requires Bluetooth stack to be enabled.
 
+config AKIRA_BT_ADV_AFTER_BLANK_S
+    int "Keep BLE advertising this long after the screen blanks (s)"
+    default 120
+    range 0 600
+    depends on BT
+    help
+      When the screen blanks with no BLE connection, advertising continues for
+      this many seconds so a phone can still find the device, then stops to
+      save the radio. A connection arriving in the window cancels the stop, and
+      waking the screen restarts advertising. 0 stops advertising immediately
+      on blank. Used by bt_manager_on_blank().
+
 config AKIRA_BT_ECHO
     bool "Enable Bluetooth Echo service"
     default n
@@ -1652,6 +1664,17 @@ config AKIRA_FUSB302_VBUS_INIT_PRIORITY
       A plain literal — SYS_INIT's priority argument is token-pasted into
       a linker section name, so it cannot be an arithmetic expression.
 
+config AKIRA_FUSB302_POLL_MS
+    int "FUSB302 VBUS poll interval while awake (ms)"
+    default 1000
+    range 100 10000
+    depends on AKIRA_FUSB302_VBUS
+    help
+      How often the FUSB302 VBUSOK bit is polled while the screen is awake.
+      The INT_N falling-edge interrupt on GPIO3 catches plug-in/charger
+      events immediately, so this poll is only a slow safety net and can be
+      lazy to save power. Paused entirely while blanked (akira_fusb302_set_idle).
+
 endmenu # USB-C VBUS Sense (FUSB302)
 
 menu "App Manager"
@@ -1954,6 +1977,28 @@ config AKIRA_WAIT_WAKE_HOLD_MS
     help
       How long the HOME button must be held to exit the Phase 1 idle
       wait screen.  Prevents accidental wakes from brief button contact.
+
+config AKIRA_IDLE_DIM_S
+    int "Dim the screen this many seconds before the idle wait screen"
+    default 10
+    range 0 60
+    depends on AKIRA_OS_SHELL
+    help
+      With no input for (display timeout - this) the backlight drops to 30%
+      of full scale (or the user's level, if lower); any key restores it.
+      Gives a cheap warning before the screen goes to the clock.  0 = off.
+
+config AKIRA_WAIT_CLOCK_S
+    int "Seconds the idle clock stays lit before the display turns off"
+    default 120
+    range 0 86400
+    depends on AKIRA_OS_SHELL
+    help
+      After this long on the dimmed wait-screen clock, the backlight driver
+      goes to standby and the panel to SLEEP_IN: no repaints until HOME is
+      held or a charger/critical-battery event briefly lights it ("peek").
+      Deep sleep still follows at akira/power/sleep_s.  0 = keep the clock
+      lit until deep sleep.
 
 config AKIRA_DEEP_SLEEP_IDLE_S
     int "Seconds on wait screen before entering deep sleep"

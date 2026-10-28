@@ -29,6 +29,13 @@ typedef enum {
 
 /* Core RF API functions (no security checks) */
 int akira_rf_init(akira_rf_chip_t chip);
+/* Boot-time bring-up: hardware-init every configured sub-GHz chip (so `rf`
+ * commands and apps can still find them) and park each in its lowest-power
+ * state. No radio is selected active, the RX daemon is NOT armed, and NO
+ * deep-sleep keep-awake lock is taken — the device is free to deep-sleep until
+ * something actually uses a radio. Call once from main() in place of the old
+ * per-chip akira_rf_init() boot sequence. */
+int akira_rf_boot_init(void);
 int akira_rf_deinit(void);
 /* Release radio-manager ownership of all RF-held chips WITHOUT powering them
  * down (no ops->deinit). Lets the mesh acquire the LR2021 that main() inits at
@@ -59,12 +66,20 @@ int akira_rf_set_lora_hopping(bool enable, uint16_t hop_period_syms,
 int akira_rf_get_rssi(int16_t *rssi);
 radio_handle_t *akira_rf_get_active_handle(void);
 
-/** True while the RF RX daemon is actively listening on the active radio. */
+/** True while a client has the active radio armed for continuous RX. */
 bool akira_rf_daemon_is_running(void);
-/** Put the active radio into RADIO_MODE_SLEEP if it is idle. No-op if busy or absent. */
+/** Put the active radio into RADIO_MODE_SLEEP if no client needs it right now
+ *  (no armed receive, no TX in flight). Returns -EBUSY if a receiver is armed,
+ *  -ENODEV if no radio is selected. Used by the screen-blank power path. */
 int akira_rf_sleep_if_idle(void);
-/** Restore the active radio to RADIO_MODE_STANDBY after akira_rf_sleep_if_idle(). */
+/** Undo akira_rf_sleep_if_idle(): restore the radio it slept to RADIO_MODE_STANDBY
+ *  (and re-arm RX if a client still wants it). Used by the screen-unblank path. */
 int akira_rf_wake(void);
+/** Unconditionally stop/park the RX daemon and drive every initialised radio
+ *  into its lowest-power state. For use right before ESP32 deep sleep: the chip
+ *  reboots on wake, so no restore is needed. Safe to call from any thread at any
+ *  time, even if a radio was mid-RX. */
+int akira_rf_sleep_all(void);
 
 /* Continuous-wave (CW) TX for jamming / range testing. */
 int akira_rf_tx_cw_start(void);

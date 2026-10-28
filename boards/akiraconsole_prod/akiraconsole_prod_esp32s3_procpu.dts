@@ -352,7 +352,9 @@
 	// FUSB302BMPX — USB-C PD controller (U8), J2 OTG port
 	// 7-bit addr 0x22 (8-bit WRITE=0x44, READ=0x45)
 	// Both VCONN pins tied to +3.3V (valid: 3.0–5.5V).
-	// INT_N → USB_INT → TCA6408 P6 → triggers IO_INT on GPIO46.
+	// INT_N → /PWR/BAT_INT → GPIO3 (shared open-drain with BQ25601 ~INT and
+	// STC3115 ALM). Serviced by fusb302_vbus.c via the bq25601 node's
+	// int-gpios. (Earlier comment said TCA6408 P6 — that was wrong.)
 	// -------------------------------------------------------------------------
 	fusb302: fusb302@22 {
 		compatible = "fcs,fusb302";

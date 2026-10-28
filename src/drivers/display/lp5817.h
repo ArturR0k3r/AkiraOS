@@ -49,6 +49,8 @@ int akira_lp5817_init(void);
  * @brief Set backlight brightness.
  *
  * Writes the 8-bit manual PWM value to all three channels and latches it.
+ * 0 also clears CHIP_EN (standby, near-zero quiescent current); the next
+ * non-zero value re-enables the device first.
  *
  * @param brightness 0 = off, 255 = full scale.
  * @return 0 on success, negative errno on error.

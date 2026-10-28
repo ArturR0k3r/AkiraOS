@@ -191,6 +191,25 @@ int akira_pm_battery_register_cb(akira_battery_cb_t cb, void *user);
 int akira_pm_battery_simulate(int pct, akira_batt_state_t state);
 
 /**
+ * @brief Put every peripheral into its lowest state before the ESP32 powers
+ *        off (deep sleep, hibernate, ship mode).
+ *
+ * The board has no load switches: radios, secure element, USB-C controller,
+ * backlight driver and panel all stay on the 3V3 rail through deep sleep and
+ * must be parked individually.  Not reversible — the chip reboots on wake.
+ */
+void akira_pm_prepare_poweroff(void);
+
+/**
+ * @brief True power-off: disconnect the battery with the charger's BATFET.
+ *
+ * Draws only microamps, but this board has no ~QON button: **plugging in USB
+ * is the only way to turn it back on.**  Does not return on success.
+ * @return -ENODEV if no charger is bound, or the charger's error.
+ */
+int akira_pm_ship_mode(void);
+
+/**
  * @brief Enable or disable automatic low-power idle management.
  * @return 0 always.
  */

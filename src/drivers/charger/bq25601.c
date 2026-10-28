@@ -84,6 +84,10 @@ LOG_MODULE_REGISTER(bq25601, CONFIG_CHARGER_LOG_LEVEL);
 #define BQ25601_REG05_WATCHDOG_MASK  GENMASK(5, 4) /* 00 = disabled, 01 = 40 s */
 #define BQ25601_REG05_EN_TIMER       BIT(3)
 
+/* REG07 bits */
+#define BQ25601_REG07_BATFET_DIS     BIT(5) /* 1 = turn the BATFET off       */
+#define BQ25601_REG07_BATFET_DLY     BIT(3) /* 1 = ...after tSM_DLY (~10 s)  */
+
 /* REG08: System Status */
 #define BQ25601_REG08_VBUS_STAT_MASK  GENMASK(7, 5)
 #define BQ25601_REG08_CHG_STAT_MASK   GENMASK(4, 3)
@@ -172,6 +176,16 @@ int bq25601_read_regs(const struct device *dev, uint8_t regs[BQ25601_NUM_REGS])
     const struct bq25601_config *cfg = dev->config;
 
     return i2c_burst_read_dt(&cfg->i2c, BQ25601_REG00, regs, BQ25601_NUM_REGS);
+}
+
+int bq25601_ship_mode(const struct device *dev)
+{
+    /* Delayed, so the caller can finish parking the board and power the
+     * ESP32 down before VSYS collapses.  Only VBUS (or ~QON, which is not
+     * wired on AkiraConsole Prod) brings the BATFET back. */
+    return bq25601_update(dev, BQ25601_REG07,
+                          BQ25601_REG07_BATFET_DIS | BQ25601_REG07_BATFET_DLY,
+                          BQ25601_REG07_BATFET_DIS | BQ25601_REG07_BATFET_DLY);
 }
 
 /* =========================================================================

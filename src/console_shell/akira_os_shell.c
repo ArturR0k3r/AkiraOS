@@ -404,7 +404,7 @@ static bool akira_power_should_stay_awake(void)
            || akira_pm_is_charging()
 #endif
 #if defined(CONFIG_BT)
-           || bt_manager_get_mode() != BT_MODE_NONE      /* BT scan/spam, not just connected */
+           || bt_manager_keeps_awake()                   /* host connected or scan/spam running */
 #endif
 #if defined(CONFIG_AKIRA_WIFI_MANAGER)
            || wifi_manager_get_state() != WIFI_MGR_STATE_IDLE
@@ -497,6 +497,29 @@ static void shell_power_event(uint32_t events, bool blanked)
 }
 #endif
 
+/* ---- backlight policy --------------------------------------------- */
+
+/* Pre-blank dim level and the paused-game dim level (hardware 0..255). */
+#define DIM_IDLE_HW 77 /* 30 % */
+#define DIM_APP_HW  26 /* 10 % */
+
+/* The user's backlight level from Settings → Display (stored in percent). */
+static uint8_t g_user_bright = 255;
+
+static uint8_t shell_read_user_brightness(void)
+{
+#ifdef CONFIG_AKIRA_SETTINGS
+    char sv[16] = "";
+
+    if (!akira_settings_get("akira/display/brightness", sv, sizeof(sv)))
+    {
+        int pct = CLAMP(atoi(sv), 1, 100);
+        return (uint8_t)((pct * 255 + 50) / 100);
+    }
+#endif
+    return 255;
+}
+
 static void shell_thread_fn(void *p1, void *p2, void *p3)
 {
     ARG_UNUSED(p1);
@@ -529,6 +552,11 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
     screen_init(&home_screen);
     screen_status_tick();
     screen_frame();
+
+    /* The display HAL lights the panel at a neutral level before settings
+     * exist; switch to the user's own level as soon as they do. */
+    g_user_bright = shell_read_user_brightness();
+    akira_display_hal_set_brightness(g_user_bright);
 
     /* Start the IPC lifecycle listener thread */
     k_thread_create(&g_lifecycle_thread,
@@ -576,6 +604,8 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
     int64_t s_last_input_ms = k_uptime_get();
     bool s_display_blanked = false;
     bool s_lock_requested = false; /* Settings → Lock screen (CMD_LOCK) */
+    bool s_dimmed = false;         /* pre-blank dim is showing          */
+    bool s_app_dimmed = false;     /* paused WASM app dimmed            */
     /* Seconds on the wait screen before auto deep-sleep.  0 = never (the wait
      * screen stays a live clock forever); set via NVS akira/power/sleep_s,
      * defaulting to CONFIG_AKIRA_DEEP_SLEEP_IDLE_S when that key is unset.
@@ -604,6 +634,13 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
         if (just_pressed && !s_display_blanked)
         {
             s_last_input_ms = now_ms;
+            if (s_dimmed || s_app_dimmed)
+            {
+                /* Any key while dimmed: back to the user's level at once. */
+                s_dimmed = false;
+                s_app_dimmed = false;
+                akira_display_hal_set_brightness(g_user_bright);
+            }
         }
 
         /* Phase 1 wake: require HOME held for CONFIG_AKIRA_WAIT_WAKE_HOLD_MS.
@@ -671,6 +708,13 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
 
         if (!g_wasm_active)
         {
+            if (s_app_dimmed)
+            {
+                /* App exited while dimmed: the shell's screens get full light. */
+                s_app_dimmed = false;
+                akira_display_hal_set_brightness(g_user_bright);
+            }
+
             /* Nothing consumes the edge queue while the shell owns input —
              * the screens all work off just_pressed, derived from the bitmask.
              * Drop whatever accumulated, or the 16-slot queue saturates after
@@ -698,7 +742,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 {
                     if ((just_pressed & BIT(_b)) && btn_names[_b])
                     {
-                        LOG_INF("BTN: %s", btn_names[_b]);
+                        LOG_DBG("BTN: %s", btn_names[_b]);
                     }
                 }
                 screen_dispatch_key(just_pressed);
@@ -742,6 +786,7 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                 if (!s_display_blanked && _gen_now != s_settings_gen_seen)
                 {
                     s_settings_gen_seen = _gen_now;
+                    g_user_bright = shell_read_user_brightness();
                     bool _en = true;
                     char _sv[16] = "";
                     if (!akira_settings_get("akira/display/timeout_en",
@@ -804,6 +849,30 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                     }
                 }
 
+                /* Pre-blank dim: a cheap "about to sleep" cue that also saves
+                 * the last stretch of full backlight before the clock. */
+#if CONFIG_AKIRA_IDLE_DIM_S > 0
+                if (!s_display_blanked && s_display_timeout_ms > 0)
+                {
+                    int64_t dim_at = MAX(s_display_timeout_ms -
+                                             (int64_t)CONFIG_AKIRA_IDLE_DIM_S * 1000,
+                                         s_display_timeout_ms / 2);
+                    bool due = (now_ms - s_last_input_ms) >= dim_at;
+
+                    if (due && !s_dimmed)
+                    {
+                        s_dimmed = true;
+                        akira_display_hal_set_brightness(MIN(g_user_bright, DIM_IDLE_HW));
+                    }
+                    else if (!due && s_dimmed)
+                    {
+                        /* Activity without a key (a host session) */
+                        s_dimmed = false;
+                        akira_display_hal_set_brightness(g_user_bright);
+                    }
+                }
+#endif
+
                 /* Idle wait-screen check */
                 static int64_t s_deep_sleep_arm_ms;
                 if (!s_display_blanked &&
@@ -812,8 +881,13 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
                       (now_ms - s_last_input_ms) >= s_display_timeout_ms)))
                 {
                     s_lock_requested = false;
+                    s_dimmed = false;
                     s_display_blanked = true;
                     s_deep_sleep_arm_ms = now_ms;
+                    /* The user walked away: close whatever was open (sticky
+                     * screens like the USB-storage lock stay) so an abandoned
+                     * settings page can't hold the device out of deep sleep. */
+                    screen_pop_to_root();
                     screen_set_suspended(true);
                     wait_screen_enter(); /* -> notify_blank(true) */
                     /* Drain button noise accumulated during wait_screen_enter's
@@ -884,7 +958,16 @@ static void shell_thread_fn(void *p1, void *p2, void *p3)
         else
         {
             /* Shell dormant while WASM holds display.
-             * s_prev_btns is already updated at the top of the loop. */
+             * s_prev_btns is already updated at the top of the loop.
+             * The app keeps the screen, but a game left paused shouldn't
+             * burn full backlight: dim after the display timeout with no
+             * key; any key (top of the loop) restores it. */
+            if (!s_app_dimmed && s_display_timeout_ms > 0 &&
+                (now_ms - s_last_input_ms) >= s_display_timeout_ms)
+            {
+                s_app_dimmed = true;
+                akira_display_hal_set_brightness(MIN(g_user_bright, DIM_APP_HW));
+            }
             k_sleep(K_MSEC(50));
         }
 

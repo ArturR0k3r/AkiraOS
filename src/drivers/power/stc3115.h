@@ -49,6 +49,13 @@ struct stc3115_regs {
  */
 int stc3115_read_regs(const struct device *dev, struct stc3115_regs *out);
 
+/**
+ * @brief Stop the gauge (GG_RUN=0, ~2 uA) keeping its SOC in RAM, before the
+ *        battery is disconnected by the charger's ship mode.
+ * @return 0 on success, negative errno on I2C failure.
+ */
+int stc3115_standby(const struct device *dev);
+
 #ifdef __cplusplus
 }
 #endif

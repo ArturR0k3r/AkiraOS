@@ -150,6 +150,17 @@ void akira_display_flush(void)
 #endif
 }
 
+void akira_display_flush_rows(int y0, int y1)
+{
+#if AKIRA_PLATFORM_NATIVE_SIM
+    ARG_UNUSED(y0);
+    ARG_UNUSED(y1);
+    akira_sim_show_display();
+#else
+    akira_framebuffer_present_rows(y0, y1);
+#endif
+}
+
 void akira_display_get_size(int *width, int *height)
 {
 #if AKIRA_PLATFORM_NATIVE_SIM

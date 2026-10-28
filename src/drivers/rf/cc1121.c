@@ -527,6 +527,14 @@ static int cc1121_init(void)
     int ret;
 
     if (g_cc1121.initialized) {
+        /* Already brought up once (e.g. parked in SPWD power-down at boot).
+         * Guarantee the caller gets a ready chip: the SIDLE strobe's CSn edge
+         * wakes the crystal, then wait_for_idle() settles it into IDLE. */
+        if (g_cc1121.current_mode == RADIO_MODE_SLEEP) {
+            cc1121_strobe(CC1121_SIDLE);
+            wait_for_idle();
+            g_cc1121.current_mode = RADIO_MODE_STANDBY;
+        }
         return 0;
     }
 

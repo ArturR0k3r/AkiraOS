@@ -919,6 +919,9 @@ static void power_action_work_fn(struct k_work *work)
         break;
     case POWER_REQ_POWEROFF:
 #ifdef CONFIG_POWEROFF
+#ifdef CONFIG_AKIRA_POWER_MANAGER
+        akira_pm_prepare_poweroff(); /* park radios, panel, backlight first */
+#endif
         sys_poweroff();
 #else
         sys_reboot(SYS_REBOOT_COLD);

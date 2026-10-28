@@ -56,6 +56,30 @@ LOG_MODULE_REGISTER(akira_power_manager, CONFIG_AKIRA_LOG_LEVEL);
 #ifdef CONFIG_FUEL_GAUGE
 #include <zephyr/drivers/fuel_gauge.h>
 #endif
+#ifdef CONFIG_FUEL_GAUGE_STC3115
+#include "stc3115.h"
+#endif
+#ifdef CONFIG_CHARGER_BQ25601
+#include "drivers/charger/bq25601.h"
+#endif
+
+#include "drivers/platform_hal.h"
+#ifdef CONFIG_AKIRA_FUSB302_VBUS
+#include <drivers/usbc/fusb302_vbus.h>
+#endif
+#if defined(CONFIG_AKIRA_SE050) && DT_HAS_COMPAT_STATUS_OKAY(nxp_se050)
+#include <zephyr/drivers/gpio.h>
+#include "drivers/secure_element/se050.h"
+#define AKIRA_PM_SE050_NODE DT_INST(0, nxp_se050)
+#if defined(CONFIG_SOC_SERIES_ESP32S3) && DT_NODE_HAS_PROP(AKIRA_PM_SE050_NODE, enable_gpios)
+/* Hold the SE050 enable pad low through deep sleep (see akira_pm_prepare_poweroff). */
+#include <hal/rtc_io_ll.h>
+#include <soc/rtc_io_periph.h>
+#include <zephyr/init.h>
+#define AKIRA_PM_SE050_HOLD 1
+#define AKIRA_PM_SE050_ENA_PIN DT_GPIO_PIN(AKIRA_PM_SE050_NODE, enable_gpios)
+#endif
+#endif
 
 #ifdef CONFIG_CHARGER
 /* Charger IC (BQ25601 on AkiraConsole Production).  Independent of the battery
@@ -306,6 +330,7 @@ int akira_pm_set_mode(akira_power_mode_t mode)
         break;
 #elif defined(CONFIG_SOC_ESP32S3)
         /* sys_poweroff() does not return — reboots on wake. */
+        akira_pm_prepare_poweroff();
         esp_sleep_enable_ext0_wakeup(0 /* GPIO_NUM_0 */, 0 /* level LOW */);
         LOG_INF("Deep sleep — wake on GPIO0 LOW (HOME button)");
         sys_poweroff();
@@ -326,6 +351,7 @@ int akira_pm_set_mode(akira_power_mode_t mode)
         break;
 #elif defined(CONFIG_SOC_ESP32S3)
         /* sys_poweroff() does not return — reboots on wake. */
+        akira_pm_prepare_poweroff();
         esp_sleep_enable_ext0_wakeup(0 /* GPIO_NUM_0 */, 0 /* level LOW */);
         LOG_INF("Hibernate — wake on GPIO0 LOW (HOME button)");
         sys_poweroff();
@@ -858,6 +884,99 @@ int akira_pm_enable_low_power_mode(bool enable)
     return 0;
 }
 
+/* ---------- power-off preparation ---------- */
+
+static void akira_pm_gate_peripherals(bool suspending);
+
+#if defined(AKIRA_PM_SE050_HOLD)
+/* A pad hold set before deep sleep survives the wake-up reboot, and would
+ * pin the SE050 enable low forever.  Release it before any driver runs. */
+static int akira_pm_release_pad_holds(void)
+{
+    int rtcio = rtc_io_num_map[AKIRA_PM_SE050_ENA_PIN];
+
+    if (rtcio >= 0) {
+        rtcio_ll_force_hold_disable(rtcio);
+    }
+    return 0;
+}
+SYS_INIT(akira_pm_release_pad_holds, PRE_KERNEL_1, 0);
+#endif
+
+void akira_pm_prepare_poweroff(void)
+{
+    /* Everything on the 3V3 rail stays powered while the ESP32 deep-sleeps
+     * (there are no load switches on this board), so each part has to be
+     * put into its own lowest state or it keeps draining the battery. */
+    LOG_INF("Preparing peripherals for power-off");
+
+#ifdef CONFIG_AKIRA_MODULE_RF
+    (void)akira_rf_sleep_all();            /* LR2021 sleep, CC1121 SPWD */
+#endif
+    akira_pm_gate_peripherals(true);       /* IMU + BME280 power-down    */
+
+#if defined(CONFIG_AKIRA_SE050) && DT_HAS_COMPAT_STATUS_OKAY(nxp_se050)
+    {
+        const struct device *se = DEVICE_DT_GET(AKIRA_PM_SE050_NODE);
+
+        if (device_is_ready(se)) {
+            (void)se050_power_off(se);     /* ENA low: deep power-down   */
+        }
+#if defined(AKIRA_PM_SE050_HOLD)
+        /* GPIO21 floats once the digital core sleeps and R95 pulls ENA back
+         * high — latch the pad low for the whole of deep sleep. */
+        int rtcio = rtc_io_num_map[AKIRA_PM_SE050_ENA_PIN];
+
+        if (rtcio >= 0) {
+            rtcio_ll_force_hold_enable(rtcio);
+        }
+#endif
+    }
+#endif
+
+#ifdef CONFIG_AKIRA_FUSB302_VBUS
+    akira_fusb302_power_down();
+#endif
+
+    /* Backlight to LP5817 standby, then ST7789V SLEEP_IN. */
+    akira_display_hal_sleep(true);
+}
+
+int akira_pm_ship_mode(void)
+{
+#ifdef CONFIG_CHARGER_BQ25601
+    if (!g_pm.charger) {
+        return -ENODEV;
+    }
+    akira_pm_prepare_poweroff();
+
+#ifdef CONFIG_FUEL_GAUGE_STC3115
+    /* The gauge stays on VBAT; in standby it draws ~2 uA instead of ~50 uA,
+     * and its RAM backup lets it resume the same SOC at the next boot. */
+    if (g_pm.fuel_gauge) {
+        (void)stc3115_standby(g_pm.fuel_gauge);
+    }
+#endif
+
+    int ret = bq25601_ship_mode(g_pm.charger);
+
+    if (ret != 0) {
+        LOG_ERR("Ship mode failed: %d", ret);
+        return ret;
+    }
+    LOG_WRN("Ship mode armed — battery disconnects in ~10 s; USB power to restart");
+#if defined(CONFIG_SOC_ESP32S3) && !defined(CONFIG_PM)
+    /* Sleep until the BATFET opens; if USB is still attached the board
+     * stays up and HOME brings it back. */
+    esp_sleep_enable_ext0_wakeup(0 /* GPIO_NUM_0 */, 0 /* level LOW */);
+    sys_poweroff();
+#endif
+    return 0;
+#else
+    return -ENOTSUP;
+#endif
+}
+
 /* ---------- blank-state subsystem idling ---------- */
 
 /**
@@ -941,7 +1060,13 @@ void akira_pm_notify_blank(bool entering)
         (void)akira_rf_sleep_if_idle();
 #endif
 #if defined(CONFIG_BT)
-        (void)bt_manager_conn_params_idle();
+        /* Idle conn params now; stop advertising a while later if nobody
+         * is connected (CONFIG_AKIRA_BT_ADV_AFTER_BLANK_S). */
+        bt_manager_on_blank(true);
+#endif
+#ifdef CONFIG_AKIRA_FUSB302_VBUS
+        /* Plug-in still arrives through the BAT_INT interrupt. */
+        akira_fusb302_set_idle(true);
 #endif
 #ifdef CONFIG_AKIRA_SD_CARD
         akira_sd_card_hotplug_pause();
@@ -954,7 +1079,10 @@ void akira_pm_notify_blank(bool entering)
         (void)akira_rf_wake();
 #endif
 #if defined(CONFIG_BT)
-        (void)bt_manager_conn_params_active();
+        bt_manager_on_blank(false);
+#endif
+#ifdef CONFIG_AKIRA_FUSB302_VBUS
+        akira_fusb302_set_idle(false);
 #endif
 #ifdef CONFIG_AKIRA_SD_CARD
         akira_sd_card_idle_remount();  /* before the poll, so it sees the truth */
