@@ -8,6 +8,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/util.h>
+#include <zephyr/version.h>
 #include <inttypes.h>
 #include <string.h>
 
@@ -35,7 +36,12 @@ void akira_identity_get(struct akira_identity *id)
 	memset(id, 0, sizeof(*id));
 	id->akira_version = AKIRA_VERSION_STRING;
 	id->akira_revision = AKIRA_BUILD_REVISION;
+	/* `git describe` of the Zephyr tree, as in the boot banner. */
+#if defined(BUILD_VERSION) && !IS_EMPTY(BUILD_VERSION)
 	id->zephyr_version = STRINGIFY(BUILD_VERSION);
+#else
+	id->zephyr_version = KERNEL_VERSION_STRING;
+#endif
 	id->board = CONFIG_BOARD_TARGET;
 	id->wamr_revision = "";
 

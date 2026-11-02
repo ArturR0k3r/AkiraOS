@@ -7,11 +7,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [1.6.5] — Unreleased
+## [1.6.6] — Unreleased
 
-> Development series on the `v1.6.x` branch. `VERSION` tracks 1.6.5; this section
-> is backfilled from the commits since 1.5.8 plus the production-readiness
-> hardening pass, and is not yet tagged/released.
+### Fixed
+- `fix(identity)`: `akira version` and `GET /api/v1/info` printed the literal
+  `BUILD_VERSION` instead of the Zephyr version: `<zephyr/version.h>` was never
+  included. Found on AkiraConsole Prod hardware; the shell had the same bug
+  before 1.6.5.
+- `fix(security)`: The boot log said `signing=enforced` although no in-tree code
+  verifies app signatures. It now reports `required`
+  (`CONFIG_AKIRA_REQUIRE_SIGNED_APPS`), `unattested apps unprivileged`
+  (`CONFIG_AKIRA_HARDEN_UNATTESTED_APPS`) or `not verified`.
+
+---
+
+## [1.6.5] — 2026-11-02
+
+> Development series on the `v1.6.x` branch, tagged `v1.6.5`. This section is
+> backfilled from the commits since 1.5.8 plus the production-readiness
+> hardening pass.
 
 ### Implemented (previously stubbed)
 - `feat(sensors)`: BME280 register writes over I2C (`i2c_reg_write_byte`) — was `-ENOTSUP`.
