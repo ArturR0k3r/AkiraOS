@@ -38,15 +38,34 @@ This writes two secrets and a `.gitignore` that excludes them:
   key so devices accept the update, then switch signing to the new key. Keep the
   old public key trusted until every device has migrated.
 
-## 2. Sign the firmware image
+## 2. Sign the firmware image — and build the bootloader that checks it
+
+A signed image is only half of it: the bootloader must be built to verify that
+key. MCUboot's Espressif defaults (`BOOT_SIGNATURE_TYPE_NONE`) check a hash and
+nothing else. In the AkiraOS tree, `build.sh` does both halves:
 
 ```bash
-west build -b <board> . -- -DCONFIG_AKIRA_RELEASE_BUILD=y
+./build.sh -b <board> -bl y -k keys/mcuboot-signing.pem --release
+```
+
+`-k` builds MCUboot with the key's signature type, its public half and
+downgrade prevention, and signs the app; `--release` applies the
+`akira-release` snippet and stops if the bootloader does not enforce signed,
+non-downgrading updates. See [SESIP evaluated configuration](../compliance/sesip-evaluated-configuration.md).
+
+In a product repo, sign after the build:
+
+```bash
+west build -b <board> . -S akira-release
 west akira sign -d build -k keys/mcuboot-signing.pem
 # -> build/zephyr/zephyr.signed.bin
 ```
 
-`west akira sign` wraps `west sign -t imgtool` with your product key.
+`west akira sign` wraps `west sign -t imgtool` with your product key. To have
+the build sign instead, set `CONFIG_MCUBOOT_SIGNATURE_KEY_FILE` together with
+`CONFIG_MCUBOOT_GENERATE_UNSIGNED_IMAGE=n`: the key option depends on it, and
+Espressif SoCs turn the unsigned image on by default, so the key is otherwise
+dropped without an error.
 
 ## 3. Sign and package apps
 

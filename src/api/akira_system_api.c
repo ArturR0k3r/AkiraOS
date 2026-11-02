@@ -49,23 +49,14 @@ LOG_MODULE_REGISTER(akira_system, CONFIG_AKIRA_LOG_LEVEL);
  *  -ENOMEM  output buffer too small to hold all names
  */
 int akira_native_sd_scan_wasm(wasm_exec_env_t exec_env,
-                               uint32_t buf_ptr, uint32_t buf_len)
+                               char *native_buf, uint32_t buf_len)
 {
     /* Only the shell (holding app.control) may browse the SD directly. */
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_CONTROL, -EPERM);
 
-    if (buf_len == 0) {
-        return -EINVAL;
-    }
-
-    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    if (!inst) {
-        return -EINVAL;
-    }
-
-    char *native_buf = (char *)wasm_runtime_addr_app_to_native(inst, buf_ptr);
-    if (!native_buf) {
-        LOG_ERR("sd_scan_wasm: invalid WASM pointer 0x%08x", buf_ptr);
+    /* "(*~)i": WAMR has already validated [native_buf, native_buf + buf_len)
+     * against the app's linear memory and translated it to a native pointer. */
+    if (!native_buf || buf_len == 0) {
         return -EINVAL;
     }
 

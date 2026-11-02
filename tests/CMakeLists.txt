@@ -86,7 +86,9 @@ target_compile_definitions(app PRIVATE
 # boot_write_img_confirmed symbols are satisfied by stubs/stub_mcuboot.c.
 set_source_files_properties(
     ${AKIRA_SRC}/connectivity/ota/ota_manager.c
-    PROPERTIES COMPILE_DEFINITIONS "CONFIG_BOOTLOADER_MCUBOOT=1;CONFIG_AKIRA_BOOT_GUARD=1"
+    src/test_ota_state.c
+    PROPERTIES COMPILE_DEFINITIONS
+    "CONFIG_BOOTLOADER_MCUBOOT=1;CONFIG_AKIRA_BOOT_GUARD=1;CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE=1"
 )
 
 # CONFIG_AKIRA_BOOT_GUARD depends on MCUBOOT_IMG_MANAGER, unavailable here for

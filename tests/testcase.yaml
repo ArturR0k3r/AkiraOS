@@ -6,3 +6,13 @@ tests:
     timeout: 120
     min_ram: 512
     filter: CONFIG_ZTEST
+  # Release posture for apps no signature verifier has attested.
+  akiraos.tests.hardened:
+    tags: akiraos security
+    platform_allow: native_sim
+    harness: ztest
+    timeout: 120
+    min_ram: 512
+    filter: CONFIG_ZTEST
+    extra_configs:
+      - CONFIG_AKIRA_HARDEN_UNATTESTED_APPS=y

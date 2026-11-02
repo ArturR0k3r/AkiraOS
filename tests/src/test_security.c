@@ -247,11 +247,33 @@ ZTEST(security_registry, test_grant_clamps_and_reports_privileged)
     uint64_t expected = (AKIRA_CAP_DISPLAY_WRITE | AKIRA_CAP_NETWORK | BIT64(48)) &
                         (uint64_t)CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK;
 
+    if (IS_ENABLED(CONFIG_AKIRA_HARDEN_UNATTESTED_APPS)) {
+        expected &= ~akira_capability_privileged_mask();
+    }
+
     zassert_equal(granted, expected, "granted 0x%016llx", (unsigned long long)granted);
     zassert_equal(privileged, granted & akira_capability_privileged_mask(),
                   "privileged bits granted to an unattested app must be reported");
     zassert_equal(akira_capability_grant(requested, true, NULL), expected,
                   "without CONFIG_AKIRA_REQUIRE_SIGNED_APPS an embedded manifest is unattested too");
+}
+
+ZTEST(security_registry, test_hardened_build_never_grants_privileged_unattested)
+{
+    if (!IS_ENABLED(CONFIG_AKIRA_HARDEN_UNATTESTED_APPS)) {
+        ztest_test_skip();
+    }
+
+    uint64_t privileged = UINT64_MAX;
+    uint64_t all = akira_capability_str_to_mask("*");
+    uint64_t granted = akira_capability_grant(all, true, &privileged);
+
+    zassert_equal(granted & akira_capability_privileged_mask(), 0,
+                  "an unattested app was granted privileged caps 0x%016llx",
+                  (unsigned long long)(granted & akira_capability_privileged_mask()));
+    zassert_equal(privileged, 0, "nothing privileged to report");
+    zassert_true(granted & AKIRA_CAP_DISPLAY_WRITE, "unprivileged caps are still granted");
+    zassert_false(granted & BIT64(48), "product privileged caps are stripped too");
 }
 
 ZTEST(security_registry, test_validate_rejects_bad_tables)

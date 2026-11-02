@@ -57,6 +57,41 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Advertised-but-incomplete entry points now return `-ENOSYS`/`-ENOTSUP` instead
   of reporting fake success (pending full implementation, see below).
 
+### SESIP Level 2 evaluated configuration
+- `feat(build)`: `build.sh -k <key.pem>` builds MCUboot to verify images signed
+  with the product key (signature type from the key, overriding Espressif's
+  `BOOT_SIGNATURE_TYPE_NONE`), with `MCUBOOT_DOWNGRADE_PREVENTION` and
+  `BOOT_VALIDATE_SLOT0` (`boards/mcuboot-secure-update.conf`), and signs the app.
+  `--release` applies the new `akira-release` snippet and fails if the built
+  bootloader does not enforce signed, non-downgrading updates.
+- `feat(ota)`: `CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE` (on in release builds) refuses
+  an older image before rebooting.
+- `fix(ota)`: BLE OTA characteristics require an encrypted link, like BLE app
+  transfer already did.
+- `fix(security)`: Validate the full pointer range in native APIs that checked
+  only the first byte or nothing: `app_list`, `app_get_self_name`,
+  `msg_publish`, `msg_recv`, `wifi_scan_rssi`, `display_get_size`,
+  `ha_light_poll` and the Python WASI `fd_*` shims. `sd_scan_wasm` treated its
+  WAMR-validated native pointer as an app offset and never worked.
+- `fix(security)`: The `fs.*` jail passed a module *instance* to
+  `wasm_runtime_get_module_name()` (which takes a module) and fell back to a
+  shared `unknown` directory. It now uses the runtime's app name, refuses names
+  with `/` or `..`, and gives an unnamed caller no files.
+- `feat(security)`: `CONFIG_AKIRA_HARDEN_UNATTESTED_APPS` (on in release builds):
+  an app no signature verifier attested gets no privileged capability and cannot
+  load AOT native code. `CONFIG_AKIRA_WAMR_MINI_LOADER` (off in release builds)
+  makes WAMR's validation-skipping mini loader optional.
+- `feat(security)`: Release checks also fail on unhardened unattested apps, the
+  mini loader without signed apps, the telnet shell and `debug memdump`
+  (`CONFIG_AKIRA_SHELL_DEBUG_COMMANDS`), and warn about the login-less serial shell.
+- `feat(identity)`: `akira_identity_get()` reports every platform part and its
+  version — AkiraOS version and git revision, the MCUboot-verified image version,
+  Zephyr, WAMR and its revision, board, device ID — through `akira version` and
+  `GET /api/v1/info`.
+- `fix(boards)`: AkiraConsole Prod MCUboot builds again: the I/O-expander driver
+  pulled in by the board overlay is turned off for the bootloader.
+- `docs`: [SESIP evaluated configuration](docs/compliance/sesip-evaluated-configuration.md).
+
 ### Added
 - `feat(security)`: Fail-closed app verification gate (`CONFIG_AKIRA_REQUIRE_SIGNED_APPS`).
 - `feat(pqc)`: Dilithium-2 post-quantum signature verify path in the runtime.

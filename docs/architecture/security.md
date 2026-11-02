@@ -199,11 +199,13 @@ The runtime logs security-relevant events for debugging and threat detection:
 
 ### 6. Flash Protection (Boot Layer)
 
-**MCUboot Verified Boot:**
-- RSA/ECDSA signature verification
-- Image headers with version info
-- Rollback protection (anti-downgrade)
-- Secure boot chain
+**MCUboot Verified Boot** (with a product key, `build.sh -k`; see [SESIP evaluated configuration](../compliance/sesip-evaluated-configuration.md)):
+- ECDSA P-256, Ed25519 or RSA signature verification of the application image, on every boot
+- Image headers carry the version from `VERSION`; `MCUBOOT_DOWNGRADE_PREVENTION` refuses older images
+- Trial boot with automatic revert (boot guard)
+- MCUboot itself is only as trustworthy as the chip's secure boot, which the integrator enables
+
+Without `-k`, Espressif boards build MCUboot with `BOOT_SIGNATURE_TYPE_NONE`: it checks a hash, not a signature.
 
 **Flash Layout:**
 ```
@@ -214,14 +216,14 @@ The runtime logs security-relevant events for debugging and threat detection:
 ├─────────────────────────────────────┤
 │ Secondary Slot (3MB) - OTA staging  │ ← Write-only during OTA
 ├─────────────────────────────────────┤
-│ FS Partition (2MB) - Apps + data    │ ← Read-only for apps
+│ FS Partition (2MB) - Apps + data    │ ← Apps: own directory only
 └─────────────────────────────────────┘
 ```
 
 **App Storage:**
-- WASM files stored in read-only partition
-- Apps cannot modify their own code
-- Tampering requires OTA firmware update
+- Apps reach files only through the `fs.*` natives, under `/akira/apps/<app name>/`; `..` and names with `/` are refused
+- The app name comes from the manifest, so it is only as authentic as the app's signature
+- Installed WASM binaries are written by the app manager, not by apps
 
 ## Manifest Format
 

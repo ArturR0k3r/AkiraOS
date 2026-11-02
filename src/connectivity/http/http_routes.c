@@ -13,6 +13,7 @@
 #include "buf_pool.h"
 #include "transport_interface.h"
 #include "akira.h"
+#include <akira_identity.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -147,11 +148,21 @@ static void __attribute__((unused)) set_upload_resp(const char *fmt, ...)
 static int route_info(const http_request_t *req, http_response_t *res,
                       void *user_data)
 {
+    struct akira_identity id;
+
+    akira_identity_get(&id);
     snprintf(s_route_buf, sizeof(s_route_buf),
              "{\"name\":\"%s\","
-             "\"fw_version\":\"" AKIRA_VERSION_STRING "\","
+             "\"fw_version\":\"%s\","
+             "\"fw_revision\":\"%s\","
+             "\"image_version\":\"%s\","
+             "\"zephyr\":\"%s\","
+             "\"wamr\":\"%s\","
+             "\"board\":\"%s\","
              "\"chip\":\"%s\"}",
              CONFIG_AKIRA_DEVICE_NAME,
+             id.akira_version, id.akira_revision, id.image_version,
+             id.zephyr_version, id.wamr_version, id.board,
              akira_get_platform_name());
 
     res->status_code = 200;

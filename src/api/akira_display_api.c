@@ -730,6 +730,15 @@ int akira_native_display_get_size(wasm_exec_env_t exec_env, int32_t *w_out, int3
         return -EINVAL;
     }
 
+    /* "(**)i" only validates one byte per pointer; check the full int32_t. */
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    if (!inst ||
+        !wasm_runtime_validate_native_addr(inst, w_out, sizeof(*w_out)) ||
+        !wasm_runtime_validate_native_addr(inst, h_out, sizeof(*h_out)))
+    {
+        return -EFAULT;
+    }
+
     int w = 0, h = 0;
     akira_display_get_size(&w, &h);
     *w_out = (int32_t)w;

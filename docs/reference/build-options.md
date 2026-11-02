@@ -95,7 +95,11 @@ Toggle these flags to export particular native APIs into the WASM sandboxes. If 
 | `CONFIG_AKIRA_SE050` | `y` if `nxp,se050` in DT | NXP SE050 secure element driver. |
 | `CONFIG_AKIRA_SE050_SCP03` | `n` | GlobalPlatform SCP03 authenticated/encrypted channel to the SE050. |
 | `CONFIG_AKIRA_BOOT_GUARD` | `y` with `MCUBOOT_IMG_MANAGER` | Confirms a new firmware image after a healthy boot; reboots it on crash, hang or deadline so MCUboot rolls back. See [OTA design](../ota_design.md#4-boot-guard-design-akira_boot_guard). |
-| `CONFIG_AKIRA_RELEASE_BUILD` | `n` | Fail the build while development-only security settings are active: HTTP no-auth, empty or example upload token, direct upload endpoint, unsigned apps, unsigned or dev-key MCUboot images. With `n` they are printed as a warning. |
+| `CONFIG_AKIRA_RELEASE_BUILD` | `n` | Fail the build while development-only security settings are active: HTTP no-auth, empty or example upload token, direct upload endpoint, unsigned apps, unsigned or dev-key MCUboot images, unhardened unattested apps, the WAMR mini loader without signed apps, the telnet shell, `debug memdump`. With `n` they are printed as a warning. The `akira-release` snippet sets it; see [SESIP evaluated configuration](../compliance/sesip-evaluated-configuration.md). |
+| `CONFIG_AKIRA_HARDEN_UNATTESTED_APPS` | `y` with `AKIRA_RELEASE_BUILD` | An app no signature verifier attested gets no privileged capability, whatever `AKIRA_UNSIGNED_APP_CAP_MASK` allows, and AOT binaries are refused unless `AKIRA_REQUIRE_SIGNED_APPS=y`. |
+| `CONFIG_AKIRA_WAMR_MINI_LOADER` | `y` unless `AKIRA_RELEASE_BUILD` | Build WAMR's mini loader, which skips module validation (saves ~20-30 KB). Only safe when every app is authenticated. |
+| `CONFIG_AKIRA_SHELL_DEBUG_COMMANDS` | `y` unless `AKIRA_RELEASE_BUILD` | Build `debug memdump`, which prints any memory address. |
+| `CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE` | `y` with `AKIRA_RELEASE_BUILD` | Refuse an OTA image whose MCUboot header version is lower than the running one, before rebooting. MCUboot enforces the same rule when built with `build.sh -k`. |
 
 ### HTTP Server (1.6.x)
 

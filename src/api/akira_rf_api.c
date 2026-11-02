@@ -593,7 +593,7 @@ int akira_native_wifi_scan_rssi(wasm_exec_env_t exec_env,
         return -EINVAL;
     }
 
-    int8_t *dst = (int8_t *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+    int8_t *dst = (int8_t *)akira_wasm_ptr_to_native(exec_env, buf_ptr, WIFI_SCAN_MAX_CHANNELS);
     if (!dst) {
         return -EFAULT;
     }

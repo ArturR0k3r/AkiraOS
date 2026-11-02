@@ -454,6 +454,42 @@ static enum ota_result do_write_chunk(const uint8_t *data, uint16_t length)
     return result;
 }
 
+#ifdef CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE
+/**
+ * @brief True if the staged image's version is lower than the running image's.
+ *
+ * Compares major.minor.revision from the MCUboot headers of both slots, as
+ * MCUboot's downgrade prevention does. An unreadable header counts as a
+ * downgrade (fail closed).
+ */
+static bool is_downgrade(void)
+{
+    struct mcuboot_img_header run, img;
+
+    if (boot_read_bank_header(FLASH_AREA_IMAGE_PRIMARY, &run, sizeof(run)) != 0 ||
+        boot_read_bank_header(FLASH_AREA_IMAGE_SECONDARY, &img, sizeof(img)) != 0)
+    {
+        LOG_ERR("Downgrade check: cannot read image headers");
+        return true;
+    }
+
+    const struct mcuboot_img_sem_ver *a = &img.h.v1.sem_ver;
+    const struct mcuboot_img_sem_ver *b = &run.h.v1.sem_ver;
+    int cmp = (a->major != b->major)       ? (a->major < b->major ? -1 : 1)
+            : (a->minor != b->minor)       ? (a->minor < b->minor ? -1 : 1)
+            : (a->revision != b->revision) ? (a->revision < b->revision ? -1 : 1)
+            : 0;
+
+    if (cmp < 0)
+    {
+        LOG_WRN("Refusing downgrade %u.%u.%u -> %u.%u.%u", b->major, b->minor,
+                b->revision, a->major, a->minor, a->revision);
+        return true;
+    }
+    return false;
+}
+#endif /* CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE */
+
 /**
  * @brief Verify the written image against the expected SHA-256.
  *
@@ -586,6 +622,17 @@ static enum ota_result do_finalize_update(void)
         set_error(OTA_ERROR_INVALID_IMAGE, "Invalid format");
         return OTA_ERROR_INVALID_IMAGE;
     }
+
+#ifdef CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE
+    /* Same rule as MCUboot's CONFIG_MCUBOOT_DOWNGRADE_PREVENTION, applied before
+     * the reboot so the sender gets an error instead of a silent erase. The
+     * header is covered by the image signature MCUboot verifies. */
+    if (is_downgrade())
+    {
+        set_error(OTA_ERROR_INVALID_IMAGE, "Older than running firmware");
+        return OTA_ERROR_INVALID_IMAGE;
+    }
+#endif
 
     /* Authenticity/integrity gate: the image content must match the expected
      * SHA-256 before we ever request a boot upgrade. Without this, the magic

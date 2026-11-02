@@ -106,6 +106,17 @@ int akira_native_ha_light_poll(wasm_exec_env_t exec_env, const char *object_id,
     if (!object_id || !on || !brightness || !r || !g || !b) {
         return -EINVAL;
     }
+
+    /* "*" only validates one byte per pointer; check each full int. */
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    if (!inst ||
+        !wasm_runtime_validate_native_addr(inst, on, sizeof(*on)) ||
+        !wasm_runtime_validate_native_addr(inst, brightness, sizeof(*brightness)) ||
+        !wasm_runtime_validate_native_addr(inst, r, sizeof(*r)) ||
+        !wasm_runtime_validate_native_addr(inst, g, sizeof(*g)) ||
+        !wasm_runtime_validate_native_addr(inst, b, sizeof(*b))) {
+        return -EFAULT;
+    }
     return ha_light_poll(object_id, on, brightness, r, g, b, timeout_ms);
 }
 
