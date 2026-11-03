@@ -126,3 +126,4 @@ flash.bin
 # Ignored so existing local checkouts (such as a locally built wamrc) are kept.
 /modules/wasm-micro-runtime/
 /modules/tflite-micro/
+CLAUDE.md
