@@ -1,0 +1,12 @@
+{
+  "name": "AkiraOS",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        { "path": "https://github.com/ArturR0k3r/AkiraOS/releases/latest/download/akiraos-akiraconsole_prod-flash.bin", "offset": 0 }
+      ]
+    }
+  ]
+}

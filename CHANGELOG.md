@@ -10,6 +10,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `docs(flash)`: Added a browser flasher at `docs.akiraos.dev/flash` (ESP Web Tools over
+  Web Serial) with a board picker and Wi-Fi provisioning notes, plus per-board manifests.
+- `ci(release)`: For the ESP32-S3 boards, also build a merged full-flash image
+  (`akiraos-<board>-flash.bin`, MCUboot + app) that the browser flasher consumes; best
+  effort, so it never blocks the rest of the release.
 - `docs(readme)`: Rewrote the README around the launch story — one-liner, browser/catalogue/
   flash call-to-action, a 60-second start, C and Rust examples, "Why AkiraOS", an honest
   comparison table (vs MicroPython / Toit / Ocre / Arduino-ESP-IDF), a current hardening
