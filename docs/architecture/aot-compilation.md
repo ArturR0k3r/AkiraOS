@@ -32,11 +32,14 @@ AkiraOS includes AOT (Ahead-of-Time) compilation support through WAMR, enabling 
 | Execution Mode | Speed | Memory | Universality |
 |----------------|-------|--------|--------------|
 | **Interpreter (.wasm)** | Baseline: WAMR classic interpreter | Lower overhead | Universal binary |
-| **AOT (.aot)** | Faster; ratio [not yet measured](../resources/performance.md#webassembly-execution-speed) | Slightly higher | Architecture-specific |
+| **AOT (.aot)** | [~78× faster than the interpreter, ≈ native speed](../resources/performance.md#webassembly-execution-speed) (ESP32-S3) | Slightly higher | Architecture-specific |
 
-No AkiraOS benchmark has measured the AOT speed-up or AOT-vs-native ratio yet; the
-[Performance](../resources/performance.md#webassembly-execution-speed) page tracks both. Upstream WAMR describes AOT as "near to
-native speed", without a number.
+Measured on an ESP32-S3 @ 240 MHz (`bench/exec_speed`, identical compute kernel, all three
+results matching): the classic interpreter is **71.8× slower than native C**, AOT is **78.3×
+faster than the interpreter**, and **AOT runs at native speed** (0.92× native cycles here —
+AOT is LLVM `-O3`, the native build GCC `-Os`). See
+[Performance](../resources/performance.md#webassembly-execution-speed) for the full table and
+the ESP32-S3 AOT cache-coherency fix that on-device AOT requires.
 
 **Benefits:**
 - Direct machine code execution — no bytecode decoding at run time
@@ -107,7 +110,7 @@ app.c  →  clang → app.wasm  →  wamrc → app.aot  →  Upload to device
 ```
 
 **Pros:**
-- Best execution speed (speed-up not yet measured on AkiraOS)
+- Best execution speed (≈ native; ~78× faster than the interpreter, measured on ESP32-S3)
 - Lower power consumption
 - Optimal for compute-heavy workloads
 

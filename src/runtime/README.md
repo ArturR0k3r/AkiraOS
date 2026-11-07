@@ -348,7 +348,8 @@ CONFIG_WAMR_AOT_SUPPORT=y
 ```
 
 - Ahead-of-time compilation
-- Speed relative to native: not yet measured
+- Speed relative to native: ≈ native (measured on ESP32-S3; ~78× faster than the interpreter —
+  see `docs/resources/performance.md`)
 - Higher memory usage
 - Requires pre-compiled `.aot` files
 

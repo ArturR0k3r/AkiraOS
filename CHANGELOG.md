@@ -10,6 +10,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `feat(bench)`: Added `bench/exec_speed` — a WebAssembly execution-speed benchmark that runs
+  one identical compute kernel three ways (native C, WAMR classic interpreter, and `wamrc` AOT)
+  and times each with `CCOUNT`, asserting all three results match. Measured on ESP32-S3 at
+  240 MHz: the interpreter is **71.8× slower than native C**, AOT is **78.3× faster than the
+  interpreter**, and **AOT runs at native speed** (0.92× native cycles — AOT is LLVM `-O3`, the
+  native build GCC `-Os`). Raw data in `bench/exec_speed/results-akiraconsole_prod.json`.
+- `fix(wamr)`: Fixed ESP32-S3 on-device AOT loading, which was unreliable (worked only by cache
+  luck). The WAMR Zephyr platform's `os_dcache_flush()` used `sys_cache_*`, which are no-ops on
+  this SoC (no `CONFIG_CACHE` driver), so after the loader wrote `.aot` code through the PSRAM
+  data-bus mirror its instruction-bus reads of section metadata returned stale cache → corrupt
+  code pointer → "target address out of range". The fix uses the ESP ROM primitives
+  (`Cache_WriteBack_All` + `Cache_Invalidate_ICache_All`). Carried in
+  `bench/exec_speed/wamr_patch/zephyr_platform.c`; should be upstreamed into the WAMR module so
+  AOT (including the retro cores) is reliable.
+- `docs(perf)`: Published the measured interpreter / AOT / native execution speeds on ESP32-S3,
+  superseding the withdrawn "AOT 10–50× faster" / "~90–95 % of native" estimates.
 - `docs(flash)`: Added a browser flasher at `docs.akiraos.dev/flash` (ESP Web Tools over
   Web Serial) with a board picker and Wi-Fi provisioning notes, plus per-board manifests.
 - `ci(release)`: For the ESP32-S3 boards, also build a merged full-flash image
