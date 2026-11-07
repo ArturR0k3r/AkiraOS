@@ -1,0 +1,20 @@
+{
+  "_comment": "Raw bench/exec_speed captures on AkiraConsole Prod (ESP32-S3 @ 240 MHz). Source of the interpreter/AOT/native figures in docs/resources/performance.md. Captured over serial; 3 consecutive boots, all results_match=true (0x3246764025). AOT requires the os_dcache_flush fix in wamr_patch/zephyr_platform.c.",
+  "board": "akiraconsole_prod",
+  "soc": "esp32s3",
+  "cpu_mhz": 240,
+  "iters": 2000000,
+  "wamrc": "wamrc 2.4.3 (Espressif LLVM, xtensa) --target=xtensa --cpu=esp32s3 --opt-level=3",
+  "native_toolchain": "Zephyr Xtensa GCC, CONFIG_SIZE_OPTIMIZATIONS=y (-Os)",
+  "runs": [
+    {"native_cycles": 36008201, "interp_cycles": 2585636374, "aot_cycles": 33008635, "native_us": 150034, "interp_us": 10773484, "aot_us": 137535, "interp_vs_native_x1000": 71806, "aot_vs_native_x1000": 916, "interp_vs_aot_x1000": 78332, "result": 3246764025, "results_match": true},
+    {"native_cycles": 36008200, "interp_cycles": 2585636392, "aot_cycles": 33008635, "native_us": 150034, "interp_us": 10773484, "aot_us": 137535, "interp_vs_native_x1000": 71806, "aot_vs_native_x1000": 916, "interp_vs_aot_x1000": 78332, "result": 3246764025, "results_match": true},
+    {"native_cycles": 36008200, "interp_cycles": 2585636392, "aot_cycles": 33008635, "native_us": 150034, "interp_us": 10773484, "aot_us": 137535, "interp_vs_native_x1000": 71806, "aot_vs_native_x1000": 916, "interp_vs_aot_x1000": 78332, "result": 3246764025, "results_match": true}
+  ],
+  "summary": {
+    "interp_vs_native": "71.8x slower",
+    "aot_vs_interp": "78.3x faster",
+    "aot_vs_native": "0.92x native cycles (~native speed; AOT is LLVM -O3, native is GCC -Os)",
+    "cycles_per_iter": {"native": 18.0, "aot": 16.5, "interp": 1292.8}
+  }
+}
