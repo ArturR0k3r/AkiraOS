@@ -533,4 +533,4 @@ stateDiagram-v2
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.5)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.6)*

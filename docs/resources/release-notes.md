@@ -11,10 +11,23 @@ permalink: /resources/release-notes
 > Release history. `CHANGELOG.md` at the repository root is the authoritative,
 > commit-level record; this page summarises each release.
 
-## v1.6.5 — Unreleased
+## v1.6.6 — 2026-11-02
 
-**Status:** development series on the `v1.6.x` branch. `VERSION` tracks 1.6.5, but
-**no 1.6.x git tag exists yet** — the newest tag is `v1.5.8`.
+**Status:** tagged `v1.6.6` on the `v1.6.x` branch: a patch release on top of 1.6.5,
+and the SESIP Level 2 evaluated configuration.
+
+### Fixed
+- **Identity**: `akira version` and `GET /api/v1/info` printed the literal
+  `BUILD_VERSION` instead of the Zephyr version.
+- **Boot log**: it said `signing=enforced` although no in-tree code verifies app
+  signatures. It now reports `required`, `unattested apps unprivileged` or
+  `not verified`, depending on the configuration.
+
+---
+
+## v1.6.5 — 2026-11-02
+
+**Status:** tagged `v1.6.5` on the `v1.6.x` branch.
 
 The 1.6 series is a connectivity build-out plus a production-readiness pass that
 deliberately *removed* overclaims: entry points that were advertised but incomplete now
@@ -306,4 +319,4 @@ Initial public release with OCRE runtime, basic BLE, WiFi OTA, and LittleFS stor
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.5)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.6)*

@@ -344,4 +344,4 @@ See [Building Apps Guide](../development/building-apps.md) for the complete buil
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.5)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.6)*

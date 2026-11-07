@@ -7,19 +7,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [1.6.6] — Unreleased
-
-### Fixed
-- `fix(identity)`: `akira version` and `GET /api/v1/info` printed the literal
-  `BUILD_VERSION` instead of the Zephyr version: `<zephyr/version.h>` was never
-  included. Found on AkiraConsole Prod hardware; the shell had the same bug
-  before 1.6.5.
-- `fix(security)`: The boot log said `signing=enforced` although no in-tree code
-  verifies app signatures. It now reports `required`
-  (`CONFIG_AKIRA_REQUIRE_SIGNED_APPS`), `unattested apps unprivileged`
-  (`CONFIG_AKIRA_HARDEN_UNATTESTED_APPS`) or `not verified`.
+## [Unreleased]
 
 ### Documentation
+- `docs`: Refer to 1.6.6 as the current release (it was tagged on 2026-11-02);
+  the release notes and this changelog still called it unreleased.
 - `docs(perf)`: `docs/resources/performance.md` is now the single source for
   performance figures. The Capability Guard overhead ("~60 ns") was an estimate, not
   a measurement; every mention now links to the page, which states the methodology
@@ -50,6 +42,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (they 404 on GitHub), moved board `.conf` files, a moved Zephyr page, a wrong GitHub
   organisation and a wrong relative path. The README's first build command used a
   `build_wasm_app.sh` script that does not exist; it now uses `./build.sh hello_world`.
+
+---
+
+## [1.6.6] — 2026-11-02
+
+### Fixed
+- `fix(identity)`: `akira version` and `GET /api/v1/info` printed the literal
+  `BUILD_VERSION` instead of the Zephyr version: `<zephyr/version.h>` was never
+  included. Found on AkiraConsole Prod hardware; the shell had the same bug
+  before 1.6.5.
+- `fix(security)`: The boot log said `signing=enforced` although no in-tree code
+  verifies app signatures. It now reports `required`
+  (`CONFIG_AKIRA_REQUIRE_SIGNED_APPS`), `unattested apps unprivileged`
+  (`CONFIG_AKIRA_HARDEN_UNATTESTED_APPS`) or `not verified`.
 
 ---
 
