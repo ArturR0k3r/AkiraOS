@@ -93,4 +93,4 @@ without a number. No AkiraOS benchmark yet measures either ratio:
 
 ---
 
-*Last updated: 2026-11-07 (AkiraOS v1.6.6)*
+*Last updated: 2026-11-07 (AkiraOS v1.6.7)*

@@ -223,7 +223,7 @@ Expected boot output:
 
 ```
 *** Booting Zephyr OS build v4.3.0 ***
-[00:00:00.123] <inf> main: AkiraOS v1.6.6 starting...
+[00:00:00.123] <inf> main: AkiraOS v1.6.7 starting...
 [00:00:00.234] <inf> runtime: WAMR initialized
 [00:00:00.345] <inf> connectivity: WiFi stack ready
 [00:00:00.456] <inf> main: System initialized successfully

@@ -8,7 +8,7 @@
 
 Every app is a sandboxed `.wasm` module. Deploy over-the-air. No firmware flash required.
 
-[![Version](https://img.shields.io/badge/version-1.6.6-7f5af0?style=flat-square)](https://github.com/ArturR0k3r/AkiraOS/releases)
+[![Version](https://img.shields.io/badge/version-1.6.7-7f5af0?style=flat-square)](https://github.com/ArturR0k3r/AkiraOS/releases)
 [![Zephyr](https://img.shields.io/badge/Zephyr-4.3.0-3b82f6?style=flat-square)](https://zephyrproject.org)
 [![WAMR](https://img.shields.io/badge/WAMR-2.x-22c55e?style=flat-square)](https://github.com/bytecodealliance/wasm-micro-runtime)
 [![License](https://img.shields.io/badge/license-Apache%202.0-22c55e?style=flat-square)](LICENSE)

@@ -91,4 +91,4 @@ See [snippets/akira-board/boards/nucleo_l476rg.conf](https://github.com/ArturR0k
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.6)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.7)*

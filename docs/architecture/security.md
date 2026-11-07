@@ -363,4 +363,4 @@ Supported capability strings (30+ mappings):
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.6)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.7)*

@@ -25,7 +25,7 @@ extern "C" {
 
 /** Platform parts and versions. Empty strings mean "not in this build". */
 struct akira_identity {
-	const char *akira_version;  /**< AkiraOS VERSION file, e.g. "1.6.6" */
+	const char *akira_version;  /**< AkiraOS VERSION file, e.g. "1.6.7" */
 	const char *akira_revision; /**< `git describe` of AkiraOS at build time */
 	const char *zephyr_version; /**< Zephyr BUILD_VERSION */
 	const char *board;          /**< Zephyr board target */
