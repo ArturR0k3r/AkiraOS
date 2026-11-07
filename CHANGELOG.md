@@ -10,6 +10,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `docs(readme)`: Rewrote the README around the launch story — one-liner, browser/catalogue/
+  flash call-to-action, a 60-second start, C and Rust examples, "Why AkiraOS", an honest
+  comparison table (vs MicroPython / Toit / Ocre / Arduino-ESP-IDF), a current hardening
+  block, and an open-source-vs-commercial section. Trimmed to under 250 lines.
+- `docs`: Added `ROADMAP.md` (Now / Next / Later).
+- `docs(contributing)`: Added a "Publish your app to the AkiraConsole App Store" guide and
+  Discord/Matrix chat placeholders.
+- `docs(launch)`: Added `docs/launch/` announcement drafts (Show HN, r/embedded, r/esp32,
+  Hackaday, Zephyr newsletter), excluded from the published docs site.
 - `ci(release)`: On a version tag, build prebuilt firmware for `akiraconsole`,
   `akiraconsole_prod`, `esp32s3_devkitm`, `nrf54l15dk` and `rpi_pico2` and attach
   them to the GitHub release. Artifacts are named `akiraos-<tag>-<board>.<ext>`
