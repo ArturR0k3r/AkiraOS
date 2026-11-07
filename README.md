@@ -49,7 +49,7 @@ C is fully supported; Rust and MicroPython are experimental ([language support](
 ┌─────────────────────────────────────────────────────┐
 │              USER SPACE — WASM Apps                 │
 │   [app1.wasm]   [app2.wasm]   [your_app.wasm]       │
-│   50KB–200KB per app · max 8 installed · 2 running  │
+│   Kconfig defaults: 8 installed · 2 running         │
 └──────────────────────┬──────────────────────────────┘
                        │ capability-checked calls
 ┌──────────────────────▼──────────────────────────────┐
@@ -74,6 +74,8 @@ C is fully supported; Rust and MicroPython are experimental ([language support](
   "capabilities": ["gpio.read", "display.write", "sensor.read"]
 }
 ```
+
+App limits are Kconfig options, not fixed: see [App limits](https://docs.akiraos.dev/architecture/runtime.html#app-limits).
 
 Full architecture docs → [docs.akiraos.dev/architecture](https://docs.akiraos.dev/architecture)
 

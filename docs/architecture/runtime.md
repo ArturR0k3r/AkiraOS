@@ -130,7 +130,35 @@ typedef struct {
 - **STOPPED** - Paused by stop() call
 - **ERROR** - Runtime error occurred
 
-**Limits:** 8 concurrent app instances default (adequate for embedded use cases). Note that AkiraOS uses a Thread-per-App Polling Model, meaning each application runs in an isolated Zephyr thread. Applications MUST yield control manually within tight loops using `delay()` to prevent system starvation.
+**Limits:** see [App limits](#app-limits). AkiraOS uses a Thread-per-App Polling Model, meaning each application runs in an isolated Zephyr thread. Applications MUST yield control manually within tight loops using `delay()` to prevent system starvation.
+
+### App limits
+
+"8 installed · 2 running" are Kconfig defaults, not fixed limits of the runtime.
+Three options bound how many apps a device can hold and run:
+
+| Option | Default | Range | What it costs |
+|--------|---------|-------|---------------|
+| `CONFIG_AKIRA_APP_MAX_INSTALLED` | 8 | 4–16 | One `app_entry_t` per slot in the app registry: a static RAM array (`g_registry[]` in `app_manager.c`), plus a stack buffer of the same size each time the registry is loaded from or saved to flash. App binaries live on the filesystem and do not count against it. |
+| `CONFIG_AKIRA_APP_MAX_RUNNING` | 2 | 1–4 | Apps running at the same time. Each one needs its own WAMR instance (linear memory and heap, sized by its manifest or `CONFIG_AKIRA_APP_DEFAULT_HEAP_KB`) and its own thread stack (`CONFIG_AKIRA_WASM_APP_STACK_SIZE`). App stacks always live in internal SRAM, never PSRAM; on ESP32-S3 that is the scarcest memory. |
+| `CONFIG_MAX_CONTAINERS` | 8 | — | WASM instances the runtime can keep loaded. The effective limit on running apps is the smaller of this and `CONFIG_AKIRA_APP_MAX_RUNNING`. |
+
+Boards override these in `snippets/akira-board/boards/*.conf` and
+`snippets/akira-reference/boards/*.conf`. For example, AkiraConsole sets
+`CONFIG_MAX_CONTAINERS=2`, and `nucleo_l476rg` sets 4 installed, 1 running and 1
+container.
+
+To change them, set the options in your board or product `.conf`:
+
+```
+CONFIG_AKIRA_APP_MAX_INSTALLED=16
+CONFIG_AKIRA_APP_MAX_RUNNING=3
+CONFIG_MAX_CONTAINERS=3
+```
+
+Raising `CONFIG_AKIRA_APP_MAX_INSTALLED` is safe. Lowering it below the number of apps
+already installed makes the stored registry fail its CRC check on the next boot. The
+device then starts with an empty registry, and the apps must be installed again.
 
 ### Chunked File Loader
 

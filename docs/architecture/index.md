@@ -80,7 +80,7 @@ WebAssembly applications run in isolated sandboxes with capability-based access 
 - **Execution:** WASM bytecode (interpreter) or AOT (native code)
 - **Security:** Per-app capabilities, memory quotas
 - **Size:** 50KB-200KB per app
-- **Max Instances:** 8 installable apps, 2 concurrent running (configurable per board)
+- **Max Instances:** 8 installed, 2 running by default; both are Kconfig options ([App limits](runtime.md#app-limits))
 - **Performance:** classic interpreter or AOT; [speed ratios not yet measured](../resources/performance.md#webassembly-execution-speed)
 
 [Learn more about the Runtime →](runtime.md) | [AOT Compilation →](aot-compilation.md)

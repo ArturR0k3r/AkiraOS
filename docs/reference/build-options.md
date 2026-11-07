@@ -25,8 +25,8 @@ Below is a subset of the critical AkiraOS features (`CONFIG_AKIRA_*`) and runtim
 | Config Flag | Default | Description |
 |---|---|---|
 | `CONFIG_MAX_CONTAINERS` | `8` | Max number of simultaneously loaded WASM modules (not the same as running apps). |
-| `CONFIG_AKIRA_APP_MAX_INSTALLED` | `8` | Max apps stored on flash. |
-| `CONFIG_AKIRA_APP_MAX_RUNNING` | `2` | Max concurrently running WASM apps. Increase only if memory allows. |
+| `CONFIG_AKIRA_APP_MAX_INSTALLED` | `8` | Size of the app registry (range 4–16). Costs static RAM per slot; app binaries live on the filesystem. See [App limits](../architecture/runtime.md#app-limits). |
+| `CONFIG_AKIRA_APP_MAX_RUNNING` | `2` | Max concurrently running WASM apps (range 1–4). Each needs its own WAMR instance and SRAM thread stack. See [App limits](../architecture/runtime.md#app-limits). |
 | `CONFIG_AKIRA_WASM_RUNTIME` | `n`* | Enable WebAssembly runtime (WAMR). Set to `y` in `prj.conf` for all AkiraOS builds. |
 | `CONFIG_WAMR_AOT_SUPPORT` | `n` | Enable WASM AOT compilation. Recommended for CPU-heavy tasks but costs flash space. Only `akiraconsole` board enables this by default. |
 | `CONFIG_WAMR_HEAP_SIZE` | `262144`| WAMR heap size in bytes (Kconfig default). Overridden per-board: ESP32-S3 uses 1 MB, ESP32 uses 32 KB. |

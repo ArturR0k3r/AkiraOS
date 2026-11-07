@@ -39,6 +39,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   MicroPython are experimental (no `micropython.wasm` with the `_akira` module is
   shipped yet). C++, AssemblyScript and TinyGo were listed without bindings or
   samples and are now described as such.
+- `docs(runtime)`: Explained the "8 installed · 2 running" limits: they are the
+  Kconfig defaults of `CONFIG_AKIRA_APP_MAX_INSTALLED` (registry slots, static RAM)
+  and `CONFIG_AKIRA_APP_MAX_RUNNING` (one WAMR instance and SRAM stack per app),
+  bounded by `CONFIG_MAX_CONTAINERS`, with how to change them and why lowering the
+  installed limit resets the registry.
 
 ---
 
