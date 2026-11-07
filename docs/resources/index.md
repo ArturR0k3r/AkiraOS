@@ -25,7 +25,7 @@ Additional resources for AkiraOS developers.
 - [WebAssembly Spec](https://webassembly.github.io/spec/)
 
 ### Community
-- [AkiraOS GitHub](https://github.com/akiraos/AkiraOS)
+- [AkiraOS GitHub](https://github.com/ArturR0k3r/AkiraOS)
 - [Zephyr Discord](https://chat.zephyrproject.org/)
 - [WASM Community](https://webassembly.org/)
 

@@ -392,8 +392,8 @@ When reporting issues, include:
 
 | Topic | Resource |
 |-------|----------|
-| WASM app development | [AkiraSDK/README.md](AkiraSDK/README.md) |
-| Full API reference | [AkiraSDK/docs/API_REFERENCE.md](AkiraSDK/docs/API_REFERENCE.md) |
+| WASM app development | [AkiraSDK/README.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/README.md) |
+| Full API reference | [AkiraSDK/docs/API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md) |
 | Architecture | [docs/architecture/system-overview.md](docs/architecture/system-overview.md) |
 | Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
 

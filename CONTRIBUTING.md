@@ -10,16 +10,16 @@
 
 ## 📋 Table of Contents
 
-- [Code of Conduct](#code-of-conduct)
-- [Getting Started](#getting-started)
-- [Development Setup](#development-setup)
-- [How to Contribute](#how-to-contribute)
-- [Coding Standards](#coding-standards)
-- [Commit Guidelines](#commit-guidelines)
-- [Pull Request Process](#pull-request-process)
-- [Testing](#testing)
-- [Documentation](#documentation)
-- [Community](#community)
+- [Code of Conduct](#-code-of-conduct)
+- [Getting Started](#-getting-started)
+- [Development Setup](#-development-setup)
+- [How to Contribute](#-how-to-contribute)
+- [Coding Standards](#-coding-standards)
+- [Commit Guidelines](#-commit-guidelines)
+- [Pull Request Process](#-pull-request-process)
+- [Testing](#-testing)
+- [Documentation](#-documentation)
+- [Community](#-community)
 
 ## 📜 Code of Conduct
 

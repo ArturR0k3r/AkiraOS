@@ -44,6 +44,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `CONFIG_AKIRA_APP_MAX_RUNNING` (one WAMR instance and SRAM stack per app),
   bounded by `CONFIG_MAX_CONTAINERS`, with how to change them and why lowering the
   installed limit resets the registry.
+- `docs`: Fixed every broken link in the root Markdown files and `docs/`: the
+  CONTRIBUTING table of contents (emoji headings), API-reference anchors that pointed
+  at sections living in the AkiraSDK reference, links into the `AkiraSDK` submodule
+  (they 404 on GitHub), moved board `.conf` files, a moved Zephyr page, a wrong GitHub
+  organisation and a wrong relative path. The README's first build command used a
+  `build_wasm_app.sh` script that does not exist; it now uses `./build.sh hello_world`.
 
 ---
 

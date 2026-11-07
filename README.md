@@ -129,17 +129,17 @@ Full setup guide → [QUICKSTART.md](QUICKSTART.md)
 
 ## WASM App Development
 
-Install the [AkiraSDK toolchain](AkiraSDK/README.md) (clang/wasi-sdk used as a cross-compiler only — AkiraOS apps target the AkiraZ native API, not a WASI runtime), then:
+Install the [AkiraSDK toolchain](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/README.md) (clang/wasi-sdk used as a cross-compiler only — AkiraOS apps target the AkiraZ native API, not a WASI runtime), then:
 
 ```bash
-# Build your first app
-cd AkiraSDK/wasm_apps/generic/hello_world
-../../build_wasm_app.sh -o hello_world.wasm main.c
+# Build your first app (WASI SDK in /opt/wasi-sdk, or set WASI_SDK=...)
+cd AkiraSDK/wasm_apps
+./build.sh hello_world            # -> bin/hello_world.wasm
 
 # Deploy to a running device over WiFi — no reflash needed.
 # The app binary is streamed raw to the app-manager install route
 # (/upload is the firmware-flash endpoint, not for apps).
-curl -X POST --data-binary @hello_world.wasm \
+curl -X POST --data-binary @bin/hello_world.wasm \
   "http://<device-ip>/api/apps/install?name=hello_world"
 ```
 

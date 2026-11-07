@@ -39,21 +39,21 @@ There are **two API layers** in AkiraOS:
 |----------|---------------|---------------|
 | [Logging / Timing](#logging-api) | `printf_native`, `delay` | `CONFIG_AKIRA_WASM_API` |
 | [Display](#display-api) | `display_clear`, `display_text`, `display_rect`, `display_flush` | `CONFIG_DISPLAY` |
-| [GPIO](#gpio-api) | `gpio_configure`, `gpio_read`, `gpio_write` | `CONFIG_GPIO` |
+| [GPIO](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#gpio-api) | `gpio_configure`, `gpio_read`, `gpio_write` | `CONFIG_GPIO` |
 | [Sensor](#sensor-api) | `sensor_read` | `CONFIG_SENSOR` |
-| [RF](#rf-api) | `rf_send`, `rf_set_frequency`, `rf_set_power`, `rf_get_rssi` | `CONFIG_AKIRA_RF_FRAMEWORK` |
+| [RF](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#rf-api) | `rf_send`, `rf_set_frequency`, `rf_set_power`, `rf_get_rssi` | `CONFIG_AKIRA_RF_FRAMEWORK` |
 | [Storage](#storage-api) | `storage_open`, `storage_read`, `storage_write`, `storage_close` | `CONFIG_AKIRA_WASM_STORAGE` |
 | [Net / Sockets](#net-api) | `net_open`, `net_connect`, `net_bind`, `net_tx_bind`, `net_rx_bind` | `CONFIG_AKIRA_WASM_NET` |
-| [BLE](#ble-api) | `ble_init`, `ble_service_create`, `ble_char_write`, `ble_event_pop` | `CONFIG_AKIRA_WASM_BLE` |
-| [HID](#hid-api) | `hid_key_press`, `hid_type_string`, `hid_mouse_move`, `hid_gamepad_*` | `CONFIG_AKIRA_WASM_HID` |
-| [Timer](#timer-api) | `timer_create`, `timer_start`, `timer_elapsed`, `timer_free` | `CONFIG_AKIRA_WASM_TIMER` |
-| [UART](#uart-api) | `uart_open`, `uart_write`, `uart_read`, `uart_close` | `CONFIG_AKIRA_WASM_UART` |
-| [I2C](#i2c-api) | `i2c_write_reg`, `i2c_read_reg` | `CONFIG_AKIRA_WASM_I2C` |
-| [PWM](#pwm-api) | `pwm_set`, `pwm_disable` | `CONFIG_AKIRA_WASM_PWM` |
-| [Power](#power-api) | `power_get_battery_level`, `power_set_mode`, `power_wake_on_gpio` | `CONFIG_AKIRA_WASM_POWER` |
-| [Memory](#memory-api) | `mem_alloc`, `mem_free` | `CONFIG_AKIRA_WASM_MEMORY` |
-| [IPC Pub/Sub](#ipc-api) | `msg_subscribe`, `msg_publish`, `msg_recv` | `CONFIG_AKIRA_WASM_IPC` |
-| [App Lifecycle](#lifecycle-api) | `app_start`, `app_stop`, `app_switch`, `app_get_self_name` | `CONFIG_AKIRA_WASM_LIFECYCLE` |
+| [BLE](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#ble-api) | `ble_init`, `ble_service_create`, `ble_char_write`, `ble_event_pop` | `CONFIG_AKIRA_WASM_BLE` |
+| [HID](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#hid-api) | `hid_key_press`, `hid_type_string`, `hid_mouse_move`, `hid_gamepad_*` | `CONFIG_AKIRA_WASM_HID` |
+| [Timer](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#timer-api) | `timer_create`, `timer_start`, `timer_elapsed`, `timer_free` | `CONFIG_AKIRA_WASM_TIMER` |
+| [UART](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#uart-api) | `uart_open`, `uart_write`, `uart_read`, `uart_close` | `CONFIG_AKIRA_WASM_UART` |
+| [I2C](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#i2c-api) | `i2c_write_reg`, `i2c_read_reg` | `CONFIG_AKIRA_WASM_I2C` |
+| [PWM](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#pwm-api) | `pwm_set`, `pwm_disable` | `CONFIG_AKIRA_WASM_PWM` |
+| [Power](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#power-management-api) | `power_get_battery_level`, `power_set_mode`, `power_wake_on_gpio` | `CONFIG_AKIRA_WASM_POWER` |
+| [Memory](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#memory-api) | `mem_alloc`, `mem_free` | `CONFIG_AKIRA_WASM_MEMORY` |
+| [IPC Pub/Sub](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#ipc-pubsub-api) | `msg_subscribe`, `msg_publish`, `msg_recv` | `CONFIG_AKIRA_WASM_IPC` |
+| [App Lifecycle](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#app-lifecycle-api) | `app_start`, `app_stop`, `app_switch`, `app_get_self_name` | `CONFIG_AKIRA_WASM_LIFECYCLE` |
 
 ## Import Module
 

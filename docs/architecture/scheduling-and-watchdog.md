@@ -302,7 +302,7 @@ _See also:_
 - [`docs/api-stability-policy.md`](../api-stability-policy.md) — API stability rules  
 - [`src/runtime/security/sandbox.h`](https://github.com/ArturR0k3r/AkiraOS/blob/main/src/runtime/security/sandbox.h) — sandbox API  
 - [`src/drivers/wdt/akira_wdt.h`](https://github.com/ArturR0k3r/AkiraOS/blob/main/src/drivers/wdt/akira_wdt.h) — WDT API  
-- [Zephyr Scheduling docs](https://docs.zephyrproject.org/latest/kernel/scheduling/index.html)
+- [Zephyr Scheduling docs](https://docs.zephyrproject.org/latest/kernel/services/scheduling/index.html)
 
 ---
 
