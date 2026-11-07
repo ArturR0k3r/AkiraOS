@@ -31,6 +31,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not enabled — and mark both ratios (AOT vs interpreter, AOT vs native C) as not yet
   measured. Also fixed `CONFIG_WAMR_BUILD_AOT` → `CONFIG_WAMR_AOT_SUPPORT` and removed
   a reference to a nonexistent `akira_perf` shell command.
+- `docs(sim)`: Removed a hard-coded `/home/<user>/…` path from
+  `src/drivers/sim/README.md` and noted that the SDL2 module is not part of the
+  v1.6.x build.
 
 ---
 
