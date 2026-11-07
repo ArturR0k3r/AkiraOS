@@ -7,6 +7,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+### Added
+- `ci(release)`: On a version tag, build prebuilt firmware for `akiraconsole`,
+  `akiraconsole_prod`, `esp32s3_devkitm`, `nrf54l15dk` and `rpi_pico2` and attach
+  them to the GitHub release. Artifacts are named `akiraos-<tag>-<board>.<ext>`
+  (`.bin`/`.signed.bin`, `.uf2` for Pico, `.hex`, `.elf`, a per-board SBOM and
+  `SHA256SUMS`). ESP boards and the nRF/Pico boards no longer collide on one
+  `zephyr.bin`. `west akira release` now also collects `.uf2` and `.hex`.
+
+---
+
 ## [1.6.7] — 2026-11-07
 
 > Documentation and developer-experience pass for the public launch: point the
