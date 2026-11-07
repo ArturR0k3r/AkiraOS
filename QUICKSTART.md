@@ -4,9 +4,35 @@
 
 <img src="assets/logo.png" alt="AkiraOS Logo" width="250"/>
 
-**Get AkiraOS running in under 15 minutes**
+**Get AkiraOS running — from zero to your first app**
 
 </div>
+
+---
+
+## Three ways to run AkiraOS
+
+| Path | What you need | Time |
+|------|---------------|------|
+| **0 — Browser simulator** | Just a browser | < 1 min |
+| **1 — Host simulator (`native_sim`)** | Linux/WSL2 + the toolchain below | ~15 min |
+| **2 — Real hardware** | A supported board + the toolchain below | ~20 min |
+
+### Path 0 — No install, run in your browser
+
+Open the **[AkiraConsole simulator](https://console.app.akiraos.dev/simulator)**. It runs
+AkiraConsole apps as WebAssembly in a Worker thread — the same `.wasm` binaries a device
+runs. You can:
+
+- pick an app from the **[catalogue](https://console.app.akiraos.dev)** and press ▶, or
+- drag a local `.wasm` / `.akpkg` onto the console, or
+- deep-link straight to an app: `https://console.app.akiraos.dev/simulator?url=<url-to.wasm>`.
+
+The simulator models the display, buttons, timers and settings. Hardware-specific calls
+(BLE, RF, Wi-Fi, HID, I²C, storage) return "not supported" so apps degrade gracefully
+instead of crashing. For those, use Path 1 or Path 2.
+
+Paths 1 and 2 share the toolchain below.
 
 ---
 
@@ -101,7 +127,7 @@ Skip this step if you are only using `native_sim`.
 
 ---
 
-## Step 5: Build and Test (Native Simulation)
+## Step 5: Build and Test (Native Simulation) — Path 1
 
 Native simulation runs AkiraOS on your host CPU — no hardware required. This is the recommended starting point.
 
@@ -123,7 +149,7 @@ The executable is at `../build-native-sim/zephyr/zephyr.exe` and is launched aut
 
 ---
 
-## Step 6: Build for Hardware
+## Step 6: Build for Hardware — Path 2
 
 Recommended board: **ESP32-S3 DevKitM** (full feature support).
 
@@ -223,6 +249,9 @@ AkiraOS:~$ help             # full command list
 ```
 
 ### Upload a WASM application
+
+> Try the app in the browser first — no device needed:
+> [console.app.akiraos.dev/simulator](https://console.app.akiraos.dev/simulator).
 
 ```bash
 # Build a WASM app (requires WASI SDK — see AkiraSDK/README.md)

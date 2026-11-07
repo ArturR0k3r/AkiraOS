@@ -10,6 +10,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Documentation
+- `docs(readme)`: Added first-screen call-to-action links — Try in browser (the
+  AkiraConsole simulator), Browse apps (the catalogue), Flash your board — and a
+  commented-out `assets/simulator.gif` demo slot with a TODO.
+- `docs(quickstart)`: Added Path 0 (no-install browser simulator) ahead of the
+  host-simulator and hardware paths, and a pointer to the simulator from the
+  app-upload section.
 - `docs`: Refer to 1.6.6 as the current release (it was tagged on 2026-11-02);
   the release notes and this changelog still called it unreleased.
 - `docs(perf)`: `docs/resources/performance.md` is now the single source for

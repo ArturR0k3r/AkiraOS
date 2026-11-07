@@ -18,6 +18,17 @@ Every app is a sandboxed `.wasm` module. Deploy over-the-air. No firmware flash 
 
 [**Quick Start**](#quick-start) · [**Architecture**](#architecture) · [**AkiraSDK**](#wasm-app-development) · [**Hardware**](#supported-hardware) · [**Docs**](https://docs.akiraos.dev)
 
+<br/>
+
+### [▶ Try AkiraOS in your browser](https://console.app.akiraos.dev/simulator) &nbsp;·&nbsp; [🕹 Browse apps](https://console.app.akiraos.dev) &nbsp;·&nbsp; [⚡ Flash your board](#quick-start)
+
+No install, no hardware — the first link runs AkiraConsole apps in a WebAssembly
+simulator. Load one of the catalogue apps or drop in your own `.wasm`.
+
+<!-- TODO(assets): record a short screen capture of the browser simulator and save it
+     as assets/simulator.gif, then uncomment the line below. -->
+<!-- ![AkiraOS browser simulator](assets/simulator.gif) -->
+
 </div>
 
 ---

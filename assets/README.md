@@ -15,6 +15,14 @@ This directory contains brand assets for the AkiraOS project.
 - **Format:** PNG
 - **Recommended Usage:** Social media, promotional materials
 
+## TODO — `simulator.gif` (needed by the README)
+
+The README first screen is ready to show a demo clip at `assets/simulator.gif` (the
+`<img>` is committed but commented out). Record a short (5–10 s, < 5 MB) screen capture
+of the browser simulator at <https://console.app.akiraos.dev/simulator> running one of
+the catalogue apps, save it here as `simulator.gif`, and uncomment the image line in the
+README.
+
 ## Usage Guidelines
 
 ### Sizing Recommendations
