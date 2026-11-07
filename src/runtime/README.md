@@ -337,19 +337,18 @@ void* akira_wasm_malloc(wasm_module_inst_t inst, size_t size) {
 
 ### Interpreter Mode (Default)
 
-- Bytecode interpretation
-- ~70% native performance
+- Bytecode interpretation (WAMR classic interpreter)
+- Speed relative to native: not yet measured, see [Performance](../../docs/resources/performance.md#webassembly-execution-speed)
 - Low memory overhead
-- Startup: ~50ms for 100KB module
 
 ### AOT Mode (If Enabled)
 
 ```bash
-CONFIG_WAMR_BUILD_AOT=y
+CONFIG_WAMR_AOT_SUPPORT=y
 ```
 
 - Ahead-of-time compilation
-- ~90% native performance
+- Speed relative to native: not yet measured
 - Higher memory usage
 - Requires pre-compiled `.aot` files
 

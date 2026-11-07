@@ -431,12 +431,12 @@ AkiraRuntime supports two execution modes:
 **1. Interpreter Mode (.wasm)**
 - Universal bytecode execution
 - Runs on all platforms
-- Baseline performance (1x)
+- WAMR classic interpreter (the fast interpreter is not enabled)
 - Default mode for uploaded `.wasm` files
 
 **2. AOT Mode (.aot)**
-- Native machine code execution
-- 10-50x faster than interpreter
+- Native machine code execution, no bytecode decoding at run time
+- Speed-up over the classic interpreter [not yet measured](../resources/performance.md#webassembly-execution-speed)
 - Architecture-specific binaries
 - Requires pre-compilation with `wamrc`
 - Currently enabled for ESP32-S3 (Xtensa)

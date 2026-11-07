@@ -81,7 +81,7 @@ WebAssembly applications run in isolated sandboxes with capability-based access 
 - **Security:** Per-app capabilities, memory quotas
 - **Size:** 50KB-200KB per app
 - **Max Instances:** 8 installable apps, 2 concurrent running (configurable per board)
-- **Performance:** 1x (interpreter) or 10-50x (AOT)
+- **Performance:** classic interpreter or AOT; [speed ratios not yet measured](../resources/performance.md#webassembly-execution-speed)
 
 [Learn more about the Runtime →](runtime.md) | [AOT Compilation →](aot-compilation.md)
 
@@ -192,7 +192,7 @@ will be published on the Performance page with board, clock and benchmark source
 - [System Overview](system-overview.md) - Complete architecture guide
 - [Connectivity Layer](connectivity.md) - Network protocols
 - [AkiraRuntime](runtime.md) - WASM execution environment
-- [AOT Compilation](aot-compilation.md) - Native code compilation for 10–50x performance
+- [AOT Compilation](aot-compilation.md) - Ahead-of-time compilation of WASM apps to machine code
 - [Security Model](security.md) - Capability system
 - [Data Flow](data-flow.md) - Information flow diagrams
 - [Advanced Connectivity](advanced-connectivity.md) - Matter, Thread, AkiraMesh (planned)

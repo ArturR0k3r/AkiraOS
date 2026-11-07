@@ -31,22 +31,17 @@ AkiraOS includes AOT (Ahead-of-Time) compilation support through WAMR, enabling 
 
 | Execution Mode | Speed | Memory | Universality |
 |----------------|-------|--------|--------------|
-| **Interpreter (.wasm)** | 1x baseline | Lower overhead | Universal binary |
-| **AOT (.aot)** | **10-50x faster** | Slightly higher | Architecture-specific |
+| **Interpreter (.wasm)** | Baseline: WAMR classic interpreter | Lower overhead | Universal binary |
+| **AOT (.aot)** | Faster; ratio [not yet measured](../resources/performance.md#webassembly-execution-speed) | Slightly higher | Architecture-specific |
 
-### Real-World Impact
-
-**Compute-Heavy Apps:**
-- Image processing: ~40x faster
-- Physics simulations: ~25x faster
-- Cryptography: ~15x faster
-- Game logic: ~10-15x faster
+No AkiraOS benchmark has measured the AOT speed-up or AOT-vs-native ratio yet; the
+[Performance](../resources/performance.md#webassembly-execution-speed) page tracks both. Upstream WAMR describes AOT as "near to
+native speed", without a number.
 
 **Benefits:**
-- Near-native CPU performance — direct machine code execution
-- Lower power consumption — reduced per-instruction overhead
-- Smooth rendering — 60 FPS display, responsive game loops
-- Predictable performance — no interpreter overhead variability
+- Direct machine code execution — no bytecode decoding at run time
+- Less work per instruction, which also means less CPU time per frame or task
+- No interpreter dispatch overhead in hot loops
 
 ---
 
@@ -112,7 +107,7 @@ app.c  →  clang → app.wasm  →  wamrc → app.aot  →  Upload to device
 ```
 
 **Pros:**
-- Maximum performance (10–50x faster)
+- Best execution speed (speed-up not yet measured on AkiraOS)
 - Lower power consumption
 - Optimal for compute-heavy workloads
 
@@ -281,10 +276,10 @@ deploy: app.wasm app_esp32s3.aot
 ### Profiling Strategy
 
 1. **Start with interpreter** (.wasm) during development
-2. **Profile** with `akira_perf` shell command
+2. **Profile** in the app with the `timer_*` natives or `rtc_get_uptime_ms()`
 3. **Identify bottlenecks** (CPU-bound functions)
 4. **Compile AOT** for production
-5. **Measure improvement** (should be 10-50x for compute)
+5. **Measure the improvement** on your own workload (no reference figure is published yet)
 
 ---
 

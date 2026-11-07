@@ -374,7 +374,7 @@ wamrc --target=riscv32 -o app-riscv32.aot app.wasm
 wamrc --target=x86_64 -o app-x86_64.aot app.wasm
 ```
 
-**Performance Gain:** 10-50x faster execution compared to interpreter mode.
+**Performance:** AOT skips bytecode interpretation at run time. Its speed-up over the WAMR classic interpreter on AkiraOS is [not yet measured](../resources/performance.md#webassembly-execution-speed).
 
 **Tradeoff:** Architecture-specific binaries (one `.aot` per platform).
 

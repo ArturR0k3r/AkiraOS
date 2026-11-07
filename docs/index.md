@@ -50,7 +50,7 @@ AkiraOS is a production-ready embedded operating system that enables **secure, d
 
 - **Zero-Trust Execution** — WASM sandboxing + capability-based access control
 - **Real-Time Kernel** — Zephyr RTOS scheduling underneath the WASM runtime
-- **AOT Compilation** — Optional native code execution (10–50x faster than interpreter)
+- **AOT Compilation** — Optional ahead-of-time compiled machine code instead of the WAMR classic interpreter ([speed-up not yet measured](resources/performance.md#webassembly-execution-speed))
 - **OTA Updates** — MCUboot secure firmware updates with rollback
 - **Multi-Platform** — 17 build targets: ESP32/-S3/-C3/-C6/-H2, nRF54L15, STM32, RP2040/RP2350, native simulation
 - **Modular Connectivity** — WiFi, Bluetooth, USB
@@ -97,7 +97,7 @@ Deep dive into system design, components, and data flows.
 - [Connectivity Layer](architecture/connectivity.md) — Network protocols
 - [Advanced Connectivity](architecture/advanced-connectivity.md) — Matter, Thread, AkiraMesh
 - [Radio Abstraction Layer](architecture/radio.md) — RF driver layering
-- [AOT Compilation](architecture/aot-compilation.md) — Native code compilation for 10–50x performance
+- [AOT Compilation](architecture/aot-compilation.md) — Ahead-of-time compilation of WASM apps to machine code
 - [Scheduling & Watchdog](architecture/scheduling-and-watchdog.md) — Cooperative model and watchdog contract
 - [Data Flow](architecture/data-flow.md) — End-to-end diagrams
 - [OTA Design](ota_design.md) — MCUboot slots, boot guard, delta updates

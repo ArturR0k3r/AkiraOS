@@ -25,6 +25,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a measurement; every mention now links to the page, which states the methodology
   (`bench/akiraclaw_bench` B1, ESP32-S3 at 240 MHz, `CCOUNT`) and marks the figure
   as not yet measured.
+- `docs(perf)`: Withdrew the unsourced WAMR speed figures ("AOT 10–50× faster than
+  the interpreter", "~70 % / ~90 % of native", per-workload speed-ups). The docs now
+  name the baseline — the WAMR **classic** interpreter, since the fast interpreter is
+  not enabled — and mark both ratios (AOT vs interpreter, AOT vs native C) as not yet
+  measured. Also fixed `CONFIG_WAMR_BUILD_AOT` → `CONFIG_WAMR_AOT_SUPPORT` and removed
+  a reference to a nonexistent `akira_perf` shell command.
 
 ---
 

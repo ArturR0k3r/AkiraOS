@@ -54,7 +54,7 @@ Your App (C/C++/Python)  →  compile  →  app.wasm  →  SecureDeploy  →  ru
 │              AKIRAZ RUNTIME                         │
 │  App Manager · Capability Guard · Native Bridge     │
 │  UI Framework (32 widgets) · Shell · 18 API modules │
-│  WAMR: interpreter (1x) or AOT (10–50x perf)        │
+│  WAMR: classic interpreter (.wasm) or AOT (.aot)    │
 └──────────┬──────────────────────┬───────────────────┘
            │                      │
 ┌──────────▼──────────┐  ┌───────▼───────────────────┐
