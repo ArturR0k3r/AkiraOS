@@ -12,7 +12,7 @@ manifest:
     # Built by zephyr/CMakeLists.txt when CONFIG_AKIRA_WASM_RUNTIME=y.
     - name: wasm-micro-runtime
       url: https://github.com/ArturR0k3r/wasm-micro-runtime
-      revision: 2ba56464d2901927a5f707cff0edc0da0c28ccb9  # AkiraOS_Patch
+      revision: d16f743f418ff29048b9ad0ce521033b34df42f8  # AkiraOS_Patch (ESP32-S3 AOT cache-coherency fix + PSRAM tables)
       path: modules/lib/wasm-micro-runtime
 
     # TensorFlow Lite Micro for AkiraClaw edge AI (CONFIG_AKIRA_TFLITE_MICRO).

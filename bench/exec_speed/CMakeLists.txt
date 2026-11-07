@@ -50,19 +50,10 @@ set(WAMR_BUILD_LIBC_WASI     0)
 set(WAMR_BUILD_GLOBAL_HEAP_POOL 0)
 set(WAMR_BUILD_REF_TYPES     1)
 include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
-# ESP32-S3 AOT dual-bus fix: swap in a patched zephyr_platform.c whose
-# os_dcache_flush() uses the ESP ROM cache primitives (Cache_WriteBack_All +
-# Cache_Invalidate_ICache_All). The stock version calls sys_cache_*, which are
-# no-ops on this SoC (CONFIG_CACHE has no esp32s3 driver), so the AOT loader read
-# stale cache after the DBUS code write (literal_size came back as garbage ->
-# corrupt module->code -> "target address out of range"). This fix belongs
-# upstream in the WAMR module; it is applied here so the bench can run AOT.
-if(EXEC_SPEED_AOT)
-    list(FILTER WAMR_RUNTIME_LIB_SOURCE EXCLUDE REGEX "zephyr_platform\\.c$")
-    list(APPEND WAMR_RUNTIME_LIB_SOURCE ${CMAKE_CURRENT_LIST_DIR}/wamr_patch/zephyr_platform.c)
-    set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/wamr_patch/zephyr_platform.c PROPERTIES
-        INCLUDE_DIRECTORIES "${WAMR_ROOT_DIR}/core/shared/platform/include;${WAMR_ROOT_DIR}/core/shared/platform/zephyr;${WAMR_ROOT_DIR}/core/shared/utils;${WAMR_ROOT_DIR}/core/iwasm/include")
-endif()
+# ESP32-S3 on-device AOT needs the WAMR dual-bus cache-coherency fix in
+# os_dcache_flush() (ESP ROM Cache_WriteBack_All + Cache_Invalidate_ICache_All).
+# That fix now lives upstream in the WAMR module (AkiraOS_Patch), so the bench
+# uses the module's zephyr_platform.c directly — no local patch needed.
 target_sources(app PRIVATE ${WAMR_RUNTIME_LIB_SOURCE})
 foreach(_wamr_src ${WAMR_RUNTIME_LIB_SOURCE})
     if(_wamr_src MATCHES "\\.(c|cc|cpp|cxx)$")
