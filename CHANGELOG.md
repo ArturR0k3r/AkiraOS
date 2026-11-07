@@ -34,6 +34,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `docs(sim)`: Removed a hard-coded `/home/<user>/…` path from
   `src/drivers/sim/README.md` and noted that the SDL2 module is not part of the
   v1.6.x build.
+- `docs`: One language list everywhere, kept in
+  `docs/development/building-apps.md#language-support`: C is supported; Rust and
+  MicroPython are experimental (no `micropython.wasm` with the `_akira` module is
+  shipped yet). C++, AssemblyScript and TinyGo were listed without bindings or
+  samples and are now described as such.
 
 ---
 

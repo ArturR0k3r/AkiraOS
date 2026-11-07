@@ -29,9 +29,11 @@ AkiraOS is a Zephyr-based embedded OS that runs **sandboxed WebAssembly applicat
 The core idea: separate the OS from the application. The firmware stays stable. Apps are `.wasm` binaries — isolated, portable, and deployable over-the-air without touching the OS.
 
 ```
-Your App (C/C++/Python)  →  compile  →  app.wasm  →  SecureDeploy  →  runs on device
-                                                              OS unchanged
+Your App (C, Rust, MicroPython)  →  compile  →  app.wasm  →  SecureDeploy  →  runs on device
+                                                                      OS unchanged
 ```
+
+C is fully supported; Rust and MicroPython are experimental ([language support](https://docs.akiraos.dev/development/building-apps.html#language-support)).
 
 **Why this matters:**
 - Update apps in the field without a firmware flash cycle

@@ -42,7 +42,7 @@ AkiraOS is a high-performance embedded operating system combining **Zephyr RTOS*
 - **WASM Apps:** Sandboxed user applications (50-200KB)
 - **Max Concurrent:** 2 running app instances (default via `CONFIG_AKIRA_APP_MAX_RUNNING`)
 - **Max Installed:** 8 apps locally stored (default via `CONFIG_AKIRA_APP_MAX_INSTALLED`)
-- **Languages:** C, Rust, AssemblyScript (compiled to WASM)
+- **Languages:** C; Rust and MicroPython are experimental ([language support](../development/building-apps.md#language-support))
 - **Native APIs:** 18 modules providing hardware and system access - see [AkiraSDK API Reference](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md) for complete API documentation covering BLE, Display, GPIO, HID, I2C, IPC, Lifecycle, Memory, Net (sockets), Power, PWM, RF, Sensors, Storage, Timer, UART, and common utilities
 
 ### Additional System Frameworks

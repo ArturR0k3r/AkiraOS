@@ -8,7 +8,22 @@ nav_order: 1
 # Building WASM Applications
 
 Complete guide to developing WebAssembly applications for AkiraOS.
-Apps can be written in **C**, **Rust**, or **Python** (MicroPython).
+
+## Language support
+
+This table is the reference list of app languages; other pages link here.
+
+| Language | Status | Toolchain | Bindings | Samples |
+|----------|--------|-----------|----------|---------|
+| **C** | Supported | WASI SDK clang, used only as a cross-compiler | `AkiraSDK/include/akira_api.h` | Every app in `AkiraSDK/wasm_apps/` except `rust/` |
+| **Rust** | Experimental | `cargo`, target `wasm32-unknown-unknown` | `AkiraSDK/rust/akira_sdk` crate | `wasm_apps/rust/hello_world` |
+| **MicroPython** | Experimental | `AkiraSDK/scripts/py_to_wasm.py` plus a `micropython.wasm` built with the `_akira` module | `AkiraSDK/python/akira.py` | `python/apps/hello_world` |
+
+MicroPython needs a `micropython.wasm` that includes the `_akira` native module. No
+release ships that binary yet, so Python apps cannot be built out of the box.
+
+Other languages that compile to `wasm32` (C++, AssemblyScript, TinyGo, Zig) could import
+the same native functions, but there are no bindings, samples or tests for them yet.
 
 ## Toolchain Setup
 
@@ -36,8 +51,9 @@ No WASI SDK is needed for Rust apps.
 
 ### Python Apps — micropython.wasm
 
-Python apps use a prebuilt `micropython.wasm` runtime that includes the `_akira`
-native C module. Obtain it from the AkiraOS releases page and place it at:
+Python apps need a `micropython.wasm` runtime that includes the `_akira` native C
+module. No AkiraOS or AkiraSDK release ships it yet (see
+[Language support](#language-support)). Once you have one, place it at:
 
 ```
 AkiraSDK/python/runtime/micropython.wasm

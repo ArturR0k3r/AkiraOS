@@ -26,7 +26,7 @@ A: The 1.5.x series is the newest tagged release and is stable for production us
 A: Only if they don't rely on WASI or browser APIs. AkiraOS uses custom native APIs.
 
 **Q: What languages can I use?**  
-A: Any language that compiles to WASM: C, C++, Rust, AssemblyScript, TinyGo.
+A: C is fully supported. Rust and MicroPython are experimental. Other languages that compile to `wasm32` (C++, AssemblyScript, TinyGo, Zig) have no bindings or samples yet. See [Language support](../development/building-apps.md#language-support).
 
 **Q: What's the performance overhead?**  
 A: Not measured yet. The [Performance](performance.md) page tracks the Capability Guard cost per native call and the interpreter, AOT and native speed ratios, and will publish them with board, clock and benchmark source.
