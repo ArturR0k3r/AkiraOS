@@ -130,7 +130,7 @@ int akira_native_display_clear(wasm_exec_env_t env, uint32_t color) {
 }
 ```
 
-**Performance:** ~60ns overhead per native call (estimated, board-dependent)
+**Performance:** not yet measured, see [Capability Guard overhead](../resources/performance.md#capability-guard-overhead).
 
 ### 3. Resource Quotas (Memory Layer)
 

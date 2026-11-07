@@ -206,8 +206,8 @@ Actual API implementation
 ```
 
 **Improvements:**
-- ✅ Inline capability checks (no function call overhead)
-- ✅ ~60ns native call overhead (down from ~100ns)
+- ✅ Capability check inlined at each call site (`AKIRA_CHECK_CAP_OR_RETURN` → `akira_security_check_exec()`)
+- ⚠️ Per-call overhead not yet measured, see [Capability Guard overhead](../../docs/resources/performance.md#capability-guard-overhead)
 - ✅ Branch prediction friendly
 - ⚠️ Still uses WAMR hash lookup (static table in future)
 
@@ -359,16 +359,12 @@ CONFIG_WAMR_BUILD_AOT=y
 
 ---
 
-## Performance Characteristics (Improved)
+## Performance Characteristics
 
-| Operation | Time | Improvement | Notes |
-|-----------|------|-------------|-------|
-| Load 100KB WASM | ~80ms | 47% faster | Chunked loading (16KB) |
-| Instantiate module | ~50ms | - | Create instance + init |
-| Native call overhead | ~60ns | 40% faster | Inline capability checks |
-| Interpreter exec | 70% native | - | Varies by workload |
-| Memory allocation | <1ms | - | PSRAM heap with quotas |
-| Quota check | ~5ns | NEW | Per-allocation overhead |
+No timing figures are published yet. Load time, instantiation, native-call overhead,
+interpreter speed and allocation cost are tracked, with methodology, in
+[docs/resources/performance.md](../../docs/resources/performance.md). Chunked loading
+reads the module in 16 KB chunks.
 
 ---
 

@@ -64,7 +64,7 @@ Your App (C/C++/Python)  →  compile  →  app.wasm  →  SecureDeploy  →  ru
 └─────────────────────┘  └────────────────────────────┘
 ```
 
-**Capability Guard** — every native API call goes through an inline permission check (~60ns overhead). Apps declare required capabilities in a manifest. No capability = no access. Period.
+**Capability Guard** — every guarded native API call checks the calling app's capability mask before it runs (per-call overhead: [not yet measured](https://docs.akiraos.dev/resources/performance.html#capability-guard-overhead)). Apps declare required capabilities in a manifest. No capability = no access. Period.
 
 ```json
 {

@@ -19,6 +19,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`CONFIG_AKIRA_REQUIRE_SIGNED_APPS`), `unattested apps unprivileged`
   (`CONFIG_AKIRA_HARDEN_UNATTESTED_APPS`) or `not verified`.
 
+### Documentation
+- `docs(perf)`: `docs/resources/performance.md` is now the single source for
+  performance figures. The Capability Guard overhead ("~60 ns") was an estimate, not
+  a measurement; every mention now links to the page, which states the methodology
+  (`bench/akiraclaw_bench` B1, ESP32-S3 at 240 MHz, `CCOUNT`) and marks the figure
+  as not yet measured.
+
 ---
 
 ## [1.6.5] — 2026-11-02

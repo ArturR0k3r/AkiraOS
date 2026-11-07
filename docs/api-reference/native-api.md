@@ -350,15 +350,10 @@ See [Error Codes Reference](error-codes.md) for domain-specific `AKIRA_ERR_*` co
 
 ## Performance Characteristics
 
-| API Category | Call Overhead | Notes |
-|--------------|---------------|-------|
-| Display | ~60ns | Inline cap check + HAL |
-| Input | ~60ns | Direct register read |
-| Sensors | ~500μs | I2C transaction time |
-| RF | ~10ms | Network stack overhead |
-| File System | ~10ms | Flash access time |
-| Logging | ~100μs | UART output |
-| Time | ~20ns | Register read |
+Per-call costs are tracked on the [Performance](../resources/performance.md) page. None
+are published yet: the [Capability Guard overhead](../resources/performance.md#capability-guard-overhead) and per-API
+latencies have not been measured. The cost of a call that touches hardware (I2C, SPI,
+flash, radio) is dominated by the bus or peripheral, not by the WASM boundary.
 
 ---
 

@@ -153,7 +153,7 @@ graph TB
 ### Capability Model
 - **Permission Bits:** Display, Input, Sensor, RF, FS
 - **Manifest:** Embedded in WASM custom section
-- **Enforcement:** Inline checks (~60ns overhead)
+- **Enforcement:** Checked on every guarded native call ([overhead not yet measured](../resources/performance.md#capability-guard-overhead))
 - **Granularity:** Per-app, not per-resource
 
 ### Boot Security

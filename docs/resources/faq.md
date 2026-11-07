@@ -29,7 +29,7 @@ A: Only if they don't rely on WASI or browser APIs. AkiraOS uses custom native A
 A: Any language that compiles to WASM: C, C++, Rust, AssemblyScript, TinyGo.
 
 **Q: What's the performance overhead?**  
-A: Native call overhead is ~60ns. WASM is 1.5-3x slower than native code.
+A: Not measured yet. The [Performance](performance.md) page tracks the Capability Guard cost per native call and the interpreter, AOT and native speed ratios, and will publish them with board, clock and benchmark source.
 
 ---
 

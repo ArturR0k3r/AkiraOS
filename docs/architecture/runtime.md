@@ -17,7 +17,7 @@ AkiraRuntime is a purpose-built WASM execution environment designed for resource
 
 **Key Features:**
 - Chunked file loading (50% less peak memory)
-- Inline capability checks (~60 ns overhead)
+- Capability check on every guarded native call ([overhead](../resources/performance.md#capability-guard-overhead) not yet measured)
 - Per-app memory quotas (prevents exhaustion)
 - Embedded manifest support
 - Custom native APIs (not WASI)
@@ -198,10 +198,9 @@ if (!(cap_mask & CAP_BIT)) return -EACCES;  ← FAST PATH
 Actual API implementation
 ```
 
-**Performance:**
-- ~60 ns native call overhead
-- Inline capability checks (no function call overhead)
-- Branch prediction friendly
+**Performance:** not yet measured, see [Capability Guard overhead](../resources/performance.md#capability-guard-overhead).
+The `AKIRA_CHECK_CAP_OR_RETURN` macro is inlined at each call site, but the check itself
+calls `akira_security_check_exec()`, which looks up the app's `cap_mask` through WAMR.
 - Planned: static jump table for <50 ns
 
 #### Implementing a Native Function
@@ -454,11 +453,11 @@ See [AOT Compilation Architecture](aot-compilation.md) for detailed guide.
 
 | Metric | Value | Target |
 |--------|-------|--------|
-| Native Call Overhead | ~60ns | <50ns |
-| WASM Load Time (100KB) | ~80ms | <50ms |
+| Native Call Overhead | [Not yet measured](../resources/performance.md#capability-guard-overhead) | <50ns |
+| WASM Load Time (100KB) | Not yet measured | <50ms |
 | Memory Usage (per app) | 64-128KB | Configurable |
 | Peak Load Memory | 16KB | Streaming |
-| App Switch Latency | <1ms | <500μs |
+| App Switch Latency | Not yet measured | <500μs |
 
 ## Application Lifecycle
 
