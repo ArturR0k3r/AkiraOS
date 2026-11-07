@@ -64,10 +64,12 @@ We use CVSS v3.1 base scores:
 
 AkiraOS implements defence-in-depth across four layers:
 
-1. **WebAssembly sandbox** — memory-safe execution, no direct hardware access, bounded linear memory per app
-2. **Capability-based access control** — 23 capability bits enforced on every native API call; apps declare requirements in their embedded manifest
-3. **Secure boot chain** — MCUboot RSA/ECDSA firmware signature verification; WASM binary SHA-256 integrity check before loading
-4. **OTA integrity** — Ed25519-signed firmware bundles (`.akfw`), atomic flash with rollback on failure
+1. **WebAssembly sandbox** — WAMR with per-app linear memory; native APIs check every app pointer over its full length
+2. **Capability-based access control** — capability bits checked on every native API call; apps request them in their embedded manifest, and apps no signature verifier attested never get privileged ones in a release build
+3. **Verified boot** — with a product key (`build.sh -k`), MCUboot verifies the image signature (ECDSA P-256, Ed25519 or RSA) on every boot; the bootloader's own root of trust is the chip's secure boot, which the integrator enables
+4. **OTA integrity** — signed images, MCUboot downgrade prevention, trial boot with automatic revert (boot guard)
+
+The configuration these claims apply to is described in [docs/compliance/sesip-evaluated-configuration.md](docs/compliance/sesip-evaluated-configuration.md).
 
 Known limitations are documented in [docs/architecture/security.md](docs/architecture/security.md).
 

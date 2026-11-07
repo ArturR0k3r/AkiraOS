@@ -25,7 +25,7 @@ Additional resources for AkiraOS developers.
 - [WebAssembly Spec](https://webassembly.github.io/spec/)
 
 ### Community
-- [AkiraOS GitHub](https://github.com/akiraos/AkiraOS)
+- [AkiraOS GitHub](https://github.com/ArturR0k3r/AkiraOS)
 - [Zephyr Discord](https://chat.zephyrproject.org/)
 - [WASM Community](https://webassembly.org/)
 
@@ -65,4 +65,4 @@ AkiraOS is licensed under [Apache 2.0](https://github.com/ArturR0k3r/AkiraOS/blo
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.5)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.7)*

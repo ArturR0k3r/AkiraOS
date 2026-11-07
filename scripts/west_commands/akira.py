@@ -165,7 +165,12 @@ class Akira(WestCommand):
             img = bd / "zephyr" / "zephyr.bin"
         self._sbom(type("A", (), {"build_dir": str(bd), "out": str(out / "sbom.cdx.json")}))
         artifacts = []
-        for p in (img, bd / "zephyr" / "zephyr.elf", out / "sbom.cdx.json"):
+        # Flashable artifacts vary by target: .bin (ESP32/STM32), .uf2 (RP2040/
+        # RP2350, copied to the RPI-RP2 drive) and .hex (some ARM flashers).
+        # Collect whichever the build produced, plus the ELF and SBOM.
+        candidates = [img, bd / "zephyr" / "zephyr.uf2", bd / "zephyr" / "zephyr.hex",
+                      bd / "zephyr" / "zephyr.elf", out / "sbom.cdx.json"]
+        for p in candidates:
             if p.exists():
                 dest = out / p.name
                 if p.resolve() != dest.resolve():

@@ -30,6 +30,7 @@ LOG_MODULE_REGISTER(akira_runtime_cmds, CONFIG_AKIRA_LOG_LEVEL);
 #include <stdio.h>
 #include <inttypes.h>
 #include "akira.h"
+#include <akira_identity.h>
 
 #ifdef CONFIG_AKIRA_APP_MANAGER
 #include <runtime/app_manager/app_manager.h>
@@ -318,14 +319,23 @@ static int cmd_version(const struct shell *sh, size_t argc, char **argv)
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
 
-    shell_print(sh, "AkiraOS %d.%d.%d \"%s\"",
-                AKIRA_VERSION_MAJOR,
-                AKIRA_VERSION_MINOR,
-                AKIRA_VERSION_PATCH,
-                AKIRA_CODENAME);
-    shell_print(sh, "Zephyr %s", STRINGIFY(BUILD_VERSION));
-    shell_print(sh, "Board:  %s", CONFIG_BOARD);
-    shell_print(sh, "Built:  %s %s", __DATE__, __TIME__);
+    struct akira_identity id;
+
+    akira_identity_get(&id);
+    shell_print(sh, "AkiraOS %s \"%s\" (%s)", id.akira_version, AKIRA_CODENAME,
+                id.akira_revision);
+    shell_print(sh, "Zephyr  %s", id.zephyr_version);
+    if (id.wamr_version[0]) {
+        shell_print(sh, "WAMR    %s (%s)", id.wamr_version, id.wamr_revision);
+    }
+    if (id.image_version[0]) {
+        shell_print(sh, "Image   %s (MCUboot header, slot0)", id.image_version);
+    }
+    shell_print(sh, "Board   %s", id.board);
+    if (id.device_id[0]) {
+        shell_print(sh, "Device  %s", id.device_id);
+    }
+    shell_print(sh, "Built   %s %s", __DATE__, __TIME__);
     return 0;
 }
 

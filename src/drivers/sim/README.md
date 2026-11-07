@@ -1,3 +1,10 @@
+> **Status on v1.6.x: not built.** Nothing adds this directory to the build
+> (`add_subdirectory()`), and `snippets/akira-board/boards/native_sim.conf` sets
+> `CONFIG_DISPLAY=n`, so a `native_sim` build does not open this window. The
+> firmware's native_sim HAL (`src/drivers/platform_hal.c`) maps its framebuffer
+> and button state to `/tmp/akira_framebuffer` and `/tmp/akira_buttons` instead.
+> Treat the rest of this page as design notes until the local simulator is reworked.
+
 # ℹ️ About
 
 The Akira Console SDL2 Visual Simulator provides a faithful, interactive simulation of the Akira Console hardware for Zephyr's `native_sim` platform. It enables developers to run and test AkiraOS firmware on a PC with a graphical window that closely mimics the real device, including:
@@ -39,18 +46,18 @@ brew install sdl2
 
 ## 🔨 Building
 
-Build for native_sim (simulator will automatically be included):
+From the root of your AkiraOS checkout:
 
 ```bash
-cd /home/artur_ubuntu/Akira/AkiraOS
-west build --pristine -b native_sim . -d ../build_native_sim
+./build.sh            # builds native_sim, then runs it
 ```
+
+The build lands in `../build-native-sim` (the workspace root).
 
 ## 🚀 Running
 
 ```bash
-cd ../build_native_sim/zephyr
-./zephyr.exe
+../build-native-sim/zephyr/zephyr.exe
 ```
 
 A window will open showing the Akira Console!

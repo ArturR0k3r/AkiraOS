@@ -17,7 +17,7 @@ AkiraRuntime is a purpose-built WASM execution environment designed for resource
 
 **Key Features:**
 - Chunked file loading (50% less peak memory)
-- Inline capability checks (~60 ns overhead)
+- Capability check on every guarded native call ([overhead](../resources/performance.md#capability-guard-overhead) not yet measured)
 - Per-app memory quotas (prevents exhaustion)
 - Embedded manifest support
 - Custom native APIs (not WASI)
@@ -130,7 +130,35 @@ typedef struct {
 - **STOPPED** - Paused by stop() call
 - **ERROR** - Runtime error occurred
 
-**Limits:** 8 concurrent app instances default (adequate for embedded use cases). Note that AkiraOS uses a Thread-per-App Polling Model, meaning each application runs in an isolated Zephyr thread. Applications MUST yield control manually within tight loops using `delay()` to prevent system starvation.
+**Limits:** see [App limits](#app-limits). AkiraOS uses a Thread-per-App Polling Model, meaning each application runs in an isolated Zephyr thread. Applications MUST yield control manually within tight loops using `delay()` to prevent system starvation.
+
+### App limits
+
+"8 installed · 2 running" are Kconfig defaults, not fixed limits of the runtime.
+Three options bound how many apps a device can hold and run:
+
+| Option | Default | Range | What it costs |
+|--------|---------|-------|---------------|
+| `CONFIG_AKIRA_APP_MAX_INSTALLED` | 8 | 4–16 | One `app_entry_t` per slot in the app registry: a static RAM array (`g_registry[]` in `app_manager.c`), plus a stack buffer of the same size each time the registry is loaded from or saved to flash. App binaries live on the filesystem and do not count against it. |
+| `CONFIG_AKIRA_APP_MAX_RUNNING` | 2 | 1–4 | Apps running at the same time. Each one needs its own WAMR instance (linear memory and heap, sized by its manifest or `CONFIG_AKIRA_APP_DEFAULT_HEAP_KB`) and its own thread stack (`CONFIG_AKIRA_WASM_APP_STACK_SIZE`). App stacks always live in internal SRAM, never PSRAM; on ESP32-S3 that is the scarcest memory. |
+| `CONFIG_MAX_CONTAINERS` | 8 | — | WASM instances the runtime can keep loaded. The effective limit on running apps is the smaller of this and `CONFIG_AKIRA_APP_MAX_RUNNING`. |
+
+Boards override these in `snippets/akira-board/boards/*.conf` and
+`snippets/akira-reference/boards/*.conf`. For example, AkiraConsole sets
+`CONFIG_MAX_CONTAINERS=2`, and `nucleo_l476rg` sets 4 installed, 1 running and 1
+container.
+
+To change them, set the options in your board or product `.conf`:
+
+```
+CONFIG_AKIRA_APP_MAX_INSTALLED=16
+CONFIG_AKIRA_APP_MAX_RUNNING=3
+CONFIG_MAX_CONTAINERS=3
+```
+
+Raising `CONFIG_AKIRA_APP_MAX_INSTALLED` is safe. Lowering it below the number of apps
+already installed makes the stored registry fail its CRC check on the next boot. The
+device then starts with an empty registry, and the apps must be installed again.
 
 ### Chunked File Loader
 
@@ -198,10 +226,9 @@ if (!(cap_mask & CAP_BIT)) return -EACCES;  ← FAST PATH
 Actual API implementation
 ```
 
-**Performance:**
-- ~60 ns native call overhead
-- Inline capability checks (no function call overhead)
-- Branch prediction friendly
+**Performance:** not yet measured, see [Capability Guard overhead](../resources/performance.md#capability-guard-overhead).
+The `AKIRA_CHECK_CAP_OR_RETURN` macro is inlined at each call site, but the check itself
+calls `akira_security_check_exec()`, which looks up the app's `cap_mask` through WAMR.
 - Planned: static jump table for <50 ns
 
 #### Implementing a Native Function
@@ -432,12 +459,12 @@ AkiraRuntime supports two execution modes:
 **1. Interpreter Mode (.wasm)**
 - Universal bytecode execution
 - Runs on all platforms
-- Baseline performance (1x)
+- WAMR classic interpreter (the fast interpreter is not enabled)
 - Default mode for uploaded `.wasm` files
 
 **2. AOT Mode (.aot)**
-- Native machine code execution
-- 10-50x faster than interpreter
+- Native machine code execution, no bytecode decoding at run time
+- Speed-up over the classic interpreter [not yet measured](../resources/performance.md#webassembly-execution-speed)
 - Architecture-specific binaries
 - Requires pre-compilation with `wamrc`
 - Currently enabled for ESP32-S3 (Xtensa)
@@ -454,11 +481,11 @@ See [AOT Compilation Architecture](aot-compilation.md) for detailed guide.
 
 | Metric | Value | Target |
 |--------|-------|--------|
-| Native Call Overhead | ~60ns | <50ns |
-| WASM Load Time (100KB) | ~80ms | <50ms |
+| Native Call Overhead | [Not yet measured](../resources/performance.md#capability-guard-overhead) | <50ns |
+| WASM Load Time (100KB) | Not yet measured | <50ms |
 | Memory Usage (per app) | 64-128KB | Configurable |
 | Peak Load Memory | 16KB | Streaming |
-| App Switch Latency | <1ms | <500μs |
+| App Switch Latency | Not yet measured | <500μs |
 
 ## Application Lifecycle
 
@@ -506,4 +533,4 @@ stateDiagram-v2
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.5)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.7)*

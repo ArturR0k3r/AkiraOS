@@ -80,8 +80,8 @@ WebAssembly applications run in isolated sandboxes with capability-based access 
 - **Execution:** WASM bytecode (interpreter) or AOT (native code)
 - **Security:** Per-app capabilities, memory quotas
 - **Size:** 50KB-200KB per app
-- **Max Instances:** 8 installable apps, 2 concurrent running (configurable per board)
-- **Performance:** 1x (interpreter) or 10-50x (AOT)
+- **Max Instances:** 8 installed, 2 running by default; both are Kconfig options ([App limits](runtime.md#app-limits))
+- **Performance:** classic interpreter or AOT; [speed ratios not yet measured](../resources/performance.md#webassembly-execution-speed)
 
 [Learn more about the Runtime →](runtime.md) | [AOT Compilation →](aot-compilation.md)
 
@@ -89,7 +89,7 @@ WebAssembly applications run in isolated sandboxes with capability-based access 
 Custom WASM runtime managing application lifecycle, security, and native API bridging.
 
 - **App Management:** Load, start, stop, unload
-- **Security:** Inline capability checks (~60ns overhead, estimated)
+- **Security:** Capability check on every guarded native call ([overhead not yet measured](../resources/performance.md#capability-guard-overhead))
 - **Memory:** PSRAM allocation with per-app quotas
 - **Native APIs:** ~29 modules / ~190 registered symbols, including BLE, Crypto, Display, FS, GPIO, HID, I2C, IPC (pub/sub), Lifecycle, Matter, Memory, MQTT, Net (sockets), OTA, Power, PWM, RF, RTC, Sensor, Settings, Storage, System, Timer, UART, WDT, AI inference, and common utilities (printf, delay)
 - **UI Framework:** 32 widgets, 8 screens, touch support
@@ -166,13 +166,14 @@ WASM Code → WAMR Import → Native Bridge → Inline Cap Check → HAL Functio
 
 | Metric | Current | Target |
 |--------|---------|--------|
-| Native Call Overhead | ~60ns (estimated) | <50ns |
-| WASM Load Time (100KB) | ~80ms (estimated) | <50ms |
-| OTA Flash Write | ~200 KB/s | ~300 KB/s |
-| HTTP Throughput | ~1.3 MB/s | ~2 MB/s |
-| Memory Overhead | ~32KB | <24KB |
+| Native Call Overhead | Not yet measured | <50ns |
+| WASM Load Time (100KB) | Not yet measured | <50ms |
+| OTA Flash Write | Not yet measured | ~300 KB/s |
+| HTTP Throughput | Not yet measured | ~2 MB/s |
+| Memory Overhead | Not yet measured | <24KB |
 
-*Note: Performance metrics are board-dependent and represent estimates. Actual values vary by hardware configuration.*
+*Targets are design goals. No current value has been measured yet; measured figures
+will be published on the Performance page with board, clock and benchmark source.*
 
 [Performance Benchmarks →](../resources/performance.md)
 
@@ -191,7 +192,7 @@ WASM Code → WAMR Import → Native Bridge → Inline Cap Check → HAL Functio
 - [System Overview](system-overview.md) - Complete architecture guide
 - [Connectivity Layer](connectivity.md) - Network protocols
 - [AkiraRuntime](runtime.md) - WASM execution environment
-- [AOT Compilation](aot-compilation.md) - Native code compilation for 10–50x performance
+- [AOT Compilation](aot-compilation.md) - Ahead-of-time compilation of WASM apps to machine code
 - [Security Model](security.md) - Capability system
 - [Data Flow](data-flow.md) - Information flow diagrams
 - [Advanced Connectivity](advanced-connectivity.md) - Matter, Thread, AkiraMesh (planned)
@@ -205,4 +206,4 @@ WASM Code → WAMR Import → Native Bridge → Inline Cap Check → HAL Functio
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.5)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.7)*

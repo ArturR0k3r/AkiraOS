@@ -33,15 +33,34 @@ add_library(akira_os INTERFACE)
 # AkiraOS version from this module's VERSION file. Defined on the interface so
 # a product application with its own VERSION still reports the AkiraOS version
 # it was built against (src/akira.h keeps predefined AKIRA_VERSION_* values).
+function(akira_os_git_revision dir out)
+    set(rev "unknown")
+    if(EXISTS "${dir}")
+        execute_process(COMMAND git describe --always --dirty --abbrev=12
+            WORKING_DIRECTORY ${dir}
+            OUTPUT_VARIABLE described OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE rc ERROR_QUIET)
+        if(rc EQUAL 0 AND described)
+            set(rev ${described})
+        endif()
+    endif()
+    set(${out} ${rev} PARENT_SCOPE)
+endfunction()
+
 function(akira_os_define_version)
     set(VERSION_FILE ${AKIRA_OS_DIR}/VERSION)
     set(VERSION_TYPE AKIRA)
     include(${ZEPHYR_BASE}/cmake/modules/version.cmake)
+    # Source revisions reported by akira_identity_get() (include/akira_identity.h).
+    akira_os_git_revision(${AKIRA_OS_DIR} akira_rev)
+    akira_os_git_revision("${WAMR_ROOT_DIR}" wamr_rev)
     target_compile_definitions(akira_os INTERFACE
         AKIRA_VERSION_MAJOR=${AKIRA_VERSION_MAJOR}
         AKIRA_VERSION_MINOR=${AKIRA_VERSION_MINOR}
         AKIRA_VERSION_PATCH=${AKIRA_PATCHLEVEL}
         AKIRA_VERSION_STRING="${AKIRA_VERSION_STRING}"
+        AKIRA_BUILD_REVISION="${akira_rev}"
+        AKIRA_WAMR_REVISION="${wamr_rev}"
     )
 endfunction()
 akira_os_define_version()
@@ -136,11 +155,14 @@ if(CONFIG_AKIRA_WASM_RUNTIME)
     endif()
 
     set(WAMR_BUILD_INTERP 1)
-    # Mini-loader: skips redundant module-level validation already handled by
-    # akira_runtime (SHA-256 integrity check + sandbox capability audit).
-    # Reduces WAMR flash footprint by ~20-30 KB. Disable if loading untrusted
-    # binaries directly from WAMR without AkiraOS's own security layer.
-    set(WAMR_BUILD_MINI_LOADER 1)
+    # Mini-loader: skips WAMR's module validation to save ~20-30 KB of flash.
+    # AkiraOS's integrity step only checks the header and hashes the binary, so
+    # this is only safe when every app is authenticated (CONFIG_AKIRA_WAMR_MINI_LOADER).
+    if(CONFIG_AKIRA_WAMR_MINI_LOADER)
+        set(WAMR_BUILD_MINI_LOADER 1)
+    else()
+        set(WAMR_BUILD_MINI_LOADER 0)
+    endif()
     # Check user configuration for AOT support
     if(CONFIG_WAMR_AOT_SUPPORT)
         set(WAMR_BUILD_AOT 1)
@@ -283,6 +305,7 @@ zephyr_library_sources(
     ${AKIRA_OS_DIR}/src/lib/simple_json.c
     ${AKIRA_OS_DIR}/src/lib/mem_helper.c
     ${AKIRA_OS_DIR}/src/lib/akpkg.c
+    ${AKIRA_OS_DIR}/src/lib/akira_identity.c
 )
 
 # ===== Akira Core (kernel, HAL) =====

@@ -482,4 +482,4 @@ so apps built before ABI stamping keep working.
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.5)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.7)*

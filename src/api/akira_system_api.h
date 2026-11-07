@@ -34,7 +34,7 @@
  * Capability: "app.control" (AKIRA_CAP_APP_CONTROL)
  */
 int akira_native_sd_scan_wasm(wasm_exec_env_t exec_env,
-                               uint32_t buf_ptr, uint32_t buf_len);
+                               char *native_buf, uint32_t buf_len);
 
 #if defined(CONFIG_AKIRA_APP_SOURCE_SD)
 /**

@@ -65,14 +65,14 @@ west flash
 
 ### b_u585i_iot02a / steval_stwinbx1
 Full feature set — networking, BT, OTA, LittleFS + external flash, USB HID.  
-See [boards/b_u585i_iot02a.conf](https://github.com/ArturR0k3r/AkiraOS/blob/main/boards/b_u585i_iot02a.conf) and  
-[boards/steval_stwinbx1.conf](https://github.com/ArturR0k3r/AkiraOS/blob/main/boards/steval_stwinbx1.conf).
+See [snippets/akira-board/boards/b_u585i_iot02a.conf](https://github.com/ArturR0k3r/AkiraOS/blob/main/snippets/akira-board/boards/b_u585i_iot02a.conf) and  
+[snippets/akira-board/boards/steval_stwinbx1.conf](https://github.com/ArturR0k3r/AkiraOS/blob/main/snippets/akira-board/boards/steval_stwinbx1.conf).
 
 ### nucleo_l476rg
 Constrained board (96KB SRAM). Networking buffers, FAT filesystem, and WebSocket  
 are disabled in the board config to fit RAM. WASM heap and app slots are reduced.  
 LittleFS is available on internal flash.  
-See [boards/nucleo_l476rg.conf](https://github.com/ArturR0k3r/AkiraOS/blob/main/boards/nucleo_l476rg.conf).
+See [snippets/akira-board/boards/nucleo_l476rg.conf](https://github.com/ArturR0k3r/AkiraOS/blob/main/snippets/akira-board/boards/nucleo_l476rg.conf).
 
 ---
 
@@ -91,4 +91,4 @@ See [boards/nucleo_l476rg.conf](https://github.com/ArturR0k3r/AkiraOS/blob/main/
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.5)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.7)*

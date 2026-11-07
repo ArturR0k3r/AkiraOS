@@ -16,6 +16,7 @@ LOG_MODULE_REGISTER(akira_ipc_api, CONFIG_AKIRA_LOG_LEVEL);
  */
 
 #include "akira_ipc_api.h"
+#include "akira_wasm_mem.h"
 #include <runtime/security.h>
 #include <runtime/akira_ipc.h>
 #include <zephyr/kernel.h>
@@ -92,12 +93,7 @@ int akira_native_msg_publish(wasm_exec_env_t exec_env,
         return -EMSGSIZE;
     }
 
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst) {
-        return -EINVAL;
-    }
-
-    const void *ptr = wasm_runtime_addr_app_to_native(module_inst, data_ptr);
+    const void *ptr = akira_wasm_ptr_to_native(exec_env, data_ptr, len);
     if (!ptr) {
         return -EFAULT;
     }
@@ -116,12 +112,7 @@ int akira_native_msg_recv(wasm_exec_env_t exec_env,
         return -EINVAL;
     }
 
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    if (!module_inst) {
-        return -EINVAL;
-    }
-
-    void *ptr = wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+    void *ptr = akira_wasm_ptr_to_native(exec_env, buf_ptr, buf_len);
     if (!ptr) {
         return -EFAULT;
     }

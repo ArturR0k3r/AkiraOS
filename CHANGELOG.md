@@ -7,11 +7,97 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [1.6.5] — Unreleased
+## [Unreleased]
 
-> Development series on the `v1.6.x` branch. `VERSION` tracks 1.6.5; this section
-> is backfilled from the commits since 1.5.8 plus the production-readiness
-> hardening pass, and is not yet tagged/released.
+### Added
+- `docs(flash)`: Added a browser flasher at `docs.akiraos.dev/flash` (ESP Web Tools over
+  Web Serial) with a board picker and Wi-Fi provisioning notes, plus per-board manifests.
+- `ci(release)`: For the ESP32-S3 boards, also build a merged full-flash image
+  (`akiraos-<board>-flash.bin`, MCUboot + app) that the browser flasher consumes; best
+  effort, so it never blocks the rest of the release.
+- `docs(readme)`: Rewrote the README around the launch story — one-liner, browser/catalogue/
+  flash call-to-action, a 60-second start, C and Rust examples, "Why AkiraOS", an honest
+  comparison table (vs MicroPython / Toit / Ocre / Arduino-ESP-IDF), a current hardening
+  block, and an open-source-vs-commercial section. Trimmed to under 250 lines.
+- `docs`: Added `ROADMAP.md` (Now / Next / Later).
+- `docs(contributing)`: Added a "Publish your app to the AkiraConsole App Store" guide and
+  Discord/Matrix chat placeholders.
+- `docs(launch)`: Added `docs/launch/` announcement drafts (Show HN, r/embedded, r/esp32,
+  Hackaday, Zephyr newsletter), excluded from the published docs site.
+- `ci(release)`: On a version tag, build prebuilt firmware for `akiraconsole`,
+  `akiraconsole_prod`, `esp32s3_devkitm`, `nrf54l15dk` and `rpi_pico2` and attach
+  them to the GitHub release. Artifacts are named `akiraos-<tag>-<board>.<ext>`
+  (`.bin`/`.signed.bin`, `.uf2` for Pico, `.hex`, `.elf`, a per-board SBOM and
+  `SHA256SUMS`). ESP boards and the nRF/Pico boards no longer collide on one
+  `zephyr.bin`. `west akira release` now also collects `.uf2` and `.hex`.
+
+---
+
+## [1.6.7] — 2026-11-07
+
+> Documentation and developer-experience pass for the public launch: point the
+> repo at the browser simulator and the app catalogue, and make every figure and
+> claim either sourced or explicitly unmeasured. No firmware behaviour changed.
+
+### Documentation
+- `docs(readme)`: Added first-screen call-to-action links — Try in browser (the
+  AkiraConsole simulator), Browse apps (the catalogue), Flash your board — and a
+  commented-out `assets/simulator.gif` demo slot with a TODO.
+- `docs(quickstart)`: Added Path 0 (no-install browser simulator) ahead of the
+  host-simulator and hardware paths, and a pointer to the simulator from the
+  app-upload section.
+- `docs(perf)`: `docs/resources/performance.md` is now the single source for
+  performance figures. The Capability Guard overhead ("~60 ns") was an estimate, not
+  a measurement; every mention now links to the page, which states the methodology
+  (`bench/akiraclaw_bench` B1, ESP32-S3 at 240 MHz, `CCOUNT`) and marks the figure
+  as not yet measured.
+- `docs(perf)`: Withdrew the unsourced WAMR speed figures ("AOT 10–50× faster than
+  the interpreter", "~70 % / ~90 % of native", per-workload speed-ups). The docs now
+  name the baseline — the WAMR **classic** interpreter, since the fast interpreter is
+  not enabled — and mark both ratios (AOT vs interpreter, AOT vs native C) as not yet
+  measured. Also fixed `CONFIG_WAMR_BUILD_AOT` → `CONFIG_WAMR_AOT_SUPPORT` and removed
+  a reference to a nonexistent `akira_perf` shell command.
+- `docs(sim)`: Removed a hard-coded `/home/<user>/…` path from
+  `src/drivers/sim/README.md` and noted that the SDL2 module is not part of the
+  v1.6.x build.
+- `docs`: One language list everywhere, kept in
+  `docs/development/building-apps.md#language-support`: C is supported; Rust and
+  MicroPython are experimental (no `micropython.wasm` with the `_akira` module is
+  shipped yet). C++, AssemblyScript and TinyGo were listed without bindings or
+  samples and are now described as such.
+- `docs(runtime)`: Explained the "8 installed · 2 running" limits: they are the
+  Kconfig defaults of `CONFIG_AKIRA_APP_MAX_INSTALLED` (registry slots, static RAM)
+  and `CONFIG_AKIRA_APP_MAX_RUNNING` (one WAMR instance and SRAM stack per app),
+  bounded by `CONFIG_MAX_CONTAINERS`, with how to change them and why lowering the
+  installed limit resets the registry.
+- `docs`: Fixed every broken link in the root Markdown files and `docs/`: the
+  CONTRIBUTING table of contents (emoji headings), API-reference anchors that pointed
+  at sections living in the AkiraSDK reference, links into the `AkiraSDK` submodule
+  (they 404 on GitHub), moved board `.conf` files, a moved Zephyr page, a wrong GitHub
+  organisation and a wrong relative path. The README's first build command used a
+  `build_wasm_app.sh` script that does not exist; it now uses `./build.sh hello_world`.
+
+---
+
+## [1.6.6] — 2026-11-02
+
+### Fixed
+- `fix(identity)`: `akira version` and `GET /api/v1/info` printed the literal
+  `BUILD_VERSION` instead of the Zephyr version: `<zephyr/version.h>` was never
+  included. Found on AkiraConsole Prod hardware; the shell had the same bug
+  before 1.6.5.
+- `fix(security)`: The boot log said `signing=enforced` although no in-tree code
+  verifies app signatures. It now reports `required`
+  (`CONFIG_AKIRA_REQUIRE_SIGNED_APPS`), `unattested apps unprivileged`
+  (`CONFIG_AKIRA_HARDEN_UNATTESTED_APPS`) or `not verified`.
+
+---
+
+## [1.6.5] — 2026-11-02
+
+> Development series on the `v1.6.x` branch, tagged `v1.6.5`. This section is
+> backfilled from the commits since 1.5.8 plus the production-readiness
+> hardening pass.
 
 ### Implemented (previously stubbed)
 - `feat(sensors)`: BME280 register writes over I2C (`i2c_reg_write_byte`) — was `-ENOTSUP`.
@@ -56,6 +142,41 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `ci`: Version-consistency gate, expanded board matrix, pinned container image.
 - Advertised-but-incomplete entry points now return `-ENOSYS`/`-ENOTSUP` instead
   of reporting fake success (pending full implementation, see below).
+
+### SESIP Level 2 evaluated configuration
+- `feat(build)`: `build.sh -k <key.pem>` builds MCUboot to verify images signed
+  with the product key (signature type from the key, overriding Espressif's
+  `BOOT_SIGNATURE_TYPE_NONE`), with `MCUBOOT_DOWNGRADE_PREVENTION` and
+  `BOOT_VALIDATE_SLOT0` (`boards/mcuboot-secure-update.conf`), and signs the app.
+  `--release` applies the new `akira-release` snippet and fails if the built
+  bootloader does not enforce signed, non-downgrading updates.
+- `feat(ota)`: `CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE` (on in release builds) refuses
+  an older image before rebooting.
+- `fix(ota)`: BLE OTA characteristics require an encrypted link, like BLE app
+  transfer already did.
+- `fix(security)`: Validate the full pointer range in native APIs that checked
+  only the first byte or nothing: `app_list`, `app_get_self_name`,
+  `msg_publish`, `msg_recv`, `wifi_scan_rssi`, `display_get_size`,
+  `ha_light_poll` and the Python WASI `fd_*` shims. `sd_scan_wasm` treated its
+  WAMR-validated native pointer as an app offset and never worked.
+- `fix(security)`: The `fs.*` jail passed a module *instance* to
+  `wasm_runtime_get_module_name()` (which takes a module) and fell back to a
+  shared `unknown` directory. It now uses the runtime's app name, refuses names
+  with `/` or `..`, and gives an unnamed caller no files.
+- `feat(security)`: `CONFIG_AKIRA_HARDEN_UNATTESTED_APPS` (on in release builds):
+  an app no signature verifier attested gets no privileged capability and cannot
+  load AOT native code. `CONFIG_AKIRA_WAMR_MINI_LOADER` (off in release builds)
+  makes WAMR's validation-skipping mini loader optional.
+- `feat(security)`: Release checks also fail on unhardened unattested apps, the
+  mini loader without signed apps, the telnet shell and `debug memdump`
+  (`CONFIG_AKIRA_SHELL_DEBUG_COMMANDS`), and warn about the login-less serial shell.
+- `feat(identity)`: `akira_identity_get()` reports every platform part and its
+  version — AkiraOS version and git revision, the MCUboot-verified image version,
+  Zephyr, WAMR and its revision, board, device ID — through `akira version` and
+  `GET /api/v1/info`.
+- `fix(boards)`: AkiraConsole Prod MCUboot builds again: the I/O-expander driver
+  pulled in by the board overlay is turned off for the bootloader.
+- `docs`: [SESIP evaluated configuration](docs/compliance/sesip-evaluated-configuration.md).
 
 ### Added
 - `feat(security)`: Fail-closed app verification gate (`CONFIG_AKIRA_REQUIRE_SIGNED_APPS`).

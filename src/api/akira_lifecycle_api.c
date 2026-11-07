@@ -20,6 +20,7 @@ LOG_MODULE_REGISTER(akira_lifecycle_api, CONFIG_AKIRA_LOG_LEVEL);
  */
 
 #include "akira_lifecycle_api.h"
+#include "akira_wasm_mem.h"
 #include <runtime/security.h>
 #include <zephyr/kernel.h>
 #include <string.h>
@@ -139,7 +140,7 @@ int akira_native_app_list(wasm_exec_env_t exec_env,
         return -EINVAL;
     }
 
-    char *wasm_buf = (char *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+    char *wasm_buf = (char *)akira_wasm_ptr_to_native(exec_env, buf_ptr, buf_len);
     if (!wasm_buf) {
         return -EFAULT;
     }
@@ -190,7 +191,7 @@ int akira_native_app_get_self_name(wasm_exec_env_t exec_env,
         return -EINVAL;
     }
 
-    char *wasm_buf = (char *)wasm_runtime_addr_app_to_native(module_inst, buf_ptr);
+    char *wasm_buf = (char *)akira_wasm_ptr_to_native(exec_env, buf_ptr, buf_len);
     if (!wasm_buf) {
         return -EFAULT;
     }

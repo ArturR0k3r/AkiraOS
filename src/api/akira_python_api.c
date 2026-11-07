@@ -1,5 +1,6 @@
 #include "akira_python_api.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 #include <zephyr/logging/log.h>
@@ -34,6 +35,14 @@ static void py_longjmp(wasm_exec_env_t exec_env, void *jmp_buf, int val)
  */
 typedef struct { uint32_t buf; uint32_t buf_len; } wasi_ciovec_t;
 
+/* A bare "*" in a native signature makes WAMR validate only the first byte, so
+ * the iovec array, each buffer it points at and the result slot are checked
+ * here against the app's linear memory before being touched. */
+static bool py_out_valid(wasm_module_inst_t inst, void *p, uint32_t size)
+{
+    return p == NULL || wasm_runtime_validate_native_addr(inst, p, size);
+}
+
 static int py_fd_write(wasm_exec_env_t exec_env, int fd,
                        const wasi_ciovec_t *iovs, int iovs_len,
                        int *nwritten)
@@ -42,10 +51,20 @@ static int py_fd_write(wasm_exec_env_t exec_env, int fd,
     int total = 0;
     char tmp[256];
 
+    if (!inst || iovs_len < 0 || iovs_len > 1024 ||
+        !wasm_runtime_validate_native_addr(inst, (void *)iovs,
+                                           (uint32_t)iovs_len * sizeof(wasi_ciovec_t)) ||
+        !py_out_valid(inst, nwritten, sizeof(*nwritten))) {
+        return 28; /* __WASI_ERRNO_INVAL */
+    }
+
     for (int i = 0; i < iovs_len; i++) {
         uint32_t buf_len = iovs[i].buf_len;
         if (buf_len == 0) {
             continue;
+        }
+        if (!wasm_runtime_validate_app_addr(inst, iovs[i].buf, buf_len)) {
+            return 21; /* __WASI_ERRNO_FAULT */
         }
         char *buf = wasm_runtime_addr_app_to_native(inst, iovs[i].buf);
         if (!buf) {
@@ -87,7 +106,11 @@ static int py_fd_sync(wasm_exec_env_t exec_env, int fd)
 static int py_fd_seek(wasm_exec_env_t exec_env, int fd,
                       int64_t offset, int whence, int64_t *newoffset)
 {
-    (void)exec_env; (void)fd; (void)offset; (void)whence;
+    (void)fd; (void)offset; (void)whence;
+    if (!py_out_valid(wasm_runtime_get_module_inst(exec_env), newoffset,
+                      sizeof(*newoffset))) {
+        return 21; /* __WASI_ERRNO_FAULT */
+    }
     if (newoffset) {
         *newoffset = 0;
     }
@@ -97,7 +120,11 @@ static int py_fd_seek(wasm_exec_env_t exec_env, int fd,
 static int py_fd_read(wasm_exec_env_t exec_env, int fd,
                       const wasi_ciovec_t *iovs, int iovs_len, int *nread)
 {
-    (void)exec_env; (void)fd; (void)iovs; (void)iovs_len;
+    (void)fd; (void)iovs; (void)iovs_len;
+    if (!py_out_valid(wasm_runtime_get_module_inst(exec_env), nread,
+                      sizeof(*nread))) {
+        return 21; /* __WASI_ERRNO_FAULT */
+    }
     if (nread) {
         *nread = 0;
     }

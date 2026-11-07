@@ -64,6 +64,7 @@ exclude:
   - Gemfile
   - Gemfile.lock
   - vendor/
+  - launch/        # launch announcement drafts — repo-only, not published to the site
 
 # Include
 include:

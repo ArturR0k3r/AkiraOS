@@ -61,6 +61,17 @@ config WAMR_AOT_SUPPORT
       - Enable for ESP32-S3 (XTENSA) and native_sim (powerful targets)
       - Disable for ARM Cortex-M targets (limited resources)
 
+config AKIRA_WAMR_MINI_LOADER
+    bool "Build WAMR's mini loader (skips WASM module validation)"
+    default y if !AKIRA_RELEASE_BUILD
+    depends on AKIRA_WASM_RUNTIME
+    help
+      The mini loader saves about 20-30 KB of flash by skipping WAMR's module
+      validation. It assumes every binary is well formed, which only holds when
+      every app is authenticated (AKIRA_REQUIRE_SIGNED_APPS=y). Off by default
+      in release builds; the release checks fail if it is on without
+      AKIRA_REQUIRE_SIGNED_APPS.
+
 config AKIRA_RUNTIME_CUSTOM
     bool "Enable Akira unified custom runtime (Minimalist)"
     default y
@@ -1696,6 +1707,17 @@ config AKIRA_OTA_REQUIRE_HASH
       image with no hash check (development transports that do not yet carry
       image metadata) and is strongly discouraged on a fielded device.
 
+config AKIRA_OTA_REFUSE_DOWNGRADE
+    bool "Refuse OTA images older than the running firmware"
+    default y if AKIRA_RELEASE_BUILD
+    depends on AKIRA_OTA && BOOTLOADER_MCUBOOT
+    help
+      ota_finalize_update() rejects an image whose MCUboot header version
+      (major.minor.revision) is lower than the running image's, before
+      requesting the upgrade. MCUboot enforces the same rule at boot when
+      built with CONFIG_MCUBOOT_DOWNGRADE_PREVENTION (build.sh -k adds it);
+      this check reports the refusal to the sender instead of rebooting.
+
 config AKIRA_OTA_HTTP
     bool "Enable HTTP OTA transport"
     default y
@@ -2013,6 +2035,29 @@ config AKIRA_UNSIGNED_APP_CAP_MASK
       matter, mqtt, power.control) so unsigned code cannot reach them. Attested
       apps (loaded when AKIRA_REQUIRE_SIGNED_APPS=y with a real verifier) are not
       affected by this mask.
+
+config AKIRA_HARDEN_UNATTESTED_APPS
+    bool "Restrict apps that no signature verifier has attested"
+    default y if AKIRA_RELEASE_BUILD
+    help
+      An app is attested only when AKIRA_REQUIRE_SIGNED_APPS=y and a platform
+      signature verifier accepted it. When this option is set, an unattested
+      app:
+      - is never granted a privileged capability (AKIRA_CAP_PRIVILEGED, or a
+        product capability flagged AKIRA_CAPABILITY_PRIVILEGED), whatever
+        AKIRA_UNSIGNED_APP_CAP_MASK allows;
+      - is refused if its binary is AOT. An AOT file is native machine code
+        and the loader cannot tell whether wamrc produced it, so WAMR's bounds
+        checks do not confine an AOT file from an untrusted source.
+      On by default in release builds.
+
+config AKIRA_SHELL_DEBUG_COMMANDS
+    bool "Shell commands that read arbitrary memory"
+    default y if !AKIRA_RELEASE_BUILD
+    depends on SHELL
+    help
+      Builds `debug memdump`, which prints any address the caller names.
+      Off by default in release builds.
 
 config AKIRA_SANDBOX
     bool "Enable runtime sandbox"

@@ -25,8 +25,8 @@ Below is a subset of the critical AkiraOS features (`CONFIG_AKIRA_*`) and runtim
 | Config Flag | Default | Description |
 |---|---|---|
 | `CONFIG_MAX_CONTAINERS` | `8` | Max number of simultaneously loaded WASM modules (not the same as running apps). |
-| `CONFIG_AKIRA_APP_MAX_INSTALLED` | `8` | Max apps stored on flash. |
-| `CONFIG_AKIRA_APP_MAX_RUNNING` | `2` | Max concurrently running WASM apps. Increase only if memory allows. |
+| `CONFIG_AKIRA_APP_MAX_INSTALLED` | `8` | Size of the app registry (range 4–16). Costs static RAM per slot; app binaries live on the filesystem. See [App limits](../architecture/runtime.md#app-limits). |
+| `CONFIG_AKIRA_APP_MAX_RUNNING` | `2` | Max concurrently running WASM apps (range 1–4). Each needs its own WAMR instance and SRAM thread stack. See [App limits](../architecture/runtime.md#app-limits). |
 | `CONFIG_AKIRA_WASM_RUNTIME` | `n`* | Enable WebAssembly runtime (WAMR). Set to `y` in `prj.conf` for all AkiraOS builds. |
 | `CONFIG_WAMR_AOT_SUPPORT` | `n` | Enable WASM AOT compilation. Recommended for CPU-heavy tasks but costs flash space. Only `akiraconsole` board enables this by default. |
 | `CONFIG_WAMR_HEAP_SIZE` | `262144`| WAMR heap size in bytes (Kconfig default). Overridden per-board: ESP32-S3 uses 1 MB, ESP32 uses 32 KB. |
@@ -95,7 +95,11 @@ Toggle these flags to export particular native APIs into the WASM sandboxes. If 
 | `CONFIG_AKIRA_SE050` | `y` if `nxp,se050` in DT | NXP SE050 secure element driver. |
 | `CONFIG_AKIRA_SE050_SCP03` | `n` | GlobalPlatform SCP03 authenticated/encrypted channel to the SE050. |
 | `CONFIG_AKIRA_BOOT_GUARD` | `y` with `MCUBOOT_IMG_MANAGER` | Confirms a new firmware image after a healthy boot; reboots it on crash, hang or deadline so MCUboot rolls back. See [OTA design](../ota_design.md#4-boot-guard-design-akira_boot_guard). |
-| `CONFIG_AKIRA_RELEASE_BUILD` | `n` | Fail the build while development-only security settings are active: HTTP no-auth, empty or example upload token, direct upload endpoint, unsigned apps, unsigned or dev-key MCUboot images. With `n` they are printed as a warning. |
+| `CONFIG_AKIRA_RELEASE_BUILD` | `n` | Fail the build while development-only security settings are active: HTTP no-auth, empty or example upload token, direct upload endpoint, unsigned apps, unsigned or dev-key MCUboot images, unhardened unattested apps, the WAMR mini loader without signed apps, the telnet shell, `debug memdump`. With `n` they are printed as a warning. The `akira-release` snippet sets it; see [SESIP evaluated configuration](../compliance/sesip-evaluated-configuration.md). |
+| `CONFIG_AKIRA_HARDEN_UNATTESTED_APPS` | `y` with `AKIRA_RELEASE_BUILD` | An app no signature verifier attested gets no privileged capability, whatever `AKIRA_UNSIGNED_APP_CAP_MASK` allows, and AOT binaries are refused unless `AKIRA_REQUIRE_SIGNED_APPS=y`. |
+| `CONFIG_AKIRA_WAMR_MINI_LOADER` | `y` unless `AKIRA_RELEASE_BUILD` | Build WAMR's mini loader, which skips module validation (saves ~20-30 KB). Only safe when every app is authenticated. |
+| `CONFIG_AKIRA_SHELL_DEBUG_COMMANDS` | `y` unless `AKIRA_RELEASE_BUILD` | Build `debug memdump`, which prints any memory address. |
+| `CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE` | `y` with `AKIRA_RELEASE_BUILD` | Refuse an OTA image whose MCUboot header version is lower than the running one, before rebooting. MCUboot enforces the same rule when built with `build.sh -k`. |
 
 ### HTTP Server (1.6.x)
 
@@ -146,4 +150,4 @@ For detailed constraints (like SRAM/PSRAM boundaries), see the [Architecture Ove
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.5)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.7)*

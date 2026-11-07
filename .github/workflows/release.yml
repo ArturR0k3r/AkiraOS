@@ -1,42 +1,151 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Cut a signed release when a version tag is pushed. Signs with the product
-# MCUboot key from the MCUBOOT_KEY_PEM secret (unsigned if absent — dev only),
-# writes a CycloneDX SBOM and SHA256SUMS, and uploads them to the GitHub release.
+# Cut a release when a version tag (v*) is pushed. Builds prebuilt firmware for
+# the launch boards, signs the MCUboot images with the product key from the
+# MCUBOOT_KEY_PEM secret where the board supports it (unsigned otherwise — dev
+# only), writes a per-board CycloneDX SBOM, and uploads everything to the
+# GitHub release. Artifact names carry the board slug so matrix jobs do not
+# overwrite each other on the release.
 name: release
 on:
   push:
     tags: ["v*"]
+
+permissions:
+  contents: write
+
 jobs:
-  release:
+  firmware:
     runs-on: ubuntu-latest
+    # The Zephyr CI image bundles the Zephyr SDK with every toolchain, so no
+    # per-board SDK install is needed.
     container: ghcr.io/zephyrproject-rtos/ci:v0.28.6@sha256:427a55fe95911ea97aa99fa0aedce95cb5550cbdd74f3525d23e35b2221f2335
     strategy:
+      fail-fast: false
       matrix:
-        board: [akiraconsole_prod/esp32s3/procpu]
+        include:
+          - board: akiraconsole/esp32s3/procpu
+            slug: akiraconsole
+            blobs: true
+            sign: true
+            esp_chip: esp32s3          # build a merged full-flash image for the web flasher
+            build_alias: akiraconsole
+          - board: akiraconsole_prod/esp32s3/procpu
+            slug: akiraconsole_prod
+            blobs: true
+            sign: true
+            esp_chip: esp32s3
+            build_alias: akiraconsole_prod
+          - board: esp32s3_devkitm/esp32s3/procpu
+            slug: esp32s3_devkitm
+            blobs: true
+            sign: false
+            esp_chip: esp32s3
+            build_alias: esp32s3_devkitm_esp32s3_procpu
+          - board: nrf54l15dk/nrf54l15/cpuapp
+            slug: nrf54l15dk
+            blobs: false
+            sign: false
+          - board: rpi_pico2/rp2350a/m33
+            slug: rpi_pico2
+            blobs: false
+            sign: false
     steps:
       - uses: actions/checkout@v4
-        with: { path: akira-os }
+        with:
+          path: akira-os
+          submodules: recursive
+
       - name: West workspace
+        working-directory: akira-os
         run: |
-          cd akira-os && west init -l . && west update && west zephyr-export
-          west blobs fetch hal_espressif
+          west init -l .
+          west update
+          west zephyr-export
+
+      - name: Fetch ESP32 HAL blobs
+        if: matrix.blobs
+        working-directory: akira-os
+        run: west blobs fetch hal_espressif
+
       - name: Provision signing key
+        if: matrix.sign
         env:
           MCUBOOT_KEY_PEM: ${{ secrets.MCUBOOT_KEY_PEM }}
         run: printf '%s' "$MCUBOOT_KEY_PEM" > akira-os/mcuboot-signing.pem
-      - name: Build + sign + SBOM + checksums
+
+      - name: Build + sign + SBOM
+        working-directory: akira-os
         env:
           BOARD: ${{ matrix.board }}
+          SIGN: ${{ matrix.sign }}
         run: |
-          cd akira-os
-          KEY=""; [ -s mcuboot-signing.pem ] && KEY="-k mcuboot-signing.pem"
-          [ -z "$KEY" ] && echo "::warning::MCUBOOT_KEY_PEM not set — shipping an UNSIGNED image"
+          KEY=""
+          if [ "$SIGN" = "true" ] && [ -s mcuboot-signing.pem ]; then
+            KEY="-k mcuboot-signing.pem"
+          elif [ "$SIGN" = "true" ]; then
+            echo "::warning::MCUBOOT_KEY_PEM not set — shipping an UNSIGNED ${BOARD} image"
+          fi
           west akira release -b "$BOARD" -s . -o dist $KEY
           rm -f mcuboot-signing.pem
+
+      - name: Rename artifacts with the board slug
+        working-directory: akira-os
+        env:
+          SLUG: ${{ matrix.slug }}
+          REF: ${{ github.ref_name }}
+        run: |
+          set -eu
+          mkdir -p out
+          for f in dist/zephyr.signed.bin dist/zephyr.bin dist/zephyr.uf2 \
+                   dist/zephyr.hex dist/zephyr.elf dist/sbom.cdx.json; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            case "$base" in
+              zephyr.signed.bin) ext=".signed.bin" ;;
+              sbom.cdx.json)     ext=".sbom.cdx.json" ;;
+              *)                 ext=".${base#zephyr.}" ;;
+            esac
+            cp "$f" "out/akiraos-${REF}-${SLUG}${ext}"
+          done
+          ( cd out && sha256sum "akiraos-${REF}-${SLUG}"* > "SHA256SUMS-${SLUG}.txt" )
+          ls -l out
+
+      # Full-flash image (MCUboot @ 0x0 + app @ 0x20000) for the browser flasher at
+      # docs.akiraos.dev/flash. Named without the tag so the page's
+      # releases/latest/download/akiraos-<slug>-flash.bin link stays stable. Best effort:
+      # a failure here must not block the rest of the release.
+      - name: Merged flash image (ESP boards)
+        if: matrix.esp_chip
+        continue-on-error: true
+        working-directory: akira-os
+        env:
+          MCUBOOT_KEY_PEM: ${{ secrets.MCUBOOT_KEY_PEM }}
+          CHIP: ${{ matrix.esp_chip }}
+          ALIAS: ${{ matrix.build_alias }}
+          SIGN: ${{ matrix.sign }}
+          SLUG: ${{ matrix.slug }}
+        run: |
+          set -eu
+          pip install --quiet esptool
+          KEY=""
+          if [ "$SIGN" = "true" ] && [ -n "${MCUBOOT_KEY_PEM:-}" ]; then
+            printf '%s' "$MCUBOOT_KEY_PEM" > mcuboot-signing.pem
+            KEY="-k mcuboot-signing.pem"
+          fi
+          # Build MCUboot + app with the board's real snippets/overlays/offsets.
+          ./build.sh -b "$ALIAS" -bl y $KEY
+          rm -f mcuboot-signing.pem
+          boot=$(find .. -path '*build-mcuboot*/zephyr/zephyr.bin' | head -1)
+          app=$(find .. -path '*/zephyr/zephyr.signed.bin' -not -path '*mcuboot*' | head -1)
+          [ -n "$app" ] || app=$(find .. -path '*/zephyr/zephyr.bin' -not -path '*mcuboot*' -not -path '*/dist/*' | head -1)
+          echo "MCUboot: $boot"; echo "App: $app"
+          [ -n "$boot" ] && [ -n "$app" ]
+          esptool --chip "$CHIP" merge_bin -o "out/akiraos-${SLUG}-flash.bin" \
+            0x0 "$boot" 0x20000 "$app"
+          ( cd out && sha256sum "akiraos-${SLUG}-flash.bin" >> "SHA256SUMS-${SLUG}.txt" )
+          ls -l out
+
       - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            akira-os/dist/*.bin
-            akira-os/dist/sbom.cdx.json
-            akira-os/dist/SHA256SUMS
+          files: akira-os/out/*

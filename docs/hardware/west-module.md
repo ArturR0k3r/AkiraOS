@@ -198,7 +198,7 @@ AKIRA_HOOK_DEFINE(widget_boot, AKIRA_HOOK_MASK(AKIRA_HOOK_BOOT_READY), on_ready,
 
 The fourth point is **profiles** (section 3). Core capability bit numbers (0–47)
 are frozen; yours live in 48–63. See the
-[API stability policy](../api-reference/api-stability-policy.md) and the
+[API stability policy](../api-stability-policy.md) and the
 [capability list](../api-reference/manifest-format.md).
 
 {: .warning }

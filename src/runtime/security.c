@@ -188,6 +188,11 @@ uint64_t akira_capability_sanitize_app_mask(uint64_t requested, bool attested)
          * CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK to refuse privileged caps to code
          * it cannot attest. */
         effective &= (uint64_t)CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK;
+        /* Release posture: privileged capabilities need an attested app,
+         * whatever the allow-mask says. */
+        if (IS_ENABLED(CONFIG_AKIRA_HARDEN_UNATTESTED_APPS)) {
+            effective &= ~akira_capability_privileged_mask();
+        }
     }
 
     return effective;

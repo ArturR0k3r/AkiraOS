@@ -493,6 +493,21 @@ static int load_wasm_ex(const uint8_t *buffer, uint32_t size,
     }
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
+    /* ===== Step 0: AOT needs an attested app =====
+     * An AOT file is native code; WAMR's bounds checks only confine it if wamrc
+     * produced it, which the loader cannot tell. Without a signature verifier
+     * (CONFIG_AKIRA_REQUIRE_SIGNED_APPS) a hardened build runs interpreted
+     * WASM only. */
+    if (IS_ENABLED(CONFIG_AKIRA_HARDEN_UNATTESTED_APPS) &&
+        !IS_ENABLED(CONFIG_AKIRA_REQUIRE_SIGNED_APPS) &&
+        memcmp(buffer, "\0aot", 4) == 0)
+    {
+        LOG_ERR("AOT binary refused: AOT apps need CONFIG_AKIRA_REQUIRE_SIGNED_APPS");
+        sandbox_audit_log(AUDIT_EVENT_INTEGRITY_FAIL, "aot_unattested", size);
+        g_apps[slot].used = false; /* release reserved slot */
+        return -EPERM;
+    }
+
     /* ===== Step 1: Integrity verification ===== */
     uint8_t binary_hash[32];
     int integrity_ret = app_verify_wasm_integrity(buffer, size, binary_hash);

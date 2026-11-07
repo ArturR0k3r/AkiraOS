@@ -10,16 +10,17 @@
 
 ## 📋 Table of Contents
 
-- [Code of Conduct](#code-of-conduct)
-- [Getting Started](#getting-started)
-- [Development Setup](#development-setup)
-- [How to Contribute](#how-to-contribute)
-- [Coding Standards](#coding-standards)
-- [Commit Guidelines](#commit-guidelines)
-- [Pull Request Process](#pull-request-process)
-- [Testing](#testing)
-- [Documentation](#documentation)
-- [Community](#community)
+- [Code of Conduct](#-code-of-conduct)
+- [Getting Started](#-getting-started)
+- [Development Setup](#-development-setup)
+- [How to Contribute](#-how-to-contribute)
+- [Coding Standards](#-coding-standards)
+- [Commit Guidelines](#-commit-guidelines)
+- [Pull Request Process](#-pull-request-process)
+- [Testing](#-testing)
+- [Documentation](#-documentation)
+- [Publish your app to the App Store](#-publish-your-app-to-the-akiraconsole-app-store)
+- [Community](#-community)
 
 ## 📜 Code of Conduct
 
@@ -294,6 +295,7 @@ Update documentation when you:
 
 - **GitHub Discussions**: For questions and general discussion
 - **GitHub Issues**: For bug reports and feature requests
+- **Chat**: Discord / Matrix — _coming soon (TODO: add invite links)_
 - **Email**: support@pen.engineering for direct support
 
 ### Communication Guidelines
@@ -314,6 +316,32 @@ We're particularly looking for contributions in:
 - **Documentation**: Making the project more accessible
 - **Testing**: Increasing test coverage and reliability
 - **Hacker Mode**: Implementing cybersecurity tools
+
+## 🏪 Publish your app to the AkiraConsole App Store
+
+Anyone can get an app into the [AkiraConsole catalogue](https://console.app.akiraos.dev),
+which the device app store and the browser simulator both read.
+
+1. **Write and build it.** Start from a sample in
+   [`AkiraSDK/wasm_apps/`](https://github.com/ArturR0k3r/AkiraSDK/tree/v1.6.x/wasm_apps);
+   `cd AkiraSDK/wasm_apps && ./build.sh <app>` produces `bin/<app>.wasm`. Declare the
+   capabilities it needs in `manifest.json` — the runtime denies anything ungranted, and
+   reviewers and users read it before installing.
+2. **Try it in the browser.** Drop the `.wasm` onto the
+   [simulator](https://console.app.akiraos.dev/simulator) and confirm it runs. Hardware-only
+   calls (BLE, RF, Wi-Fi, HID) return "not supported" there — test those on a device.
+3. **Package it.** Bundle the binary and manifest into an `.akpkg`:
+   ```bash
+   akira-cli pack bin/<app>.wasm <app>/manifest.json -o <app>.akpkg
+   # optional: akira-cli sign <app>.akpkg --key your-ed25519.pem
+   ```
+4. **Submit it.** Upload the `.akpkg` on the **Submit** page of
+   [console.app.akiraos.dev](https://console.app.akiraos.dev) (optionally with screenshots
+   and a thumbnail). It appears in the catalogue, and its deep link
+   `…/simulator?url=<download-url>` runs it in the browser.
+
+Prefer to keep an app in this repo? Add it under `AkiraSDK/wasm_apps/` with a `manifest.json`
+and the release workflow publishes it to the catalogue on the next SDK tag.
 
 ## 📄 License
 

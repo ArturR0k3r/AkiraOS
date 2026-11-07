@@ -11,10 +11,42 @@ permalink: /resources/release-notes
 > Release history. `CHANGELOG.md` at the repository root is the authoritative,
 > commit-level record; this page summarises each release.
 
-## v1.6.5 — Unreleased
+## v1.6.7 — 2026-11-07
 
-**Status:** development series on the `v1.6.x` branch. `VERSION` tracks 1.6.5, but
-**no 1.6.x git tag exists yet** — the newest tag is `v1.5.8`.
+**Status:** `v1.6.x` branch. A documentation and developer-experience pass for the
+public launch — no firmware behaviour changed.
+
+### Changed
+- The README and QUICKSTART lead with the **browser simulator**
+  (<https://console.app.akiraos.dev/simulator>) and the **app catalogue**.
+- Performance figures are consolidated in [Performance](performance.md); unsourced
+  numbers (Capability Guard ns, AOT speed-ups) are marked *not yet measured*.
+- One language-support list: C supported; Rust and MicroPython experimental.
+- The "8 installed / 2 running" app limits are documented as Kconfig options.
+- Fixed broken links across the README and docs.
+
+### Fixed (AkiraSDK)
+- The `akira_sdk` Rust crate and its `hello_world` sample now build.
+
+---
+
+## v1.6.6 — 2026-11-02
+
+**Status:** tagged `v1.6.6` on the `v1.6.x` branch: a patch release on top of 1.6.5,
+and the SESIP Level 2 evaluated configuration.
+
+### Fixed
+- **Identity**: `akira version` and `GET /api/v1/info` printed the literal
+  `BUILD_VERSION` instead of the Zephyr version.
+- **Boot log**: it said `signing=enforced` although no in-tree code verifies app
+  signatures. It now reports `required`, `unattested apps unprivileged` or
+  `not verified`, depending on the configuration.
+
+---
+
+## v1.6.5 — 2026-11-02
+
+**Status:** tagged `v1.6.5` on the `v1.6.x` branch.
 
 The 1.6 series is a connectivity build-out plus a production-readiness pass that
 deliberately *removed* overclaims: entry points that were advertised but incomplete now
@@ -306,4 +338,4 @@ Initial public release with OCRE runtime, basic BLE, WiFi OTA, and LittleFS stor
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.5)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.7)*

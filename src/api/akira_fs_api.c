@@ -82,6 +82,7 @@ static void fd_release(fs_fd_t *h)
 
 #define SANDBOX_PATH_MAX 256
 #define SANDBOX_BASE     "/akira/apps"
+#define SANDBOX_NAME_MAX 32 /* akira_managed_app_t.name */
 
 static int resolve_path(wasm_exec_env_t exec_env,
                         const char *rel, char *out, size_t out_len)
@@ -95,10 +96,16 @@ static int resolve_path(wasm_exec_env_t exec_env,
         return -EACCES;
     }
 
+    /* Jail directory = the runtime's name for the calling app. No shared
+     * fallback directory: an app that cannot be named gets no files. The name
+     * comes from the app's manifest, so it must not step out of the jail. */
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    const char *app_name    = wasm_runtime_get_module_name(inst);
-    if (!app_name || app_name[0] == '\0') {
-        app_name = "unknown";
+    char app_name[SANDBOX_NAME_MAX];
+    if (!inst ||
+        akira_runtime_get_name_for_module_inst(inst, app_name, sizeof(app_name)) < 0 ||
+        app_name[0] == '\0' || strchr(app_name, '/') || strstr(app_name, "..")) {
+        LOG_WRN("FS: no usable app name for the caller");
+        return -EACCES;
     }
 
     int n = snprintf(out, out_len, "%s/%s/%s", SANDBOX_BASE, app_name, rel);

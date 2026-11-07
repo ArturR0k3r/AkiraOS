@@ -154,13 +154,9 @@ sequenceDiagram
     end
 ```
 
-**Performance (estimated):**
-- Hash lookup: ~20ns (WAMR native function resolution)
-- Capability check: ~10ns (inline bitmask check)
-- HAL call: ~30ns (function call overhead)
-- **Total overhead:** ~60ns
-
-> **Note:** These are estimated values. Actual performance depends on hardware, compiler optimization, and cache behavior.
+**Performance:** not yet measured. See
+[Capability Guard overhead](../resources/performance.md#capability-guard-overhead) for what the check does and how it
+will be benchmarked.
 
 ---
 
@@ -216,7 +212,7 @@ graph LR
 **Call Stack:**
 ```
 wasm_app_code()
-  └─ akira_native_sensor_read()         [~60ns overhead*]
+  └─ akira_native_sensor_read()         [capability check]
       └─ platform_sensor_read()          [HAL layer]
           └─ i2c_burst_read()             [Zephyr driver]
               └─ Hardware I2C transaction [~500μs*]
@@ -304,7 +300,7 @@ graph TB
 |------|--------|-------------|--------|-------------|---------|
 | **App Upload** | HTTP | File System | 2 | ~22KB | ~200ms (100KB) |
 | **OTA Update** | HTTP | Flash | 2 | ~6KB | ~10s (1.1MB) |
-| **Native Call** | WASM | Hardware | 0 | N/A | ~60ns* |
+| **Native Call** | WASM | Hardware | 0 | N/A | not measured |
 | **HID Output** | WASM | BLE Host | 1 | 8-64B | ~5-10ms* |
 | **Sensor Read** | I2C | WASM | 1 | ~16B | ~500μs* |
 | **File Write** | WASM | Flash | 2 | ~4KB | ~10ms |
@@ -337,4 +333,4 @@ graph TB
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.5)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.7)*

@@ -791,6 +791,12 @@ int shell_stress_test(uint32_t duration_seconds, uint8_t cpu_load)
 
 int shell_memory_dump(uintptr_t address, size_t length, char format)
 {
+    /* Reads arbitrary addresses: development builds only. */
+    if (!IS_ENABLED(CONFIG_AKIRA_SHELL_DEBUG_COMMANDS))
+    {
+        return -ENOTSUP;
+    }
+
     if (length > 4096 || length == 0)
     {
         return -EINVAL;
@@ -1074,6 +1080,7 @@ static int cmd_stress_test(const struct shell *sh, size_t argc, char **argv)
     return shell_stress_test(duration, cpu_load);
 }
 
+#ifdef CONFIG_AKIRA_SHELL_DEBUG_COMMANDS
 static int cmd_memory_dump(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 3)
@@ -1100,6 +1107,7 @@ static int cmd_memory_dump(const struct shell *sh, size_t argc, char **argv)
 
     return shell_memory_dump(address, length, format);
 }
+#endif /* CONFIG_AKIRA_SHELL_DEBUG_COMMANDS */
 
 static int cmd_alias(const struct shell *sh, size_t argc, char **argv)
 {
@@ -1924,7 +1932,9 @@ SHELL_STATIC_SUBCMD_SET_CREATE(gpio_cmds,
 #endif /* CONFIG_GPIO */
 
 SHELL_STATIC_SUBCMD_SET_CREATE(debug_cmds,
+#ifdef CONFIG_AKIRA_SHELL_DEBUG_COMMANDS
                                SHELL_CMD(memdump, NULL, "Dump memory contents", cmd_memory_dump),
+#endif
                                SHELL_CMD(alias, NULL, "Create command alias", cmd_alias),
                                SHELL_CMD(history, NULL, "Show command history", cmd_history),
                                SHELL_CMD(clear_history, NULL, "Clear command history", cmd_clear_history),

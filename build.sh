@@ -13,6 +13,9 @@
 #   -r all          Flash both bootloader and application
 #   -e              Erase flash before flashing
 #   -s              Generate SBOM (Software Bill of Materials)
+#   -k <key.pem>    Sign firmware with this product key; MCUboot (-bl) verifies it
+#                   and refuses downgrades (see docs/development/signing-and-release.md)
+#   --release       Release build (akira-release snippet): fail on dev settings
 #   -c              Clean build artifacts
 #   --full-clean    Reset to pristine state (remove all build dirs)
 #   -h, --help      Show this help message
@@ -46,6 +49,8 @@ GENERATE_SBOM=false
 CLEAN_BUILD=false
 FULL_CLEAN=false
 ENABLE_PLATFORM=false
+SIGN_KEY=""               # product firmware signing key (PEM), -k
+RELEASE_BUILD=false       # --release
 PORT=""
 BAUD="921600"
 
@@ -145,6 +150,10 @@ ${BOLD}OPTIONS:${NC}
     -r all          Flash both bootloader and application
     -e              Erase flash before flashing
     -s              Generate SBOM (Software Bill of Materials)
+    -k <key.pem>    Sign firmware with this product key; with -bl, MCUboot is
+                    built to verify it and to refuse downgrades
+    --release       Release build (akira-release snippet): fail on
+                    development-only security settings
     -c              Clean build artifacts for selected board
     --full-clean    Reset to pristine state (remove ALL build dirs)
     --platform      Enable AkiraPlatform enterprise features
@@ -265,6 +274,65 @@ clean_build() {
     fi
 }
 
+# Print the MCUboot -D options that make the bootloader verify images signed
+# with key $1 (BOOT_SIGNATURE_TYPE_* + BOOT_SIGNATURE_KEY_FILE).
+mcuboot_signature_options() {
+    local key="$1"
+    local text
+    if ! text="$(openssl pkey -in "$key" -noout -text 2>/dev/null)"; then
+        print_error "Cannot read signing key $key (needs openssl)" >&2
+        return 1
+    fi
+    if grep -q "ED25519" <<<"$text"; then
+        echo "-DCONFIG_BOOT_SIGNATURE_TYPE_ED25519=y"
+    elif grep -q "prime256v1" <<<"$text"; then
+        echo "-DCONFIG_BOOT_SIGNATURE_TYPE_ECDSA_P256=y"
+    elif grep -qE "^(RSA )?Private-Key: \((2048|3072) bit" <<<"$text"; then
+        local bits
+        bits="$(grep -oE "\((2048|3072) bit" <<<"$text" | grep -oE "[0-9]+")"
+        echo "-DCONFIG_BOOT_SIGNATURE_TYPE_RSA=y -DCONFIG_BOOT_SIGNATURE_TYPE_RSA_LEN=$bits"
+    else
+        print_error "Unsupported signing key type in $key (use ecdsa-p256, ed25519 or rsa-2048/3072)" >&2
+        return 1
+    fi
+    echo "-DCONFIG_BOOT_SIGNATURE_KEY_FILE=\"$key\""
+}
+
+# Check the built MCUboot enforces signed, non-downgrading updates. Fatal for
+# --release builds, a warning otherwise.
+check_mcuboot_secure_update() {
+    local cfg="$1/zephyr/.config"
+    local problems=()
+    [[ -f "$cfg" ]] || return 0
+    if grep -q "^CONFIG_BOOT_SIGNATURE_TYPE_NONE=y" "$cfg"; then
+        problems+=("MCUboot checks only a hash, no signature (BOOT_SIGNATURE_TYPE_NONE) - build with -k <key.pem>")
+    fi
+    local key
+    key="$(sed -n 's/^CONFIG_BOOT_SIGNATURE_KEY_FILE="\(.*\)"$/\1/p' "$cfg")"
+    if [[ "$(basename "$key")" =~ ^root-(rsa-2048|rsa-3072|ec-p256|ec-p384|ed25519)(-pkcs8)?\.pem$ ]]; then
+        problems+=("MCUboot trusts its public development key ($(basename "$key"))")
+    fi
+    if ! grep -q "^CONFIG_MCUBOOT_DOWNGRADE_PREVENTION=y" "$cfg"; then
+        problems+=("MCUboot downgrade prevention is off")
+    fi
+    if [[ ${#problems[@]} -eq 0 ]]; then
+        print_success "MCUboot verifies signed images and refuses downgrades"
+        return 0
+    fi
+    local p
+    for p in "${problems[@]}"; do
+        if [[ "$RELEASE_BUILD" == true ]]; then
+            print_error "$p"
+        else
+            print_warning "$p"
+        fi
+    done
+    if [[ "$RELEASE_BUILD" == true ]]; then
+        print_error "Release build blocked: the bootloader does not enforce secure updates"
+        exit 1
+    fi
+}
+
 build_mcuboot() {
     local zephyr_board="${BOARD_MAP[$BOARD]}"
     local board_id="${BOARD_ID[$BOARD]:-$BOARD}"
@@ -305,10 +373,19 @@ build_mcuboot() {
         esp32|esp32s2|esp32s3)
             mcuboot_confs+=("$SCRIPT_DIR/boards/mcuboot-swap-move.conf") ;;
     esac
-    # Board-specific overrides (boards/<board>.mcuboot.conf) go last so they win.
+    # Board-specific overrides (boards/<board>.mcuboot.conf) win over the above.
     local mcuboot_conf="$SCRIPT_DIR/boards/${board_id}.mcuboot.conf"
     if [[ -f "$mcuboot_conf" ]]; then
         mcuboot_confs+=("$mcuboot_conf")
+    fi
+    # With a product key, verify signatures and refuse downgrades. Applied after
+    # the board overrides so a board file cannot weaken it.
+    if [[ -n "$SIGN_KEY" ]]; then
+        local sig_opts
+        sig_opts="$(mcuboot_signature_options "$SIGN_KEY")" || exit 1
+        extra_cmake+=" $(echo $sig_opts)"
+        mcuboot_confs+=("$SCRIPT_DIR/boards/mcuboot-secure-update.conf")
+        print_info "MCUboot signing key: $SIGN_KEY"
     fi
     if [[ ${#mcuboot_confs[@]} -gt 0 ]]; then
         local conf_list
@@ -340,6 +417,7 @@ build_mcuboot() {
     if [[ $build_rc -eq 0 ]]; then
         print_success "MCUboot build complete!"
         print_info "Binary: $build_dir/zephyr/zephyr.bin"
+        check_mcuboot_secure_update "$build_dir"
     else
         print_error "MCUboot build failed!"
         exit 1
@@ -375,7 +453,20 @@ build_application() {
         extra_cmake+=" -DEXTRA_ZEPHYR_MODULES=$platform_path"
         print_info "AkiraPlatform enabled: $platform_path"
     fi
-    
+
+    # Sign with the product key (overrides any board's development key). The key
+    # option depends on !MCUBOOT_GENERATE_UNSIGNED_IMAGE, which Espressif SoCs
+    # turn on by default, so turn it off too.
+    if [[ -n "$SIGN_KEY" && "$BOARD" != "native_sim" ]]; then
+        extra_cmake+=" -DCONFIG_MCUBOOT_GENERATE_UNSIGNED_IMAGE=n"
+        extra_cmake+=" -DCONFIG_MCUBOOT_SIGNATURE_KEY_FILE=\"$SIGN_KEY\""
+        print_info "Signing key: $SIGN_KEY"
+    fi
+    if [[ "$RELEASE_BUILD" == true ]]; then
+        extra_cmake+=" -DSNIPPET=akira-release"
+        print_info "Release build (akira-release snippet): development-only settings are errors"
+    fi
+
     if west build --pristine -b "$zephyr_board" AkiraOS -d "$build_dir" -- $extra_cmake; then
         print_success "AkiraOS build complete!"
         print_info "Binary: $build_dir/zephyr/zephyr.bin"
@@ -833,6 +924,18 @@ parse_args() {
                 ;;
             --platform)
                 ENABLE_PLATFORM=true
+                shift
+                ;;
+            -k)
+                if [[ ! -f "$2" ]]; then
+                    print_error "Signing key not found: $2"
+                    exit 1
+                fi
+                SIGN_KEY="$(realpath "$2")"
+                shift 2
+                ;;
+            --release)
+                RELEASE_BUILD=true
                 shift
                 ;;
             -p)

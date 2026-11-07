@@ -199,17 +199,19 @@ static ssize_t ota_data_write(struct bt_conn *conn,
 BT_GATT_SERVICE_DEFINE(ota_svc,
     BT_GATT_PRIMARY_SERVICE(OTA_SERVICE_UUID),
     
-    /* Control Characteristic */
+    /* Control Characteristic
+     * (encrypted link required — starts, aborts and finishes a firmware update) */
     BT_GATT_CHARACTERISTIC(OTA_CONTROL_UUID,
                           BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY,
-                          BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+                          BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT,
                           ota_control_read, ota_control_write, NULL),
     BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-    
-    /* Data Characteristic */
+
+    /* Data Characteristic
+     * (encrypted link required — carries the firmware image) */
     BT_GATT_CHARACTERISTIC(OTA_DATA_UUID,
                           BT_GATT_CHRC_WRITE_WITHOUT_RESP,
-                          BT_GATT_PERM_WRITE,
+                          BT_GATT_PERM_WRITE_ENCRYPT,
                           NULL, ota_data_write, NULL),
 );
 

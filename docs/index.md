@@ -49,8 +49,8 @@ AkiraOS is a production-ready embedded operating system that enables **secure, d
 ### Core Features
 
 - **Zero-Trust Execution** — WASM sandboxing + capability-based access control
-- **Real-Time Performance** — Zephyr RTOS with <60 ns native call overhead
-- **AOT Compilation** — Optional native code execution (10–50x faster than interpreter)
+- **Real-Time Kernel** — Zephyr RTOS scheduling underneath the WASM runtime
+- **AOT Compilation** — Optional ahead-of-time compiled machine code instead of the WAMR classic interpreter ([speed-up not yet measured](resources/performance.md#webassembly-execution-speed))
 - **OTA Updates** — MCUboot secure firmware updates with rollback
 - **Multi-Platform** — 17 build targets: ESP32/-S3/-C3/-C6/-H2, nRF54L15, STM32, RP2040/RP2350, native simulation
 - **Modular Connectivity** — WiFi, Bluetooth, USB
@@ -58,18 +58,18 @@ AkiraOS is a production-ready embedded operating system that enables **secure, d
 
 ### Key Metrics
 
-These are indicative design targets on ESP32-S3, not audited benchmark results. The
-reproducible benchmark suite lives in
+Timing figures are not published yet: see [Performance](resources/performance.md)
+for what will be measured and how. The reproducible benchmark suite lives in
 [`bench/akiraclaw_bench/`](https://github.com/ArturR0k3r/AkiraOS/tree/main/bench/akiraclaw_bench)
 (B1–B5: WASM vs native, MPU, audit log, memory, BLE).
 
-| Metric | Target |
-|--------|--------|
-| Native call overhead | ~60 ns |
-| WASM load time (100 KB app) | ~80 ms |
-| Max concurrent apps | 2 (`CONFIG_AKIRA_APP_MAX_RUNNING`) |
+| Metric | Value |
+|--------|-------|
+| Native call overhead | [Not yet measured](resources/performance.md#capability-guard-overhead) |
+| WASM load time (100 KB app) | Not yet measured |
+| Max concurrent apps | 2 by default (`CONFIG_AKIRA_APP_MAX_RUNNING`) |
 | Memory per app | 64–256 KB configurable |
-| Boot time | ~500 ms (ESP32-S3) |
+| Boot time | Not yet measured |
 
 [Learn more about the architecture](architecture)
 
@@ -97,7 +97,7 @@ Deep dive into system design, components, and data flows.
 - [Connectivity Layer](architecture/connectivity.md) — Network protocols
 - [Advanced Connectivity](architecture/advanced-connectivity.md) — Matter, Thread, AkiraMesh
 - [Radio Abstraction Layer](architecture/radio.md) — RF driver layering
-- [AOT Compilation](architecture/aot-compilation.md) — Native code compilation for 10–50x performance
+- [AOT Compilation](architecture/aot-compilation.md) — Ahead-of-time compilation of WASM apps to machine code
 - [Scheduling & Watchdog](architecture/scheduling-and-watchdog.md) — Cooperative model and watchdog contract
 - [Data Flow](architecture/data-flow.md) — End-to-end diagrams
 - [OTA Design](ota_design.md) — MCUboot slots, boot guard, delta updates
@@ -176,7 +176,7 @@ Additional learning materials and references.
 - [FAQ](resources/faq.md) — Frequently asked questions
 - [Glossary](resources/glossary.md) — Technical terms
 - [Performance](resources/performance.md) — Benchmarks
-- [Release Notes](resources/release-notes.md) — Release history through v1.6.5
+- [Release Notes](resources/release-notes.md) — Release history through v1.6.7
 - [Support & Compatibility](resources/support-policy.md) — Release channels, LTS, version matrix
 - [SBOM (CycloneDX)](compliance/sbom-cyclonedx.md) — Software Bill of Materials
 
@@ -242,4 +242,4 @@ Third-party components: Zephyr RTOS, WASM Micro Runtime (WAMR), MCUboot, ESP-IDF
 
 ---
 
-*Last updated: 2026-09-14 (AkiraOS v1.6.5)*
+*Last updated: 2026-09-14 (AkiraOS v1.6.7)*

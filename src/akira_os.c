@@ -233,10 +233,12 @@ int akira_start(void)
 #else
             "disabled",
 #endif
-#ifdef CONFIG_AKIRA_APP_SIGNING
-            "enforced",
+#if defined(CONFIG_AKIRA_REQUIRE_SIGNED_APPS)
+            "required",
+#elif defined(CONFIG_AKIRA_HARDEN_UNATTESTED_APPS)
+            "unattested apps unprivileged",
 #else
-            "permissive",
+            "not verified",
 #endif
 #ifdef CONFIG_AKIRA_WASM_INTEGRITY_CHECK
             "enabled",

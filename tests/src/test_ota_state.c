@@ -12,6 +12,7 @@
  */
 
 #include <zephyr/ztest.h>
+#include <zephyr/dfu/mcuboot.h>
 #include <string.h>
 #include <stdint.h>
 
@@ -20,11 +21,25 @@
 /* Exported by stubs/stub_mcuboot.c */
 extern int stub_boot_request_upgrade_rc;
 extern int stub_boot_write_img_confirmed_rc;
+extern struct mcuboot_img_header stub_slot0_header;
+extern struct mcuboot_img_header stub_slot1_header;
 
 /* MCUboot image header magic expected by do_finalize_update() */
 #define OTA_IMAGE_MAGIC 0x96f3b83dU
 
 /* ── suite setup/teardown ────────────────────────────────────────────────── */
+
+/** Set the MCUboot header version the stub reports for a slot. */
+static void set_slot_version(struct mcuboot_img_header *hdr, uint8_t major,
+                             uint8_t minor, uint16_t revision)
+{
+    memset(hdr, 0, sizeof(*hdr));
+    hdr->mcuboot_version = 1;
+    hdr->h.v1.image_size = 0x1000;
+    hdr->h.v1.sem_ver.major = major;
+    hdr->h.v1.sem_ver.minor = minor;
+    hdr->h.v1.sem_ver.revision = revision;
+}
 
 static void ota_before(void *arg)
 {
@@ -33,6 +48,10 @@ static void ota_before(void *arg)
     /* Reset stub return codes to "success" */
     stub_boot_request_upgrade_rc = 0;
     stub_boot_write_img_confirmed_rc = 0;
+
+    /* Running and staged images at the same version: not a downgrade. */
+    set_slot_version(&stub_slot0_header, 1, 6, 5);
+    set_slot_version(&stub_slot1_header, 1, 6, 5);
 
     /* Make sure any previous update is cleaned up */
     ota_abort_update();
@@ -264,6 +283,64 @@ ZTEST(ota_state, test_zero_length_chunk_rejected)
 
     zassert_equal(rc, OTA_ERROR_INVALID_PARAM,
                   "zero length chunk should give INVALID_PARAM");
+}
+
+ZTEST(ota_state, test_finalize_refuses_downgrade)
+{
+    if (!IS_ENABLED(CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE) ||
+        ota_start_update(0) != OTA_OK)
+    {
+        ztest_test_skip();
+    }
+
+    set_slot_version(&stub_slot1_header, 1, 6, 4);
+    write_valid_magic();
+
+    zassert_equal(ota_finalize_update(), OTA_ERROR_INVALID_IMAGE,
+                  "an image older than the running one must be refused");
+    zassert_equal(ota_get_progress()->state, OTA_STATE_ERROR,
+                  "a refused downgrade must leave the OTA state in ERROR");
+}
+
+ZTEST(ota_state, test_finalize_accepts_newer_and_equal_versions)
+{
+    if (!IS_ENABLED(CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE))
+    {
+        ztest_test_skip();
+    }
+
+    /* Newer revision, newer minor with lower revision, same version. */
+    const uint8_t versions[][3] = { {1, 6, 6}, {1, 7, 0}, {1, 6, 5} };
+
+    for (size_t i = 0; i < ARRAY_SIZE(versions); i++)
+    {
+        ota_abort_update();
+        if (ota_start_update(0) != OTA_OK)
+        {
+            ztest_test_skip();
+        }
+        set_slot_version(&stub_slot1_header, versions[i][0], versions[i][1],
+                         versions[i][2]);
+        write_valid_magic();
+        zassert_equal(ota_finalize_update(), OTA_OK, "version %u.%u.%u refused",
+                      versions[i][0], versions[i][1], versions[i][2]);
+    }
+}
+
+ZTEST(ota_state, test_finalize_refuses_unreadable_header)
+{
+    if (!IS_ENABLED(CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE) ||
+        ota_start_update(0) != OTA_OK)
+    {
+        ztest_test_skip();
+    }
+
+    /* image_size 0: the stub reports "no valid image" for the staged slot. */
+    stub_slot1_header.h.v1.image_size = 0;
+    write_valid_magic();
+
+    zassert_equal(ota_finalize_update(), OTA_ERROR_INVALID_IMAGE,
+                  "the downgrade check must fail closed");
 }
 
 ZTEST_SUITE(ota_state, NULL, NULL, ota_before, NULL, NULL);

@@ -46,6 +46,18 @@ if(NOT CONFIG_AKIRA_APP_SIGNING)
   list(APPEND _akira_findings
     "CONFIG_AKIRA_APP_SIGNING is not set - WASM app signatures are not verified")
 endif()
+# Without a platform verifier (REQUIRE_SIGNED_APPS) no app is attested, so the
+# sandbox alone has to hold: no privileged grants, no AOT, full WAMR validation.
+if(CONFIG_AKIRA_WASM_RUNTIME AND NOT CONFIG_AKIRA_REQUIRE_SIGNED_APPS)
+  if(NOT CONFIG_AKIRA_HARDEN_UNATTESTED_APPS)
+    list(APPEND _akira_findings
+      "CONFIG_AKIRA_HARDEN_UNATTESTED_APPS is not set - unattested apps can be granted privileged capabilities and load AOT native code")
+  endif()
+  if(CONFIG_AKIRA_WAMR_MINI_LOADER)
+    list(APPEND _akira_findings
+      "CONFIG_AKIRA_WAMR_MINI_LOADER=y - WAMR skips module validation for apps no verifier has authenticated")
+  endif()
+endif()
 
 # --- MCUboot firmware images ------------------------------------------------
 if(CONFIG_BOOTLOADER_MCUBOOT)
@@ -59,6 +71,28 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
     list(APPEND _akira_findings
       "CONFIG_MCUBOOT_GENERATE_UNSIGNED_IMAGE=y with no signature key - firmware images are unsigned")
   endif()
+endif()
+
+# --- Debug interfaces -------------------------------------------------------
+if(CONFIG_SHELL_BACKEND_TELNET)
+  list(APPEND _akira_findings
+    "CONFIG_SHELL_BACKEND_TELNET=y - an unauthenticated shell listens on the network")
+endif()
+if(CONFIG_AKIRA_SHELL_DEBUG_COMMANDS)
+  list(APPEND _akira_findings
+    "CONFIG_AKIRA_SHELL_DEBUG_COMMANDS=y - `debug memdump` reads arbitrary memory")
+endif()
+
+# Advisories: printed in release builds, never fatal. They need a deployment
+# decision rather than a code change (see docs/compliance/sesip-evaluated-configuration.md).
+set(_akira_advisories "")
+if(CONFIG_SHELL)
+  list(APPEND _akira_advisories
+    "CONFIG_SHELL=y - the serial/USB shell has no login, so turn it off or lock the port in production")
+endif()
+if(CONFIG_AKIRA_RELEASE_BUILD AND _akira_advisories)
+  list(JOIN _akira_advisories "\n  - " _akira_advisory_text)
+  message(WARNING "AkiraOS release build advisories:\n  - ${_akira_advisory_text}")
 endif()
 
 # --- Report -----------------------------------------------------------------
