@@ -94,6 +94,17 @@ if(CONFIG_AKIRA_WASM_RUNTIME)
     set(WAMR_BUILD_REF_TYPES        1)
     include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
     target_sources(app PRIVATE ${WAMR_RUNTIME_LIB_SOURCE})
+    # WAMR's zephyr platform header declares a zephyr_fs_desc with struct
+    # fs_file_t/fs_dir_t but never includes <zephyr/fs/fs.h>; in the OS build the
+    # WAMR Zephyr library picks it up transitively, but this standalone bench
+    # build does not. Force-include it for the WAMR C/C++ sources only (not the
+    # .S assembly files, which would choke on a C header).
+    foreach(_wamr_src ${WAMR_RUNTIME_LIB_SOURCE})
+        if(_wamr_src MATCHES "\\.(c|cc|cpp|cxx)$")
+            set_source_files_properties(${_wamr_src} PROPERTIES
+                COMPILE_OPTIONS "-include;zephyr/fs/fs.h")
+        endif()
+    endforeach()
     target_include_directories(app PRIVATE
         ${WAMR_ROOT_DIR}/core/iwasm/include
         ${WAMR_ROOT_DIR}/core/shared
