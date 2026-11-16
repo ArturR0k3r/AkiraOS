@@ -80,6 +80,7 @@ typedef struct {
     struct k_condvar cond_exit; /**< Broadcast when thread exits */
 
     uint64_t cap_mask;        /**< capability bitmask from manifest */
+    bool attested;            /**< an admission provider trusted its signature */
     uint32_t memory_quota;    /**< memory quota from manifest (0 = unlimited) */
     atomic_t memory_used;     /**< current memory usage (bytes) — updated atomically */
     char commands_json[MANIFEST_COMMANDS_JSON_MAX_LEN]; /**< raw "commands" array from manifest */
@@ -140,6 +141,19 @@ int akira_runtime_stop(int instance_id);
  * If manifest_json is NULL, no manifest is saved. Returns instance id or negative on error.
  */
 int akira_runtime_install_with_manifest(const char *name, const void *binary, size_t size, const char *manifest_json, size_t manifest_size);
+
+struct akira_admission_record;
+/**
+ * @brief Load an installed app, checking it against its admission record.
+ *
+ * @param record  Record written at install (akira_admission.h), or NULL when
+ *                there is none. A binary or stored manifest that no longer
+ *                matches the record is refused with -EACCES.
+ * @return slot id, or negative errno.
+ */
+int akira_runtime_install_admitted(const char *name, const void *binary, size_t size,
+                                   const char *manifest_json, size_t manifest_size,
+                                   const struct akira_admission_record *record);
 int akira_runtime_install(const char *name, const void *binary, size_t size);
 
 /* Destroy/uninstall helpers */

@@ -6,8 +6,10 @@
  * complete (BENCH_TS_STOP).
  *
  * Two sub-measurements:
- *   hmac_enabled=true   — CONFIG_AKIRA_AUDIT_LOG_HMAC=y (prj_hmac.conf)
- *   hmac_enabled=false  — CONFIG_AKIRA_AUDIT_LOG_HMAC=n (baseline)
+ *   hmac_enabled is always false since 1.7: audit records are no longer
+ *   signed on the write path. Signing happens in an audit sink
+ *   (include/akira_audit.h) on the system workqueue, so the write cost
+ *   measured here is the whole cost an event source pays.
  *
  * The benchmark can only measure the build it was compiled with.  Run once
  * with each prj.conf and compare audit_write_avg_ns.
@@ -85,7 +87,7 @@ void bench_b3_run(void)
 
 #ifndef CONFIG_AKIRA_SECURITY_AUDIT
     result.mock_mode   = true;
-    result.mock_reason = "CONFIG_AKIRA_SECURITY_AUDIT=n; rebuild with prj_hmac.conf or prj.conf";
+    result.mock_reason = "CONFIG_AKIRA_SECURITY_AUDIT=n; rebuild with prj.conf";
     bench_print_b3(&result);
     return;
 #else
@@ -120,13 +122,8 @@ void bench_b3_run(void)
 
     /* audit_nohmac_avg_ns: only meaningful when comparing across two builds.
      * In the HMAC build, set to 0 (the no-HMAC build populates it). */
-#ifdef CONFIG_AKIRA_AUDIT_LOG_HMAC
-    result.hmac_enabled      = true;
-    result.audit_nohmac_avg_ns = 0; /* populate from non-HMAC build run */
-#else
     result.hmac_enabled        = false;
     result.audit_nohmac_avg_ns = result.audit_write_avg_ns;
-#endif
 
     bench_print_b3(&result);
 

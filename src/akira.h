@@ -14,6 +14,7 @@
 #ifndef AKIRA_CORE_H
 #define AKIRA_CORE_H
 
+#include <akira_os.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <stdint.h>
@@ -147,15 +148,7 @@ extern "C"
      */
     int akira_init(void);
 
-    /**
-     * @brief Start AkiraOS
-     *
-     * Starts all registered services and enters the main loop.
-     * This function does not return under normal operation.
-     *
-     * @return AKIRA_OK if shutdown was requested, error code on failure
-     */
-    int akira_start(void);
+    /* akira_start() is declared in include/akira_os.h (included above). */
 
     /**
      * @brief Request AkiraOS shutdown

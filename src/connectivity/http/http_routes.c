@@ -87,6 +87,20 @@ static bool route_check_auth(const http_request_t *req)
 #endif /* CONFIG_AKIRA_HTTP_NO_AUTH */
 }
 
+/* Reply 401 unless the request carries the upload token. Every route that
+ * changes device state (install, start, stop, delete, firmware) uses it. */
+static bool route_require_auth(const http_request_t *req, http_response_t *res)
+{
+    if (route_check_auth(req))
+    {
+        return true;
+    }
+    res->status_code = 401;
+    res->content_type = HTTP_CONTENT_JSON;
+    res->body = "{\"error\":\"Unauthorized\"}";
+    return false;
+}
+
 /*===========================================================================*/
 /* Query-param helper                                                        */
 /*===========================================================================*/
@@ -159,11 +173,15 @@ static int route_info(const http_request_t *req, http_response_t *res,
              "\"zephyr\":\"%s\","
              "\"wamr\":\"%s\","
              "\"board\":\"%s\","
-             "\"chip\":\"%s\"}",
+             "\"chip\":\"%s\","
+             "\"serial\":\"%s\","
+             "\"org\":\"%s\","
+             "\"cert_sha256\":\"%s\"}",
              CONFIG_AKIRA_DEVICE_NAME,
              id.akira_version, id.akira_revision, id.image_version,
              id.zephyr_version, id.wamr_version, id.board,
-             akira_get_platform_name());
+             akira_get_platform_name(), id.provisioned.serial,
+             id.provisioned.org, id.provisioned.cert_sha256);
 
     res->status_code = 200;
     res->content_type = HTTP_CONTENT_JSON;
@@ -283,6 +301,10 @@ static int route_app_start(const http_request_t *req, http_response_t *res,
                            void *user_data)
 {
 #ifdef CONFIG_AKIRA_APP_MANAGER
+    if (!route_require_auth(req, res))
+    {
+        return 0;
+    }
     char name[APP_NAME_MAX_LEN] = {0};
     if (!query_param(req->query, "name", name, sizeof(name)) || name[0] == '\0')
     {
@@ -320,6 +342,10 @@ static int route_app_stop(const http_request_t *req, http_response_t *res,
                           void *user_data)
 {
 #ifdef CONFIG_AKIRA_APP_MANAGER
+    if (!route_require_auth(req, res))
+    {
+        return 0;
+    }
     char name[APP_NAME_MAX_LEN] = {0};
     if (!query_param(req->query, "name", name, sizeof(name)) || name[0] == '\0')
     {
@@ -357,6 +383,10 @@ static int route_app_delete(const http_request_t *req, http_response_t *res,
                             void *user_data)
 {
 #ifdef CONFIG_AKIRA_APP_MANAGER
+    if (!route_require_auth(req, res))
+    {
+        return 0;
+    }
     char name[APP_NAME_MAX_LEN] = {0};
     if (!query_param(req->query, "name", name, sizeof(name)) || name[0] == '\0')
     {

@@ -95,7 +95,7 @@ CONFIG_AKIRA_OS=y      # every CONFIG_AKIRA_* option depends on this
 
 ```c
 /* src/main.c */
-#include <akira.h>
+#include <akira_os.h>
 
 int main(void)
 {
@@ -160,15 +160,18 @@ module's `akira-board` snippet for an AkiraOS board.
 
 ## 5. The four extension points
 
+Since 1.7 product code includes only headers from `include/`; the full list,
+including the provider APIs (admission, network policy, settings key, audit,
+identity), is in [Extension points](../api-reference/extension-points.md).
+
 Everything a product adds registers itself through link-time tables — no edits
 to AkiraOS. Put these in a subsystem compiled **into the application** (see the
 gotcha below), for example `subsys/widget/widget.c`:
 
 ```c
-#include <akira_capability.h>
+#include <akira_capability.h>     /* also AKIRA_CHECK_CAP_OR_RETURN() */
 #include <akira_native_registry.h>
 #include <akira_hooks.h>
-#include <runtime/security.h>
 
 /* (a) A product capability, in the vendor range 48-63. Apps request it by name
  *     in their manifest ("widget.actuate"). A duplicate bit fails to link. */

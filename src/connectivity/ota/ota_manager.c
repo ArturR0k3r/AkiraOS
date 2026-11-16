@@ -7,6 +7,7 @@
  */
 
 #include "ota_manager.h"
+#include <akira_hooks.h>
 #include "../transport_interface.h"
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/reboot.h>
@@ -222,6 +223,16 @@ static inline void set_error_fast(enum ota_result error)
     ota_status.last_error = error;
 }
 
+/* Raise an OTA hook event (akira_hooks.h). Called without ota_mutex held. */
+static void ota_emit(enum akira_hook_event_type type, enum ota_state state, int error)
+{
+    struct akira_hook_event e = {
+        .type = type,
+        .ota = { .state = (int)state, .error = error },
+    };
+    akira_hooks_emit(&e);
+}
+
 static void set_error(enum ota_result error, const char *message)
 {
     k_mutex_lock(&ota_mutex, K_FOREVER);
@@ -232,6 +243,7 @@ static void set_error(enum ota_result error, const char *message)
         ota_status.status_message[sizeof(ota_status.status_message) - 1] = '\0';
     }
     k_mutex_unlock(&ota_mutex);
+    ota_emit(AKIRA_HOOK_OTA_ERROR, OTA_STATE_ERROR, (int)error);
 
     if (progress_callback)
     {
@@ -363,6 +375,7 @@ static enum ota_result do_start_update(uint32_t expected_size)
 
     update_progress(OTA_STATE_RECEIVING, "Ready");
     LOG_INF("OTA started, slot prepared");
+    ota_emit(AKIRA_HOOK_OTA_STARTED, OTA_STATE_RECEIVING, 0);
     return OTA_OK;
 }
 
@@ -658,6 +671,7 @@ static enum ota_result do_finalize_update(void)
 
     update_progress(OTA_STATE_COMPLETE, "Ready - reboot to apply");
     LOG_INF("OTA complete");
+    ota_emit(AKIRA_HOOK_OTA_STAGED, OTA_STATE_COMPLETE, 0);
     return OTA_OK;
 }
 
@@ -694,10 +708,17 @@ static enum ota_result do_abort_update(void)
 static enum ota_result do_confirm_firmware(void)
 {
 #ifdef CONFIG_AKIRA_BOOT_GUARD
-    /* Let the boot guard end the trial (deadline, rollback record) too. */
+    /* Let the boot guard end the trial (deadline, rollback record) too. It
+     * raises AKIRA_HOOK_OTA_CONFIRMED. */
     int ret = akira_boot_guard_confirm();
 #else
+    bool was_trial = !boot_is_img_confirmed();
     int ret = boot_write_img_confirmed();
+
+    if (ret == 0 && was_trial)
+    {
+        ota_emit(AKIRA_HOOK_OTA_CONFIRMED, OTA_STATE_IDLE, 0);
+    }
 #endif
     return (ret == 0) ? OTA_OK : OTA_ERROR_BOOT_REQUEST_FAILED;
 }
@@ -1211,6 +1232,8 @@ const char *ota_state_to_string(enum ota_state state)
 
 void ota_reboot_to_apply_update(uint32_t delay_ms)
 {
+    /* Last chance for subscribers to persist state before the reboot. */
+    ota_emit(AKIRA_HOOK_OTA_PRE_REBOOT, OTA_STATE_COMPLETE, 0);
     LOG_INF("Scheduling reboot in %u ms", delay_ms);
     if (delay_ms > 0)
     {

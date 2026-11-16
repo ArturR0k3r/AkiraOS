@@ -10,6 +10,34 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `feat(security)`: App admission (`include/akira_admission.h`). Providers registered with
+  `AKIRA_APP_ADMISSION_DEFINE()` see every install (HTTP, BLE, USB, SD, shell, fleet) with
+  the binary hash, package digest and signatures, and every load (including SD-XIP and cloud
+  loads). They can refuse an app, attest it, or clamp its capabilities. The install verdict
+  is kept in an admission record bound to the binary and stored manifest by SHA-256; a load
+  whose bytes changed is refused. `attested` is now a per-app result that drives
+  `akira_capability_grant()` and the AOT rule, replacing the compile-time flag.
+- `feat(security)`: Baseline app signature check. `CONFIG_AKIRA_APP_PUBKEY` (Ed25519 public
+  key) attests `.akpkg` packages whose `sig.ed25519` (written by `akira-cli sign`) verifies.
+  With `CONFIG_AKIRA_REQUIRE_SIGNED_APPS=y`, apps nobody attested are refused at install and
+  load. Ed25519 verification (`include/akira_ed25519.h`) is the fiat-crypto verifier from
+  MCUboot (MIT), since mbedTLS 3 has no EdDSA.
+- `feat(security)`: Network egress policy providers (`include/akira_net_policy.h`) gate WASM
+  `net_connect`, `net_bind`, `net_listen` and the URLs `ota_check` / `ota_fetch_and_apply`
+  fetch; the manifest's `network_policy` reaches providers through admission.
+- `feat(security)`: Settings key providers (`include/akira_keyprovider.h`), audit sinks and
+  `akira_audit_emit()` (`include/akira_audit.h`, sequence-numbered, delivered outside the
+  audit lock with drop accounting), and identity providers for the provisioned serial,
+  organisation and certificate fingerprint (`include/akira_identity.h`, shown by
+  `akira version` and `GET /api/v1/info`).
+- `feat(api)`: Public façades for product firmware and device-management modules:
+  `akira_os.h` (`akira_start()`), `akira_apps.h`, `akira_ota.h`, `akira_wifi.h`,
+  `akira_mem.h`. `AKIRA_CHECK_CAP_OR_RETURN()` and friends move to `akira_capability.h`.
+- `feat(hooks)`: The ten declared-but-silent events are now raised: `NET_UP` / `NET_DOWN`,
+  `BT_CONNECTED` / `BT_DISCONNECTED`, `USB_CONFIGURED` / `USB_DISCONNECTED`, `OTA_STARTED`,
+  `OTA_STAGED`, `OTA_PRE_REBOOT`, `APP_FAILED`; `OTA_ERROR` also covers download, hash and
+  downgrade failures. App events carry `registry_id`.
+- `docs(api)`: `docs/api-reference/extension-points.md`.
 - `feat(bench)`: Added `bench/exec_speed` — a WebAssembly execution-speed benchmark that runs
   one identical compute kernel three ways (native C, WAMR classic interpreter, and `wamrc` AOT)
   and times each with `CCOUNT`, asserting all three results match. Measured on ESP32-S3 at
@@ -48,6 +76,38 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `zephyr.bin`. `west akira release` now also collects `.uf2` and `.hex`.
 
 ---
+
+
+### Changed
+- `feat(security)!`: `akira_capability_grant(requested, attested, ...)`: the second argument
+  is the admission verdict, no longer "manifest embedded in the binary". A signed package's
+  JSON manifest is covered by its signature and by the admission record, so signed apps no
+  longer need an embedded manifest to be attested.
+- `fix(ota)`: `ota_manager_init()` runs whenever OTA is built (MCUboot + flash map), not only
+  with the HTTP server, so release builds (`HTTP_SERVER=n`) can update.
+- `chore(version)`: 1.7.0.
+
+### Deprecated
+- `CONFIG_AKIRA_CLOUD_CLIENT` (`src/connectivity/cloud`) now defaults to `n` and selects
+  `DEPRECATED`; removal in 1.9. It never had a working transport. The BLE companion's
+  `apps.update` replies "update not supported" without it.
+
+### Removed
+- The header-less weak hooks `akira_settings_get_encryption_key()`,
+  `akira_net_policy_check(app_id, host, port)`, `akira_platform_allowlist_verify()` and
+  `akira_platform_pqc_verify()`, replaced by the provider APIs above.
+- `CONFIG_AKIRA_AUDIT_LOG_HMAC` / `CONFIG_AKIRA_PLATFORM_AUDIT_HMAC` and the per-entry
+  `hmac` field: core no longer includes a commercial header or signs audit records under a
+  spinlock; sign in an audit sink instead. The akiraclaw bench `prj_hmac.conf` variant goes
+  with it.
+
+### Fixed
+- `fix(http)`: `POST /api/v1/apps/start`, `/stop` and `DELETE /api/v1/apps` now require the
+  upload token like install and firmware upload did.
+- `fix(config)`: `CONFIG_AKIRA_APP_MAX_INSTALLED` range raised to 32 (24 in `prj.conf` broke
+  configuration); the registry buffers moved off the stack.
+- `fix(build)`: `CONFIG_AKIRA_OS_SHELL=y` without `src/console_shell/` now fails with a clear
+  message; removed eight non-existent include directories from the `akira_os` target.
 
 ## [1.6.7] — 2026-11-07
 

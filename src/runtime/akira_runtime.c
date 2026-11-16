@@ -7,6 +7,7 @@
  * Optimized for low SRAM usage with chunked WASM loading and PSRAM fallback.
  */
 
+#include <akira_admission.h>
 #include "akira_runtime.h"
 #include "manifest_parser.h"
 #include "akira_abi_check.h"
@@ -457,7 +458,9 @@ int akira_runtime_init(void)
  * allocated from PSRAM when available to minimize SRAM pressure.
  */
 static int load_wasm_ex(const uint8_t *buffer, uint32_t size,
-                        const char *manifest_json, size_t manifest_len)
+                        const char *manifest_json, size_t manifest_len,
+                        const char *app_name,
+                        const struct akira_admission_record *record)
 {
     if (!atomic_get(&g_runtime_initialized))
     {
@@ -493,21 +496,6 @@ static int load_wasm_ex(const uint8_t *buffer, uint32_t size,
     }
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
-    /* ===== Step 0: AOT needs an attested app =====
-     * An AOT file is native code; WAMR's bounds checks only confine it if wamrc
-     * produced it, which the loader cannot tell. Without a signature verifier
-     * (CONFIG_AKIRA_REQUIRE_SIGNED_APPS) a hardened build runs interpreted
-     * WASM only. */
-    if (IS_ENABLED(CONFIG_AKIRA_HARDEN_UNATTESTED_APPS) &&
-        !IS_ENABLED(CONFIG_AKIRA_REQUIRE_SIGNED_APPS) &&
-        memcmp(buffer, "\0aot", 4) == 0)
-    {
-        LOG_ERR("AOT binary refused: AOT apps need CONFIG_AKIRA_REQUIRE_SIGNED_APPS");
-        sandbox_audit_log(AUDIT_EVENT_INTEGRITY_FAIL, "aot_unattested", size);
-        g_apps[slot].used = false; /* release reserved slot */
-        return -EPERM;
-    }
-
     /* ===== Step 1: Integrity verification ===== */
     uint8_t binary_hash[32];
     int integrity_ret = app_verify_wasm_integrity(buffer, size, binary_hash);
@@ -554,6 +542,72 @@ static int load_wasm_ex(const uint8_t *buffer, uint32_t size,
     {
         g_apps[slot].used = false; /* release reserved slot */
         return abi_ret;
+    }
+
+    /* ===== Step 3b: Admission (akira_admission.h) =====
+     * Every load path reaches here. The record written at install binds the
+     * app to its binary and to the manifest JSON stored next to it; a load
+     * whose bytes differ from what was admitted is refused outright. */
+    const char *adm_name = app_name ? app_name :
+                           (manifest.valid && manifest.name[0] ? manifest.name : "");
+    bool json_in_use = !manifest_from_binary && manifest_json && manifest_len > 0;
+    uint8_t manifest_hash[32];
+
+    if (json_in_use &&
+        app_compute_hash(manifest_json, manifest_len, manifest_hash) != 0)
+    {
+        g_apps[slot].used = false;
+        return -EIO;
+    }
+    if (record)
+    {
+        /* No JSON at install leaves manifest_sha256 all-zero, so a sidecar
+         * JSON added later never matches. */
+        bool bin_ok = memcmp(record->binary_sha256, binary_hash, 32) == 0;
+        bool mf_ok = !json_in_use ||
+                     memcmp(record->manifest_sha256, manifest_hash, 32) == 0;
+        if (!bin_ok || !mf_ok)
+        {
+            LOG_ERR("'%s' does not match what was admitted at install (%s changed)",
+                    adm_name, bin_ok ? "manifest" : "binary");
+            sandbox_audit_log(AUDIT_EVENT_INTEGRITY_FAIL, adm_name, bin_ok ? 2 : 1);
+            g_apps[slot].used = false;
+            return -EACCES;
+        }
+    }
+
+    uint64_t requested_mask = manifest.valid ? manifest.cap_mask : 0;
+    struct akira_admission_ctx adm_ctx = {
+        .phase = AKIRA_ADMISSION_LOAD,
+        .source = record ? (enum akira_app_source)record->source
+                         : AKIRA_APP_SOURCE_UNKNOWN,
+        .name = adm_name,
+        .version = manifest.valid ? manifest.version : "",
+        .requested_caps = requested_mask,
+        .binary_sha256 = binary_hash,
+        .manifest_sha256 = json_in_use ? manifest_hash : NULL,
+        .manifest_embedded = manifest_from_binary,
+        .net_policy = manifest.valid ? &manifest.net_policy : NULL,
+        .record = record,
+    };
+    struct akira_admission_result adm;
+
+    if (akira_admission_evaluate(&adm_ctx, &adm) != 0)
+    {
+        g_apps[slot].used = false;
+        return -EACCES;
+    }
+
+    /* An AOT file is native code; WAMR's bounds checks only confine it if
+     * wamrc produced it, which the loader cannot tell. A hardened build runs
+     * AOT only for an attested app. */
+    if (IS_ENABLED(CONFIG_AKIRA_HARDEN_UNATTESTED_APPS) && !adm.attested &&
+        memcmp(buffer, "\0aot", 4) == 0)
+    {
+        LOG_ERR("AOT binary refused: '%s' is not attested", adm_name);
+        sandbox_audit_log(AUDIT_EVENT_INTEGRITY_FAIL, "aot_unattested", size);
+        g_apps[slot].used = false; /* release reserved slot */
+        return -EPERM;
     }
 
     /* ===== Step 4: Load WASM module ===== */
@@ -664,15 +718,16 @@ static int load_wasm_ex(const uint8_t *buffer, uint32_t size,
     g_apps[slot].status = AKIRA_APP_STATUS_CREATED;
     g_apps[slot].exit_code = 0;
     g_apps[slot].tid = NULL;
-    /* The manifest is NOT cryptographically bound to a trusted signer unless a
-     * real platform verifier is linked (CONFIG_AKIRA_REQUIRE_SIGNED_APPS), and a
-     * JSON manifest supplied next to the binary is never covered by that gate.
-     * Clamp the requested capabilities once, here; never grant an app the raw
-     * manifest mask verbatim — that let an app self-assert "*" → all caps. */
-    uint64_t requested_mask = manifest.valid ? manifest.cap_mask : 0;
+    /* Grant capabilities once, here. An unattested app's request is clamped
+     * (CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK, CONFIG_AKIRA_HARDEN_UNATTESTED_APPS);
+     * admission clamps (install record + this load) apply to every app. Never
+     * grant the raw manifest mask verbatim — an app must not self-assert "*". */
     uint64_t unattested_privileged = 0;
-    g_apps[slot].cap_mask = akira_capability_grant(requested_mask, manifest_from_binary,
-                                                   &unattested_privileged);
+    g_apps[slot].cap_mask = akira_capability_grant(requested_mask, adm.attested,
+                                                   &unattested_privileged) &
+                            adm.cap_clamp &
+                            (record ? record->cap_clamp : UINT64_MAX);
+    g_apps[slot].attested = adm.attested;
 
     if (unattested_privileged) {
         /* An unsigned app was granted world-affecting capabilities. This is
@@ -683,9 +738,9 @@ static int load_wasm_ex(const uint8_t *buffer, uint32_t size,
                           (uint32_t)(g_apps[slot].cap_mask & 0xFFFFFFFFu));
     }
     if (g_apps[slot].cap_mask != requested_mask) {
-        LOG_INF("Capability mask sanitized: requested=0x%016llx granted=0x%016llx (from_binary=%d)",
+        LOG_INF("Capability mask sanitized: requested=0x%016llx granted=0x%016llx (attested=%d)",
                 (unsigned long long)requested_mask,
-                (unsigned long long)g_apps[slot].cap_mask, manifest_from_binary);
+                (unsigned long long)g_apps[slot].cap_mask, adm.attested);
     }
     g_apps[slot].memory_quota = manifest.valid ? manifest.memory_quota : 0;
     strncpy(g_apps[slot].commands_json, manifest.commands_json,
@@ -720,7 +775,7 @@ static int load_wasm_ex(const uint8_t *buffer, uint32_t size,
 
 int akira_runtime_load_wasm(const uint8_t *buffer, uint32_t size)
 {
-    return load_wasm_ex(buffer, size, NULL, 0);
+    return load_wasm_ex(buffer, size, NULL, 0, NULL, NULL);
 }
 
 /* ===== Thread-per-app implementation ===== */
@@ -1091,6 +1146,14 @@ int akira_runtime_stop(int instance_id)
 
 int akira_runtime_install_with_manifest(const char *name, const void *binary, size_t size, const char *manifest_json, size_t manifest_size)
 {
+    return akira_runtime_install_admitted(name, binary, size, manifest_json,
+                                          manifest_size, NULL);
+}
+
+int akira_runtime_install_admitted(const char *name, const void *binary, size_t size,
+                                   const char *manifest_json, size_t manifest_size,
+                                   const struct akira_admission_record *record)
+{
     if (!name || !binary || size == 0)
         return -EINVAL;
 
@@ -1121,7 +1184,7 @@ int akira_runtime_install_with_manifest(const char *name, const void *binary, si
      * used only when the binary has none, and capabilities, quota and commands
      * all come from that one manifest (see load_wasm_ex). */
     int id = load_wasm_ex((const uint8_t *)binary, (uint32_t)size,
-                          manifest_json, manifest_size);
+                          manifest_json, manifest_size, name, record);
     if (id < 0)
         return id;
 

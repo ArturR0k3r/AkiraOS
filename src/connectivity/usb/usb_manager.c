@@ -4,6 +4,7 @@
  */
 
 #include "usb_manager.h"
+#include <akira_hooks.h>
 #include <zephyr/kernel.h>
 #include <zephyr/usb/usbd.h>
 #include <zephyr/usb/usbd_msg.h>
@@ -108,6 +109,10 @@ static void usb_manager_msg_cb(struct usbd_context *const ctx,
         usb_manager_set_state(USB_STATE_CONFIGURED);
         k_mutex_unlock(&usb_mgr_ctx.mutex);
         usb_manager_notify_callbacks(USB_EVENT_CONFIGURED);
+        {
+            struct akira_hook_event e = { .type = AKIRA_HOOK_USB_CONFIGURED };
+            akira_hooks_emit(&e);
+        }
         break;
         
     case USBD_MSG_SUSPEND:
@@ -156,6 +161,10 @@ static void usb_manager_msg_cb(struct usbd_context *const ctx,
         usb_mgr_ctx.stats.error_count++;
         k_mutex_unlock(&usb_mgr_ctx.mutex);
         usb_manager_report_vbus_state(false);
+        {
+            struct akira_hook_event e = { .type = AKIRA_HOOK_USB_DISCONNECTED };
+            akira_hooks_emit(&e);
+        }
         break;
         
     case USBD_MSG_UDC_ERROR:

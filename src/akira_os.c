@@ -34,6 +34,8 @@
 #ifdef CONFIG_AKIRA_HTTP_SERVER
 #include "http_server.h"
 #include "http_routes.h"
+#endif
+#if defined(CONFIG_AKIRA_OTA) && defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
 #include "ota/ota_manager.h"
 #endif
 #ifdef CONFIG_AKIRA_SETTINGS
@@ -185,8 +187,9 @@ int akira_start(void)
     LOG_INF("RF module enabled");
 #endif
 
-#ifdef CONFIG_AKIRA_HTTP_SERVER
-    /* Initialize OTA manager (required by /upload endpoint) */
+#if defined(CONFIG_AKIRA_OTA) && defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
+    /* OTA serves HTTP uploads, WASM ota_* natives and device-management
+     * clients (include/akira_ota.h); release builds turn HTTP off. */
     if (ota_manager_init() < 0)
     {
         LOG_ERR("OTA manager init failed");
@@ -195,7 +198,9 @@ int akira_start(void)
     {
         LOG_INF("OTA manager initialized");
     }
+#endif
 
+#ifdef CONFIG_AKIRA_HTTP_SERVER
     if (akira_http_server_init() < 0)
     {
         LOG_ERR("HTTP server init failed");

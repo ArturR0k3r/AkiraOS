@@ -25,12 +25,14 @@ extern "C"
 {
 #endif
 
+#include <akira_net_policy.h>
+
 /** Maximum number of allowed hosts in a manifest network_policy */
-#define MANIFEST_NET_MAX_HOSTS 4
+#define MANIFEST_NET_MAX_HOSTS AKIRA_NET_POLICY_MAX_HOSTS
 /** Maximum number of allowed ports in a manifest network_policy */
-#define MANIFEST_NET_MAX_PORTS 8
+#define MANIFEST_NET_MAX_PORTS AKIRA_NET_POLICY_MAX_PORTS
 /** Maximum length of a single allowed hostname */
-#define MANIFEST_NET_HOST_LEN 64
+#define MANIFEST_NET_HOST_LEN AKIRA_NET_POLICY_HOST_LEN
 
 /** Maximum size of the raw "commands" JSON array captured verbatim from the manifest */
 #define MANIFEST_COMMANDS_JSON_MAX_LEN 512
@@ -38,19 +40,10 @@ extern "C"
     /**
      * @brief Per-app network egress policy, parsed from manifest "network_policy".
      *
-     * If net_policy_present is false the default platform policy applies.
-     * allowed_hosts entries may use "*" as a wildcard for all hosts.
-     * allowed_ports entries of 0 mean any port.
+     * The layout is public (struct akira_net_policy_decl): admission
+     * providers receive it at load and network policy providers enforce it.
      */
-    typedef struct
-    {
-        bool present;  /**< True if "network_policy" key was in manifest */
-        bool deny_all; /**< True if policy is { "deny_all": true } */
-        uint8_t host_count;
-        uint8_t port_count;
-        char allowed_hosts[MANIFEST_NET_MAX_HOSTS][MANIFEST_NET_HOST_LEN];
-        uint16_t allowed_ports[MANIFEST_NET_MAX_PORTS];
-    } akira_manifest_net_policy_t;
+    typedef struct akira_net_policy_decl akira_manifest_net_policy_t;
 
     /**
      * @brief Parsed manifest data structure

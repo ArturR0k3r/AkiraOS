@@ -140,19 +140,20 @@ extern "C"
         AUDIT_EVENT_APP_LOADED,
         AUDIT_EVENT_APP_STARTED,
         AUDIT_EVENT_APP_STOPPED,
+        AUDIT_EVENT_ADMISSION_DENIED,
+        AUDIT_EVENT_NET_DENIED,
         AUDIT_EVENT_MAX
     } audit_event_type_t;
 
-    /** Audit log entry */
+    /** Audit log entry. Values of `type` are enum akira_audit_type
+     *  (include/akira_audit.h); products may log their own types. */
     typedef struct
     {
-        audit_event_type_t type;
+        uint32_t type;
+        uint32_t seq; /**< position in the audit stream since boot */
         int64_t timestamp_ms;
         char app_name[32];
         uint32_t detail; /**< Event-specific detail (e.g., syscall cat) */
-#ifdef CONFIG_AKIRA_AUDIT_LOG_HMAC
-        uint8_t hmac[32]; /**< HMAC-SHA256 tag */
-#endif
     } audit_entry_t;
 
 /** Audit log ring buffer size */

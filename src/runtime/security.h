@@ -170,44 +170,27 @@ extern "C" {
  */
 uint64_t akira_capability_sanitize_app_mask(uint64_t requested, bool attested);
 
-/*
- * Capability check macro using security subsystem.
- * Delegates to akira_security_check_exec() for centralized permission validation.
- * For WASM API use with string-based capability names.
- *
- * @param exec_env     The WASM execution environment
- * @param capability   The capability name to check (e.g., AKIRA_CAP_DISPLAY_WRITE)
- * @return             true if capability is granted, false otherwise
- *
- * Note: Involves function call overhead. For performance-critical paths,
- * consider caching capability check results when possible.
- */
+/* AKIRA_CHECK_CAP_OR_RETURN(), AKIRA_CHECK_CAP_OR_RETURN_VOID(),
+ * AKIRA_CHECK_CAP_INLINE() and akira_security_check_exec() are public:
+ * include/akira_capability.h. That header defines them only with the WASM
+ * runtime; builds without it (stubs, unit tests) get them here. */
+#ifndef CONFIG_AKIRA_WASM_RUNTIME
+bool akira_security_check_exec(wasm_exec_env_t exec_env, uint64_t capability);
 #define AKIRA_CHECK_CAP_INLINE(exec_env, capability) \
     akira_security_check_exec(exec_env, capability)
-
-/*
- * Inline capability check with early return for functions returning int.
- * Usage: AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_<CAPABILITY>, -EPERM);
- */
 #define AKIRA_CHECK_CAP_OR_RETURN(exec_env, capability, retval) \
     do { \
         if (!akira_security_check_exec(exec_env, capability)) { \
             return (retval); \
         } \
     } while (0)
-
-/*
- * Inline capability check with early return for void functions.
- */
 #define AKIRA_CHECK_CAP_OR_RETURN_VOID(exec_env, capability) \
     do { \
         if (!akira_security_check_exec(exec_env, capability)) { \
             return; \
         } \
     } while (0)
-
-/* Central capability guard used by native APIs and runtime */
-bool akira_security_check_exec(wasm_exec_env_t exec_env, uint64_t capability);
+#endif
 bool akira_security_check_native(uint64_t capability);
 
 /* Convenience wrapper used by native API implementations (non-wasm callers) */

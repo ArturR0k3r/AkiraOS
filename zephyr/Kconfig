@@ -1351,11 +1351,15 @@ endmenu
 menu "Cloud Connectivity"
 
 config AKIRA_CLOUD_CLIENT
-    bool "Enable unified cloud client"
-    default y
+    bool "Unified cloud client [DEPRECATED]"
+    default n
+    select DEPRECATED
     help
-      Enable the unified cloud connectivity layer that handles
-      communication from all sources (servers, AkiraApp, web).
+      Deprecated in 1.7, removed in 1.9. This client never had a working
+      transport (cloud_client_connect() returns -ENOSYS) and speaks a binary
+      protocol no server implements. Fleet management is provided by a
+      device-management module built on the public APIs (akira_apps.h,
+      akira_ota.h, akira_hooks.h), e.g. AkiraPlatform's hub client.
 
 config AKIRA_CLOUD_AUTO_CONNECT
     bool "Auto-connect on boot"
@@ -1423,7 +1427,7 @@ config AKIRA_CLOUD_OTA_HANDLER
 
 config AKIRA_CLOUD_AUTO_INSTALL_APPS
     bool "Auto-install downloaded apps"
-    default y
+    default n
     depends on AKIRA_CLOUD_APP_HANDLER
     help
       Automatically install apps after successful download.
@@ -1994,20 +1998,37 @@ config AKIRA_ALLOW_UNSIGNED_APPS
       rejected. Set y only in development builds — never in production.
       Checked directly in app_signing_v2.c; independent of AKIRA_APP_SIGNING.
 
+config AKIRA_APP_PUBKEY
+    string "OEM app signing key (Ed25519 public key, 64 hex digits)"
+    default ""
+    depends on AKIRA_APP_SIGNING
+    help
+      Public half of the key that signs this product's apps (`west akira
+      keygen` writes it; `akira-cli sign` / `west akira pack` sign with the
+      private half). An .akpkg whose sig.ed25519 verifies against this key
+      is attested: it may be granted privileged capabilities and, when
+      AKIRA_HARDEN_UNATTESTED_APPS=y, run as AOT. Empty disables the check;
+      admission providers (include/akira_admission.h) can attest apps
+      signed with other keys.
+
+config AKIRA_ED25519
+    bool
+    default y if AKIRA_APP_SIGNING
+    select MBEDTLS_SHA512
+    help
+      Ed25519 signature verification (include/akira_ed25519.h), used by the
+      baseline app signature check and available to products.
+
 config AKIRA_REQUIRE_SIGNED_APPS
-    bool "Fail closed when no platform signature verifier is linked"
+    bool "Refuse apps that no signature check attested"
     default n
     depends on AKIRA_APP_SIGNING
     help
-      The app allowlist and PQC-signature checks are platform hooks
-      (akira_platform_allowlist_verify / akira_platform_pqc_verify) whose
-      in-tree default implementations allow every app; a strong verifier is
-      provided by AkiraPlatform (AKIRA_PLATFORM_APP_ALLOWLIST /
-      AKIRA_PLATFORM_PQC_SIGNING). When this option is set and no such strong
-      verifier is linked, the default hooks fail closed (reject the app)
-      instead of allowing it — so an app can never self-assert its capability
-      mask on an unverified build. Leave n for development builds that
-      intentionally run unsigned apps.
+      Install and load only apps that an admission provider attested: the
+      baseline check (AKIRA_APP_PUBKEY) or a product/AkiraPlatform provider.
+      Unsigned apps, bare .wasm uploads and apps whose signature does not
+      verify are refused at install and at every load. Leave n for
+      development builds that intentionally run unsigned apps.
 
 config AKIRA_RELEASE_BUILD
     bool "Release build: fail on development-only security settings"
@@ -2025,7 +2046,7 @@ config AKIRA_UNSIGNED_APP_CAP_MASK
     hex "Capability allow-mask for unsigned/unattested apps"
     default 0xFFFFFFFFFFFFFFFF
     help
-      Bitmask of capabilities an unsigned (unattested) WASM app is permitted to
+      Bitmask of capabilities an unattested WASM app is permitted to
       request from its manifest. The runtime ANDs a manifest's requested mask
       with this value before granting it (see akira_capability_sanitize_app_mask).
       The default (all bits) preserves local development and on-device security
@@ -2033,16 +2054,15 @@ config AKIRA_UNSIGNED_APP_CAP_MASK
       untrusted third-party apps should narrow this to exclude privileged bits
       (RF, network, wifi.inject, ota.trigger, hid, fs.write, settings, crypto,
       matter, mqtt, power.control) so unsigned code cannot reach them. Attested
-      apps (loaded when AKIRA_REQUIRE_SIGNED_APPS=y with a real verifier) are not
-      affected by this mask.
+      apps (see AKIRA_APP_PUBKEY) are not affected by this mask.
 
 config AKIRA_HARDEN_UNATTESTED_APPS
     bool "Restrict apps that no signature verifier has attested"
     default y if AKIRA_RELEASE_BUILD
     help
-      An app is attested only when AKIRA_REQUIRE_SIGNED_APPS=y and a platform
-      signature verifier accepted it. When this option is set, an unattested
-      app:
+      An app is attested when an admission provider trusts its signature:
+      the baseline check (AKIRA_APP_PUBKEY) or a product/AkiraPlatform
+      provider. When this option is set, an unattested app:
       - is never granted a privileged capability (AKIRA_CAP_PRIVILEGED, or a
         product capability flagged AKIRA_CAPABILITY_PRIVILEGED), whatever
         AKIRA_UNSIGNED_APP_CAP_MASK allows;
@@ -2116,29 +2136,9 @@ config AKIRA_AUDIT_LOG_SIZE
     range 16 128
     depends on AKIRA_SECURITY_AUDIT
     help
-      Number of audit log entries in the ring buffer.
-      Each entry uses ~100 bytes of RAM (includes 32-byte HMAC field).
-
-config AKIRA_PLATFORM_AUDIT_HMAC
-    bool "Platform HMAC key provider for audit log"
-    default n
-    help
-      Indicates that the platform layer provides akira_platform_audit_hmac_sign().
-      Set this in board-specific or application-specific Kconfig when a concrete
-      implementation (HSM, mbedTLS stub, etc.) is available.
-
-config AKIRA_AUDIT_LOG_HMAC
-    bool "HMAC-SHA256 signing of audit log entries"
-    default n
-    depends on AKIRA_SECURITY_AUDIT
-    depends on AKIRA_PLATFORM_AUDIT_HMAC
-    help
-      Tag each audit log entry with HMAC-SHA256 keyed from HSM slot
-      AKIRA_HSM_SLOT_AUDIT_KEY.  The 32-byte tag enables AkiraHub to
-      verify that entries were authentically produced by this device,
-      closing the PSA Certified L1 non-repudiation gap (IEC 62443-4-2 SL2).
-
-      Requires akira_platform_audit_hmac_init() to be called at boot.
+      Number of audit log entries in the ring buffer (64 bytes each).
+      Products sign, persist or export records through an audit sink
+      (include/akira_audit.h); a larger ring tolerates slower sinks.
 
 config AKIRA_SANDBOX_MPU
     bool "Hardware MPU isolation per WASM sandbox"

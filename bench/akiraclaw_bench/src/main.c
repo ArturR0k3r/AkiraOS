@@ -7,7 +7,6 @@
  *
  * Build variants (select via CMake -DCONF_FILE=):
  *   prj.conf          — baseline: B1 native_tflm + wasm_claw, B2 watchdog, B3 no-HMAC, B4, B5 no-BLE
- *   prj_hmac.conf     — B3 with HMAC enabled
  *   prj_noguard.conf  — B1 wasm_noguard (CONFIG_AKIRA_CAPABILITY_SYSTEM=n)
  *   prj_ble.conf      — B5 with BLE advertising active
  *

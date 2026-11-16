@@ -1,3 +1,4 @@
+#include <akira_keyprovider.h>
 #include "settings.h"
 #include "fs_manager.h"
 #include <zephyr/kernel.h>
@@ -57,17 +58,9 @@ static int parse_hex_key(void)
     return 0;
 }
 
-/**
- * @brief Weak hook: provide the 32-byte AES-256 NVS encryption key.
- *
- * The default implementation parses CONFIG_AKIRA_SETTINGS_ENCRYPTION_KEY_HEX.
- * AkiraPlatform overrides this with a strong implementation that reads the key
- * from a hardware secure element (ATECC608B, SE050) or ESP32 eFuse, ensuring
- * key material never appears as a compile-time constant in firmware.
- *
- * @param key_out  Output buffer — must be exactly 32 bytes.
- * @return 0 on success, negative errno on failure.
- */
+/* The encryption key comes from the first settings key provider
+ * (include/akira_keyprovider.h) that supplies one; without a provider it is
+ * derived from CONFIG_AKIRA_SETTINGS_ENCRYPTION_KEY_HEX (default_settings_key()). */
 #ifdef CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY
 /**
  * @brief Derive a per-device AES-256 key = HMAC-SHA256(base_key, device_id).
@@ -135,7 +128,7 @@ static int derive_per_device_key(const uint8_t *base_key, uint8_t *key_out)
 }
 #endif /* CONFIG_AKIRA_SETTINGS_PER_DEVICE_KEY */
 
-__weak int akira_settings_get_encryption_key(uint8_t *key_out)
+static int default_settings_key(uint8_t *key_out)
 {
     int ret = parse_hex_key();
     if (ret != 0)
@@ -152,6 +145,54 @@ __weak int akira_settings_get_encryption_key(uint8_t *key_out)
 #endif
 }
 
+#define SETTINGS_KEY_MAX_PROVIDERS 8
+
+static int obtain_settings_key(uint8_t *key_out)
+{
+    const struct akira_settings_key_provider *order[SETTINGS_KEY_MAX_PROVIDERS];
+    int n = 0;
+
+    STRUCT_SECTION_FOREACH(akira_settings_key_provider, p)
+    {
+        if (!p->fn)
+        {
+            continue;
+        }
+        if (n == SETTINGS_KEY_MAX_PROVIDERS)
+        {
+            LOG_ERR("More than %d settings key providers", SETTINGS_KEY_MAX_PROVIDERS);
+            return -E2BIG;
+        }
+        int i = n++;
+        while (i > 0 && order[i - 1]->prio > p->prio)
+        {
+            order[i] = order[i - 1];
+            i--;
+        }
+        order[i] = p;
+    }
+
+    for (int i = 0; i < n; i++)
+    {
+        int ret = order[i]->fn(key_out, order[i]->user_data);
+        if (ret == 0)
+        {
+            LOG_INF("Settings key from provider '%s'", order[i]->name);
+            return 0;
+        }
+        if (ret != -ENOTSUP && ret != -ENODEV)
+        {
+            /* Fail closed: a provider that exists but fails must not fall
+             * back to a weaker key (and data encrypted under its key would
+             * be unreadable with another one anyway). */
+            LOG_ERR("Settings key provider '%s' failed: %d", order[i]->name, ret);
+            return ret;
+        }
+    }
+
+    return default_settings_key(key_out);
+}
+
 static int crypto_init(void)
 {
     if (crypto_ctx.initialized)
@@ -159,7 +200,7 @@ static int crypto_init(void)
         return 0;
     }
 
-    int ret = akira_settings_get_encryption_key(ENCRYPTION_KEY);
+    int ret = obtain_settings_key(ENCRYPTION_KEY);
     if (ret != 0)
     {
         LOG_ERR("Failed to obtain encryption key");

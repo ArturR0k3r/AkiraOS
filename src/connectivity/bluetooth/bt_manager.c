@@ -4,6 +4,7 @@
  */
 
 #include "bt_manager.h"
+#include <akira_hooks.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
@@ -108,6 +109,10 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     LOG_INF("Connected: %s", addr);
 
     notify_event(BT_EVENT_CONNECTED, NULL);
+    {
+        struct akira_hook_event e = { .type = AKIRA_HOOK_BT_CONNECTED };
+        akira_hooks_emit(&e);
+    }
 #if defined(CONFIG_AKIRA_WASM_BLE)
     if (bt_mgr.mode == BT_MODE_BLE_APP)
     {
@@ -133,6 +138,10 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
     bt_mgr.stats.disconnections++;
 
     notify_event(BT_EVENT_DISCONNECTED, NULL);
+    {
+        struct akira_hook_event e = { .type = AKIRA_HOOK_BT_DISCONNECTED };
+        akira_hooks_emit(&e);
+    }
 #if defined(CONFIG_AKIRA_WASM_BLE)
     if (bt_mgr.mode == BT_MODE_BLE_APP)
     {

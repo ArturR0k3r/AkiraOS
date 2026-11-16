@@ -13,6 +13,11 @@ an MCUboot built with that key. This page is the preparative and operational
 guidance for that configuration. A build outside it is a development build and
 the Security Target does not cover it.
 
+> **Version scope.** The evaluated configuration is tag `v1.6.6`. AkiraOS 1.7
+> adds a baseline app signature check (`CONFIG_AKIRA_APP_PUBKEY`, see
+> [Extension points](../api-reference/extension-points.md#app-admission)); it
+> is not part of the `v1.6.6` evaluation, and the claims below are unchanged.
+
 ## Build the evaluated configuration
 
 Generate the product keys once and keep them out of git

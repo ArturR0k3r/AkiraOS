@@ -17,9 +17,14 @@
 #include <stdio.h>
 #include "runtime/security.h"
 #include <lib/mem_helper.h>
-#ifdef CONFIG_AKIRA_AUDIT_LOG_HMAC
-#include <akira_platform/audit_hmac.h>
-#endif
+#include <akira_audit.h>
+
+BUILD_ASSERT((int)AUDIT_EVENT_SYSCALL_DENIED == (int)AKIRA_AUDIT_SYSCALL_DENIED &&
+             (int)AUDIT_EVENT_APP_STOPPED == (int)AKIRA_AUDIT_APP_STOPPED &&
+             (int)AUDIT_EVENT_ADMISSION_DENIED == (int)AKIRA_AUDIT_ADMISSION_DENIED &&
+             (int)AUDIT_EVENT_NET_DENIED == (int)AKIRA_AUDIT_NET_DENIED,
+             "audit_event_type_t must match enum akira_audit_type");
+BUILD_ASSERT(sizeof(((audit_entry_t *)0)->app_name) == AKIRA_AUDIT_APP_NAME_LEN);
 
 LOG_MODULE_REGISTER(akira_sandbox, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -39,6 +44,63 @@ static struct
 } g_audit AKIRA_BULK_BSS;
 
 static struct k_spinlock g_audit_lock;
+
+/* ===== Audit sinks (akira_audit.h) =====
+ * Records are delivered from the system workqueue, outside g_audit_lock, in
+ * sequence order. g_sink_next is the seq of the next record to deliver; the
+ * writer never waits for sinks, so a slow sink sees an AKIRA_AUDIT_DROPPED
+ * record when the ring overtook it. */
+static struct k_work g_audit_sink_work;
+static uint32_t g_sink_next;
+static bool g_have_sinks;
+
+static void audit_sinks_deliver(const struct akira_audit_record *rec)
+{
+    STRUCT_SECTION_FOREACH(akira_audit_sink, sink) {
+        if (sink->fn) {
+            sink->fn(rec, sink->user_data);
+        }
+    }
+}
+
+static void audit_sink_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    for (;;) {
+        struct akira_audit_record rec;
+        uint32_t dropped = 0;
+        k_spinlock_key_t key = k_spin_lock(&g_audit_lock);
+        uint32_t head = (uint32_t)atomic_get(&g_audit.write_idx);
+
+        if (g_sink_next == head) {
+            k_spin_unlock(&g_audit_lock, key);
+            return;
+        }
+        if (head - g_sink_next > CONFIG_AKIRA_AUDIT_LOG_SIZE) {
+            dropped = head - g_sink_next - CONFIG_AKIRA_AUDIT_LOG_SIZE;
+            memset(&rec, 0, sizeof(rec));
+            rec.seq = g_sink_next;
+            rec.type = AKIRA_AUDIT_DROPPED;
+            rec.timestamp_ms = k_uptime_get();
+            rec.detail = dropped;
+            g_sink_next = head - CONFIG_AKIRA_AUDIT_LOG_SIZE;
+        } else {
+            const audit_entry_t *e =
+                &g_audit.entries[g_sink_next % CONFIG_AKIRA_AUDIT_LOG_SIZE];
+
+            rec.seq = e->seq;
+            rec.type = e->type;
+            rec.timestamp_ms = e->timestamp_ms;
+            rec.detail = e->detail;
+            memcpy(rec.app_name, e->app_name, sizeof(rec.app_name));
+            g_sink_next++;
+        }
+        k_spin_unlock(&g_audit_lock, key);
+
+        audit_sinks_deliver(&rec);
+    }
+}
 
 /* ===== Rate Limit Helpers ===== */
 
@@ -145,6 +207,12 @@ int sandbox_init(void)
     memset(&g_audit, 0, sizeof(g_audit));
     atomic_set(&g_audit.write_idx, 0);
     atomic_set(&g_audit.count, 0);
+    g_sink_next = 0;
+    g_have_sinks = false;
+    STRUCT_SECTION_FOREACH(akira_audit_sink, sink) {
+        g_have_sinks = true;
+    }
+    k_work_init(&g_audit_sink_work, audit_sink_work_handler);
     g_audit.initialized = true;
 
     LOG_INF("Sandbox subsystem initialized (audit_log=%d entries)",
@@ -330,6 +398,11 @@ void sandbox_watchdog_kill(sandbox_ctx_t *ctx, const char *app_name)
 void sandbox_audit_log(audit_event_type_t type, const char *app_name,
                        uint32_t detail)
 {
+    akira_audit_emit((uint32_t)type, app_name, detail);
+}
+
+void akira_audit_emit(uint32_t type, const char *app_name, uint32_t detail)
+{
     if (!g_audit.initialized)
         return;
 
@@ -340,10 +413,12 @@ void sandbox_audit_log(audit_event_type_t type, const char *app_name,
      * held only for the duration of one entry write (~100 ns). */
     k_spinlock_key_t key = k_spin_lock(&g_audit_lock);
 
-    int idx = (int)(atomic_inc(&g_audit.write_idx) % CONFIG_AKIRA_AUDIT_LOG_SIZE);
+    uint32_t seq = (uint32_t)atomic_inc(&g_audit.write_idx);
+    int idx = (int)(seq % CONFIG_AKIRA_AUDIT_LOG_SIZE);
 
     audit_entry_t *entry = &g_audit.entries[idx];
     entry->type = type;
+    entry->seq = seq;
     entry->timestamp_ms = k_uptime_get();
     entry->detail = detail;
 
@@ -357,11 +432,6 @@ void sandbox_audit_log(audit_event_type_t type, const char *app_name,
         entry->app_name[0] = '\0';
     }
 
-#ifdef CONFIG_AKIRA_AUDIT_LOG_HMAC
-    memset(entry->hmac, 0, sizeof(entry->hmac));
-    akira_platform_audit_hmac_sign((uint32_t)entry->type, entry->timestamp_ms,
-                                   entry->app_name, entry->detail, entry->hmac);
-#endif
 
     int32_t count = atomic_get(&g_audit.count);
     if (count < CONFIG_AKIRA_AUDIT_LOG_SIZE)
@@ -371,9 +441,14 @@ void sandbox_audit_log(audit_event_type_t type, const char *app_name,
 
     k_spin_unlock(&g_audit_lock, key);
 
+    if (g_have_sinks) {
+        k_work_submit(&g_audit_sink_work);
+    }
+
     /* Log critical security events outside the lock to minimise hold time */
     if (type == AUDIT_EVENT_SYSCALL_DENIED || type == AUDIT_EVENT_WATCHDOG_KILL ||
-        type == AUDIT_EVENT_INTEGRITY_FAIL || type == AUDIT_EVENT_SIGNATURE_FAIL)
+        type == AUDIT_EVENT_INTEGRITY_FAIL || type == AUDIT_EVENT_SIGNATURE_FAIL ||
+        type == AUDIT_EVENT_ADMISSION_DENIED || type == AUDIT_EVENT_NET_DENIED)
     {
         LOG_WRN("SECURITY [%s] event=%d detail=0x%08x",
                 app_name ? app_name : "?", type, detail);

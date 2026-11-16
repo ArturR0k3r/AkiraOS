@@ -17,6 +17,7 @@
 #include "../../akira.h"
 #include "../../akira_platform_stubs.h"
 #include <akira_hooks.h>
+#include <akira_admission.h>
 #include "../akira_abi_check.h"
 #include "../manifest_parser.h"
 #include <zephyr/fs/fs.h>
@@ -274,22 +275,140 @@ void app_manager_shutdown(void)
 
 /* ===== Installation ===== */
 
-/* Reject an app whose manifest asks for an incompatible WASM ABI or a newer
- * AkiraOS than this firmware, before it is written to flash or replaces an
- * installed app. The manifest embedded in the binary is authoritative; a JSON
- * manifest (sidecar or package) is checked only when the binary has none. */
-static int abi_gate(const void *binary, size_t size, const char *json, size_t json_len)
+/* Admission inputs that only some install paths have. */
+struct install_extras
 {
-    akira_manifest_t m;
+    const char *json;               /* manifest JSON stored next to the app */
+    size_t json_len;
+    const uint8_t *package_digest;  /* SHA-256(manifest || binary [|| model]) */
+    const uint8_t *sig_ed25519;
+    size_t sig_ed25519_len;
+    const uint8_t *sig_mldsa44;
+    size_t sig_mldsa44_len;
+};
 
-    if (manifest_parse_with_fallback((const uint8_t *)binary, size, json, json_len, &m) != 0) {
-        return 0; /* No manifest to check. */
-    }
-    return akira_abi_check_default(&m);
+#define ADMISSION_RECORD_MAGIC   0x41444d31 /* "ADM1" */
+#define ADMISSION_RECORD_VERSION 1
+
+static void record_path(char *buf, size_t size, uint8_t id, const char *name)
+{
+    snprintf(buf, size, "%s/%03d_%s.adm", APPS_DIR, id, name);
 }
 
-int app_manager_install(const char *name, const void *binary, size_t size,
-                        const app_manifest_t *manifest, app_source_t source)
+static int record_save(uint8_t id, const char *name,
+                       const struct akira_admission_record *rec)
+{
+    char path[APP_PATH_MAX_LEN];
+
+    record_path(path, sizeof(path), id, name);
+    ssize_t n = fs_manager_write_file(path, rec, sizeof(*rec));
+    return n == (ssize_t)sizeof(*rec) ? 0 : (n < 0 ? (int)n : -EIO);
+}
+
+static int record_load(uint8_t id, const char *name, struct akira_admission_record *rec)
+{
+    char path[APP_PATH_MAX_LEN];
+
+    record_path(path, sizeof(path), id, name);
+    if (!fs_manager_exists(path))
+    {
+        return -ENOENT;
+    }
+    ssize_t n = fs_manager_read_file(path, rec, sizeof(*rec));
+    if (n != (ssize_t)sizeof(*rec) || rec->magic != ADMISSION_RECORD_MAGIC ||
+        rec->version != ADMISSION_RECORD_VERSION)
+    {
+        LOG_WRN("Ignoring malformed admission record %s", path);
+        return -EINVAL;
+    }
+    return 0;
+}
+
+/* Run INSTALL admission (akira_admission.h) and the ABI / minimum-version gate
+ * over one candidate. The manifest embedded in the binary is authoritative; a
+ * JSON manifest (sidecar or package) is used only when the binary has none. */
+static int admit_install(const char *app_name, const void *binary, size_t size,
+                         app_source_t source, const struct install_extras *x,
+                         struct akira_admission_result *res,
+                         struct akira_admission_record *rec)
+{
+    akira_manifest_t *m = akira_malloc_buffer(sizeof(*m));
+    uint8_t mf_hash[32];
+    bool have_json = x && x->json && x->json_len > 0;
+    int ret;
+
+    if (!m)
+    {
+        return -ENOMEM;
+    }
+
+    bool parsed = manifest_parse_with_fallback((const uint8_t *)binary, size,
+                                               have_json ? x->json : NULL,
+                                               have_json ? x->json_len : 0, m) == 0;
+    if (parsed)
+    {
+        ret = akira_abi_check_default(m);
+        if (ret < 0)
+        {
+            akira_free_buffer(m);
+            return ret;
+        }
+    }
+
+    memset(rec, 0, sizeof(*rec));
+    rec->magic = ADMISSION_RECORD_MAGIC;
+    rec->version = ADMISSION_RECORD_VERSION;
+    rec->source = (uint8_t)source;
+
+    ret = app_compute_hash(binary, size, rec->binary_sha256);
+    if (ret == 0 && have_json)
+    {
+        ret = app_compute_hash(x->json, x->json_len, mf_hash);
+        memcpy(rec->manifest_sha256, mf_hash, sizeof(mf_hash));
+    }
+    if (ret != 0)
+    {
+        akira_free_buffer(m);
+        return -EIO;
+    }
+
+    struct akira_admission_ctx ctx = {
+        .phase = AKIRA_ADMISSION_INSTALL,
+        .source = (enum akira_app_source)source,
+        .name = app_name,
+        .version = parsed ? m->version : "",
+        .requested_caps = parsed && m->valid ? m->cap_mask : 0,
+        .binary_sha256 = rec->binary_sha256,
+        .manifest_sha256 = have_json ? rec->manifest_sha256 : NULL,
+        .manifest_embedded = manifest_parse_wasm_section((const uint8_t *)binary,
+                                                         size, m) == 0,
+        .net_policy = parsed ? &m->net_policy : NULL,
+        .package_digest = x ? x->package_digest : NULL,
+        .sig_ed25519 = x ? x->sig_ed25519 : NULL,
+        .sig_ed25519_len = x ? x->sig_ed25519_len : 0,
+        .sig_mldsa44 = x ? x->sig_mldsa44 : NULL,
+        .sig_mldsa44_len = x ? x->sig_mldsa44_len : 0,
+        .manifest_json = have_json ? (const uint8_t *)x->json : NULL,
+        .manifest_json_len = have_json ? x->json_len : 0,
+    };
+
+    ret = akira_admission_evaluate(&ctx, res);
+    akira_free_buffer(m);
+    if (ret != 0)
+    {
+        return ret;
+    }
+
+    rec->attested = res->attested ? 1 : 0;
+    rec->cap_clamp = res->cap_clamp;
+    memcpy(rec->signer_id, res->signer_id, sizeof(rec->signer_id));
+    memcpy(rec->seal, res->seal, sizeof(rec->seal));
+    return 0;
+}
+
+static int install_admitted(const char *name, const void *binary, size_t size,
+                            const app_manifest_t *manifest, app_source_t source,
+                            const struct install_extras *x)
 {
     if (!g_initialized)
     {
@@ -316,15 +435,6 @@ int app_manager_install(const char *name, const void *binary, size_t size,
         return -EFBIG;
     }
 
-    /* Reject an incompatible embedded manifest before touching the registry. */
-    ret = abi_gate(binary, size, NULL, 0);
-    if (ret < 0)
-    {
-        return ret;
-    }
-
-    k_mutex_lock(&g_registry_mutex, K_FOREVER);
-
     /* Determine app name */
     char app_name[APP_NAME_MAX_LEN];
     if (name && name[0])
@@ -342,6 +452,18 @@ int app_manager_install(const char *name, const void *binary, size_t size,
         snprintf(app_name, APP_NAME_MAX_LEN, "app_%08x",
                  crc32_ieee((const uint8_t *)binary, size > 256 ? 256 : size));
     }
+
+    /* Refuse an incompatible or unadmitted app before touching the registry. */
+    struct akira_admission_result adm;
+    struct akira_admission_record rec;
+
+    ret = admit_install(app_name, binary, size, source, x, &adm, &rec);
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
 
     /* Check if already exists */
     app_entry_t *existing = find_app_by_name(app_name);
@@ -398,6 +520,13 @@ int app_manager_install(const char *name, const void *binary, size_t size,
         return ret;
     }
 
+    /* Bind the admission verdict to these bytes. Without a record the app
+     * loads unattested (and not at all under CONFIG_AKIRA_REQUIRE_SIGNED_APPS). */
+    if (record_save(existing->id, app_name, &rec) < 0)
+    {
+        LOG_ERR("Failed to save admission record for %s", app_name);
+    }
+
     /* Populate rest of entry */
     existing->source = source;
     existing->size = size;
@@ -433,10 +562,17 @@ int app_manager_install(const char *name, const void *binary, size_t size,
 
     k_mutex_unlock(&g_registry_mutex);
 
-    LOG_INF("Installed app: %s (ID: %d, size: %zu)", app_name, existing->id, size);
+    LOG_INF("Installed app: %s (ID: %d, size: %zu, %s)", app_name, existing->id, size,
+            adm.attested ? "attested" : "unattested");
     akira_hooks_emit_app(AKIRA_HOOK_APP_INSTALLED, app_name, existing->id, -1,
                          existing->version, 0);
     return existing->id;
+}
+
+int app_manager_install(const char *name, const void *binary, size_t size,
+                        const app_manifest_t *manifest, app_source_t source)
+{
+    return install_admitted(name, binary, size, manifest, source, NULL);
 }
 
 int app_manager_install_from_path(const char *path)
@@ -530,13 +666,8 @@ int app_manager_install_from_path(const char *path)
         json[mf_size] = '\0';
         if (app_manifest_parse(json, mf_size, &manifest) == 0)
         {
-            int gate = abi_gate(buffer, size, json, (size_t)mf_size);
-            if (gate < 0) {
-                akira_free_buffer(buffer);
-                akira_free_buffer(json);
-                return gate;
-            }
-            int ret = app_manager_install(name, buffer, size, &manifest, source);
+            struct install_extras x = { .json = json, .json_len = (size_t)mf_size };
+            int ret = install_admitted(name, buffer, size, &manifest, source, &x);
             akira_free_buffer(buffer);
             if (ret > 0) {
                 /* Persist the manifest JSON alongside the saved binary so
@@ -597,6 +728,8 @@ int app_manager_uninstall(const char *name)
     /* Destroy container */
     akira_runtime_uninstall(app->name, app->container_id);
 
+    int uninstalled_id = app->id;
+
     /* Clear entry */
     memset(app, 0, sizeof(app_entry_t));
     g_app_count--;
@@ -607,7 +740,7 @@ int app_manager_uninstall(const char *name)
     k_mutex_unlock(&g_registry_mutex);
 
     LOG_INF("Uninstalled app: %s", name);
-    akira_hooks_emit_app(AKIRA_HOOK_APP_UNINSTALLED, name, -1, -1, NULL, 0);
+    akira_hooks_emit_app(AKIRA_HOOK_APP_UNINSTALLED, name, uninstalled_id, -1, NULL, 0);
     return 0;
 }
 
@@ -712,10 +845,14 @@ int app_manager_start(const char *name)
             }
         }
 
-        int load_ret = akira_runtime_install_with_manifest(
+        struct akira_admission_record rec;
+        bool have_rec = record_load(app->id, app->name, &rec) == 0;
+
+        int load_ret = akira_runtime_install_admitted(
             name, buffer, app->size,
             json_len > 0 ? manifest_json : NULL,
-            json_len > 0 ? (size_t)json_len : 0);
+            json_len > 0 ? (size_t)json_len : 0,
+            have_rec ? &rec : NULL);
         akira_free_buffer(buffer);
         akira_free_buffer(manifest_json);
 
@@ -772,9 +909,10 @@ int app_manager_start(const char *name)
      * to keep lock scope short and avoid unexpected hold-time increases. */
     char lc_name[APP_NAME_MAX_LEN];
     strncpy(lc_name, app->name, APP_NAME_MAX_LEN);
+    int lc_id = app->id;
     k_mutex_unlock(&g_registry_mutex);
 
-    akira_hooks_emit_app(AKIRA_HOOK_APP_STARTED, lc_name, -1, container_id, NULL, 0);
+    akira_hooks_emit_app(AKIRA_HOOK_APP_STARTED, lc_name, lc_id, container_id, NULL, 0);
 
 #ifdef CONFIG_AKIRA_WASM_IPC
     {
@@ -1711,10 +1849,10 @@ static int delete_app_binary(const char *name)
         return -ENOENT;
     }
 
-    /* Delete .wasm, .aot, and .json variants if they exist */
+    /* Delete the binary (.wasm/.aot), stored manifest and admission record */
     char path[APP_PATH_MAX_LEN];
-    static const char *exts[] = {".wasm", ".aot", ".json"};
-    for (int i = 0; i < 3; i++) {
+    static const char *exts[] = {".wasm", ".aot", ".json", ".adm"};
+    for (int i = 0; i < ARRAY_SIZE(exts); i++) {
         snprintf(path, sizeof(path), "%s/%03d_%s%s", APPS_DIR, app->id, name, exts[i]);
         int ret = fs_manager_delete_file(path);
         if (ret < 0 && ret != -ENOENT)
@@ -1799,6 +1937,8 @@ static void app_manager_on_runtime_exit(int slot, int exit_code)
 {
     char lc_name[APP_NAME_MAX_LEN] = {0};
     int  lc_state = -1;
+    int  lc_id = -1;
+    bool lc_failed = false;
 
     k_mutex_lock(&g_registry_mutex, K_FOREVER);
 
@@ -1816,7 +1956,10 @@ static void app_manager_on_runtime_exit(int slot, int exit_code)
             strncpy(lc_name, g_registry[i].name, APP_NAME_MAX_LEN);
             lc_state = (int)new_state;
 
+            lc_id = g_registry[i].id;
             set_app_state(&g_registry[i], new_state);
+            /* set_app_state() moves a crash past its restart budget to FAILED. */
+            lc_failed = g_registry[i].state == APP_STATE_FAILED;
             registry_save();
             break;
         }
@@ -1837,7 +1980,11 @@ static void app_manager_on_runtime_exit(int slot, int exit_code)
     /* Emit a lifecycle event: a non-zero exit is a crash, zero is a clean stop. */
     if (lc_name[0] != '\0') {
         akira_hooks_emit_app(exit_code != 0 ? AKIRA_HOOK_APP_CRASHED : AKIRA_HOOK_APP_STOPPED,
-                             lc_name, -1, -1, NULL, exit_code);
+                             lc_name, lc_id, slot, NULL, exit_code);
+        if (lc_failed) {
+            akira_hooks_emit_app(AKIRA_HOOK_APP_FAILED, lc_name, lc_id, -1, NULL,
+                                 exit_code);
+        }
     }
 
 #ifdef CONFIG_AKIRA_WASM_IPC
@@ -2068,34 +2215,17 @@ int app_manager_install_akpkg(char *name, size_t name_size,
     }
 
     /* --- Extract tar entries --- */
-    const uint8_t *wasm_ptr;   size_t wasm_size;
-    const char    *mfst_ptr;   size_t mfst_size;
-    const uint8_t *model_ptr;  size_t model_size;
-    const uint8_t *d2_sig;     size_t d2_sig_size;
+    struct akpkg_contents pkgc;
 
-    int ret = akpkg_tar_extract(tar_buf, (size_t)tar_len,
-                                &wasm_ptr, &wasm_size,
-                                &mfst_ptr, &mfst_size,
-                                &model_ptr, &model_size,
-                                &d2_sig, &d2_sig_size);
+    int ret = akpkg_tar_extract_contents(tar_buf, (size_t)tar_len, &pkgc);
     if (ret) {
         LOG_ERR("akpkg: tar extraction failed (%d)", ret);
         akira_free_buffer(tar_buf);
         return ret;
     }
 
-    LOG_INF("akpkg: wasm=%zu B  manifest=%zu B", wasm_size, mfst_size);
-
-    /* --- PQC verification (Dilithium-2) — delegated to AkiraPlatform --- */
-    ret = app_verify_pqc_sig((const uint8_t *)mfst_ptr, mfst_size,
-                             wasm_ptr, wasm_size,
-                             model_ptr, model_size,
-                             d2_sig, d2_sig_size);
-    if (ret != 0) {
-        LOG_ERR("akpkg: PQC signature check failed (%d)", ret);
-        akira_free_buffer(tar_buf);
-        return -EACCES;
-    }
+    LOG_INF("akpkg: wasm=%zu B  manifest=%zu B%s", pkgc.wasm_size, pkgc.manifest_size,
+            pkgc.sig_ed25519 || pkgc.sig_mldsa44 ? "  signed" : "");
 
     /* --- Determine app name (use caller buffer directly) --- */
     if (!name || name_size == 0) {
@@ -2113,24 +2243,18 @@ int app_manager_install_akpkg(char *name, size_t name_size,
     app_manifest_t manifest;
     bool has_manifest = false;
 
-    if (mfst_size >= 4096u) {
-        LOG_ERR("akpkg manifest too large: %zu bytes", mfst_size);
+    if (pkgc.manifest_size >= 4096u) {
+        LOG_ERR("akpkg manifest too large: %zu bytes", pkgc.manifest_size);
         akira_free_buffer(tar_buf);
         return -EFBIG;
     }
-    if (mfst_size > 0) {
+    if (pkgc.manifest_size > 0) {
         /* app_manifest_parse requires a null-terminated string. */
-        char *json_copy = akira_malloc_buffer(mfst_size + 1u);
+        char *json_copy = akira_malloc_buffer(pkgc.manifest_size + 1u);
         if (json_copy) {
-            memcpy(json_copy, mfst_ptr, mfst_size);
-            json_copy[mfst_size] = '\0';
-            int gate = abi_gate(wasm_ptr, wasm_size, json_copy, mfst_size);
-            if (gate < 0) {
-                akira_free_buffer(json_copy);
-                akira_free_buffer(tar_buf);
-                return gate;
-            }
-            if (app_manifest_parse(json_copy, mfst_size, &manifest) == 0) {
+            memcpy(json_copy, pkgc.manifest, pkgc.manifest_size);
+            json_copy[pkgc.manifest_size] = '\0';
+            if (app_manifest_parse(json_copy, pkgc.manifest_size, &manifest) == 0) {
                 has_manifest = true;
                 /* Manifest name always takes precedence over the caller-supplied name.
                  * Write back into the caller's buffer so they see the final name. */
@@ -2143,17 +2267,39 @@ int app_manager_install_akpkg(char *name, size_t name_size,
         }
     }
 
-    /* --- Install the WASM binary --- */
-    int app_id = app_manager_install(app_name, wasm_ptr, wasm_size,
-                                     has_manifest ? &manifest : NULL,
-                                     source);
+    /* --- What the package signatures sign (akira-cli digest()) --- */
+    uint8_t digest[32];
 
-    /* --- Persist raw manifest JSON for app_manager_start() --- */
-    if (app_id > 0 && mfst_size > 0) {
+    ret = app_compute_package_digest((const uint8_t *)pkgc.manifest, pkgc.manifest_size,
+                                     pkgc.wasm, pkgc.wasm_size,
+                                     pkgc.model, pkgc.model_size, digest);
+    if (ret != 0) {
+        akira_free_buffer(tar_buf);
+        return ret;
+    }
+
+    struct install_extras x = {
+        .json = pkgc.manifest,
+        .json_len = pkgc.manifest_size,
+        .package_digest = digest,
+        .sig_ed25519 = pkgc.sig_ed25519,
+        .sig_ed25519_len = pkgc.sig_ed25519_size,
+        .sig_mldsa44 = pkgc.sig_mldsa44,
+        .sig_mldsa44_len = pkgc.sig_mldsa44_size,
+    };
+
+    /* --- Admit and install the WASM binary --- */
+    int app_id = install_admitted(app_name, pkgc.wasm, pkgc.wasm_size,
+                                  has_manifest ? &manifest : NULL, source, &x);
+
+    /* --- Persist raw manifest JSON for app_manager_start() ---
+     * These exact bytes are hashed into the admission record. */
+    if (app_id > 0 && pkgc.manifest_size > 0) {
         char json_path[APP_PATH_MAX_LEN];
         snprintf(json_path, sizeof(json_path),
                  "%s/%03d_%s.json", APPS_DIR, (uint8_t)app_id, app_name);
-        ssize_t written = fs_manager_write_file(json_path, mfst_ptr, mfst_size);
+        ssize_t written = fs_manager_write_file(json_path, pkgc.manifest,
+                                                pkgc.manifest_size);
         if (written < 0) {
             LOG_WRN("akpkg: failed to save manifest JSON to %s (%zd)",
                     json_path, written);
@@ -2164,7 +2310,118 @@ int app_manager_install_akpkg(char *name, size_t name_size,
 
     if (app_id > 0) {
         LOG_INF("akpkg: installed '%s' (id=%d, wasm=%zu B)",
-                app_name, app_id, wasm_size);
+                app_name, app_id, pkgc.wasm_size);
     }
     return app_id;
+}
+/* ===== Public façade (include/akira_apps.h) ===== */
+
+#include <akira_apps.h>
+
+BUILD_ASSERT((int)AKIRA_APP_SOURCE_FLEET == (int)APP_SOURCE_FLEET &&
+             (int)AKIRA_APP_SOURCE_FIRMWARE == (int)APP_SOURCE_FIRMWARE,
+             "enum akira_app_source must match app_source_t");
+BUILD_ASSERT((int)AKIRA_APP_STATE_FAILED == (int)APP_STATE_FAILED,
+             "enum akira_app_state must match app_state_t");
+
+/* Caller holds g_registry_mutex. */
+static void fill_summary(const app_entry_t *app, struct akira_app_summary *out)
+{
+    struct akira_admission_record rec;
+
+    memset(out, 0, sizeof(*out));
+    out->id = app->id;
+    out->state = (uint8_t)app->state;
+    out->source = (uint8_t)app->source;
+    out->crash_count = app->crash_count;
+    out->size = app->size;
+    strncpy(out->name, app->name, sizeof(out->name) - 1);
+    strncpy(out->version, app->version, sizeof(out->version) - 1);
+    out->attested = record_load(app->id, app->name, &rec) == 0 && rec.attested;
+    if (app->container_id >= 0)
+    {
+        out->cap_mask = akira_runtime_get_cap_mask(app->container_id);
+    }
+}
+
+int akira_apps_count(void)
+{
+    if (!g_initialized)
+    {
+        return -ENODEV;
+    }
+    return g_app_count;
+}
+
+int akira_apps_list(struct akira_app_summary *out, int max)
+{
+    if (!g_initialized)
+    {
+        return -ENODEV;
+    }
+    if (!out || max <= 0)
+    {
+        return -EINVAL;
+    }
+
+    int n = 0;
+
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED && n < max; i++)
+    {
+        if (g_registry[i].name[0] != '\0')
+        {
+            fill_summary(&g_registry[i], &out[n++]);
+        }
+    }
+    k_mutex_unlock(&g_registry_mutex);
+    return n;
+}
+
+int akira_apps_get(const char *name, struct akira_app_summary *out)
+{
+    if (!g_initialized)
+    {
+        return -ENODEV;
+    }
+    if (!name || !out)
+    {
+        return -EINVAL;
+    }
+
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
+    app_entry_t *app = find_app_by_name(name);
+    if (app)
+    {
+        fill_summary(app, out);
+    }
+    k_mutex_unlock(&g_registry_mutex);
+    return app ? 0 : -ENOENT;
+}
+
+int akira_apps_install_package(const uint8_t *pkg, size_t len,
+                               enum akira_app_source source,
+                               char *name_out, size_t name_size)
+{
+    char local[APP_NAME_MAX_LEN] = "";
+    char *name = name_out && name_size > 0 ? name_out : local;
+    size_t size = name_out && name_size > 0 ? name_size : sizeof(local);
+
+    name[0] = '\0';
+    return app_manager_install_akpkg(name, size, pkg, len, (app_source_t)source);
+}
+
+int akira_apps_start(const char *name)
+{
+    return app_manager_start(name);
+}
+
+int akira_apps_stop(const char *name)
+{
+    return app_manager_stop(name);
+}
+
+int akira_apps_uninstall(const char *name)
+{
+    return app_manager_uninstall(name);
 }

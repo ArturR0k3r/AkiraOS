@@ -335,6 +335,12 @@ static int cmd_version(const struct shell *sh, size_t argc, char **argv)
     if (id.device_id[0]) {
         shell_print(sh, "Device  %s", id.device_id);
     }
+    if (id.provisioned.serial[0]) {
+        shell_print(sh, "Serial  %s (org %s, key in %s)", id.provisioned.serial,
+                    id.provisioned.org[0] ? id.provisioned.org : "-",
+                    id.provisioned.key_store[0] ? id.provisioned.key_store : "-");
+        shell_print(sh, "Cert    sha256:%s", id.provisioned.cert_sha256);
+    }
     shell_print(sh, "Built   %s %s", __DATE__, __TIME__);
     return 0;
 }

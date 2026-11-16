@@ -75,4 +75,15 @@ void akira_identity_get(struct akira_identity *id)
 		snprintk(&id->device_id[2 * i], 3, "%02x", raw[i]);
 	}
 #endif
+
+	STRUCT_SECTION_FOREACH(akira_identity_provider, p) {
+		if (p->fn) {
+			p->fn(&id->provisioned, p->user_data);
+		}
+	}
+	/* Providers write fixed arrays; never hand out an unterminated string. */
+	id->provisioned.serial[sizeof(id->provisioned.serial) - 1] = '\0';
+	id->provisioned.org[sizeof(id->provisioned.org) - 1] = '\0';
+	id->provisioned.cert_sha256[sizeof(id->provisioned.cert_sha256) - 1] = '\0';
+	id->provisioned.key_store[sizeof(id->provisioned.key_store) - 1] = '\0';
 }

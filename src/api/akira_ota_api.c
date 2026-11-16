@@ -4,6 +4,8 @@
  */
 
 #define LOG_MODULE_NAME akira_ota_api
+#include <akira_net_policy.h>
+#include <stdlib.h>
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(akira_ota_api, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -66,6 +68,51 @@ static int validate_https_url(const char *url)
         return -EPROTO;
     }
     return 0;
+}
+
+/* Ask the egress policy providers (include/akira_net_policy.h) whether the
+ * calling app may make the firmware fetch @p url. Host and port are taken from
+ * the URL; the scheme was already checked by validate_https_url(). */
+static int ota_url_policy_gate(wasm_exec_env_t exec_env, const char *url)
+{
+    char app_name[32] = "";
+    char host[AKIRA_NET_POLICY_HOST_LEN];
+    uint16_t port = 443;
+    const char *p = strstr(url, "://");
+    size_t n = 0;
+
+    if (!p) {
+        return -EINVAL;
+    }
+    p += 3;
+    while (p[n] != '\0' && p[n] != '/' && p[n] != ':' && p[n] != '?') {
+        n++;
+    }
+    if (n == 0 || n >= sizeof(host)) {
+        return -EINVAL;
+    }
+    memcpy(host, p, n);
+    host[n] = '\0';
+    if (strncmp(url, "http://", 7) == 0) {
+        port = 80;
+    }
+    if (p[n] == ':') {
+        port = (uint16_t)strtoul(&p[n + 1], NULL, 10);
+    }
+
+    wasm_module_inst_t mi = wasm_runtime_get_module_inst(exec_env);
+    if (mi) {
+        (void)akira_runtime_get_name_for_module_inst(mi, app_name,
+                                                     sizeof(app_name));
+    }
+
+    struct akira_net_policy_ctx ctx = {
+        .op = AKIRA_NET_OP_FETCH_URL,
+        .app_name = app_name,
+        .host = host,
+        .port = port,
+    };
+    return akira_net_policy_check(&ctx);
 }
 
 /* ── Real OTA download implementation ───────────────────────────────────── */
@@ -633,6 +680,10 @@ int akira_native_ota_check(wasm_exec_env_t exec_env, const char *manifest_url)
     if (ret < 0) {
         return ret;
     }
+    ret = ota_url_policy_gate(exec_env, manifest_url);
+    if (ret < 0) {
+        return ret;
+    }
 
 #if defined(CONFIG_HTTP_CLIENT) && defined(CONFIG_NET_SOCKETS)
     struct ota_manifest m;
@@ -691,6 +742,10 @@ int akira_native_ota_fetch_and_apply(wasm_exec_env_t exec_env,
     if (ret < 0) {
         return ret;
     }
+    ret = ota_url_policy_gate(exec_env, manifest_url);
+    if (ret < 0) {
+        return ret;
+    }
 
     /* Check OTA is not already in progress */
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
@@ -740,6 +795,12 @@ int akira_native_ota_fetch_and_apply(wasm_exec_env_t exec_env,
         return -EPROTO;
     }
 #endif
+
+    /* The image may live on another host than the manifest. */
+    ret = ota_url_policy_gate(exec_env, m.fw_url);
+    if (ret < 0) {
+        return ret;
+    }
 
     /* 4. Download, verify (SHA-256) and stage the image in the 2nd slot. */
     ret = ota_download_and_apply(&m);

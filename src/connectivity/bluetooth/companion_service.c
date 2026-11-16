@@ -52,7 +52,9 @@ LOG_MODULE_REGISTER(companion_svc, CONFIG_AKIRA_LOG_LEVEL);
 #include "../../runtime/app_manager/app_cmd_bridge.h"
 #include "../../connectivity/ota/ota_manager.h"
 #include "../../settings/settings.h"
+#ifdef CONFIG_AKIRA_CLOUD_APP_HANDLER
 #include "../../connectivity/cloud/cloud_app_handler.h"
+#endif
 #include "../../storage/fs_manager.h"
 
 /* --------------------------------------------------------------------------
@@ -404,8 +406,12 @@ static void handle_apps_update(const char *op, int id, const char *params)
         send_resp(op, id, false, "missing name");
         return;
     }
+#ifdef CONFIG_AKIRA_CLOUD_APP_HANDLER
     int rc = cloud_app_update(name, NULL, NULL);
     send_resp(op, id, rc == 0, rc == 0 ? NULL : "update failed");
+#else
+    send_resp(op, id, false, "update not supported");
+#endif
 }
 
 static void handle_apps_restart(const char *op, int id, const char *params)
