@@ -39,7 +39,7 @@ Base URL: `http://<device-ip>:8080/api`
 
 When the device has joined a WiFi network the same REST endpoints are available
 as documented below.  The web app discovers the device via mDNS
-(`_akira._tcp.local`) as described in `HUB_INTEGRATION.md`.
+(`_akira._tcp.local`).
 
 Endpoints are shared with the USB JSON-RPC transport — see the
 [Endpoint Reference](#endpoint-reference) section.
