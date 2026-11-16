@@ -7,7 +7,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [1.7.0] — Unreleased
 
 ### Added
 - `feat(security)`: App admission (`include/akira_admission.h`). Providers registered with
