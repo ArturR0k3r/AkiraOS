@@ -1532,7 +1532,7 @@ config AKIRA_APP_MANAGER
 config AKIRA_APP_MAX_INSTALLED
     int "Maximum installed apps"
     default 8
-    range 4 16
+    range 4 32
     depends on AKIRA_APP_MANAGER
     help
       Maximum number of WASM apps that can be installed.

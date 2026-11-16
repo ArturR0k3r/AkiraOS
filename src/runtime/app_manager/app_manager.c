@@ -1468,12 +1468,31 @@ static int ensure_dirs_exist(void)
     return 0;
 }
 
+/* The serialized registry is ~110 B per entry, so it lives on the heap: with
+ * CONFIG_AKIRA_APP_MAX_INSTALLED=24 a stack copy would be ~2.6 KB on whatever
+ * thread installs, starts or restarts an app (HTTP, shell, WASM app threads). */
+#define REGISTRY_BUF_SIZE \
+    (sizeof(registry_header_t) + CONFIG_AKIRA_APP_MAX_INSTALLED * sizeof(app_entry_t))
+
+static int registry_load_from(uint8_t *buffer);
+
 static int registry_load(void)
 {
+    uint8_t *buffer = akira_malloc_buffer(REGISTRY_BUF_SIZE);
+
+    if (!buffer)
+    {
+        return -ENOMEM;
+    }
+    int ret = registry_load_from(buffer);
+    akira_free_buffer(buffer);
+    return ret;
+}
+
+static int registry_load_from(uint8_t *buffer)
+{
     /* Try to read registry using fs_manager (handles RAM fallback) */
-    uint8_t buffer[sizeof(registry_header_t) + CONFIG_AKIRA_APP_MAX_INSTALLED * sizeof(app_entry_t)];
-    
-    ssize_t read = fs_manager_read_file(REGISTRY_PATH, buffer, sizeof(buffer));
+    ssize_t read = fs_manager_read_file(REGISTRY_PATH, buffer, REGISTRY_BUF_SIZE);
     if (read < (ssize_t)sizeof(registry_header_t))
     {
         LOG_DBG("No registry found or too small: %zd", read);
@@ -1536,8 +1555,14 @@ static int registry_load(void)
 static int registry_save(void)
 {
     /* Build registry buffer */
-    uint8_t buffer[sizeof(registry_header_t) + CONFIG_AKIRA_APP_MAX_INSTALLED * sizeof(app_entry_t)];
+    uint8_t *buffer = akira_malloc_buffer(REGISTRY_BUF_SIZE);
     size_t offset = 0;
+
+    if (!buffer)
+    {
+        LOG_ERR("Failed to save registry: out of memory");
+        return -ENOMEM;
+    }
 
     /* Write header with crc=0 placeholder; will be patched after entries are written */
     registry_header_t header = {
@@ -1567,6 +1592,7 @@ static int registry_save(void)
 
     /* Save using fs_manager (handles RAM fallback) */
     ssize_t written = fs_manager_write_file(REGISTRY_PATH, buffer, offset);
+    akira_free_buffer(buffer);
     if (written < 0)
     {
         LOG_ERR("Failed to save registry: %zd", written);
