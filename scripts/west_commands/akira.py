@@ -111,10 +111,20 @@ class Akira(WestCommand):
         components = []
         try:
             listed = subprocess.run(
-                ["west", "list", "-f", "{name}\t{revision}\t{url}"],
+                ["west", "list", "-f", "{name}\t{revision}\t{url}\t{abspath}"],
                 capture_output=True, text=True, check=True).stdout
             for line in listed.splitlines():
-                name, rev, url = (line.split("\t") + ["", "", ""])[:3]
+                name, rev, url, abspath = (line.split("\t") + ["", "", "", ""])[:4]
+                if name == "manifest":
+                    # west calls the repository holding west.yml "manifest", with
+                    # revision HEAD and no URL: name it after its directory (the
+                    # product, or akira-platform) and record the commit it is at.
+                    name = Path(abspath).name or name
+                    head = subprocess.run(["git", "-C", abspath, "rev-parse", "HEAD"],
+                                          capture_output=True, text=True)
+                    rev = head.stdout.strip() if head.returncode == 0 else ""
+                if url == "N/A":
+                    url = ""
                 components.append({
                     "type": "library", "name": name, "version": rev or "unknown",
                     "purl": f"pkg:generic/{name}@{rev}" if rev else f"pkg:generic/{name}",

@@ -118,6 +118,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   configuration); the registry buffers moved off the stack.
 - `fix(build)`: `CONFIG_AKIRA_OS_SHELL=y` without `src/console_shell/` now fails with a clear
   message; removed eight non-existent include directories from the `akira_os` target.
+- `fix(sbom)`: `west akira sbom` names the repository that holds `west.yml` (the product)
+  after its directory with its commit, instead of west's placeholder `manifest` at `HEAD`
+  with URL `N/A`.
 
 ## [1.6.7] — 2026-11-07
 
