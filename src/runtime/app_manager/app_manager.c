@@ -2403,6 +2403,10 @@ int akira_apps_install_package(const uint8_t *pkg, size_t len,
                                enum akira_app_source source,
                                char *name_out, size_t name_size)
 {
+    if (!g_initialized)
+    {
+        return -ENODEV;
+    }
     char local[APP_NAME_MAX_LEN] = "";
     char *name = name_out && name_size > 0 ? name_out : local;
     size_t size = name_out && name_size > 0 ? name_size : sizeof(local);
@@ -2411,17 +2415,20 @@ int akira_apps_install_package(const uint8_t *pkg, size_t len,
     return app_manager_install_akpkg(name, size, pkg, len, (app_source_t)source);
 }
 
+/* The façade reports a missing app manager as -ENODEV (the app manager's own
+ * calls fold it into -EINVAL), so callers can tell "not now" from "bad
+ * request". */
 int akira_apps_start(const char *name)
 {
-    return app_manager_start(name);
+    return g_initialized ? app_manager_start(name) : -ENODEV;
 }
 
 int akira_apps_stop(const char *name)
 {
-    return app_manager_stop(name);
+    return g_initialized ? app_manager_stop(name) : -ENODEV;
 }
 
 int akira_apps_uninstall(const char *name)
 {
-    return app_manager_uninstall(name);
+    return g_initialized ? app_manager_uninstall(name) : -ENODEV;
 }
