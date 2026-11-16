@@ -38,6 +38,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `OTA_STAGED`, `OTA_PRE_REBOOT`, `APP_FAILED`; `OTA_ERROR` also covers download, hash and
   downgrade failures. App events carry `registry_id`.
 - `docs(api)`: `docs/api-reference/extension-points.md`.
+- `feat(drivers)`: Microchip ATECC608B driver upstreamed from the Latch product firmware
+  (`include/drivers/secure_element/atecc608b.h`, binding `microchip,atecc608b`) and extended
+  with on-chip P-256 key generation, public key, sign, HMAC-SHA256 with a slot key, data-slot
+  writes, config-zone write and zone/slot locks. The new commands are not yet validated on
+  hardware.
+- `feat(drivers)`: The SE050 header is public (`include/drivers/secure_element/se050.h`) and
+  gains HMAC key storage, on-chip HMAC-SHA256 and object deletion (not yet validated on
+  hardware). `se050 apdu` / `se050 ecctest` now need `CONFIG_AKIRA_SHELL_DEBUG_COMMANDS`.
 - `feat(bench)`: Added `bench/exec_speed` — a WebAssembly execution-speed benchmark that runs
   one identical compute kernel three ways (native C, WAMR classic interpreter, and `wamrc` AOT)
   and times each with `CCOUNT`, asserting all three results match. Measured on ESP32-S3 at

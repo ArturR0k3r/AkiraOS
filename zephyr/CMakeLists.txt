@@ -593,6 +593,12 @@ if(CONFIG_AKIRA_SE050)
                                 ${AKIRA_OS_DIR}/src/drivers/secure_element/se050_transport.c)
 endif()
 
+if(CONFIG_AKIRA_ATECC608B)
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/secure_element/atecc608b.c)
+    zephyr_library_sources_ifdef(CONFIG_AKIRA_ATECC608B_SHELL
+        ${AKIRA_OS_DIR}/src/drivers/secure_element/atecc608b_shell.c)
+endif()
+
 if(CONFIG_AKIRA_PWM_DIAL)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/input/akira_pwm_dial.c)
 endif()

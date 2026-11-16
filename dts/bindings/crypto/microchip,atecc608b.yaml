@@ -1,0 +1,31 @@
+# Copyright (c) 2026 PenEngineering S.R.L
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Microchip ATECC608B CryptoAuthentication secure element (I2C).
+
+  Provides a hardware root of trust: an ECC P-256 private key generated inside
+  the part that cannot be read out of it, a factory-programmed 9-byte serial
+  number, a hardware TRNG, and monotonic counters.
+
+  The part has no wake pin. It is woken by holding SDA low for at least 60 µs,
+  which the driver does by clocking a zero byte at I2C address 0x00. That pulse
+  is only long enough on a bus running at or below ~133 kHz, so the I2C
+  controller this device sits on must be configured for standard mode.
+
+  Default address of a blank ATECC608B is 0x60 (0xC0 as an 8-bit write
+  address). Pre-provisioned TrustFLEX and TrustAndGO variants ship at 0x6A,
+  which collides with an LSM6DS3 on the same bus.
+
+compatible: "microchip,atecc608b"
+
+include: i2c-device.yaml
+
+properties:
+  wake-retries:
+    type: int
+    default: 3
+    description: |
+      How many times to repeat the wake pulse before declaring the part
+      absent. A single missed wake is normal when the device is entering
+      sleep as the pulse arrives.

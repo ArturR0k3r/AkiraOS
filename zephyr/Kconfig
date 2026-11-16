@@ -458,6 +458,35 @@ config AKIRA_SE050
       (keys never leave the chip), and secure binary object storage.
       Owns the ENA GPIO for deep-sleep power gating.
 
+config AKIRA_ATECC608B
+    bool "Enable Microchip ATECC608B secure element driver"
+    default y if DT_HAS_MICROCHIP_ATECC608B_ENABLED
+    depends on I2C
+    help
+      Microchip ATECC608B CryptoAuthentication secure element
+      (include/drivers/secure_element/atecc608b.h): P-256 keys generated
+      inside the part, HMAC with slot keys, factory serial number, TRNG,
+      and zone configuration / locking for provisioning.
+
+      The part has no wake pin — it is woken by holding SDA low for 60 us,
+      which only works on a bus at or below ~133 kHz. The I2C controller it
+      sits on must be configured for standard mode.
+
+config AKIRA_ATECC608B_SHELL
+    bool "ATECC608B shell commands"
+    default y
+    depends on AKIRA_ATECC608B && SHELL
+    help
+      `atecc info|serial|random` for bring-up and provisioning checks.
+
+config AKIRA_ATECC608B_INIT_PRIORITY
+    int "ATECC608B SYS_INIT priority"
+    default 65
+    depends on AKIRA_ATECC608B
+    help
+      Must run after the I2C driver initialises. A missing part is logged and
+      does not stop the boot.
+
 config AKIRA_SE050_SCP03
     bool "Use GlobalPlatform SCP03 authenticated/encrypted channel"
     default n

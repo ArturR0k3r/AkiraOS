@@ -9,7 +9,7 @@
 
 #define DT_DRV_COMPAT nxp_se050
 
-#include "se050.h"
+#include <drivers/secure_element/se050.h>
 #include "se050_transport.h"
 #include <zephyr/device.h>
 #include <zephyr/kernel.h>
@@ -41,6 +41,8 @@ LOG_MODULE_REGISTER(se050, CONFIG_I2C_LOG_LEVEL);
 #define P1_EC               0x01   /* credential type: EC */
 #define P1_BINARY           0x06   /* credential type: binary file */
 #define P1_SIGNATURE        0x0C   /* credential type: signature (ECDSA sign) */
+#define P1_HMAC             0x05   /* credential type: HMAC key */
+#define P1_MAC              0x0D   /* crypto operation: MAC */
 
 /* P2 operation */
 #define P2_DEFAULT          0x00
@@ -48,6 +50,10 @@ LOG_MODULE_REGISTER(se050, CONFIG_I2C_LOG_LEVEL);
 #define P2_EXIST            0x27
 #define P2_SIGN             0x09
 #define P2_RANDOM           0x49
+#define P2_DELETE_OBJECT    0x28
+#define P2_GENERATE_ONESHOT 0x45
+
+#define MACALGO_HMAC_SHA256 0x19
 
 /* TLV tags */
 #define TAG_1               0x41   /* object id / primary operand */
@@ -642,6 +648,7 @@ static int cmd_se050_rand(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+#ifdef CONFIG_AKIRA_SHELL_DEBUG_COMMANDS
 /* Raw APDU probe: `se050 apdu 80040049024100` → sends the hex APDU and prints
  * the raw response (payload + SW). Bring-up/debug aid only. */
 static int hexnib(char c)
@@ -736,15 +743,125 @@ static int cmd_se050_ecctest(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "...  OK (key 0x%08X)", objid);
     return 0;
 }
+#endif /* CONFIG_AKIRA_SHELL_DEBUG_COMMANDS */
 
+/* `apdu` and `ecctest` can create, use and (with a raw APDU) delete any
+ * object on the part: bring-up aids, never in a release image. */
 SHELL_STATIC_SUBCMD_SET_CREATE(se050_sub,
     SHELL_CMD(info, NULL, "Show SE050 status", cmd_se050_info),
     SHELL_CMD_ARG(rand, NULL, "Get N random bytes", cmd_se050_rand, 1, 1),
+#ifdef CONFIG_AKIRA_SHELL_DEBUG_COMMANDS
     SHELL_CMD_ARG(apdu, NULL, "Send raw hex APDU, print response", cmd_se050_apdu, 2, 0),
     SHELL_CMD_ARG(ecctest, NULL, "P-256 gen+pub+sign self-test [objid]", cmd_se050_ecctest, 1, 1),
+#endif
     SHELL_SUBCMD_SET_END);
 SHELL_CMD_REGISTER(se050, &se050_sub, "SE050 secure element", NULL);
 #endif /* CONFIG_SHELL */
+
+/* =========================================================================
+ * HMAC keys and HMAC computation (SE05x WriteSymmKey / MACOneShot). Not yet
+ * validated on hardware; see se050.h.
+ * ========================================================================= */
+int se050_hmac_key_write(const struct device *dev, uint32_t objid,
+                         const uint8_t *key, size_t len)
+{
+    struct se050_data *d = dev->data;
+    if (!key || len < 16 || len > 64) {
+        return -EINVAL;
+    }
+
+    uint8_t id[4]; put_u32(id, objid);
+    uint8_t tlv[8 + 2 + 64]; size_t off = 0;
+    int ret = tlv_put(tlv, sizeof(tlv), &off, TAG_1, id, sizeof(id));
+    if (ret == 0) ret = tlv_put(tlv, sizeof(tlv), &off, TAG_3, key, len);
+    if (ret < 0) {
+        return ret;
+    }
+
+    k_mutex_lock(&d->lock, K_FOREVER);
+    uint16_t sw = 0;
+    ret = se05x_apdu(d, INS_WRITE, P1_HMAC, P2_DEFAULT, tlv, off,
+                     NULL, 0, NULL, &sw);
+    k_mutex_unlock(&d->lock);
+    memset(tlv, 0, sizeof(tlv));
+    if (ret < 0) {
+        return ret;
+    }
+    if (sw != SW_OK) {
+        LOG_ERR("WriteSymmKey(HMAC) SW=0x%04X", sw);
+        return -EIO;
+    }
+    return 0;
+}
+
+int se050_hmac_sha256(const struct device *dev, uint32_t objid,
+                      const uint8_t *data, size_t len, uint8_t mac[32])
+{
+    struct se050_data *d = dev->data;
+    if ((!data && len) || !mac || len > SE050_HMAC_MAX_DATA) {
+        return -EINVAL;
+    }
+
+    uint8_t id[4]; put_u32(id, objid);
+    uint8_t algo = MACALGO_HMAC_SHA256;
+    uint8_t tlv[6 + 3 + 4 + SE050_HMAC_MAX_DATA]; size_t off = 0;
+    int ret = tlv_put(tlv, sizeof(tlv), &off, TAG_1, id, sizeof(id));
+    if (ret == 0) ret = tlv_put(tlv, sizeof(tlv), &off, TAG_2, &algo, 1);
+    if (ret == 0) ret = tlv_put(tlv, sizeof(tlv), &off, TAG_3, data, len);
+    if (ret < 0) {
+        return ret;
+    }
+
+    k_mutex_lock(&d->lock, K_FOREVER);
+    uint8_t resp[48]; size_t rlen = 0; uint16_t sw = 0;
+    ret = se05x_apdu(d, INS_CRYPTO, P1_MAC, P2_GENERATE_ONESHOT, tlv, off,
+                     resp, sizeof(resp), &rlen, &sw);
+    k_mutex_unlock(&d->lock);
+    if (ret < 0) {
+        return ret;
+    }
+    if (sw != SW_OK) {
+        LOG_ERR("MACOneShot SW=0x%04X", sw);
+        return -EIO;
+    }
+
+    size_t vlen = 0;
+    const uint8_t *v = tlv_find(resp, rlen, TAG_1, &vlen);
+    if (!v || vlen != 32) {
+        return -EPROTO;
+    }
+    memcpy(mac, v, 32);
+    return 0;
+}
+
+int se050_delete_object(const struct device *dev, uint32_t objid)
+{
+    struct se050_data *d = dev->data;
+    if (!se050_object_exists(dev, objid)) {
+        return -ENOENT;
+    }
+
+    uint8_t id[4]; put_u32(id, objid);
+    uint8_t tlv[8]; size_t off = 0;
+    int ret = tlv_put(tlv, sizeof(tlv), &off, TAG_1, id, sizeof(id));
+    if (ret < 0) {
+        return ret;
+    }
+
+    k_mutex_lock(&d->lock, K_FOREVER);
+    uint16_t sw = 0;
+    ret = se05x_apdu(d, INS_MGMT, P1_DEFAULT, P2_DELETE_OBJECT, tlv, off,
+                     NULL, 0, NULL, &sw);
+    k_mutex_unlock(&d->lock);
+    if (ret < 0) {
+        return ret;
+    }
+    if (sw != SW_OK) {
+        LOG_ERR("DeleteSecureObject SW=0x%04X", sw);
+        return -EIO;
+    }
+    return 0;
+}
 
 /* =========================================================================
  * Device instantiation
