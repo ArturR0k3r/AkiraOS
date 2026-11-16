@@ -87,7 +87,9 @@ include(${AKIRA_OS_DIR}/cmake/akira_release_checks.cmake)
 # AKIRA_HOOK_DEFINE(). Registered before the AKIRA_OS_BUILD_LIBRARIES check so
 # applications that compile AkiraOS sources themselves (tests/) link them too.
 zephyr_linker_sources(SECTIONS ${CMAKE_CURRENT_LIST_DIR}/linker/akira_sections.ld)
-foreach(registry akira_capability akira_native_api akira_hook)
+foreach(registry akira_capability akira_native_api akira_hook
+                 akira_app_admission akira_net_policy akira_settings_key_provider
+                 akira_audit_sink akira_identity_provider)
     zephyr_iterable_section(NAME ${registry} KVMA RAM_REGION GROUP RODATA_REGION)
 endforeach()
 
@@ -319,6 +321,8 @@ zephyr_library_sources(
 zephyr_library_sources(
     ${AKIRA_OS_DIR}/src/runtime/akira_runtime.c
     ${AKIRA_OS_DIR}/src/runtime/akira_hooks.c
+    ${AKIRA_OS_DIR}/src/runtime/security/akira_admission.c
+    ${AKIRA_OS_DIR}/src/runtime/security/akira_net_policy.c
     ${AKIRA_OS_DIR}/src/runtime/akira_abi_check.c
     ${AKIRA_OS_DIR}/src/runtime/security.c
     ${AKIRA_OS_DIR}/src/runtime/manifest_parser.c
@@ -589,6 +593,12 @@ if(CONFIG_AKIRA_SE050)
                                 ${AKIRA_OS_DIR}/src/drivers/secure_element/se050_transport.c)
 endif()
 
+if(CONFIG_AKIRA_ATECC608B)
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/secure_element/atecc608b.c)
+    zephyr_library_sources_ifdef(CONFIG_AKIRA_ATECC608B_SHELL
+        ${AKIRA_OS_DIR}/src/drivers/secure_element/atecc608b_shell.c)
+endif()
+
 if(CONFIG_AKIRA_PWM_DIAL)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/input/akira_pwm_dial.c)
 endif()
@@ -598,6 +608,20 @@ if(CONFIG_AKIRA_OTA AND CONFIG_FLASH_MAP AND CONFIG_BOOTLOADER_MCUBOOT)
     zephyr_library_sources(
         ${AKIRA_OS_DIR}/src/connectivity/transport_interface.c
         ${AKIRA_OS_DIR}/src/connectivity/ota/ota_manager.c
+        ${AKIRA_OS_DIR}/src/connectivity/ota/akira_ota.c
+    )
+else()
+    # include/akira_ota.h stays linkable: every call reports -ENOTSUP.
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/connectivity/ota/akira_ota_stub.c)
+endif()
+
+# Ed25519 verification (include/akira_ed25519.h) and the baseline app
+# signature check (CONFIG_AKIRA_APP_PUBKEY).
+if(CONFIG_AKIRA_ED25519)
+    zephyr_library_sources(
+        ${AKIRA_OS_DIR}/src/lib/crypto/ed25519/curve25519.c
+        ${AKIRA_OS_DIR}/src/lib/crypto/ed25519/akira_ed25519.c
+        ${AKIRA_OS_DIR}/src/runtime/security/app_signature_baseline.c
     )
 endif()
 
@@ -734,7 +758,10 @@ endif()
 
 # WiFi Manager — centralized connect/disconnect/stats
 if(CONFIG_AKIRA_WIFI_MANAGER)
-    zephyr_library_sources(${AKIRA_OS_DIR}/src/connectivity/wifi/wifi_manager.c)
+    zephyr_library_sources(
+        ${AKIRA_OS_DIR}/src/connectivity/wifi/wifi_manager.c
+        ${AKIRA_OS_DIR}/src/connectivity/wifi/akira_wifi.c
+    )
 endif()
 
 # Radio Abstraction Layer (RAL)
@@ -848,6 +875,12 @@ if(CONFIG_AKIRA_APP_SOURCE_BLE)
 endif()
 
 # ===== Native OS Shell (akira_display_* framebuffer renderer) =====
+if(CONFIG_AKIRA_OS_SHELL AND NOT EXISTS ${AKIRA_OS_DIR}/src/console_shell/akira_os_shell.c)
+    message(FATAL_ERROR
+        "CONFIG_AKIRA_OS_SHELL=y but src/console_shell/ is not in this tree; the "
+        "native console shell lives on the C0ns0l3-Firmware branch. Disable "
+        "CONFIG_AKIRA_OS_SHELL (the akira-profile-console snippet sets it).")
+endif()
 if(CONFIG_AKIRA_OS_SHELL)
     zephyr_library_sources(
         ${AKIRA_OS_DIR}/src/console_shell/akira_os_shell.c
@@ -873,9 +906,7 @@ endif()
 target_include_directories(akira_os INTERFACE
     ${AKIRA_OS_DIR}/include/
     ${AKIRA_OS_DIR}/src/
-    ${AKIRA_OS_DIR}/src/akira/
     ${AKIRA_OS_DIR}/src/api/
-    ${AKIRA_OS_DIR}/src/apps/
     ${AKIRA_OS_DIR}/src/connectivity/
     ${AKIRA_OS_DIR}/src/connectivity/bluetooth/
     ${AKIRA_OS_DIR}/src/connectivity/client/
@@ -884,15 +915,9 @@ target_include_directories(akira_os INTERFACE
     ${AKIRA_OS_DIR}/src/connectivity/http/
     ${AKIRA_OS_DIR}/src/connectivity/usb/
     ${AKIRA_OS_DIR}/src/drivers/
-    ${AKIRA_OS_DIR}/src/ipc/
     ${AKIRA_OS_DIR}/src/lib/
-    ${AKIRA_OS_DIR}/src/OTA/
-    ${AKIRA_OS_DIR}/src/power/
-    ${AKIRA_OS_DIR}/src/resource/
     ${AKIRA_OS_DIR}/src/runtime/
-    ${AKIRA_OS_DIR}/src/security/
     ${AKIRA_OS_DIR}/src/runtime/security/
-    ${AKIRA_OS_DIR}/src/services/
     ${AKIRA_OS_DIR}/src/settings/
     ${AKIRA_OS_DIR}/src/shell/
     ${AKIRA_OS_DIR}/src/storage/

@@ -198,18 +198,12 @@ uint64_t akira_capability_sanitize_app_mask(uint64_t requested, bool attested)
     return effective;
 }
 
-uint64_t akira_capability_grant(uint64_t requested, bool from_binary,
+uint64_t akira_capability_grant(uint64_t requested, bool attested,
                                 uint64_t *unattested_privileged)
 {
-    /* Only a manifest embedded in the binary can be covered by the platform
-     * signature gate; a separately supplied JSON manifest never is. It is
-     * re-read from the (unauthenticated) filesystem at start, after any install-
-     * time signature check, so it cannot be trusted to raise privilege. On a
-     * hardened board (CONFIG_AKIRA_REQUIRE_SIGNED_APPS=y with a narrowed
-     * CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK) a signed app must therefore embed its
-     * manifest in the WASM binary (AkiraSDK embed_manifest.py) for its
-     * capabilities to be attested; a sidecar-only manifest is clamped. */
-    bool attested = from_binary && IS_ENABLED(CONFIG_AKIRA_REQUIRE_SIGNED_APPS);
+    /* `attested` is the admission verdict for this app (akira_admission.h):
+     * a provider verified a signature over the binary and the manifest it
+     * was installed with, and the load matched that install record. */
     uint64_t granted = akira_capability_sanitize_app_mask(requested, attested);
 
     if (unattested_privileged) {

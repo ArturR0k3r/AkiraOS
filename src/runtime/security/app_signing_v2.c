@@ -19,11 +19,6 @@
 
 LOG_MODULE_REGISTER(akira_app_signing, CONFIG_AKIRA_LOG_LEVEL);
 
-/* Forward declarations — weak defaults defined later in this file */
-int akira_platform_allowlist_verify(const uint8_t *app_hash, size_t hash_len);
-int akira_platform_pqc_verify(const uint8_t *digest, size_t digest_len,
-                               const uint8_t *sig,    size_t sig_len);
-
 /* mbedTLS integration */
 #ifdef CONFIG_MBEDTLS
 #include <mbedtls/sha256.h>
@@ -548,131 +543,41 @@ int app_verify_wasm_integrity(const void *binary, size_t size,
         LOG_DBG("WASM integrity check passed: %d sections, %zu bytes", section_count, size);
     }
 
-    /* Compute hash — always required for allowlist check */
+    /* The hash identifies the binary to admission (akira_admission.h), which
+     * decides whether it may run, and to the module cache. */
     uint8_t _local_hash[32];
     uint8_t *hash_ptr = hash_out ? hash_out : _local_hash;
-    int ret = app_compute_hash(binary, size, hash_ptr);
-    if (ret != 0)
-    {
-        return ret;
-    }
-
-    /* Platform allowlist gate — overridden by AkiraPlatform when
-     * CONFIG_AKIRA_PLATFORM_APP_ALLOWLIST=y. Default: allow all. */
-    int allowlist_ret = akira_platform_allowlist_verify(hash_ptr, 32);
-    if (allowlist_ret != 0)
-    {
-        LOG_ERR("Binary rejected by OEM allowlist");
-        sandbox_audit_log(AUDIT_EVENT_SIGNATURE_FAIL, "allowlist_deny", 0);
-        return -EACCES;
-    }
-
-    return 0;
+    return app_compute_hash(binary, size, hash_ptr);
 }
 
-/**
- * @brief Weak hook: OEM app allowlist verification.
- *
- * The default implementation allows all binaries. AkiraPlatform overrides
- * this with a strong implementation that checks the SHA-256 hash against
- * an NVS-persisted allowlist (see CONFIG_AKIRA_PLATFORM_APP_ALLOWLIST).
- *
- * Called from app_verify_wasm_integrity() after structural checks and
- * hash computation. Also called by app_verify_signature() after the
- * cryptographic signature check passes.
- *
- * @param app_hash  SHA-256 hash of the binary (32 bytes).
- * @param hash_len  Must be 32.
- * @return 0 if allowed, -EACCES if denied by allowlist.
- */
-__weak int akira_platform_allowlist_verify(const uint8_t *app_hash, size_t hash_len)
+int app_compute_package_digest(const uint8_t *manifest, size_t manifest_size,
+                               const uint8_t *wasm, size_t wasm_size,
+                               const uint8_t *model, size_t model_size,
+                               uint8_t digest[32])
 {
-    ARG_UNUSED(app_hash);
-    ARG_UNUSED(hash_len);
-#ifdef CONFIG_AKIRA_REQUIRE_SIGNED_APPS
-    /* Fail closed: signed apps are required but no strong platform allowlist
-     * verifier is linked, so no binary can be attested — reject rather than
-     * let an app self-assert its capabilities. */
-    LOG_ERR("REQUIRE_SIGNED_APPS: no platform allowlist verifier linked; rejecting app");
-    return -EACCES;
-#else
-    return 0; /* Default: allow all */
-#endif
-}
-
-/* ===== PQC Signature Verification (Dilithium-2 / FIPS 204) ===== */
-
-/**
- * @brief Verify the Dilithium-2 .akpkg signature.
- *
- * Computes SHA-256(manifest || wasm [|| model]) then calls the
- * akira_platform_pqc_verify() weak hook with the digest and the raw
- * sig.dilithium2 bytes extracted from the archive.
- */
-int app_verify_pqc_sig(const uint8_t *manifest, size_t manifest_size,
-                       const uint8_t *wasm,     size_t wasm_size,
-                       const uint8_t *model,    size_t model_size,
-                       const uint8_t *sig,      size_t sig_size)
-{
-    if (!manifest || manifest_size == 0 || !wasm || wasm_size == 0) {
+    if (!manifest || !wasm || wasm_size == 0 || !digest) {
         return -EINVAL;
     }
 
 #if CRYPTO_AVAILABLE
-    /* Compute SHA-256(manifest || wasm [|| model]) to match akira-cli digest(). */
     mbedtls_sha256_context ctx;
-    uint8_t digest[32];
 
     mbedtls_sha256_init(&ctx);
     if (mbedtls_sha256_starts(&ctx, 0) != 0 ||
         mbedtls_sha256_update(&ctx, manifest, manifest_size) != 0 ||
-        mbedtls_sha256_update(&ctx, wasm,     wasm_size)     != 0 ||
+        mbedtls_sha256_update(&ctx, wasm, wasm_size) != 0 ||
         (model && model_size > 0 &&
-         mbedtls_sha256_update(&ctx, model, model_size) != 0)    ||
+         mbedtls_sha256_update(&ctx, model, model_size) != 0) ||
         mbedtls_sha256_finish(&ctx, digest) != 0) {
         mbedtls_sha256_free(&ctx);
-        LOG_ERR("PQC: SHA-256 computation failed");
         return -EIO;
     }
     mbedtls_sha256_free(&ctx);
-
-    return akira_platform_pqc_verify(digest, sizeof(digest), sig, sig_size);
+    return 0;
 #else
-    ARG_UNUSED(sig);
-    ARG_UNUSED(sig_size);
+    ARG_UNUSED(manifest_size);
     ARG_UNUSED(model);
     ARG_UNUSED(model_size);
-    return 0; /* No crypto — PQC verification skipped */
-#endif
-}
-
-/**
- * @brief Weak hook: Dilithium-2 signature verification.
- *
- * The default implementation is a no-op that allows all packages. AkiraPlatform
- * overrides this with a strong liboqs-backed implementation when
- * CONFIG_AKIRA_PLATFORM_PQC_SIGNING=y.
- *
- * @param digest      SHA-256(manifest || wasm [|| model]) — 32 bytes.
- * @param digest_len  Must be 32.
- * @param sig         sig.dilithium2 bytes (may be NULL if entry absent).
- * @param sig_len     Length of sig (0 if entry absent).
- * @return 0 if valid or PQC not enforced; -EACCES on signature mismatch;
- *         -ENODATA if sig is NULL and mandatory mode is configured.
- */
-__weak int akira_platform_pqc_verify(const uint8_t *digest, size_t digest_len,
-                                      const uint8_t *sig,    size_t sig_len)
-{
-    ARG_UNUSED(digest);
-    ARG_UNUSED(digest_len);
-    ARG_UNUSED(sig);
-    ARG_UNUSED(sig_len);
-#ifdef CONFIG_AKIRA_REQUIRE_SIGNED_APPS
-    /* Fail closed: signed apps are required but no strong platform PQC
-     * verifier is linked, so the signature cannot be checked — reject. */
-    LOG_ERR("REQUIRE_SIGNED_APPS: no platform PQC verifier linked; rejecting package");
-    return -EACCES;
-#else
-    return 0; /* Default: PQC not enforced */
+    return -ENOTSUP;
 #endif
 }

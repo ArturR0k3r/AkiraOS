@@ -194,3 +194,16 @@ void akira_free_aligned(void *ptr)
 
     k_free(raw);
 }
+
+/* Public façade (include/akira_mem.h). */
+#include <akira_mem.h>
+
+void *akira_mem_alloc(size_t size)
+{
+    return akira_malloc_buffer(size);
+}
+
+void akira_mem_free(void *ptr)
+{
+    akira_free_buffer(ptr);
+}

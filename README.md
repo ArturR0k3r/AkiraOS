@@ -194,11 +194,10 @@ figures are published yet — see [Performance](https://docs.akiraos.dev/resourc
    SESIP Level 2 evaluated configuration (tag `v1.6.6`) ships this way.
 
 > **Honest hardening status.** Default developer builds are **unsigned**; authenticity comes
-> from the `--release` signing flow above. In-tree **app-signature** verification is a hook
-> (`CONFIG_AKIRA_REQUIRE_SIGNED_APPS` + `CONFIG_AKIRA_HARDEN_UNATTESTED_APPS`); a full
-> verifier ships with AkiraPlatform. ESP32 **flash encryption** and **Secure Boot V2** are
-> integrator steps, not enabled by default. Treat these as configuration you must turn on for
-> a fielded device.
+> from the `--release` signing flow above. Since 1.7 AkiraOS verifies **Ed25519 app
+> signatures** against your OEM key (`CONFIG_AKIRA_APP_PUBKEY`; `CONFIG_AKIRA_REQUIRE_SIGNED_APPS`
+> refuses unsigned apps). ESP32 **flash encryption** and **Secure Boot V2** are integrator steps,
+> not enabled by default. Treat these as configuration you must turn on for a fielded device.
 
 [Security architecture →](https://docs.akiraos.dev/architecture/security.html)
 
@@ -210,8 +209,10 @@ AkiraOS firmware is **Apache-2.0 and free forever** — the full runtime, every 
 AkiraSDK and samples, all hardware targets, with no fees. Your app code stays proprietary
 (Apache-2.0 is not copyleft).
 
-Paid tiers add hosted services, not firmware features: **AkiraHub** (device registry, app
-catalogue, remote install), the `akira-cli` signing service, enterprise support and legal
+Paid tiers add **AkiraHub** (device registry, app catalogue, remote install),
+**AkiraPlatform** (a fleet module: secure-element identity, publisher and post-quantum app
+signing, signed policy, tamper-evident audit — built on the public
+[extension points](docs/api-reference/extension-points.md)), signing services, support and
 indemnification. See [COMMERCIAL.md](COMMERCIAL.md).
 
 ---

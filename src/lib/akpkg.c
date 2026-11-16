@@ -1023,20 +1023,10 @@ size_t akpkg_base64_decode(const char *src, size_t src_len,
     return out_pos;
 }
 
-int akpkg_tar_extract(const uint8_t *tar, size_t tar_len,
-                      const uint8_t **wasm_ptr,       size_t *wasm_size,
-                      const char    **manifest_ptr,   size_t *manifest_size,
-                      const uint8_t **model_ptr,      size_t *model_size,
-                      const uint8_t **dilithium2_ptr, size_t *dilithium2_size)
+int akpkg_tar_extract_contents(const uint8_t *tar, size_t tar_len,
+                               struct akpkg_contents *out)
 {
-    *wasm_ptr = NULL;
-    *wasm_size = 0;
-    *manifest_ptr = NULL;
-    *manifest_size = 0;
-    if (model_ptr)       *model_ptr       = NULL;
-    if (model_size)      *model_size      = 0;
-    if (dilithium2_ptr)  *dilithium2_ptr  = NULL;
-    if (dilithium2_size) *dilithium2_size = 0;
+    memset(out, 0, sizeof(*out));
 
     size_t pos = 0;
 
@@ -1069,26 +1059,37 @@ int akpkg_tar_extract(const uint8_t *tar, size_t tar_len,
             /* Regular file — check filename (path component stripped). */
             const char *base = strrchr(name, '/');
             base = base ? base + 1 : name;
+            const uint8_t *data = tar + pos;
 
             if (strcmp(base, "app.wasm") == 0 || strcmp(base, "app.aot") == 0)
             {
-                *wasm_ptr = tar + pos;
-                *wasm_size = fsize;
+                out->wasm = data;
+                out->wasm_size = fsize;
             }
             else if (strcmp(base, "manifest.json") == 0)
             {
-                *manifest_ptr = (const char *)(tar + pos);
-                *manifest_size = fsize;
+                out->manifest = (const char *)data;
+                out->manifest_size = fsize;
             }
-            else if (strcmp(base, "model.tflite") == 0 && model_ptr && model_size)
+            else if (strcmp(base, "model.tflite") == 0)
             {
-                *model_ptr  = tar + pos;
-                *model_size = fsize;
+                out->model = data;
+                out->model_size = fsize;
             }
-            else if (strcmp(base, "sig.dilithium2") == 0 && dilithium2_ptr && dilithium2_size)
+            else if (strcmp(base, "sig.ed25519") == 0)
             {
-                *dilithium2_ptr  = tar + pos;
-                *dilithium2_size = fsize;
+                out->sig_ed25519 = data;
+                out->sig_ed25519_size = fsize;
+            }
+            else if (strcmp(base, "sig.mldsa44") == 0)
+            {
+                out->sig_mldsa44 = data;
+                out->sig_mldsa44_size = fsize;
+            }
+            else if (strcmp(base, "sig.dilithium2") == 0)
+            {
+                out->sig_dilithium2 = data;
+                out->sig_dilithium2_size = fsize;
             }
         }
 
@@ -1096,19 +1097,39 @@ int akpkg_tar_extract(const uint8_t *tar, size_t tar_len,
         pos += (fsize + TAR_BLOCK_SZ - 1u) & ~(TAR_BLOCK_SZ - 1u);
     }
 
-    if (!(*wasm_ptr) || !(*manifest_ptr))
+    if (!out->wasm || !out->manifest)
     {
         LOG_ERR("akpkg: missing %s%s in archive",
-                (*wasm_ptr) ? "" : "app.wasm/app.aot ",
-                (*manifest_ptr) ? "" : "manifest.json");
+                out->wasm ? "" : "app.wasm/app.aot ",
+                out->manifest ? "" : "manifest.json");
         return -ENOENT;
     }
 
-    if (model_ptr && *model_ptr)
-        LOG_DBG("akpkg: model.tflite found (%zu B)", *model_size);
-
-    if (dilithium2_ptr && *dilithium2_ptr)
-        LOG_DBG("akpkg: sig.dilithium2 found (%zu B)", *dilithium2_size);
+    if (out->model)
+        LOG_DBG("akpkg: model.tflite found (%zu B)", out->model_size);
+    if (out->sig_dilithium2 && !out->sig_mldsa44)
+        LOG_WRN("akpkg: sig.dilithium2 (pre-standard Dilithium) is not verified; "
+                "re-sign with ML-DSA-44 (sig.mldsa44)");
 
     return 0;
+}
+
+int akpkg_tar_extract(const uint8_t *tar, size_t tar_len,
+                      const uint8_t **wasm_ptr,       size_t *wasm_size,
+                      const char    **manifest_ptr,   size_t *manifest_size,
+                      const uint8_t **model_ptr,      size_t *model_size,
+                      const uint8_t **dilithium2_ptr, size_t *dilithium2_size)
+{
+    struct akpkg_contents c;
+    int ret = akpkg_tar_extract_contents(tar, tar_len, &c);
+
+    *wasm_ptr = c.wasm;
+    *wasm_size = c.wasm_size;
+    *manifest_ptr = c.manifest;
+    *manifest_size = c.manifest_size;
+    if (model_ptr)       *model_ptr       = c.model;
+    if (model_size)      *model_size      = c.model_size;
+    if (dilithium2_ptr)  *dilithium2_ptr  = c.sig_dilithium2;
+    if (dilithium2_size) *dilithium2_size = c.sig_dilithium2_size;
+    return ret;
 }

@@ -94,6 +94,7 @@ extern "C"
         APP_SOURCE_USB,
         APP_SOURCE_SD,
         APP_SOURCE_FIRMWARE,
+        APP_SOURCE_FLEET, /**< device-management client (akira_apps.h) */
     } app_source_t;
 
     /**

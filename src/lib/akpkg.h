@@ -71,6 +71,24 @@ int32_t akpkg_inflate(const uint8_t *gz, size_t gz_len,
  * @param dilithium2_size  Out: sig.dilithium2 size in bytes (0 if absent or not requested).
  * @return 0 on success, -ENOENT if app.wasm or manifest.json is missing.
  */
+/** Entries of an .akpkg tar. Pointers point into the tar buffer; absent
+ *  entries are NULL with size 0. */
+struct akpkg_contents {
+    const uint8_t *wasm;           size_t wasm_size;     /**< app.wasm or app.aot */
+    const char    *manifest;       size_t manifest_size; /**< manifest.json */
+    const uint8_t *model;          size_t model_size;    /**< model.tflite */
+    const uint8_t *sig_ed25519;    size_t sig_ed25519_size;
+    const uint8_t *sig_mldsa44;    size_t sig_mldsa44_size;    /**< FIPS 204 ML-DSA-44 */
+    const uint8_t *sig_dilithium2; size_t sig_dilithium2_size; /**< legacy round-3 */
+};
+
+/**
+ * @brief Locate every known entry of an .akpkg tar.
+ * @return 0, or -ENOENT if app.wasm/app.aot or manifest.json is missing.
+ */
+int akpkg_tar_extract_contents(const uint8_t *tar, size_t tar_len,
+                               struct akpkg_contents *out);
+
 int akpkg_tar_extract(const uint8_t *tar, size_t tar_len,
                       const uint8_t **wasm_ptr,        size_t *wasm_size,
                       const char    **manifest_ptr,    size_t *manifest_size,

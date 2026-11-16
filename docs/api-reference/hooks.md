@@ -36,19 +36,27 @@ must not block, and must not call back into the subsystem that raised the event.
 |---|---|---|---|
 | `AKIRA_HOOK_BOOT_PRE_RUNTIME` | HAL and connectivity are up, before the WASM runtime | main | — |
 | `AKIRA_HOOK_BOOT_READY` | app manager is up; ready to run apps | main | — |
-| `AKIRA_HOOK_APP_INSTALLED` | an app was installed | installer (HTTP/BLE/USB/shell) | `app.name`, `app.registry_id`, `app.version` |
-| `AKIRA_HOOK_APP_UNINSTALLED` | an app was uninstalled | caller | `app.name` |
-| `AKIRA_HOOK_APP_STARTED` | an app started | caller | `app.name`, `app.container_id` |
-| `AKIRA_HOOK_APP_STOPPED` | an app stopped or exited cleanly | WASM app thread | `app.name`, `app.exit_code` |
-| `AKIRA_HOOK_APP_CRASHED` | an app trapped or exited non-zero | WASM app thread | `app.name`, `app.exit_code` |
-| `AKIRA_HOOK_APP_FAILED` | an app exhausted its restart budget | app manager | `app.name` |
-| `AKIRA_HOOK_NET_UP` / `_DOWN` | a network link changed | net_mgmt | `net.link` |
+| `AKIRA_HOOK_APP_INSTALLED` | an app was installed (and admitted) | installer (HTTP/BLE/USB/shell/fleet client) | `app.name`, `app.registry_id`, `app.version` |
+| `AKIRA_HOOK_APP_UNINSTALLED` | an app was uninstalled | caller | `app.name`, `app.registry_id` |
+| `AKIRA_HOOK_APP_STARTED` | an app started | caller | `app.name`, `app.registry_id`, `app.container_id` |
+| `AKIRA_HOOK_APP_STOPPED` | an app stopped or exited cleanly | WASM app thread | `app.name`, `app.registry_id`, `app.container_id`, `app.exit_code` |
+| `AKIRA_HOOK_APP_CRASHED` | an app trapped or exited non-zero | WASM app thread | as `APP_STOPPED` |
+| `AKIRA_HOOK_APP_FAILED` | a crash exhausted the app's restart budget (raised right after `APP_CRASHED`) | WASM app thread | `app.name`, `app.registry_id`, `app.exit_code` |
+| `AKIRA_HOOK_NET_UP` / `_DOWN` | Wi-Fi got an IPv4 address / disconnected | net_mgmt | `net.link` |
 | `AKIRA_HOOK_BT_CONNECTED` / `_DISCONNECTED` | a BLE central connected/disconnected | BT RX | — |
-| `AKIRA_HOOK_USB_CONFIGURED` / `_DISCONNECTED` | USB was (de)configured | USB | — |
-| `AKIRA_HOOK_OTA_STARTED` / `_STAGED` / `_PRE_REBOOT` / `_CONFIRMED` / `_ERROR` | OTA progress | OTA | `ota.state`, `ota.error` |
+| `AKIRA_HOOK_USB_CONFIGURED` / `_DISCONNECTED` | the host configured the device / VBUS was removed | USB | — |
+| `AKIRA_HOOK_OTA_STARTED` | the secondary slot was erased for a new image | OTA worker | `ota.state` |
+| `AKIRA_HOOK_OTA_STAGED` | the image passed size/hash/version checks and is marked for a test boot | OTA worker | `ota.state` |
+| `AKIRA_HOOK_OTA_PRE_REBOOT` | `ota_reboot_to_apply_update()` / `akira_ota_reboot()` is about to reboot | caller | — |
+| `AKIRA_HOOK_OTA_CONFIRMED` | the running trial image was confirmed | boot guard / caller | — |
+| `AKIRA_HOOK_OTA_ERROR` | an update failed (flash, hash, downgrade, boot request), or the previous boot rolled back (`ota.error = -ECANCELED`, at `BOOT_READY`) | OTA worker / main | `ota.state`, `ota.error` (an `enum ota_result` or `-ECANCELED`) |
 
 Handlers on the WASM app thread (stopped, crashed) and the BT RX thread run with
 small stacks (8 KB and ~2 KB on akiraconsole_prod); keep them short.
+
+Hooks only observe. To *decide* (refuse an app, block a connection, supply
+a key), use the provider APIs in
+[Extension points](extension-points.md).
 
 ## Relationship to the legacy weak hooks
 

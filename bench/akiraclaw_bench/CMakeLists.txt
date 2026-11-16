@@ -26,8 +26,6 @@ target_sources(app PRIVATE
     src/aiinfer_bench.cpp
     # AkiraOS runtime sources needed by B2 (sandbox) and B3 (audit)
     ${CMAKE_CURRENT_LIST_DIR}/../../src/runtime/security/sandbox.c
-    # HMAC platform stub (only compiled when AKIRA_AUDIT_LOG_HMAC=y)
-    src/akira_platform/audit_hmac.c
 )
 
 # ── Include directories ──────────────────────────────────────────────────

@@ -7,7 +7,7 @@
  */
 
 #include <zephyr/logging/log.h>
-#include <akira.h>
+#include <akira_os.h>
 
 LOG_MODULE_REGISTER(product_main, LOG_LEVEL_INF);
 

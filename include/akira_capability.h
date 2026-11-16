@@ -17,8 +17,11 @@
  * - The name must be a string literal of at most 63 characters, contain a '.',
  *   contain no '*', and must not collide with a core name, alias or wildcard
  *   prefix. The runtime rejects violations at start-up.
- * - Place the definition in sources built into the application or a
- *   zephyr_library(); those are linked whole-archive, so the entry is kept.
+ * - Place the definition in sources compiled into the `app` target, or into a
+ *   zephyr_library() created by a Zephyr *module*. Zephyr links those
+ *   whole-archive, so the entry is kept. A zephyr_library() an application
+ *   creates after find_package(Zephyr) is not whole-archived, and an object
+ *   holding only registry entries is silently dropped from it.
  *
  * A manifest may request every capability of a product namespace with a
  * wildcard such as "acme.*".
@@ -117,17 +120,19 @@ uint64_t akira_capability_privileged_mask(void);
 /**
  * @brief Compute the capabilities to grant an app.
  *
- * Clamps @p requested to registered capabilities and, unless the manifest came
- * from the app binary on a build that verifies app signatures
- * (CONFIG_AKIRA_REQUIRE_SIGNED_APPS), to CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK.
+ * Clamps @p requested to registered capabilities and, for an app that is not
+ * attested, to CONFIG_AKIRA_UNSIGNED_APP_CAP_MASK (and away from privileged
+ * capabilities when CONFIG_AKIRA_HARDEN_UNATTESTED_APPS=y).
  *
  * @param requested          Mask parsed from the app manifest.
- * @param from_binary        True if the manifest is embedded in the binary.
+ * @param attested           Admission verdict (akira_admission.h): a trusted
+ *                           signature covers the binary and its manifest.
+ *                           Before 1.7 this was "manifest embedded in binary".
  * @param unattested_privileged Optional output: privileged bits granted to an
  *                           app that was not attested (for audit logging).
  * @return The capability mask to grant.
  */
-uint64_t akira_capability_grant(uint64_t requested, bool from_binary,
+uint64_t akira_capability_grant(uint64_t requested, bool attested,
                                 uint64_t *unattested_privileged);
 
 /**
@@ -141,6 +146,41 @@ int akira_capability_validate(const struct akira_capability *begin,
 
 /** @brief Validate every capability linked into the image. */
 int akira_capability_registry_validate(void);
+
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) || defined(__DOXYGEN__)
+#include <wasm_export.h>
+
+/**
+ * @brief True if the app running in @p exec_env holds @p capability.
+ *
+ * Use at the top of every native function (AKIRA_NATIVE_API_DEFINE). Denials
+ * are audited and rate-limited by the sandbox.
+ *
+ * @since 1.6 (public since 1.7; previously runtime/security.h)
+ */
+bool akira_security_check_exec(wasm_exec_env_t exec_env, uint64_t capability);
+
+/** Return @p retval from the calling native function unless the app holds
+ *  @p capability. */
+#define AKIRA_CHECK_CAP_OR_RETURN(exec_env, capability, retval)                    \
+    do {                                                                           \
+        if (!akira_security_check_exec(exec_env, capability)) {                   \
+            return (retval);                                                       \
+        }                                                                          \
+    } while (0)
+
+/** As AKIRA_CHECK_CAP_OR_RETURN() for native functions returning void. */
+#define AKIRA_CHECK_CAP_OR_RETURN_VOID(exec_env, capability)                       \
+    do {                                                                           \
+        if (!akira_security_check_exec(exec_env, capability)) {                   \
+            return;                                                                \
+        }                                                                          \
+    } while (0)
+
+/** Expression form: true if the app holds @p capability. */
+#define AKIRA_CHECK_CAP_INLINE(exec_env, capability)                               \
+    akira_security_check_exec(exec_env, capability)
+#endif /* CONFIG_AKIRA_WASM_RUNTIME */
 
 #ifdef __cplusplus
 }

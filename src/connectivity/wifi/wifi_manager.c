@@ -6,6 +6,7 @@
  */
 
 #include "wifi_manager.h"
+#include <akira_hooks.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/net/net_if.h>
@@ -52,6 +53,16 @@ static void fire_event(wifi_mgr_event_t evt)
         if (mgr.listeners[i].cb) {
             mgr.listeners[i].cb(evt, mgr.listeners[i].user_data);
         }
+    }
+
+    /* System-wide link events (akira_hooks.h) */
+    if (evt == WIFI_MGR_EVT_CONNECTED || evt == WIFI_MGR_EVT_DISCONNECTED) {
+        struct akira_hook_event e = {
+            .type = evt == WIFI_MGR_EVT_CONNECTED ? AKIRA_HOOK_NET_UP
+                                                  : AKIRA_HOOK_NET_DOWN,
+            .net = { .link = AKIRA_HOOK_NET_LINK_WIFI },
+        };
+        akira_hooks_emit(&e);
     }
 }
 

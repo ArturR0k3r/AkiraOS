@@ -9,7 +9,6 @@
 #include <akira_capability.h>
 #include <akira_native_registry.h>
 #include <akira_hooks.h>
-#include <runtime/security.h>
 
 LOG_MODULE_REGISTER(widget, LOG_LEVEL_INF);
 

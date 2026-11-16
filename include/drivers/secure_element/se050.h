@@ -12,10 +12,16 @@
  * All functions are thread-safe: the driver serialises access to the single
  * physical part with an internal mutex.
  *
- * SCOPE: the SE05x APDU constants track the public SE05x APDU specification.
- * The layer compiles and is structurally complete; exact enum values and the
- * live APDU exchange must be confirmed against the part before field use.
- * SCP03 (authenticated channel) is compiled only when CONFIG_AKIRA_SE050_SCP03.
+ *   - HMAC-SHA256 keys stored on-die and HMAC computed by the part (1.7)
+ *
+ * Hardware status: TRNG, binary objects, existence checks and P-256
+ * keygen / public key / sign were validated on AkiraConsole Prod Rev A.3
+ * (2026-07). The HMAC and delete operations added in 1.7 follow the NXP
+ * Plug & Trust middleware constants and are not yet validated on a part.
+ * The session is a plain (unauthenticated) APDU channel; SCP03 is compiled
+ * only with CONFIG_AKIRA_SE050_SCP03.
+ *
+ * Include as <drivers/secure_element/se050.h> (public since 1.7).
  *
  * @stability experimental
  * @since 1.7
@@ -98,6 +104,29 @@ int se050_ecc_get_pub(const struct device *dev, uint32_t objid,
  */
 int se050_ecc_sign(const struct device *dev, uint32_t objid,
                   const uint8_t hash[32], uint8_t sig_rs[SE050_P256_SIG_LEN]);
+
+/**
+ * @brief Store an HMAC key under @p objid (create-or-overwrite).
+ *
+ * The key cannot be read back; it is used only by se050_hmac_sha256().
+ * @param key  Key bytes (16..64).
+ */
+int se050_hmac_key_write(const struct device *dev, uint32_t objid,
+                         const uint8_t *key, size_t len);
+
+/**
+ * @brief HMAC-SHA256 of @p data with the key stored under @p objid,
+ *        computed on the part.
+ * @param len  At most SE050_HMAC_MAX_DATA bytes.
+ */
+int se050_hmac_sha256(const struct device *dev, uint32_t objid,
+                      const uint8_t *data, size_t len, uint8_t mac[32]);
+
+/** Largest input se050_hmac_sha256() accepts in one APDU. */
+#define SE050_HMAC_MAX_DATA 192
+
+/** @brief Delete the secure object @p objid. -ENOENT if it does not exist. */
+int se050_delete_object(const struct device *dev, uint32_t objid);
 
 #ifdef __cplusplus
 }

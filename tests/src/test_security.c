@@ -254,8 +254,9 @@ ZTEST(security_registry, test_grant_clamps_and_reports_privileged)
     zassert_equal(granted, expected, "granted 0x%016llx", (unsigned long long)granted);
     zassert_equal(privileged, granted & akira_capability_privileged_mask(),
                   "privileged bits granted to an unattested app must be reported");
-    zassert_equal(akira_capability_grant(requested, true, NULL), expected,
-                  "without CONFIG_AKIRA_REQUIRE_SIGNED_APPS an embedded manifest is unattested too");
+    zassert_equal(akira_capability_grant(requested, true, NULL),
+                  AKIRA_CAP_DISPLAY_WRITE | AKIRA_CAP_NETWORK | BIT64(48),
+                  "an attested app gets every registered capability it asks for");
 }
 
 ZTEST(security_registry, test_hardened_build_never_grants_privileged_unattested)
@@ -266,7 +267,7 @@ ZTEST(security_registry, test_hardened_build_never_grants_privileged_unattested)
 
     uint64_t privileged = UINT64_MAX;
     uint64_t all = akira_capability_str_to_mask("*");
-    uint64_t granted = akira_capability_grant(all, true, &privileged);
+    uint64_t granted = akira_capability_grant(all, false, &privileged);
 
     zassert_equal(granted & akira_capability_privileged_mask(), 0,
                   "an unattested app was granted privileged caps 0x%016llx",

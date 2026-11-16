@@ -4,6 +4,7 @@
  */
 
 #define LOG_MODULE_NAME akira_net_api
+#include <akira_net_policy.h>
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(akira_net_api, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -62,24 +63,26 @@ int akira_native_net_open(wasm_exec_env_t exec_env, int32_t type)
 	return net_stream_open((int)type);
 }
 
-/**
- * @brief Weak hook: per-app network egress policy check.
- *
- * The default implementation allows all connections. AkiraPlatform overrides
- * this with a strong implementation that enforces the network_policy declared
- * in the app manifest (see CONFIG_AKIRA_PLATFORM_NET_POLICY).
- *
- * @param app_id  Runtime app identifier (from wasm_runtime_get_module_inst).
- * @param host    Destination hostname or IP string.
- * @param port    Destination TCP/UDP port.
- * @return 0 if the connection is allowed, -EACCES if denied by policy.
- */
-__weak int akira_net_policy_check(uint32_t app_id, const char *host, uint16_t port)
+/* Ask the egress policy providers (include/akira_net_policy.h). */
+static int net_policy_gate(wasm_exec_env_t exec_env, enum akira_net_op op,
+			   const char *host, uint16_t port)
 {
-	ARG_UNUSED(app_id);
-	ARG_UNUSED(host);
-	ARG_UNUSED(port);
-	return 0; /* Default: allow all */
+	char app_name[32] = "";
+	wasm_module_inst_t mi = wasm_runtime_get_module_inst(exec_env);
+
+	if (mi) {
+		(void)akira_runtime_get_name_for_module_inst(mi, app_name,
+							     sizeof(app_name));
+	}
+
+	struct akira_net_policy_ctx ctx = {
+		.op = op,
+		.app_name = app_name,
+		.host = host,
+		.port = port,
+	};
+
+	return akira_net_policy_check(&ctx);
 }
 
 int akira_native_net_connect(wasm_exec_env_t exec_env, int32_t handle,
@@ -93,16 +96,11 @@ int akira_native_net_connect(wasm_exec_env_t exec_env, int32_t handle,
 		return -EINVAL;
 	}
 
-	/* Platform egress policy gate — overridden by AkiraPlatform when
-	 * CONFIG_AKIRA_PLATFORM_NET_POLICY=y. Default: allow all. */
-	wasm_module_inst_t mi = wasm_runtime_get_module_inst(exec_env);
-	uint32_t app_id = mi ? (uint32_t)(uintptr_t)mi : 0U;
-	int policy_ret = akira_net_policy_check(app_id, host, (uint16_t)port);
+	int policy_ret = net_policy_gate(exec_env, AKIRA_NET_OP_CONNECT, host,
+					 (uint16_t)port);
 	if (policy_ret != 0)
 	{
-		LOG_WRN("net_connect: DENIED by policy (app=0x%08x host=%s port=%d)",
-				app_id, host, port);
-		return -EACCES;
+		return policy_ret;
 	}
 
 	return net_stream_connect((int)handle, host, (uint16_t)port);
@@ -118,6 +116,13 @@ int akira_native_net_bind(wasm_exec_env_t exec_env, int32_t handle,
 		return -EINVAL;
 	}
 
+	int policy_ret = net_policy_gate(exec_env, AKIRA_NET_OP_BIND, NULL,
+					 (uint16_t)port);
+	if (policy_ret != 0)
+	{
+		return policy_ret;
+	}
+
 	return net_stream_bind((int)handle, (uint16_t)port);
 }
 
@@ -129,6 +134,12 @@ int akira_native_net_listen(wasm_exec_env_t exec_env, int32_t handle,
 	if (backlog <= 0)
 	{
 		backlog = 1;
+	}
+
+	int policy_ret = net_policy_gate(exec_env, AKIRA_NET_OP_LISTEN, NULL, 0);
+	if (policy_ret != 0)
+	{
+		return policy_ret;
 	}
 
 	return net_stream_listen((int)handle, (int)backlog);

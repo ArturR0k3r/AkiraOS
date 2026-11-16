@@ -42,6 +42,11 @@ target_sources(app PRIVATE
     ${AKIRA_SRC}/connectivity/ota/ota_manager.c
     ${AKIRA_SRC}/runtime/akira_boot_guard.c
     ${AKIRA_SRC}/runtime/akira_hooks.c
+    ${AKIRA_SRC}/runtime/security/akira_admission.c
+    ${AKIRA_SRC}/runtime/security/akira_net_policy.c
+    ${AKIRA_SRC}/runtime/security/app_signature_baseline.c
+    ${AKIRA_SRC}/lib/crypto/ed25519/curve25519.c
+    ${AKIRA_SRC}/lib/crypto/ed25519/akira_ed25519.c
 
     # Stubs
     stubs/stub_mcuboot.c
@@ -63,6 +68,16 @@ target_sources(app PRIVATE
     src/test_matter_accessory.c
     src/test_mqtt_ha.c
     src/test_display_clip.c
+    src/test_admission.c
+)
+
+# The baseline app signature provider reads CONFIG_AKIRA_APP_PUBKEY, which
+# depends on AKIRA_APP_SIGNING (off in this suite). Give it the RFC 8032
+# test-1 public key that test_admission.c signs with.
+set_source_files_properties(
+    ${AKIRA_SRC}/runtime/security/app_signature_baseline.c
+    PROPERTIES COMPILE_DEFINITIONS
+    "CONFIG_AKIRA_APP_PUBKEY=\"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a\""
 )
 
 # The Matter accessory sources are normally gated by Kconfig symbols whose

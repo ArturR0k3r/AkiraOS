@@ -102,6 +102,7 @@ Deep dive into system design, components, and data flows.
 - [Data Flow](architecture/data-flow.md) — End-to-end diagrams
 - [OTA Design](ota_design.md) — MCUboot slots, boot guard, delta updates
 - [AkiraHub Integration](hub/HUB_INTEGRATION.md) · [Phone Companion App](hub/PHONE_APP_INTEGRATION.md) · [Web Interface](hub/WEB_INTERFACE.md) — integration specs
+- [Extension points](api-reference/extension-points.md) — admission, network policy, keys, audit, identity providers and public façades for product firmware
 
 ---
 
