@@ -94,7 +94,7 @@ one `AKIRA_AUDIT_DROPPED` record that counts what it missed.
 | Header | What |
 |---|---|
 | `akira_os.h` | `akira_start()`: the standard boot sequence |
-| `akira_apps.h` | list, install (`.akpkg`), start, stop, uninstall apps |
+| `akira_apps.h` | list, install (`.akpkg`), start, stop, uninstall apps; read an app's manifest `commands` and send it an app-defined command (`<name>.cmd` → `<name>.evt` IPC) |
 | `akira_ota.h` | write and stage a firmware image; `akira_boot_guard.h` decides confirm or rollback |
 | `akira_wifi.h` | station credentials, scan, soft-AP |
 | `akira_mem.h` | PSRAM-first allocation for large buffers |

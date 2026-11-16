@@ -33,6 +33,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `feat(api)`: Public façades for product firmware and device-management modules:
   `akira_os.h` (`akira_start()`), `akira_apps.h`, `akira_ota.h`, `akira_wifi.h`,
   `akira_mem.h`. `AKIRA_CHECK_CAP_OR_RETURN()` and friends move to `akira_capability.h`.
+  `akira_apps_send_command()` and `akira_apps_get_commands()` expose the app command
+  bridge (`<name>.cmd` / `<name>.evt`) and the manifest `commands` array.
 - `feat(hooks)`: The ten declared-but-silent events are now raised: `NET_UP` / `NET_DOWN`,
   `BT_CONNECTED` / `BT_DISCONNECTED`, `USB_CONFIGURED` / `USB_DISCONNECTED`, `OTA_STARTED`,
   `OTA_STAGED`, `OTA_PRE_REBOOT`, `APP_FAILED`; `OTA_ERROR` also covers download, hash and

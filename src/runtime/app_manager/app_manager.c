@@ -2432,3 +2432,103 @@ int akira_apps_uninstall(const char *name)
 {
     return g_initialized ? app_manager_uninstall(name) : -ENODEV;
 }
+
+int akira_apps_get_commands(const char *name, char *buf, size_t size)
+{
+    if (!g_initialized)
+    {
+        return -ENODEV;
+    }
+    if (!name || !buf || size < 3)
+    {
+        return -EINVAL;
+    }
+
+    int ret = -ENOENT;
+
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
+    app_entry_t *app = find_app_by_name(name);
+    if (app)
+    {
+        ret = 0;
+        if (app->container_id < 0 ||
+            akira_runtime_get_commands_json(app->container_id, buf, size) != 0 ||
+            buf[0] == '\0')
+        {
+            strcpy(buf, "[]");
+        }
+    }
+    k_mutex_unlock(&g_registry_mutex);
+    return ret;
+}
+
+#ifdef CONFIG_AKIRA_WASM_IPC
+#include "app_cmd_bridge.h"
+
+struct apps_cmd_reply {
+    void *buf;
+    size_t size;
+    int ret;
+};
+
+static void apps_cmd_reply_cb(const char *app_name, const void *reply, size_t reply_len,
+                              app_cmd_reply_status_t status, void *user_data)
+{
+    struct apps_cmd_reply *r = user_data;
+
+    ARG_UNUSED(app_name);
+    switch (status)
+    {
+    case APP_CMD_REPLY_OK:
+        if (reply_len > r->size)
+        {
+            r->ret = -ENOBUFS;
+            return;
+        }
+        if (reply_len > 0)
+        {
+            memcpy(r->buf, reply, reply_len);
+        }
+        r->ret = (int)reply_len;
+        break;
+    case APP_CMD_REPLY_NOT_LISTENING:
+        r->ret = -ENOENT;
+        break;
+    default:
+        r->ret = -ETIMEDOUT;
+        break;
+    }
+}
+#endif
+
+int akira_apps_send_command(const char *name, const void *cmd, size_t cmd_len,
+                            void *reply, size_t reply_size, uint32_t timeout_ms)
+{
+    if (!g_initialized)
+    {
+        return -ENODEV;
+    }
+    if (!name || !name[0] || (!cmd && cmd_len) || (!reply && reply_size))
+    {
+        return -EINVAL;
+    }
+    if (cmd_len > AKIRA_APPS_CMD_MAX)
+    {
+        return -EMSGSIZE;
+    }
+#ifdef CONFIG_AKIRA_WASM_IPC
+    struct apps_cmd_reply r = { reply, reply_size, -ETIMEDOUT };
+    /* The bridge invokes the callback before returning on every path except
+     * argument errors, so r.ret carries the outcome. */
+    int rc = app_cmd_bridge_send(name, cmd, cmd_len, apps_cmd_reply_cb, &r,
+                                 K_MSEC(timeout_ms));
+
+    if (rc < 0 && rc != -ENOENT)
+    {
+        return rc;
+    }
+    return r.ret;
+#else
+    return -ENOTSUP;
+#endif
+}

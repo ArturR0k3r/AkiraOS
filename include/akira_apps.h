@@ -86,6 +86,48 @@ int akira_apps_start(const char *name);
 int akira_apps_stop(const char *name);
 int akira_apps_uninstall(const char *name);
 
+/** Largest command or reply akira_apps_send_command() carries, bytes. */
+#ifdef CONFIG_AKIRA_IPC_MSG_MAX_SIZE
+#define AKIRA_APPS_CMD_MAX CONFIG_AKIRA_IPC_MSG_MAX_SIZE
+#else
+#define AKIRA_APPS_CMD_MAX 256
+#endif
+
+/** Room for an app's manifest "commands" array (raw JSON). */
+#define AKIRA_APPS_COMMANDS_LEN 512
+
+/**
+ * @brief Copy the "commands" array from an app's manifest, as raw JSON.
+ *
+ * The array describes the commands the app accepts through
+ * akira_apps_send_command(); its format is up to the app. Available while
+ * the app is loaded: otherwise, or when the manifest has none, @p buf
+ * receives "[]".
+ *
+ * @return 0, -ENOENT if no such app, -ENODEV, or -EINVAL.
+ */
+int akira_apps_get_commands(const char *name, char *buf, size_t size);
+
+/**
+ * @brief Send an app-defined command to a running app and wait for its reply.
+ *
+ * The command is published on the app's "<name>.cmd" IPC topic, which the
+ * app subscribes to itself; the reply is read from "<name>.evt" (the
+ * convention the BLE companion service uses). Command and reply are opaque
+ * and at most AKIRA_APPS_CMD_MAX bytes. Blocks for up to @p timeout_ms, so
+ * call it from a thread or work queue, never from a hook handler or the BT
+ * thread. Needs CONFIG_AKIRA_WASM_IPC.
+ *
+ * @return reply length (>= 0),
+ *         -ENOENT if the app is not running or not subscribed to its command topic,
+ *         -ETIMEDOUT if it did not reply in time,
+ *         -EMSGSIZE if @p cmd_len exceeds AKIRA_APPS_CMD_MAX,
+ *         -ENOBUFS if the reply does not fit @p reply_size,
+ *         -ENOTSUP without CONFIG_AKIRA_WASM_IPC, -ENODEV, or -EINVAL.
+ */
+int akira_apps_send_command(const char *name, const void *cmd, size_t cmd_len,
+                            void *reply, size_t reply_size, uint32_t timeout_ms);
+
 #ifdef __cplusplus
 }
 #endif

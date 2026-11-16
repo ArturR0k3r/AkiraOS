@@ -15,7 +15,7 @@ What AkiraOS provides for any fleet client, AkiraPlatform's or your own:
 
 | Need | AkiraOS public API |
 |---|---|
-| Install, start, stop, uninstall apps | `include/akira_apps.h` (installs go through app admission) |
+| Install, start, stop, uninstall apps; app-defined commands | `include/akira_apps.h` (installs go through app admission) |
 | Write and stage firmware; confirm or roll back | `include/akira_ota.h`, `include/akira_boot_guard.h` |
 | Know when the network comes up; app and OTA events | `include/akira_hooks.h` (`NET_UP`, `APP_*`, `OTA_*`) |
 | Report security events | `include/akira_audit.h` (audit sinks) |
