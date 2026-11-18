@@ -93,7 +93,7 @@ static void akira_input_cb(struct input_event *evt, void *user_data)
     if (k_msgq_put(&g_event_queue, &e, K_NO_WAIT) != 0) {
         akira_input_event_t discard;
 
-        LOG_WRN("event queue full, evicting oldest for code=%u %s", evt->code, evt->value ? "pressed" : "released");
+        LOG_DBG("event queue full, evicting oldest for code=%u %s", evt->code, evt->value ? "pressed" : "released");
         (void)k_msgq_get(&g_event_queue, &discard, K_NO_WAIT);
         (void)k_msgq_put(&g_event_queue, &e, K_NO_WAIT);
     }
