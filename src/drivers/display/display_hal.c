@@ -159,14 +159,14 @@ void akira_display_hal_flush(void)
 #if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
     if (display_dev == NULL)
     {
-        LOG_ERR("Display not initialized");
+        LOG_ERR_RATELIMIT("Display not initialized");
         return;
     }
 
     uint16_t *fb = akira_framebuffer_get();
     if (fb == NULL)
     {
-        LOG_ERR("Framebuffer is NULL");
+        LOG_ERR_RATELIMIT("Framebuffer is NULL");
         return;
     }
 
@@ -222,7 +222,7 @@ void akira_display_hal_flush(void)
         int ret = display_write(display_dev, 0, 0, &desc, conv_buf);
         if (ret < 0)
         {
-            LOG_ERR("Display write failed: %d", ret);
+            LOG_ERR_RATELIMIT("Display write failed: %d", ret);
         }
     }
     else
@@ -238,7 +238,7 @@ void akira_display_hal_flush(void)
         int ret = display_write(display_dev, 0, 0, &desc, fb);
         if (ret < 0)
         {
-            LOG_ERR("Display write failed: %d", ret);
+            LOG_ERR_RATELIMIT("Display write failed: %d", ret);
         }
     }
 #endif

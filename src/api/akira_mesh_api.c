@@ -32,12 +32,33 @@
 #include <string.h>
 #include <errno.h>
 #include <stdio.h>
+#include <akira_app_containment.h>
 
 LOG_MODULE_REGISTER(akira_mesh_api, CONFIG_AKIRA_LOG_LEVEL);
 
 /* Must match AKIRA_MESH_MAX_PAYLOAD in AkiraSDK/include/akira_api.h. */
 #define MESH_API_MAX_PAYLOAD 200
 #define MESH_API_RX_DEPTH    CONFIG_AKIRA_WASM_MESH_RX_QUEUE_DEPTH
+
+/* Bounds for app-supplied parameters. */
+#define MESH_BEACON_MIN_MS     1000u
+#define MESH_BEACON_MAX_MS     600000u
+#define MESH_BEACON_DEFAULT_MS 5000u
+#define MESH_WAIT_SLICE_MS     100u
+#define MESH_WAIT_MAX_MS       60000u
+#define MESH_RELEASE_LOCK_MS   2000u
+#define MESH_API_LOCK_MS       2000u
+
+/* mesh init/start/stop/send take s_lock and drive the radio (SPI, BUSY waits)
+ * under the host stack's own locks: a stop must not abort the app thread while
+ * it holds them and leak the lock. Bracket those spans so a stop waits. */
+#define MESH_CRITICAL(env, expr)                \
+    ({                                          \
+        akira_native_critical_enter(env);       \
+        int mesh_crit_ret_ = (expr);            \
+        akira_native_critical_exit(env);        \
+        mesh_crit_ret_;                         \
+    })
 
 /** Validate a WASM pointer/length pair, or bail with -EFAULT. */
 #define WASM_ADDR_CHECK(inst, ptr, len)                                      \
@@ -99,9 +120,22 @@ static struct k_msgq s_rx_q;
 static char         *s_rx_buf;      /* PSRAM backing store for s_rx_q */
 static bool          s_rx_ready;
 static bool          s_session;     /* an app currently owns the mesh */
+static int           s_owner_slot = -1; /* WASM slot that owns the session */
 static uint32_t      s_rx_dropped;
 
 static K_MUTEX_DEFINE(s_lock);
+
+/* True if the caller may operate the current session: there is no session yet,
+ * or the caller's slot owns it. A different app must not drive or drain another
+ * app's mesh (one app, one handle). */
+static bool mesh_caller_owns(wasm_exec_env_t exec_env)
+{
+    if (!s_session) {
+        return true;
+    }
+    int slot = akira_runtime_slot_of_exec_env(exec_env);
+    return (s_owner_slot < 0) || (slot == s_owner_slot);
+}
 
 /* Runs on the mesh RX thread — never blocks. On a full queue the oldest item
  * is discarded so a slow app sees fresh traffic rather than a stalled backlog.
@@ -183,6 +217,25 @@ static const uint32_t s_transport_caps[] = {
 #endif
 };
 
+/* s_lock is only ever held by an app thread inside a native critical
+ * section, so a stop never aborts a thread that holds it, and it is taken
+ * with a bound, so no native waits for it forever. */
+static int mesh_lock(wasm_exec_env_t exec_env)
+{
+    akira_native_critical_enter(exec_env);
+    if (k_mutex_lock(&s_lock, K_MSEC(MESH_API_LOCK_MS)) != 0) {
+        akira_native_critical_exit(exec_env);
+        return -EBUSY;
+    }
+    return 0;
+}
+
+static void mesh_unlock(wasm_exec_env_t exec_env)
+{
+    k_mutex_unlock(&s_lock);
+    akira_native_critical_exit(exec_env);
+}
+
 /* ---- Natives ------------------------------------------------------------ */
 
 /* mesh_init — sig "(i$ii)i" */
@@ -199,10 +252,16 @@ int akira_native_mesh_init(wasm_exec_env_t exec_env, int node_id,
         return -EINVAL;
     }
 
-    k_mutex_lock(&s_lock, K_FOREVER);
+    /* The whole call, radio work included (rf_deinit + mesh_init), runs in
+     * the critical section mesh_lock() opens, so a stop cannot abort this
+     * thread while it holds s_lock, the chip lock or the mesh init lock. */
+    int lret = mesh_lock(exec_env);
 
+    if (lret != 0) {
+        return lret;
+    }
     if (s_session) {
-        k_mutex_unlock(&s_lock);
+        mesh_unlock(exec_env);
         return -EALREADY;
     }
 
@@ -219,8 +278,11 @@ int akira_native_mesh_init(wasm_exec_env_t exec_env, int node_id,
     cfg.node_id[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)node_id;
     cfg.role = (akira_mesh_role_t)role;
     cfg.max_hops = CONFIG_AKIRA_MESH_MAX_HOPS;
-    cfg.beacon_interval_ms = (beacon_interval_ms == 0) ? 5000
-                                                       : beacon_interval_ms;
+    if (beacon_interval_ms == 0) {
+        beacon_interval_ms = MESH_BEACON_DEFAULT_MS;
+    }
+    cfg.beacon_interval_ms = CLAMP(beacon_interval_ms, MESH_BEACON_MIN_MS,
+                                   MESH_BEACON_MAX_MS);
 
     if (name && name[0] != '\0') {
         strncpy(cfg.node_name, name, sizeof(cfg.node_name) - 1);
@@ -244,7 +306,7 @@ int akira_native_mesh_init(wasm_exec_env_t exec_env, int node_id,
         }
     }
     if (ret != 0) {
-        k_mutex_unlock(&s_lock);
+        mesh_unlock(exec_env);
         LOG_ERR("mesh_init failed: %d", ret);
         return ret;
     }
@@ -252,15 +314,16 @@ int akira_native_mesh_init(wasm_exec_env_t exec_env, int node_id,
     ret = rx_queue_alloc();
     if (ret != 0) {
         akira_mesh_stop();
-        k_mutex_unlock(&s_lock);
+        mesh_unlock(exec_env);
         return ret;
     }
     s_rx_dropped = 0;
 
     akira_mesh_register_rx_callback(mesh_api_rx_cb, NULL);
     s_session = true;
+    s_owner_slot = akira_runtime_slot_of_exec_env(exec_env);
 
-    k_mutex_unlock(&s_lock);
+    mesh_unlock(exec_env);
     LOG_INF("mesh_init: node 0x%02X '%s' role=%d", (unsigned)node_id,
             cfg.node_name, role);
     return 0;
@@ -273,7 +336,10 @@ int akira_native_mesh_start(wasm_exec_env_t exec_env)
     if (!s_session) {
         return -ENODEV;
     }
-    return akira_mesh_start();
+    if (!mesh_caller_owns(exec_env)) {
+        return -EPERM;
+    }
+    return MESH_CRITICAL(exec_env, akira_mesh_start());
 }
 
 /* mesh_stop — sig "()i" */
@@ -281,17 +347,26 @@ int akira_native_mesh_stop(wasm_exec_env_t exec_env)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_MESH, -EPERM);
 
-    k_mutex_lock(&s_lock, K_FOREVER);
+    int ret = mesh_lock(exec_env);
+
+    if (ret != 0) {
+        return ret;
+    }
     if (!s_session) {
-        k_mutex_unlock(&s_lock);
+        mesh_unlock(exec_env);
         return 0;
+    }
+    if (!mesh_caller_owns(exec_env)) {
+        mesh_unlock(exec_env);
+        return -EPERM;
     }
     /* Detach the callback before freeing the queue it writes into. */
     akira_mesh_register_rx_callback(NULL, NULL);
-    int ret = akira_mesh_stop();
+    ret = akira_mesh_stop();
     rx_queue_free();
     s_session = false;
-    k_mutex_unlock(&s_lock);
+    s_owner_slot = -1;
+    mesh_unlock(exec_env);
     return ret;
 }
 
@@ -311,8 +386,12 @@ int akira_native_mesh_send(wasm_exec_env_t exec_env, void *dest_id,
     if (!s_session) {
         return -ENODEV;
     }
-    return akira_mesh_send((const uint8_t *)dest_id, (const uint8_t *)data,
-                           (size_t)len);
+    if (!mesh_caller_owns(exec_env)) {
+        return -EPERM;
+    }
+    return MESH_CRITICAL(exec_env,
+                         akira_mesh_send((const uint8_t *)dest_id,
+                                         (const uint8_t *)data, (size_t)len));
 }
 
 /* mesh_broadcast — sig "(*~i)i" */
@@ -333,8 +412,12 @@ int akira_native_mesh_broadcast(wasm_exec_env_t exec_env, void *data,
     if (!s_session) {
         return -ENODEV;
     }
-    return akira_mesh_broadcast((const uint8_t *)data, (size_t)len,
-                                (uint8_t)max_hops);
+    if (!mesh_caller_owns(exec_env)) {
+        return -EPERM;
+    }
+    return MESH_CRITICAL(exec_env,
+                         akira_mesh_broadcast((const uint8_t *)data, (size_t)len,
+                                              (uint8_t)max_hops));
 }
 
 /* mesh_recv_pop — sig "(**~i)i" */
@@ -347,6 +430,9 @@ int akira_native_mesh_recv_pop(wasm_exec_env_t exec_env, void *src_id_out,
     if (max_len == 0) {
         return -EINVAL;
     }
+    /* At most one payload (MESH_API_MAX_PAYLOAD) is ever written: validate and
+     * copy only that span. */
+    max_len = MIN(max_len, (uint32_t)MESH_API_MAX_PAYLOAD);
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
     WASM_ADDR_CHECK(inst, src_id_out, AKIRA_MESH_NODE_ID_LEN);
     WASM_ADDR_CHECK(inst, buf, max_len);
@@ -354,9 +440,30 @@ int akira_native_mesh_recv_pop(wasm_exec_env_t exec_env, void *src_id_out,
     if (!s_session || !s_rx_ready) {
         return -ENODEV;
     }
+    if (!mesh_caller_owns(exec_env)) {
+        return -EPERM;
+    }
 
+    /* Wait in short slices (no lock held) so a stop is honoured promptly and no
+     * app-chosen timeout is passed straight to the kernel. */
     struct mesh_rx_item item;
-    if (k_msgq_get(&s_rx_q, &item, K_MSEC(timeout_ms)) != 0) {
+    uint32_t left = MIN(timeout_ms, MESH_WAIT_MAX_MS);
+    int ret;
+    for (;;) {
+        uint32_t slice = MIN(left, MESH_WAIT_SLICE_MS);
+        ret = k_msgq_get(&s_rx_q, &item, slice ? K_MSEC(slice) : K_NO_WAIT);
+        if (ret == 0 || slice == 0) {
+            break;
+        }
+        left -= slice;
+        if (akira_runtime_stop_requested(exec_env)) {
+            return -ECANCELED;
+        }
+        if (left == 0) {
+            break;
+        }
+    }
+    if (ret != 0) {
         return -EAGAIN;
     }
 
@@ -387,9 +494,11 @@ int akira_native_mesh_get_nodes(wasm_exec_env_t exec_env, void *buf,
     /* akira_mesh_get_nodes() always copies from the table head, so it cannot
      * be windowed — it writes straight into the (already bounds-checked) WASM
      * buffer. Safe only because the two record layouts are asserted identical
-     * above; no staging copy and no temporary allocation is needed. */
-    return akira_mesh_get_nodes((akira_mesh_node_info_t *)buf,
-                                (size_t)max_nodes);
+     * above; no staging copy and no temporary allocation is needed. It takes
+     * the stack's tables lock, so bracket it against a stop-abort. */
+    return MESH_CRITICAL(exec_env,
+                         akira_mesh_get_nodes((akira_mesh_node_info_t *)buf,
+                                              (size_t)max_nodes));
 }
 
 /* mesh_get_stats — sig "(*)i" */
@@ -433,25 +542,70 @@ int akira_native_mesh_distribute_app(wasm_exec_env_t exec_env, void *dest_id,
     if (!s_session) {
         return -ENODEV;
     }
+    if (!mesh_caller_owns(exec_env)) {
+        return -EPERM;
+    }
     /* The host stack has no per-destination distribution yet and returns
      * -ENOSYS; dest_id is validated above so the ABI stays stable once
-     * chunking lands. */
-    return akira_mesh_distribute_app(app_name, (const uint8_t *)data,
-                                     (size_t)len);
+     * chunking lands. Wrapped against a stop-abort: once chunking adds a
+     * per-fragment loop it will run under the stack's radio/tables locks. */
+    return MESH_CRITICAL(exec_env,
+                         akira_mesh_distribute_app(app_name,
+                                                   (const uint8_t *)data,
+                                                   (size_t)len));
+}
+
+/* Internal teardown — caller holds s_lock. */
+static void mesh_teardown_locked(void)
+{
+    akira_mesh_register_rx_callback(NULL, NULL);
+    akira_mesh_stop();
+    rx_queue_free();
+    s_session = false;
+    s_owner_slot = -1;
 }
 
 void akira_mesh_api_cleanup(void)
 {
     k_mutex_lock(&s_lock, K_FOREVER);
     if (s_session) {
-        akira_mesh_register_rx_callback(NULL, NULL);
-        akira_mesh_stop();
-        rx_queue_free();
-        s_session = false;
-        LOG_INF("mesh: session released on app exit");
+        mesh_teardown_locked();
+        LOG_INF("mesh: session released");
     }
     k_mutex_unlock(&s_lock);
 }
+
+/* Release the mesh session a WASM app set up, if it ends however it ends:
+ * otherwise the radio stays acquired by "mesh" and nothing else can claim it.
+ * Only the owning slot's teardown acts — a different app ending must not kill a
+ * live session. Uses a timed lock so it can never wedge the cleanup thread. */
+void akira_mesh_api_release(int slot)
+{
+    if (slot < 0) {
+        return;
+    }
+    if (k_mutex_lock(&s_lock, K_MSEC(MESH_RELEASE_LOCK_MS)) != 0) {
+        LOG_WRN("mesh: release lock busy; session of slot %d may linger", slot);
+        return;
+    }
+    if (s_session && slot == s_owner_slot) {
+        mesh_teardown_locked();
+        LOG_INF("mesh: stopped (owner app slot %d gone)", slot);
+    }
+    k_mutex_unlock(&s_lock);
+}
+
+/* Register the per-slot release hook. Before RF (60): mesh hands the radio
+ * back to the RF layer first. */
+#include <akira_app_containment.h>
+
+static void mesh_release(int slot, const char *app_name)
+{
+    ARG_UNUSED(app_name);
+    akira_mesh_api_release(slot);
+}
+
+AKIRA_APP_RESOURCE_DEFINE(mesh, 40, NULL, mesh_release);
 
 /* ===== WASM exports =====
  * Registered with WAMR by the native API registry (akira_native_registry.h).

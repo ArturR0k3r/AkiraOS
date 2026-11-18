@@ -62,16 +62,22 @@ int akira_native_app_get_self_name(wasm_exec_env_t exec_env,
 /**
  * @brief Start an installed app by name.
  *
- * Requires AKIRA_CAP_APP_CONTROL.  Calls app_manager_start() which loads
- * the binary, creates a WAMR instance, and spawns its thread.  Returns once
- * the app's WAMR instantiation has succeeded or failed.
+ * Requires AKIRA_CAP_APP_CONTROL.  app_manager_start() (binary load, WAMR
+ * instance, thread) runs on the lifecycle work queue, never on the caller's
+ * thread; the caller waits for its result, so this still returns once the
+ * app's WAMR instantiation has succeeded or failed.  The wait ends early
+ * with -EINTR if the caller is stopped (the start still completes).
  *
  * @param exec_env WASM execution environment
  * @param name     Null-terminated app name
  * @return 0 on success, negative Zephyr errno on failure
- *   -EINVAL  empty or NULL name
+ *   -EINVAL  empty/NULL/over-long name, or caller tried to start self
  *   -ENOENT  app not installed
- *   -EBUSY   max concurrent apps already running
+ *   -EBUSY   max concurrent apps already running, or too many lifecycle
+ *            requests pending
+ *   -EAGAIN  this app is sending lifecycle requests too fast (a burst of 4,
+ *            then one per 2 s)
+ *   -EINTR   the caller is being stopped
  *   -EPERM   capability not granted
  */
 int akira_native_app_start(wasm_exec_env_t exec_env, const char *name);
@@ -80,13 +86,16 @@ int akira_native_app_start(wasm_exec_env_t exec_env, const char *name);
  * @brief Stop a running app by name.
  *
  * Requires AKIRA_CAP_APP_CONTROL.  An app cannot stop itself via this API;
- * self-exit is done by returning 0 from main().
+ * self-exit is done by returning 0 from main().  Like app_start, the stop
+ * runs on the lifecycle work queue (it can take up to the stop timeout) and
+ * the caller waits for the result.
  *
  * @param exec_env WASM execution environment
  * @param name     Null-terminated app name
  * @return 0 on success, negative Zephyr errno on failure
- *   -EINVAL  empty/NULL name, or caller tried to stop self
+ *   -EINVAL  empty/NULL/over-long name, or caller tried to stop self
  *   -ENOENT  app not installed
+ *   -EBUSY / -EAGAIN / -EINTR  as for akira_native_app_start()
  *   -EPERM   capability not granted
  */
 int akira_native_app_stop(wasm_exec_env_t exec_env, const char *name);
@@ -111,11 +120,13 @@ int akira_native_app_stop(wasm_exec_env_t exec_env, const char *name);
  * @param exec_env WASM execution environment
  * @param name     Target app name
  * @return 0 on success (caller should return from main), negative on error
+ *         (-EAGAIN: lifecycle requests too fast, see akira_native_app_start())
  */
 int akira_native_app_switch(wasm_exec_env_t exec_env, const char *name);
 
 /**
  * @brief Check whether a newer version of the calling app is available.
+ * Registered "(*~)i": WAMR validates [ver_buf, ver_buf + buf_len).
  * Reads cached state only (no network round-trip from this call) — kept
  * fresh via Hub push (MSG_TYPE_APP_AVAILABLE) and periodic polling.
  * @param ver_buf  Output buffer for the available version string
@@ -131,6 +142,26 @@ int akira_native_app_check_update(wasm_exec_env_t exec_env, uint8_t *ver_buf, ui
  * @return 0 queued, negative errno (no update available, no connectivity)
  */
 int akira_native_app_request_update(wasm_exec_env_t exec_env);
+
+/** A lifecycle operation on an app, e.g. app_manager_start(). */
+typedef int (*akira_lifecycle_op_t)(const char *name);
+
+/**
+ * @brief Run @p op(@p name) on the lifecycle work queue for the calling app.
+ *
+ * For work a native must not do on an app's thread because it holds the app
+ * registry or filesystem locks for long, or waits for another app (an abort
+ * in the middle would leak the lock). The name is copied; the caller waits
+ * for the result in stop-aware sleeps. If the caller is stopped, or after
+ * 60 s, it returns -EINTR / -ETIMEDOUT and the call still completes on the
+ * queue. Shares the per-app rate limit of app_start/app_stop/app_switch.
+ *
+ * @return @p op's result, or -EINVAL (bad name), -EPERM (not an app),
+ *         -EAGAIN (rate limit), -EBUSY (queue full), -EINTR, -ETIMEDOUT,
+ *         -ENOTSUP (no app manager)
+ */
+int akira_lifecycle_run_deferred(wasm_exec_env_t exec_env, akira_lifecycle_op_t op,
+                                 const char *name);
 
 #ifdef __cplusplus
 }

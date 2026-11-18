@@ -4,6 +4,11 @@
  *
  * Exposes aiinfer_load / aiinfer_run / aiinfer_unload to WASM apps.
  * Gated behind AKIRA_CAP_AIINFER ("ai.infer" in manifest).
+ *
+ * A handle belongs to the app that loaded it: other apps cannot run or
+ * unload it, and it is freed when the app ends, however it ends.  Models
+ * are capped at 1 MiB (256 KiB without PSRAM) and must pass the flatbuffer
+ * verifier.
  * @stability experimental
  * @since 2.0
  */

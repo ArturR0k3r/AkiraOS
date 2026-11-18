@@ -20,6 +20,11 @@
  * Platform-agnostic primitives (no security checks)
  * All draw calls write to the framebuffer only.  Call akira_display_flush()
  * to push the framebuffer to the hardware driver.
+ *
+ * Any coordinate, size or radius is accepted: shapes are clipped to the panel
+ * (partly off-screen shapes are drawn clipped, not rejected) and every loop
+ * is bounded by the panel size.  Radii are capped at 4096; text draws at
+ * most 4096 bytes per call.  Bitmaps must hold w * h RGB565 pixels.
  * -------------------------------------------------------------------------*/
 void akira_display_clear(uint16_t color);
 void akira_display_pixel(int x, int y, uint16_t color);
@@ -70,7 +75,12 @@ void akira_display_rounded_rect_fill(int x, int y, int w, int h,
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 /* ---------------------------------------------------------------------------
  * WASM native export wrappers (with capability checks)
- * Registered in akira_export_api.c.
+ * Registered by AKIRA_NATIVE_API_DEFINE() in akira_display_api.c.
+ *
+ * Pixel buffers (bitmap, bitmap_transparent, raw_write) must be 2-byte
+ * aligned with data_size >= w * h * 2, else -EINVAL.
+ * raw_write takes only windows entirely on the panel (-EINVAL otherwise).
+ * A pending auto-flush is cancelled when the app that armed it ends.
  * -------------------------------------------------------------------------*/
 int akira_native_display_clear(wasm_exec_env_t exec_env, uint32_t color);
 int akira_native_display_pixel(wasm_exec_env_t exec_env, int32_t x, int32_t y, uint32_t color);

@@ -50,6 +50,14 @@ int akira_rf_set_coding_rate(uint8_t cr);
 int akira_rf_get_rssi(int16_t *rssi);
 radio_handle_t *akira_rf_get_active_handle(void);
 
+/**
+ * Release everything WASM app @p slot left running in the RF API: resume the
+ * RX daemon if it died inside a raw capture/replay, purge the RX queue and drop
+ * RF ownership of the active chip. No-op if the slot never used the RF API.
+ * Idempotent; call at app teardown, from any thread.
+ */
+void akira_rf_api_release(int slot);
+
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 /* WASM native export functions (with capability checks) */
 int akira_native_rf_select(wasm_exec_env_t exec_env, int chip);

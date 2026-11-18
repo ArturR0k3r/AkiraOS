@@ -89,7 +89,7 @@ include(${AKIRA_OS_DIR}/cmake/akira_release_checks.cmake)
 zephyr_linker_sources(SECTIONS ${CMAKE_CURRENT_LIST_DIR}/linker/akira_sections.ld)
 foreach(registry akira_capability akira_native_api akira_hook
                  akira_app_admission akira_net_policy akira_settings_key_provider
-                 akira_audit_sink akira_identity_provider)
+                 akira_audit_sink akira_identity_provider akira_app_resource)
     zephyr_iterable_section(NAME ${registry} KVMA RAM_REGION GROUP RODATA_REGION)
 endforeach()
 
@@ -164,6 +164,11 @@ if(CONFIG_AKIRA_WASM_RUNTIME)
         set(WAMR_BUILD_MINI_LOADER 1)
     else()
         set(WAMR_BUILD_MINI_LOADER 0)
+    endif()
+    # Native stack WAMR keeps free below an app's frames, so deep recursion
+    # traps the app instead of overrunning its thread stack.
+    if(CONFIG_AKIRA_WASM_STACK_GUARD_SIZE)
+        add_definitions(-DWASM_STACK_GUARD_SIZE=${CONFIG_AKIRA_WASM_STACK_GUARD_SIZE})
     endif()
     # Check user configuration for AOT support
     if(CONFIG_WAMR_AOT_SUPPORT)
@@ -320,6 +325,7 @@ zephyr_library_sources(
 
 zephyr_library_sources(
     ${AKIRA_OS_DIR}/src/runtime/akira_runtime.c
+    ${AKIRA_OS_DIR}/src/runtime/app_resources.c
     ${AKIRA_OS_DIR}/src/runtime/akira_hooks.c
     ${AKIRA_OS_DIR}/src/runtime/security/akira_admission.c
     ${AKIRA_OS_DIR}/src/runtime/security/akira_net_policy.c
@@ -513,6 +519,10 @@ if(CONFIG_AKIRA_PANIC)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/lib/akira_panic.c)
 endif()
 
+if(CONFIG_AKIRA_SANDBOX_SELFTEST)
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/runtime/sandbox_selftest.c)
+endif()
+
 # Keep connectivity and drivers as before (use module gating further below)
 
 # Akira shell commands
@@ -615,14 +625,18 @@ else()
     zephyr_library_sources(${AKIRA_OS_DIR}/src/connectivity/ota/akira_ota_stub.c)
 endif()
 
-# Ed25519 verification (include/akira_ed25519.h) and the baseline app
-# signature check (CONFIG_AKIRA_APP_PUBKEY).
+# Ed25519 verification (include/akira_ed25519.h), signing for the WASM
+# crypto API, and the baseline app signature check (CONFIG_AKIRA_APP_PUBKEY).
 if(CONFIG_AKIRA_ED25519)
     zephyr_library_sources(
         ${AKIRA_OS_DIR}/src/lib/crypto/ed25519/curve25519.c
         ${AKIRA_OS_DIR}/src/lib/crypto/ed25519/akira_ed25519.c
-        ${AKIRA_OS_DIR}/src/runtime/security/app_signature_baseline.c
+        ${AKIRA_OS_DIR}/src/lib/crypto/ed25519/ed25519_sign.c
     )
+    if(CONFIG_AKIRA_APP_SIGNING)
+        zephyr_library_sources(
+            ${AKIRA_OS_DIR}/src/runtime/security/app_signature_baseline.c)
+    endif()
 endif()
 
 # Shared buffer pool for connectivity (HTTP uploads, OTA, etc.)

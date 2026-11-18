@@ -1,8 +1,10 @@
 #include "akira_python_api.h"
+#include "akira_common_api.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <wasm_export.h>
 
@@ -30,14 +32,24 @@ static void py_longjmp(wasm_exec_env_t exec_env, void *jmp_buf, int val)
 
 /* ── WASI fd_* ───────────────────────────────────────────────────────────────
  * Emscripten's libc routes Python print() through fd_write on fd 1/2.
- * We forward those writes to the Zephyr logger; all other fds are discarded.
- * ciovec layout: [buf_app_offset: u32][buf_len: u32] × iovs_len
+ * We forward those writes to the rate-limited app console; all other fds are
+ * discarded.  ciovec layout: [buf_app_offset: u32][buf_len: u32] × iovs_len
+ *
+ * These are reachable by every WASI app with no capability, and a bare "*" in
+ * a native signature makes WAMR validate only the first byte, so the iovec
+ * array, each buffer it points at and the result slot are checked here for
+ * their full length, and every call is bounded.
  */
 typedef struct { uint32_t buf; uint32_t buf_len; } wasi_ciovec_t;
 
-/* A bare "*" in a native signature makes WAMR validate only the first byte, so
- * the iovec array, each buffer it points at and the result slot are checked
- * here against the app's linear memory before being touched. */
+/* WASI errno values (wasi_snapshot_preview1) */
+#define WASI_ESUCCESS 0
+#define WASI_EFAULT   21
+#define WASI_EINVAL   28
+
+#define PY_MAX_IOVS   16   /* iovecs consumed per call */
+#define PY_MAX_WRITE  4096 /* bytes consumed per call; libc writes the rest next */
+
 static bool py_out_valid(wasm_module_inst_t inst, void *p, uint32_t size)
 {
     return p == NULL || wasm_runtime_validate_native_addr(inst, p, size);
@@ -45,50 +57,51 @@ static bool py_out_valid(wasm_module_inst_t inst, void *p, uint32_t size)
 
 static int py_fd_write(wasm_exec_env_t exec_env, int fd,
                        const wasi_ciovec_t *iovs, int iovs_len,
-                       int *nwritten)
+                       uint32_t *nwritten)
 {
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    int total = 0;
-    char tmp[256];
+    uint32_t total = 0;
 
-    if (!inst || iovs_len < 0 || iovs_len > 1024 ||
-        !wasm_runtime_validate_native_addr(inst, (void *)iovs,
-                                           (uint32_t)iovs_len * sizeof(wasi_ciovec_t)) ||
-        !py_out_valid(inst, nwritten, sizeof(*nwritten))) {
-        return 28; /* __WASI_ERRNO_INVAL */
+    if (!inst || iovs_len < 0) {
+        return WASI_EINVAL;
+    }
+    /* A short write: libc writes whatever is left in its next call. */
+    int n = MIN(iovs_len, PY_MAX_IOVS);
+
+    if (!py_out_valid(inst, nwritten, sizeof(*nwritten)) ||
+        (n > 0 &&
+         (!iovs || !wasm_runtime_validate_native_addr(inst, (void *)iovs,
+                                                      (uint32_t)n * sizeof(wasi_ciovec_t))))) {
+        return WASI_EFAULT;
     }
 
-    for (int i = 0; i < iovs_len; i++) {
-        uint32_t buf_len = iovs[i].buf_len;
-        if (buf_len == 0) {
+    for (int i = 0; i < n && total < PY_MAX_WRITE; i++) {
+        wasi_ciovec_t iov;
+
+        /* One read of each entry (app memory, possibly unaligned). */
+        memcpy(&iov, &iovs[i], sizeof(iov));
+        uint32_t len = MIN(iov.buf_len, PY_MAX_WRITE - total);
+        if (len == 0) {
             continue;
         }
-        if (!wasm_runtime_validate_app_addr(inst, iovs[i].buf, buf_len)) {
-            return 21; /* __WASI_ERRNO_FAULT */
-        }
-        char *buf = wasm_runtime_addr_app_to_native(inst, iovs[i].buf);
-        if (!buf) {
-            continue;
+        if (!wasm_runtime_validate_app_addr(inst, iov.buf, len)) {
+            return WASI_EFAULT;
         }
         if (fd == 1 || fd == 2) {
-            uint32_t pos = 0;
-            while (pos < buf_len) {
-                uint32_t chunk = buf_len - pos;
-                if (chunk >= sizeof(tmp)) {
-                    chunk = sizeof(tmp) - 1;
-                }
-                memcpy(tmp, buf + pos, chunk);
-                tmp[chunk] = '\0';
-                LOG_INF("%s", tmp);
-                pos += chunk;
+            const char *buf = wasm_runtime_addr_app_to_native(inst, iov.buf);
+            if (buf) {
+                akira_app_console_write(exec_env, buf, len);
             }
         }
-        total += (int)buf_len;
+        total += len;
     }
+
+    /* Dropped (rate-limited or non-console) output still counts as written,
+     * so the app makes progress instead of retrying forever. */
     if (nwritten) {
-        *nwritten = total;
+        memcpy(nwritten, &total, sizeof(total));
     }
-    return 0;
+    return WASI_ESUCCESS;
 }
 
 static int py_fd_close(wasm_exec_env_t exec_env, int fd)
@@ -107,28 +120,35 @@ static int py_fd_seek(wasm_exec_env_t exec_env, int fd,
                       int64_t offset, int whence, int64_t *newoffset)
 {
     (void)fd; (void)offset; (void)whence;
-    if (!py_out_valid(wasm_runtime_get_module_inst(exec_env), newoffset,
-                      sizeof(*newoffset))) {
-        return 21; /* __WASI_ERRNO_FAULT */
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    const int64_t zero = 0;
+
+    if (!inst || !py_out_valid(inst, newoffset, sizeof(*newoffset))) {
+        return WASI_EFAULT;
     }
     if (newoffset) {
-        *newoffset = 0;
+        memcpy(newoffset, &zero, sizeof(zero)); /* may be unaligned */
     }
-    return 0;
+    return WASI_ESUCCESS;
 }
 
 static int py_fd_read(wasm_exec_env_t exec_env, int fd,
-                      const wasi_ciovec_t *iovs, int iovs_len, int *nread)
+                      const wasi_ciovec_t *iovs, int iovs_len, uint32_t *nread)
 {
-    (void)fd; (void)iovs; (void)iovs_len;
-    if (!py_out_valid(wasm_runtime_get_module_inst(exec_env), nread,
-                      sizeof(*nread))) {
-        return 21; /* __WASI_ERRNO_FAULT */
+    (void)fd; (void)iovs; /* nothing is ever read: the iovecs are not touched */
+    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+    const uint32_t zero = 0;
+
+    if (!inst || iovs_len < 0) {
+        return WASI_EINVAL;
+    }
+    if (!py_out_valid(inst, nread, sizeof(*nread))) {
+        return WASI_EFAULT;
     }
     if (nread) {
-        *nread = 0;
+        memcpy(nread, &zero, sizeof(zero)); /* may be unaligned */
     }
-    return 0;
+    return WASI_ESUCCESS;
 }
 
 /* ── Registration ────────────────────────────────────────────────────────── */

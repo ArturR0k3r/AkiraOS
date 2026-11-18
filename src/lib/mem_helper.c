@@ -114,6 +114,39 @@ void *akira_malloc_buffer_ex(size_t size, mem_source_t *source)
     return ptr;
 }
 
+void *akira_malloc_app_buffer(size_t size)
+{
+    if (size == 0) {
+        return NULL;
+    }
+#ifdef CONFIG_AKIRA_PSRAM
+    void *ptr = shared_multi_heap_alloc(SMH_REG_ATTR_EXTERNAL, size);
+
+#if HAS_ESP_PTR_CHECK
+    if (ptr && !esp_ptr_external_ram(ptr)) {
+        shared_multi_heap_free(ptr);
+        ptr = NULL;
+    }
+#endif
+    return ptr;
+#else
+#if defined(CONFIG_AKIRA_WASM_APP_HEAP_RESERVE_KB) && \
+    defined(CONFIG_SYS_HEAP_RUNTIME_STATS) && (K_HEAP_MEM_POOL_SIZE > 0)
+    /* No PSRAM: apps share the system heap with drivers and the network
+     * stack. Refuse an app's allocation that would leave less than the
+     * reserve free, so an app can exhaust only its own share. */
+    extern struct k_heap _system_heap;
+    struct sys_memory_stats stats;
+
+    if (sys_heap_runtime_stats_get(&_system_heap.heap, &stats) == 0 &&
+        stats.free_bytes < size + (size_t)CONFIG_AKIRA_WASM_APP_HEAP_RESERVE_KB * 1024) {
+        return NULL;
+    }
+#endif
+    return k_malloc(size);
+#endif
+}
+
 void akira_free_buffer(void *ptr)
 {
     if (!ptr) {

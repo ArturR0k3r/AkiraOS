@@ -42,7 +42,8 @@ int akira_native_crypto_sha256(wasm_exec_env_t exec_env,
  * @param iv_ptr     16-byte IV.
  * @param in_ptr     Plaintext buffer (must be multiple of 16 bytes).
  * @param in_len     Plaintext length.
- * @param out_ptr    Ciphertext output buffer (same size as in_len).
+ * @param out_ptr    Ciphertext output buffer (same size as in_len; may be
+ *                   in_ptr itself). The IV is not prepended.
  * @return 0 on success, negative errno on error.
  */
 int akira_native_crypto_aes256_encrypt(wasm_exec_env_t exec_env,
@@ -106,6 +107,7 @@ int akira_native_crypto_aes256_ctr(wasm_exec_env_t exec_env,
  *
  * @param seed_ptr  WASM pointer to 32-byte output buffer (private seed).
  * @param pub_ptr   WASM pointer to 32-byte output buffer (public key).
+ *                  Both are written only on success.
  * @return 0 on success, -ENOTSUP if not compiled in, -EIO on PSA failure.
  */
 int akira_native_crypto_ed25519_keygen(wasm_exec_env_t exec_env,

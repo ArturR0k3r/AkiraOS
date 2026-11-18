@@ -221,7 +221,7 @@ Without `-k`, Espressif boards build MCUboot with `BOOT_SIGNATURE_TYPE_NONE`: it
 ```
 
 **App Storage:**
-- Apps reach files only through the `fs.*` natives, under `/akira/apps/<app name>/`; `..` and names with `/` are refused
+- Apps reach files only through the `fs.*` and `storage_*` natives, under `<mount>/apps/<app name>/` (`/SD:` with a card, `/lfs` without); `..` and names with `/` are refused
 - The app name comes from the manifest, so it is only as authentic as the app's signature
 - Installed WASM binaries are written by the app manager, not by apps
 

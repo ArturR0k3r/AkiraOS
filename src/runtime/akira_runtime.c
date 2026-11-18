@@ -13,6 +13,8 @@
 #include "akira_abi_check.h"
 #include "runtime_cache.h"
 #include <zephyr/kernel.h>
+#include <zephyr/kernel_structs.h>
+#include <zephyr/fatal.h>
 #include <zephyr/init.h>
 #include <zephyr/logging/log.h>
 #include <string.h>
@@ -33,10 +35,6 @@
 
 #ifdef CONFIG_AKIRA_WASM_IPC
 #include <runtime/akira_ipc.h>
-#endif
-
-#ifdef CONFIG_AKIRA_WASM_MESH
-#include "akira_mesh_api.h"
 #endif
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
@@ -101,6 +99,8 @@ static int wasm_stacks_early_alloc(void)
 }
 SYS_INIT(wasm_stacks_early_alloc, APPLICATION, 1);
 static struct k_thread g_app_threads[AKIRA_MAX_WASM_INSTANCES];
+/* A thread was ever created on this slot's k_thread/stack. */
+static bool g_app_thread_created[AKIRA_MAX_WASM_INSTANCES];
 
 /* Per-slot deferred cleanup context.
  * When a WASM thread exits naturally (main() returns), we cannot free the
@@ -145,6 +145,7 @@ static K_MUTEX_DEFINE(g_runtime_mutex);
  * per-slot app->exit_mutex so a concurrent set_exit_callback() cannot
  * produce a torn read on 64-bit platforms (native_sim). */
 static akira_runtime_exit_cb_t g_exit_cb = NULL;
+static akira_runtime_exit_cb_t get_exit_cb(void);
 
 /* Atomic init flag: prevents double-init if two threads race at boot. */
 static atomic_t g_runtime_initialized = ATOMIC_INIT(0);
@@ -155,17 +156,70 @@ static atomic_t g_runtime_initialized = ATOMIC_INIT(0);
  *
  * Each allocation carries a uint64_t header (8 bytes) encoding:
  *   low  32 bits = requested size
- *   high 32 bits = byte offset from the raw allocation to the header
+ *   high 32 bits = bits 0-7:  byte offset from the raw allocation to the header
+ *                  bits 8-15: slot + 1 the allocation is charged to (0 = none)
  * The raw allocation is rounded up to the next 8-byte boundary so that
  * hdr+1 (the returned user pointer) is always 8-byte aligned regardless
  * of whether the underlying allocator returns 4- or 8-byte-aligned blocks.
  * WAMR asserts 8-byte alignment on the instance heap buffer — misalignment
  * produces the "heap init struct buf not 8-byte aligned" error.
+ *
+ * What WAMR allocates on an app's own thread (its instance, linear memory,
+ * every memory.grow) is charged to that app and capped at
+ * CONFIG_AKIRA_WASM_APP_MEM_LIMIT_KB, and comes from PSRAM only on boards
+ * that have it: an app growing its memory fails its own allocation instead of
+ * draining the internal SRAM that drivers and radios need. Module loading runs
+ * on the installing thread and is not charged.
  */
-static void *wamr_malloc(unsigned int size)
+#define WAMR_HDR_SLOT_SHIFT 8
+#define WAMR_APP_MEM_LIMIT ((atomic_val_t)CONFIG_AKIRA_WASM_APP_MEM_LIMIT_KB * 1024)
+
+static atomic_t g_mem_limit_warned; /* one warning per slot per run */
+
+static int wamr_hdr_slot(uint64_t hdr)
+{
+    return (int)((hdr >> (32 + WAMR_HDR_SLOT_SHIFT)) & 0xFFu) - 1;
+}
+
+static bool wamr_charge(int slot, uint32_t n)
+{
+    atomic_t *used = &g_apps[slot].wamr_bytes;
+
+    if ((atomic_val_t)n > WAMR_APP_MEM_LIMIT ||
+        atomic_add(used, (atomic_val_t)n) + (atomic_val_t)n > WAMR_APP_MEM_LIMIT)
+    {
+        if ((atomic_val_t)n <= WAMR_APP_MEM_LIMIT)
+        {
+            atomic_sub(used, (atomic_val_t)n);
+        }
+        if (!atomic_test_and_set_bit(&g_mem_limit_warned, slot))
+        {
+            LOG_WRN("App '%s' (slot %d) hit its %d KB memory limit; allocation refused",
+                    g_apps[slot].name, slot, CONFIG_AKIRA_WASM_APP_MEM_LIMIT_KB);
+        }
+        return false;
+    }
+    return true;
+}
+
+static void wamr_uncharge(int slot, uint32_t n)
+{
+    atomic_t *used = &g_apps[slot].wamr_bytes;
+    atomic_val_t old;
+    atomic_val_t now;
+
+    do
+    {
+        old = atomic_get(used);
+        now = old > (atomic_val_t)n ? old - (atomic_val_t)n : 0;
+    } while (!atomic_cas(used, old, now));
+}
+
+static void *wamr_alloc_raw(unsigned int size, int slot)
 {
     /* Request enough space for padding (up to 7 bytes) + header + data */
-    uint8_t *raw = akira_malloc_buffer(sizeof(uint64_t) + 7 + size);
+    size_t total = sizeof(uint64_t) + 7 + (size_t)size;
+    uint8_t *raw = slot >= 0 ? akira_malloc_app_buffer(total) : akira_malloc_buffer(total);
 
     if (!raw)
     {
@@ -174,9 +228,36 @@ static void *wamr_malloc(unsigned int size)
     /* Round raw up to next 8-byte boundary */
     uintptr_t hdr_addr = ((uintptr_t)raw + 7) & ~(uintptr_t)7;
     uint32_t padding = (uint32_t)(hdr_addr - (uintptr_t)raw);
+    uint32_t tag = slot >= 0 ? (uint32_t)(slot + 1) << WAMR_HDR_SLOT_SHIFT : 0;
     uint64_t *hdr = (uint64_t *)hdr_addr;
-    *hdr = ((uint64_t)padding << 32) | (uint64_t)size;
+
+    *hdr = ((uint64_t)(padding | tag) << 32) | (uint64_t)size;
     return hdr + 1; /* user ptr is 8-byte aligned */
+}
+
+static void wamr_free_raw(void *ptr)
+{
+    uint64_t *hdr = (uint64_t *)ptr - 1;
+    uint32_t padding = (uint32_t)(*hdr >> 32) & 0xFFu;
+
+    akira_free_buffer((uint8_t *)hdr - padding);
+}
+
+static void *wamr_malloc(unsigned int size)
+{
+    int slot = akira_runtime_slot_of_thread(k_current_get());
+
+    if (slot >= 0 && !wamr_charge(slot, size))
+    {
+        return NULL;
+    }
+    void *ptr = wamr_alloc_raw(size, slot);
+
+    if (!ptr && slot >= 0)
+    {
+        wamr_uncharge(slot, size);
+    }
+    return ptr;
 }
 
 static void wamr_free(void *ptr)
@@ -185,9 +266,14 @@ static void wamr_free(void *ptr)
     {
         return;
     }
-    uint64_t *hdr = (uint64_t *)ptr - 1;
-    uint32_t padding = (uint32_t)(*hdr >> 32);
-    akira_free_buffer((uint8_t *)hdr - padding);
+    uint64_t hdr = *((uint64_t *)ptr - 1);
+    int slot = wamr_hdr_slot(hdr);
+
+    if (slot >= 0 && slot < AKIRA_MAX_WASM_INSTANCES)
+    {
+        wamr_uncharge(slot, (uint32_t)hdr);
+    }
+    wamr_free_raw(ptr);
 }
 
 static void *wamr_realloc(void *ptr, unsigned int new_size)
@@ -202,17 +288,40 @@ static void *wamr_realloc(void *ptr, unsigned int new_size)
         return NULL;
     }
 
-    uint32_t old_size = (uint32_t)(*((uint64_t *)ptr - 1) & 0xFFFFFFFFu);
-    void *new_ptr = wamr_malloc(new_size);
+    uint64_t hdr = *((uint64_t *)ptr - 1);
+    uint32_t old_size = (uint32_t)hdr;
+    int old_slot = wamr_hdr_slot(hdr);
+    int slot = old_slot >= 0 ? old_slot : akira_runtime_slot_of_thread(k_current_get());
+    /* Charge only the growth: the old block goes right after the copy. */
+    uint32_t credit = (old_slot >= 0 && old_slot == slot) ? old_size : 0;
+    uint32_t grow = new_size > credit ? new_size - credit : 0;
+
+    if (slot >= 0 && grow && !wamr_charge(slot, grow))
+    {
+        return NULL;
+    }
+    void *new_ptr = wamr_alloc_raw(new_size, slot);
 
     if (!new_ptr)
     {
+        if (slot >= 0 && grow)
+        {
+            wamr_uncharge(slot, grow);
+        }
         return NULL;
     }
 
     size_t copy_size = (size_t)(old_size < new_size ? old_size : new_size);
     memcpy(new_ptr, ptr, copy_size);
-    wamr_free(ptr);
+    if (old_slot >= 0 && old_slot != slot)
+    {
+        wamr_uncharge(old_slot, old_size);
+    }
+    wamr_free_raw(ptr);
+    if (slot >= 0 && credit > new_size)
+    {
+        wamr_uncharge(slot, credit - new_size);
+    }
     return new_ptr;
 }
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
@@ -254,19 +363,21 @@ int akira_runtime_get_name_for_module_inst(wasm_module_inst_t inst, char *buf, s
 {
     if (!inst || !buf || buflen == 0)
         return -EINVAL;
-    /* Lock to protect against concurrent slot reuse modifying name/used/instance. */
-    k_mutex_lock(&g_runtime_mutex, K_FOREVER);
-    for (int i = 0; i < AKIRA_MAX_WASM_INSTANCES; i++)
+    /* No lock: natives call this from app threads, and a thread aborted while
+     * holding g_runtime_mutex would block every later load. The slot is found
+     * through the instance's own custom data and checked against it; a live
+     * instance's slot can't be reused under it. */
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
+    akira_managed_app_t *app = (akira_managed_app_t *)wasm_runtime_get_custom_data(inst);
+
+    if (app >= g_apps && app < g_apps + AKIRA_MAX_WASM_INSTANCES &&
+        app->used && app->instance == inst)
     {
-        if (g_apps[i].used && g_apps[i].instance == inst)
-        {
-            strncpy(buf, g_apps[i].name, buflen - 1);
-            buf[buflen - 1] = '\0';
-            k_mutex_unlock(&g_runtime_mutex);
-            return 0;
-        }
+        strncpy(buf, app->name, buflen - 1);
+        buf[buflen - 1] = '\0';
+        return 0;
     }
-    k_mutex_unlock(&g_runtime_mutex);
+#endif
     return -ENOENT;
 }
 
@@ -391,6 +502,10 @@ int akira_runtime_init(void)
     {
         g_slot_cleanup[i].slot = i;
         k_work_init(&g_slot_cleanup[i].work, slot_cleanup_work_fn);
+        /* Once, never per run: a stop may still be waiting on them while the
+         * slot is reused. */
+        k_mutex_init(&g_apps[i].exit_mutex);
+        k_condvar_init(&g_apps[i].cond_exit);
         if (!g_app_stacks[i])
         {
             LOG_ERR("SRAM stack for slot %d missing (early alloc failed)", i);
@@ -485,6 +600,7 @@ static int load_wasm_ex(const uint8_t *buffer, uint32_t size,
         {
             slot = _i;
             g_apps[_i].used = true; /* reserve immediately under lock */
+            g_apps[_i].generation++;
             break;
         }
     }
@@ -599,15 +715,20 @@ static int load_wasm_ex(const uint8_t *buffer, uint32_t size,
     }
 
     /* An AOT file is native code; WAMR's bounds checks only confine it if
-     * wamrc produced it, which the loader cannot tell. A hardened build runs
-     * AOT only for an attested app. */
-    if (IS_ENABLED(CONFIG_AKIRA_HARDEN_UNATTESTED_APPS) && !adm.attested &&
-        memcmp(buffer, "\0aot", 4) == 0)
+     * wamrc produced it, which the loader cannot tell. Running an unattested
+     * one is the user's choice unless the build refuses it. */
+    if (!adm.attested && memcmp(buffer, "\0aot", 4) == 0)
     {
-        LOG_ERR("AOT binary refused: '%s' is not attested", adm_name);
-        sandbox_audit_log(AUDIT_EVENT_INTEGRITY_FAIL, "aot_unattested", size);
-        g_apps[slot].used = false; /* release reserved slot */
-        return -EPERM;
+        if (IS_ENABLED(CONFIG_AKIRA_REFUSE_UNATTESTED_AOT))
+        {
+            LOG_ERR("AOT binary refused: '%s' is not attested", adm_name);
+            sandbox_audit_log(AUDIT_EVENT_INTEGRITY_FAIL, "aot_unattested", size);
+            g_apps[slot].used = false; /* release reserved slot */
+            return -EPERM;
+        }
+        LOG_WRN("'%s' is unattested AOT native code: the sandbox only confines "
+                "it if wamrc built it from a source you trust", adm_name);
+        sandbox_audit_log(AUDIT_EVENT_APP_LOADED, "aot_unattested", size);
     }
 
     /* ===== Step 4: Load WASM module ===== */
@@ -871,6 +992,14 @@ static void wasm_app_thread_fn(void *p1, void *p2, void *p3)
             LOG_INF("Slot %d: no entry point — reactive module", slot);
             wasm_runtime_clear_exception(inst);
         }
+        else if (ex && app->stop_requested)
+        {
+            /* akira_runtime_stop() asked WAMR to unwind this app. WAMR reports
+             * that as the exception "terminated by user": an orderly exit,
+             * not a trap. */
+            LOG_INF("Slot %d stopped on request (%s)", slot, ex);
+            wasm_runtime_clear_exception(inst);
+        }
         else if (ex)
         {
             LOG_ERR("WASM exception (slot %d): %s", slot, ex);
@@ -881,31 +1010,29 @@ static void wasm_app_thread_fn(void *p1, void *p2, void *p3)
 
     perf_exec_end(&app->perf);
 
-    /* ------ Step 4: Clean up WAMR resources ------ */
+    /* ------ Step 4: Release what the app left running ------
+     * Before deinstantiate: anything holding pointers into the app's linear
+     * memory must stop using them first. From here on this thread runs only
+     * host code that takes system and WAMR locks, so a concurrent stop must
+     * wait for it rather than abort it (reset when the slot next starts). */
+    atomic_inc(&app->native_critical);
+    akira_app_resources_release(slot, app->name);
+
+    /* ------ Step 4b: Clean up WAMR resources ------ */
     /* Singleton exec_env is automatically freed by wasm_runtime_deinstantiate;
      * never call wasm_runtime_destroy_exec_env on it. */
     app->exec_env = NULL;
 
     AKIRA_DISPLAY_RELEASE_OWNER(inst);
+    /* Clear the slot's pointer first: a fault inside deinstantiate must not
+     * make the crash cleanup free it a second time. */
+    app->instance = NULL;
     instance_map_remove(inst);
     wasm_runtime_deinstantiate(inst);
-    app->instance = NULL;
 
     atomic_set(&app->memory_used, 0);
     sandbox_exec_end(&app->sandbox);
     sandbox_audit_log(AUDIT_EVENT_APP_STOPPED, app->name, (uint32_t)slot);
-
-    /* Release IPC subscriptions before the name slot is cleared */
-#ifdef CONFIG_AKIRA_WASM_IPC
-    akira_ipc_cleanup_app(app->name);
-#endif
-
-    /* Release the mesh radio if the app exited (or crashed) mid-session —
-     * otherwise the radio stays acquired by "mesh" forever and no other
-     * subsystem can claim it. */
-#ifdef CONFIG_AKIRA_WASM_MESH
-    akira_mesh_api_cleanup();
-#endif
 
     app->exit_code = (int8_t)exit_code;
     LOG_INF("App thread done (slot %d, exit=%d, calls=%u, traps=%u)",
@@ -928,18 +1055,23 @@ thread_exit:
      * if the exit callback tried to call akira_runtime_destroy().
      * exec_env and instance are already NULL (cleaned up in Step 4 above).
      * Only the module handle and the slot itself remain to free. */
+    /* Each pointer is cleared before its free, as in reclaim_dead_slot(). */
     if (app->module)
     {
-        wasm_runtime_unload(app->module);
+        wasm_module_t mod = app->module;
+
         app->module = NULL;
+        wasm_runtime_unload(mod);
     }
     /* Free the owned binary copy now that the module is unloaded.
      * Must come AFTER wasm_runtime_unload() — WAMR holds raw pointers
      * into this buffer for export/import name strings. */
     if (app->wasm_binary)
     {
-        akira_free_buffer(app->wasm_binary);
+        uint8_t *bin = app->wasm_binary;
+
         app->wasm_binary = NULL;
+        akira_free_buffer(bin);
     }
     if (app->hash_valid)
     {
@@ -954,10 +1086,7 @@ thread_exit:
     /* Invoke registered exit callback (e.g. app_manager state transition).
      * Read g_exit_cb under g_runtime_mutex to guard against a concurrent
      * set_exit_callback() tearing the pointer on 64-bit targets (native_sim). */
-    akira_runtime_exit_cb_t cb;
-    k_mutex_lock(&g_runtime_mutex, K_FOREVER);
-    cb = g_exit_cb;
-    k_mutex_unlock(&g_runtime_mutex);
+    akira_runtime_exit_cb_t cb = get_exit_cb();
     if (cb)
     {
         cb(slot, app->exit_code);
@@ -973,6 +1102,287 @@ thread_exit:
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
 
+/* ===== Containment: no app can hang or crash the system =====
+ * See include/akira_app_containment.h and docs/architecture/app-containment.md. */
+
+int akira_runtime_slot_of_thread(k_tid_t tid)
+{
+    for (int i = 0; i < AKIRA_MAX_WASM_INSTANCES; i++)
+    {
+        if (tid == &g_app_threads[i] && g_apps[i].used)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static akira_runtime_exit_cb_t get_exit_cb(void)
+{
+    akira_runtime_exit_cb_t cb;
+
+    k_mutex_lock(&g_runtime_mutex, K_FOREVER);
+    cb = g_exit_cb;
+    k_mutex_unlock(&g_runtime_mutex);
+    return cb;
+}
+
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
+/* Free what a dead (aborted or faulted) app thread never got to free. Every
+ * pointer is cleared before its free, so a second caller is harmless. Caller
+ * holds app->exit_mutex. */
+static void reclaim_dead_slot(int slot, int exit_code)
+{
+    akira_managed_app_t *app = &g_apps[slot];
+
+    /* First: nothing may keep using the app's memory once it is freed. */
+    akira_app_resources_release(slot, app->name);
+    app->exec_env = NULL; /* the singleton goes with the instance */
+    if (app->instance)
+    {
+        wasm_module_inst_t inst = app->instance;
+
+        app->instance = NULL;
+        AKIRA_DISPLAY_RELEASE_OWNER(inst);
+        instance_map_remove(inst);
+        wasm_runtime_deinstantiate(inst);
+    }
+    if (app->module)
+    {
+        wasm_module_t mod = app->module;
+
+        app->module = NULL;
+        wasm_runtime_unload(mod);
+    }
+    if (app->wasm_binary)
+    {
+        uint8_t *bin = app->wasm_binary;
+
+        app->wasm_binary = NULL;
+        akira_free_buffer(bin);
+    }
+    if (app->hash_valid)
+    {
+        app->hash_valid = false;
+        module_cache_release(app->binary_hash);
+        module_cache_invalidate(app->binary_hash);
+    }
+    atomic_set(&app->memory_used, 0);
+    /* Not sandbox_exec_end(): that acts on the calling thread, and this runs
+     * on the stopping thread or the system workqueue. */
+    app->sandbox.exec_active = false;
+    app->exit_code = (int8_t)exit_code;
+}
+
+/* After reclaim_dead_slot(): give the slot back and tell the app manager,
+ * exactly as a thread that exits on its own does. */
+static void free_dead_slot(int slot, int exit_code)
+{
+    akira_managed_app_t *app = &g_apps[slot];
+    akira_runtime_exit_cb_t cb;
+
+    app->name[0] = '\0';
+    app->tid = NULL;
+    app->used = false; /* must be the last write */
+
+    cb = get_exit_cb();
+    if (cb)
+    {
+        cb(slot, exit_code);
+    }
+}
+
+static akira_managed_app_t *app_of_env(wasm_exec_env_t exec_env)
+{
+    wasm_module_inst_t inst = exec_env ? wasm_runtime_get_module_inst(exec_env) : NULL;
+
+    return inst ? (akira_managed_app_t *)wasm_runtime_get_custom_data(inst) : NULL;
+}
+
+int akira_runtime_slot_of_exec_env(wasm_exec_env_t exec_env)
+{
+    akira_managed_app_t *app = app_of_env(exec_env);
+
+    return app ? (int)(app - g_apps) : -1;
+}
+
+bool akira_runtime_stop_requested(wasm_exec_env_t exec_env)
+{
+    akira_managed_app_t *app = app_of_env(exec_env);
+
+    return app && app->stop_requested;
+}
+
+void akira_native_critical_enter(wasm_exec_env_t exec_env)
+{
+    akira_managed_app_t *app = app_of_env(exec_env);
+
+    if (app)
+    {
+        atomic_inc(&app->native_critical);
+    }
+}
+
+void akira_native_critical_exit(wasm_exec_env_t exec_env)
+{
+    akira_managed_app_t *app = app_of_env(exec_env);
+
+    if (app && atomic_get(&app->native_critical) > 0)
+    {
+        atomic_dec(&app->native_critical);
+    }
+}
+
+bool akira_runtime_sleep(wasm_exec_env_t exec_env, k_timeout_t timeout)
+{
+    akira_managed_app_t *app = app_of_env(exec_env);
+
+    if (!app)
+    {
+        k_sleep(timeout);
+        return false;
+    }
+    if (app->stop_requested)
+    {
+        return true;
+    }
+    if (k_sem_take(&app->stop_sem, timeout) == 0)
+    {
+        k_sem_give(&app->stop_sem); /* stay signalled for later waits */
+        return true;
+    }
+    return false;
+}
+
+/* ---- a fault in an app thread kills the app, not the system ------------- */
+
+static atomic_t g_fault_slots;
+static uint8_t g_fault_reason[AKIRA_MAX_WASM_INSTANCES];
+static bool g_fault_in_critical[AKIRA_MAX_WASM_INSTANCES];
+
+static void fault_work_fn(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    for (int slot = 0; slot < AKIRA_MAX_WASM_INSTANCES; slot++)
+    {
+        if (!atomic_test_and_clear_bit(&g_fault_slots, slot))
+        {
+            continue;
+        }
+        akira_managed_app_t *app = &g_apps[slot];
+        akira_runtime_exit_cb_t cb;
+
+        /* Zephyr aborted the thread when the fatal handler returned. */
+        k_thread_join(&g_app_threads[slot], K_MSEC(200));
+
+        k_mutex_lock(&app->exit_mutex, K_FOREVER);
+        /* Whatever state the thread reached (running, or already in its exit
+         * path), a crashed thread never frees its slot itself. */
+        if (!app->used || !app->crashed || app->parked)
+        {
+            k_mutex_unlock(&app->exit_mutex);
+            continue;
+        }
+        if (g_fault_in_critical[slot])
+        {
+            /* It died holding a system lock (a bus, the filesystem, the heap
+             * of a driver). The release hooks could block on that lock
+             * forever, and wedge this work queue with them, so they don't
+             * run: the slot keeps its memory and resources and is never
+             * reused, so nothing else can reach what it owned. */
+            LOG_ERR("App '%s' (slot %d) crashed (fatal error %u) inside a native holding "
+                    "a system lock: stopped it; the slot stays parked until reboot",
+                    app->name, slot, g_fault_reason[slot]);
+            sandbox_audit_log(AUDIT_EVENT_APP_STOPPED, app->name, (uint32_t)slot);
+            app->parked = true;
+            app->tid = NULL;
+            app->status = AKIRA_APP_STATUS_ERROR;
+            k_condvar_broadcast(&app->cond_exit);
+            k_mutex_unlock(&app->exit_mutex);
+
+            cb = get_exit_cb();
+            if (cb)
+            {
+                cb(slot, -EFAULT);
+            }
+            continue;
+        }
+        LOG_ERR("App '%s' (slot %d) crashed (fatal error %u): stopped it, system unaffected",
+                app->name, slot, g_fault_reason[slot]);
+        sandbox_audit_log(AUDIT_EVENT_APP_STOPPED, app->name, (uint32_t)slot);
+        reclaim_dead_slot(slot, -EFAULT);
+        app->status = AKIRA_APP_STATUS_ERROR;
+        k_condvar_broadcast(&app->cond_exit);
+        k_mutex_unlock(&app->exit_mutex);
+
+        /* App manager: ERROR, restart policy, crash hook. */
+        free_dead_slot(slot, -EFAULT);
+    }
+}
+
+static K_WORK_DEFINE(g_fault_work, fault_work_fn);
+
+/* True when the fault interrupted thread code, not an ISR or exception. */
+static bool fault_in_thread_context(const struct arch_esf *esf)
+{
+#if defined(CONFIG_CPU_CORTEX_M)
+    /* The fault handler itself runs as an exception, so k_is_in_isr() is
+     * always true here. The stacked xPSR says what the fault interrupted:
+     * exception number (IPSR) 0 is thread mode. */
+    return esf != NULL && (esf->basic.xpsr & 0x1FFU) == 0U;
+#elif defined(CONFIG_XTENSA)
+    ARG_UNUSED(esf);
+    /* Level-1 exceptions and interrupts share a vector; the exception entry
+     * itself counts as one level of nesting. */
+    return arch_curr_cpu()->nested <= 1;
+#elif defined(CONFIG_ARCH_POSIX) || defined(CONFIG_RISCV)
+    /* Faults don't count as interrupt nesting on these. */
+    ARG_UNUSED(esf);
+    return !k_is_in_isr();
+#else
+    /* Not verified for this architecture: keep Zephyr's policy. */
+    ARG_UNUSED(esf);
+    return false;
+#endif
+}
+#endif /* CONFIG_AKIRA_WASM_RUNTIME */
+
+bool akira_runtime_contain_fault(unsigned int reason, const struct arch_esf *esf)
+{
+#if defined(CONFIG_AKIRA_WASM_RUNTIME) && defined(CONFIG_MULTITHREADING)
+    int slot = akira_runtime_slot_of_thread(k_current_get());
+
+    if (slot < 0 || reason == K_ERR_KERNEL_PANIC || !fault_in_thread_context(esf))
+    {
+        return false;
+    }
+#if !defined(CONFIG_HW_STACK_PROTECTION)
+    /* Without a hardware stack guard, an overflow is found (by the sentinel
+     * or a canary) only after it may have overwritten the heap memory next
+     * to the app's stack, which belongs to someone else: keep Zephyr's
+     * policy. WAMR keeps CONFIG_AKIRA_WASM_STACK_GUARD_SIZE free for natives,
+     * so only a native using more than that can get here. */
+    if (reason == K_ERR_STACK_CHK_FAIL)
+    {
+        return false;
+    }
+#endif
+    /* The cleanup runs on the system work queue and logs from there: no
+     * logging in fatal context. */
+    g_apps[slot].crashed = true;
+    g_fault_reason[slot] = (uint8_t)reason;
+    g_fault_in_critical[slot] = atomic_get(&g_apps[slot].native_critical) > 0;
+    atomic_set_bit(&g_fault_slots, slot);
+    k_work_submit(&g_fault_work);
+    return true;
+#else
+    ARG_UNUSED(reason);
+    ARG_UNUSED(esf);
+    return false;
+#endif
+}
+
 /* Instantiate and run a loaded WASM module in a dedicated thread */
 int akira_runtime_start(int instance_id)
 {
@@ -983,17 +1393,29 @@ int akira_runtime_start(int instance_id)
 
     akira_managed_app_t *app = &g_apps[instance_id];
 
+    if (app->parked)
+    {
+        return -EBUSY; /* see fault_work_fn() */
+    }
     if (app->status == AKIRA_APP_STATUS_RUNNING)
     {
         return 0; /* already running */
     }
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
-    /* Defensive: if a previous thread for this slot hasn't been joined yet,
-     * wait for it now before reusing the pre-allocated stack. */
-    if (app->tid)
+    /* The previous thread on this slot must be gone before its k_thread and
+     * stack are reused. app->tid is no proof: an exiting thread clears it and
+     * then still runs the exit callback. Creating a thread on a live one
+     * corrupts the scheduler, so refuse instead. */
+    if (g_app_thread_created[instance_id])
     {
-        k_thread_join(&g_app_threads[instance_id], K_MSEC(500));
+        int join_ret = k_thread_join(&g_app_threads[instance_id], K_MSEC(2000));
+
+        if (join_ret != 0)
+        {
+            LOG_ERR("Slot %d: previous app thread still running (%d)", instance_id, join_ret);
+            return -EBUSY;
+        }
         app->tid = NULL;
     }
 
@@ -1005,11 +1427,24 @@ int akira_runtime_start(int instance_id)
         return -ENOMEM;
     }
 
-    /* Initialize per-slot sync primitives for this run */
+    /* Per-run sync primitives. exit_mutex and cond_exit are initialised once
+     * in akira_runtime_init(): a stop of the previous run may still wait on
+     * them. */
     k_sem_init(&app->sem_start, 0, 1);
-    k_mutex_init(&app->exit_mutex);
-    k_condvar_init(&app->cond_exit);
+    app->generation++;
     app->exit_code = 0;
+    app->stop_requested = false;
+    app->crashed = false;
+    k_sem_init(&app->stop_sem, 0, 1);
+    atomic_set(&app->native_critical, 0);
+    atomic_set(&app->wamr_bytes, 0);
+    atomic_clear_bit(&g_mem_limit_warned, instance_id);
+
+    /* RUNNING before the thread exists: an app can exit or crash before this
+     * function gets the CPU back, and the exit path and the fault cleanup
+     * act only on a RUNNING slot. Setting it afterwards turned a crash in
+     * the first instructions into a zombie slot. */
+    app->status = AKIRA_APP_STATUS_RUNNING;
 
     app->tid = k_thread_create(
         &g_app_threads[instance_id],
@@ -1019,10 +1454,12 @@ int akira_runtime_start(int instance_id)
         (void *)(intptr_t)instance_id, NULL, NULL,
         CONFIG_AKIRA_WASM_APP_PRIORITY,
         0, K_NO_WAIT);
+    g_app_thread_created[instance_id] = true;
 
     if (!app->tid)
     {
         LOG_ERR("Failed to create app thread for slot %d", instance_id);
+        app->status = AKIRA_APP_STATUS_CREATED;
         return -ENOMEM;
     }
 
@@ -1035,6 +1472,12 @@ int akira_runtime_start(int instance_id)
         k_thread_abort(app->tid);
         k_thread_join(&g_app_threads[instance_id], K_MSEC(200));
         app->tid = NULL;
+        /* Free the module and binary too, or each timed-out start leaks them. */
+        k_mutex_lock(&app->exit_mutex, K_FOREVER);
+        reclaim_dead_slot(instance_id, -ETIMEDOUT);
+        app->status = AKIRA_APP_STATUS_ERROR;
+        k_mutex_unlock(&app->exit_mutex);
+        app->name[0] = '\0';
         app->used = false;
         return -ETIMEDOUT;
     }
@@ -1047,7 +1490,6 @@ int akira_runtime_start(int instance_id)
         return -EIO;
     }
 
-    app->status = AKIRA_APP_STATUS_RUNNING;
     sandbox_audit_log(AUDIT_EVENT_APP_STARTED, app->name, (uint32_t)instance_id);
     LOG_INF("WASM module loaded into slot %d (cap=0x%016llx, quota=%u)",
             instance_id, (unsigned long long)app->cap_mask, app->memory_quota);
@@ -1068,75 +1510,148 @@ int akira_runtime_stop(int instance_id)
 
     akira_managed_app_t *app = &g_apps[instance_id];
 
-    if (app->status == AKIRA_APP_STATUS_STOPPED ||
+    if (app->parked ||
+        app->status == AKIRA_APP_STATUS_STOPPED ||
         app->status == AKIRA_APP_STATUS_CREATED)
     {
         return 0; /* nothing to stop */
     }
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
-    /* Ask WAMR to interrupt the running WASM execution.
-     * This causes wasm_runtime_call_wasm() to return with an exception. */
+    /* The run this call stops. While it waits, the slot can be freed (the
+     * app exits, or its crash is cleaned up) and reused by another app;
+     * nothing below may touch that one. */
+    const uint32_t gen = app->generation;
+
+    if (app->tid && app->tid == k_current_get())
+    {
+        /* Called from the app's own thread (e.g. through a native): it can't
+         * wait for itself to exit. Ask it to unwind; its thread finishes the
+         * teardown when control returns to the runtime. */
+        app->stop_requested = true;
+        k_sem_give(&app->stop_sem);
+        if (app->instance)
+        {
+            wasm_runtime_terminate(app->instance);
+        }
+        return 0;
+    }
+
+    /* Stage 1: ask. Set the flag and wake every wait the app can be in, then
+     * terminate: WAMR sees the termination only when control returns to
+     * WASM, so a native waiting on the app's behalf must be woken first. */
     if (app->instance)
     {
+        app->stop_requested = true;
+        akira_app_resources_on_stop_request(instance_id, app->name);
+        k_sem_give(&app->stop_sem);
         wasm_runtime_terminate(app->instance);
     }
 
-    /* Wait for the app thread to finish cleanup and signal cond_exit.
-     * Use per-slot exit_mutex: stop() calls on different slots are fully
-     * independent and do not block each other. */
+    /* Stage 2: grace. A cooperative app is gone within a frame.
+     *
+     * Stage 3: abort. A thread still on the CPU after the grace period is
+     * spinning in WASM code (WAMR checks for termination only at calls), so
+     * it holds no system lock and is aborted now. One blocked inside a native
+     * call gets the full timeout. One inside a critical section
+     * (native_critical) holds a system lock and is never aborted: it gets
+     * three times the timeout to leave the section, and if it hasn't, the
+     * stop gives up with -EBUSY and the app ends when the native returns.
+     * A thread that crashed is cleaned up by the fault work, which this
+     * waits for. */
+    bool aborted = false;
+
     k_mutex_lock(&app->exit_mutex, K_FOREVER);
-    if (app->status == AKIRA_APP_STATUS_RUNNING)
+    if (app->status == AKIRA_APP_STATUS_RUNNING && app->generation == gen)
     {
-        /* 5-second timeout; abort thread if it doesn't respond */
-        int wait_ret = k_condvar_wait(&app->cond_exit, &app->exit_mutex,
-                                      K_MSEC(CONFIG_AKIRA_WASM_STOP_TIMEOUT_MS));
-        if (wait_ret != 0)
+        const int timeout = CONFIG_AKIRA_WASM_STOP_TIMEOUT_MS;
+        const int grace = MIN(1500, timeout);
+        int waited = grace;
+        int wait_ret = k_condvar_wait(&app->cond_exit, &app->exit_mutex, K_MSEC(grace));
+
+        while (wait_ret != 0 && app->status == AKIRA_APP_STATUS_RUNNING && app->tid &&
+               app->used && app->generation == gen)
         {
-            LOG_ERR("App thread (slot %d) timed out — aborting", instance_id);
+            uint32_t state = app->tid->base.thread_state;
+            bool blocked = (state & (_THREAD_PENDING | _THREAD_SLEEPING | _THREAD_SUSPENDED)) != 0;
+            bool critical = atomic_get(&app->native_critical) > 0;
+
+            if (!((app->crashed && waited < 3 * timeout) ||
+                  (critical && waited < 3 * timeout) ||
+                  (blocked && waited < timeout)))
+            {
+                break;
+            }
+            wait_ret = k_condvar_wait(&app->cond_exit, &app->exit_mutex, K_MSEC(100));
+            waited += 100;
+        }
+        if (wait_ret != 0 && app->status == AKIRA_APP_STATUS_RUNNING && !app->crashed &&
+            app->used && app->generation == gen && app->tid)
+        {
+            bool blocked = (app->tid->base.thread_state &
+                            (_THREAD_PENDING | _THREAD_SLEEPING | _THREAD_SUSPENDED)) != 0;
+
+            /* Suspended, it can't enter a critical section between the check
+             * and the abort. */
+            k_thread_suspend(app->tid);
+            if (atomic_get(&app->native_critical) > 0)
+            {
+                k_thread_resume(app->tid);
+                k_mutex_unlock(&app->exit_mutex);
+                LOG_ERR("App thread (slot %d) is still inside a lock-holding native after "
+                        "%d ms: not aborting it (the lock would be lost); it stops when "
+                        "the native returns", instance_id, 3 * timeout);
+                return -EBUSY;
+            }
+            LOG_ERR("App thread (slot %d) didn't stop: aborting it (%s)", instance_id,
+                    blocked ? "still blocked in a native call after the full timeout"
+                            : "spinning in WASM code");
             k_thread_abort(app->tid);
             app->tid = NULL;
-            /* Manual cleanup since thread was aborted before our cleanup code ran.
-             * exec_env is the singleton — do NOT call wasm_runtime_destroy_exec_env;
-             * it will be freed by wasm_runtime_deinstantiate below. */
-            app->exec_env = NULL;
-            if (app->instance)
-            {
-                AKIRA_DISPLAY_RELEASE_OWNER(app->instance);
-                instance_map_remove(app->instance);
-                wasm_runtime_deinstantiate(app->instance);
-                app->instance = NULL;
-            }
-            if (app->module)
-            {
-                wasm_runtime_unload(app->module);
-                app->module = NULL;
-            }
-            if (app->hash_valid)
-            {
-                module_cache_release(app->binary_hash);
-                module_cache_invalidate(app->binary_hash);
-                app->hash_valid = false;
-            }
-            atomic_set(&app->memory_used, 0);
+            /* Stopped on request: report it as a clean stop (exit code 0). */
+            reclaim_dead_slot(instance_id, 0);
+            aborted = true;
         }
     }
-    app->status = AKIRA_APP_STATUS_STOPPED;
+    if (!app->used || app->generation != gen)
+    {
+        /* The app ended and its slot was freed (and maybe reused) while this
+         * waited: nothing of this run is left to stop. */
+        k_mutex_unlock(&app->exit_mutex);
+        return 0;
+    }
+    /* A crashed app whose cleanup hasn't run yet stays RUNNING, so a new
+     * start can't take the slot before the fault work frees it. */
+    if (!(app->crashed && app->status == AKIRA_APP_STATUS_RUNNING))
+    {
+        app->status = AKIRA_APP_STATUS_STOPPED;
+    }
+    k_tid_t tid = app->tid;
     k_mutex_unlock(&app->exit_mutex);
 
-    /* Join to release Zephyr thread resources and free the SRAM stack.
-     * Timeout is 2 s: the join is now always called without the outer
-     * g_registry_mutex held so the WASM thread's exit callback can complete
-     * without deadlock, and 2 s gives it ample time. */
-    if (app->tid)
+    /* Join to release Zephyr thread resources. Timeout is 2 s: the join is
+     * always called without the outer g_registry_mutex held so the WASM
+     * thread's exit callback can complete without deadlock. */
+    if (tid)
     {
-        k_thread_join(&g_app_threads[instance_id], K_MSEC(2000));
-        app->tid = NULL;
+        k_thread_join(tid, K_MSEC(2000));
+        k_mutex_lock(&app->exit_mutex, K_FOREVER);
+        if (app->generation == gen && app->tid == tid)
+        {
+            app->tid = NULL;
+        }
+        k_mutex_unlock(&app->exit_mutex);
     }
 
     sandbox_audit_log(AUDIT_EVENT_APP_STOPPED, app->name, (uint32_t)instance_id);
     LOG_INF("Stopped slot %d (calls=%u, traps=%u)",
             instance_id, app->perf.call_count, app->perf.trap_count);
+    if (aborted)
+    {
+        /* The thread never reached its own exit path: free the slot here,
+         * or every aborted app would leak a runtime slot. */
+        free_dead_slot(instance_id, 0);
+    }
     return 0;
 #else
     (void)instance_id;
@@ -1209,6 +1724,13 @@ int akira_runtime_destroy(int instance_id)
     }
 
     akira_managed_app_t *app = &g_apps[instance_id];
+
+    if (app->parked)
+    {
+        /* Its resources may still be in use (see fault_work_fn()): the slot
+         * stays reserved until reboot. */
+        return 0;
+    }
 
     /* Stop the thread first if it's still running */
     if (app->status == AKIRA_APP_STATUS_RUNNING ||

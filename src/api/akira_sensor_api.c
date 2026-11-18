@@ -22,6 +22,9 @@ LOG_MODULE_REGISTER(akira_sensor, CONFIG_AKIRA_LOG_LEVEL);
 #include "akira_api.h"
 #include "akira_sensor_api.h"
 #include <runtime/security.h>
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
+#include <akira_app_containment.h>
+#endif
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <errno.h>
@@ -75,38 +78,54 @@ static const struct device * const s_sensors[] = {
     /* ---- Proximity / ToF ---- */
     _SD_COMPAT(st_vl53l0x)
     _SD_COMPAT(st_vl53l1x)
+    NULL /* end marker: the list is empty on boards without sensors */
 };
 #undef _SD
 #undef _SD_COMPAT
 
+/* Bounded by the (compile-time) number of sensors; each fetch is one
+ * driver transaction with the driver's own timeouts. */
 int akira_sensor_read(int channel, float *out)
 {
     if (!out) {
         return -EINVAL;
     }
+    /* App-chosen: only the common channels.  SENSOR_CHAN_ALL makes some
+     * drivers' channel_get() fill one value per channel, and private
+     * channels have driver-defined result sizes. */
+    if (channel < 0 || channel >= SENSOR_CHAN_ALL) {
+        return -EINVAL;
+    }
+    enum sensor_channel ch = (enum sensor_channel)channel;
 
-    for (size_t i = 0; i < ARRAY_SIZE(s_sensors); i++) {
+    for (size_t i = 0; s_sensors[i] != NULL; i++) {
         const struct device *dev = s_sensors[i];
 
         if (!device_is_ready(dev)) {
-            LOG_ERR("sensor_read: device '%s' not ready (driver init failed?)", dev->name);
+            /* Debug only: an app polling would repeat this every call. */
+            LOG_DBG("sensor_read: device '%s' not ready (driver init failed?)", dev->name);
             continue;
         }
 
-        int ret = sensor_sample_fetch_chan(dev, (enum sensor_channel)channel);
+        int ret = sensor_sample_fetch_chan(dev, ch);
         if (ret < 0) {
             LOG_DBG("sensor_read: '%s' does not support channel=%d (ret=%d)", dev->name, channel, ret);
             continue;
         }
 
-        struct sensor_value val;
-        ret = sensor_channel_get(dev, (enum sensor_channel)channel, &val);
+        /* Vector channels write several values: *_XYZ and POS_DXYZ three,
+         * GAME_ROTATION_VECTOR four.  Room for all of them (a single
+         * sensor_value here was overrun on the stack). */
+        struct sensor_value val[4] = {0};
+        ret = sensor_channel_get(dev, ch, val);
         if (ret < 0) {
-            LOG_ERR("sensor_read: '%s' channel_get failed (channel=%d ret=%d)", dev->name, channel, ret);
+            LOG_DBG("sensor_read: '%s' channel_get failed (channel=%d ret=%d)", dev->name, channel, ret);
             continue;
         }
 
-        *out = (float)sensor_value_to_double(&val);
+        /* The API returns one scalar: the value of a scalar channel, the
+         * first component of a vector channel (as before). */
+        *out = (float)sensor_value_to_double(&val[0]);
         return 0;
     }
 
@@ -135,15 +154,31 @@ int akira_native_sensor_read(wasm_exec_env_t exec_env, int32_t channel)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_SENSOR_READ, -EPERM);
 
+    /* A fetch runs a transaction on the system bus with the driver's locks
+     * held: a stop must not abort the app in the middle of it. */
     float v = 0.0f;
+    akira_native_critical_enter(exec_env);
     int ret = akira_sensor_read((int)channel, &v);
+    akira_native_critical_exit(exec_env);
     if (ret < 0) {
         LOG_DBG("sensor_read: channel=%d err=%d", (int)channel, ret);
         return INT32_MIN;
     }
 
-    /* Scale ×1000 — WASM callers divide by 1000.0 to recover float. */
-    return (int32_t)(v * 1000.0f);
+    /* Scale ×1000 — WASM callers divide by 1000.0 to recover float.
+     * Out-of-range (or NaN) values would make the conversion undefined:
+     * saturate, keeping INT32_MIN as the error marker. */
+    float scaled = v * 1000.0f;
+    if (!(scaled == scaled)) {
+        return INT32_MIN;
+    }
+    if (scaled >= 2147483520.0f) {
+        return INT32_MAX;
+    }
+    if (scaled <= -2147483520.0f) {
+        return INT32_MIN + 1;
+    }
+    return (int32_t)scaled;
 }
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */

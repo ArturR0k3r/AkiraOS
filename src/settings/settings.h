@@ -10,9 +10,15 @@
 #ifndef AKIRA_SETTINGS_H
 #define AKIRA_SETTINGS_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <zephyr/kernel.h>
 #include <settings/system_settings.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define SETTINGS_COUNTER_ID 0 // Position in NVS to store count of settings
 #define SETTINGS_START_ID 1 // Starting ID for settings entries in NVS
@@ -130,6 +136,43 @@ int akira_settings_set_async(const char *key, const char *value, settings_wq_cal
  * @return 0 on success, negative on error
  */
 int akira_settings_delete_async(const char *key,  settings_wq_callback_t callback, void *user_data);
+
+/**
+ * Settings for a WASM app, in a namespace of its own.
+ *
+ * @p key is stored as "a/<ns>/<key>", where <ns> is bound to the exact app
+ * name, so an app can neither read nor change the OS's keys or another app's.
+ * Keys may be up to MAX_KEY_LEN - 6 characters, values up to
+ * MAX_VALUE_LEN - 1. New keys are limited per app, for all apps together and
+ * by MAX_KEYS, so apps can't fill the partition the OS's settings live in.
+ *
+ * Safe to call from a thread that may be stopped or aborted while it waits:
+ * the request owns copies of everything, the wait is bounded by @p timeout
+ * and ends early once @p give_up returns true (checked every 50 ms). A request
+ * left behind still runs and frees itself, so a SET or DELETE that returned
+ * -ETIMEDOUT or -ECANCELED may still take effect.
+ *
+ * @param op      AKIRA_SETTINGS_OP_GET, _SET or _DELETE
+ * @param app     the app's name
+ * @param value   value for SET, else NULL
+ * @param out     GET: receives the NUL-terminated value (truncated to fit)
+ * @return 0; -ENOENT (no such key), -ENAMETOOLONG, -E2BIG (value),
+ *         -ENOSPC (key quota), -EBUSY (too many app requests queued),
+ *         -ETIMEDOUT / -ECANCELED (gave up waiting), or a storage error.
+ */
+int akira_settings_app_call(settings_op_type_t op, const char *app,
+                            const char *key, const char *value,
+                            char *out, size_t out_len, k_timeout_t timeout,
+                            bool (*give_up)(void *ctx), void *ctx);
+
+/**
+ * Delete every setting app @p app stored through akira_settings_app_call().
+ * For the app manager, when an app is uninstalled. Waits like the other
+ * synchronous calls.
+ *
+ * @return 0 (also when the app has none), or a storage error.
+ */
+int akira_settings_app_purge(const char *app);
 
 #ifdef __cplusplus
 }

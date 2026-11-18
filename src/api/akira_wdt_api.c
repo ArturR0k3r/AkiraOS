@@ -11,7 +11,13 @@ LOG_MODULE_REGISTER(akira_wdt_api, CONFIG_AKIRA_LOG_LEVEL);
  * @file akira_wdt_api.c
  * @brief WASM-facing watchdog pet API.
  *
- * Thin capability-gated wrapper around akira_wdt_feed().
+ * The console has ONE hardware watchdog, fed by the system's own worker
+ * (akira_wdt.c) so that it fires only if AkiraOS itself wedges.  Letting an
+ * app feed it would let any app (capabilities are self-declared) mask a hung
+ * system — the work queue that feeds it could be dead while an app keeps the
+ * dog quiet.  So wdt_pet() never touches the hardware: it keeps its API
+ * contract (0 while a watchdog is running, -ENODEV otherwise) and is a
+ * liveness no-op.  App hangs are handled by the runtime's stop/abort path.
  * Requires AKIRA_CAP_WDT capability in the app manifest ("wdt").
  */
 
@@ -30,8 +36,8 @@ int akira_native_wdt_pet(wasm_exec_env_t exec_env)
         return -ENODEV;
     }
 
-    akira_wdt_feed();
-    LOG_DBG("WDT pet from WASM app");
+    /* Deliberately NOT akira_wdt_feed(): see the file comment. */
+    LOG_DBG("WDT pet from WASM app (no-op)");
     return 0;
 }
 

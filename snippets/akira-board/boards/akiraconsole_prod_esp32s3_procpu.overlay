@@ -45,13 +45,21 @@
 #endif /* !CONFIG_MCUBOOT */
 
 // =============================================================================
-// ADC alias
+// ADC alias — the WASM adc_read() device
+// SAR ADC1 (DT node adc0), NOT SAR ADC2 (adc1): ADC2 CH0-CH3 are GPIO11-GPIO14
+// (SPI2 MOSI/CLK/MISO and the SD chip select), and the ESP32 ADC driver
+// disconnects a channel's pad on setup, so the first app adc_read() took the
+// display, SD card and radios off SPI2. ADC2 is also shared with the Wi-Fi PHY.
+// On ADC1 only CH1 = GPIO2 = ANA (RV1 pot) is free;
+// CONFIG_AKIRA_WASM_ADC_CHANNEL_MASK in the board .conf allows just that one.
 // =============================================================================
 / {
 	aliases {
-		akira-adc = &adc1;
+		akira-adc = &adc0;
 	};
 };
+
+&adc0 { status = "okay"; };
 
 // =============================================================================
 // Display

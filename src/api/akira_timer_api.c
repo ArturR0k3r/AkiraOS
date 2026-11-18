@@ -16,33 +16,50 @@ LOG_MODULE_REGISTER(akira_timer, CONFIG_AKIRA_LOG_LEVEL);
 #include <runtime/security.h>
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
+#include <zephyr/spinlock.h>
 #include <errno.h>
 #include <string.h>
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 
+#include <akira_app_containment.h>
+#include <lib/mem_helper.h>
+
 #ifndef CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES
 #define CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES 8
 #endif
+
+/* One app may hold at most this many handles, so no app can take the whole
+ * pool from the others. */
+#define TIMER_MAX_PER_APP MAX(1, CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES / 2)
 
 /* -------------------------------------------------------------------------- */
 /* Timer pool                                                                  */
 /* -------------------------------------------------------------------------- */
 
+/* Polling timers only: no k_timer and no callbacks into WASM, so nothing can
+ * fire after an app is gone. Handles are owned by the app slot (the module
+ * instance pointer is reused by the next app in that slot, so it is not a
+ * safe owner) and freed by the release hook below. */
 struct akira_timer_slot {
     bool        allocated;
     bool        running;
+    int8_t      owner_slot; /* akira_runtime_slot_of_exec_env() of creator */
     int64_t     start_ms;   /* k_uptime_get() at last start */
     int64_t     elapsed_ms; /* accumulated ms when stopped  */
-    const void *owner;      /* wasm_module_inst_t of creator */
 };
 
-static struct akira_timer_slot s_pool[CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES];
-static K_MUTEX_DEFINE(s_pool_lock);
+/* Guarded by a spinlock, not a mutex: every section is a few loads and
+ * stores, so an app thread can never be stopped while holding it, and the
+ * release hook never waits on a lock a dead app took. */
+static struct akira_timer_slot AKIRA_BULK_BSS s_pool[CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES];
+static struct k_spinlock s_pool_lock;
 
 int akira_timer_init(void)
 {
+    k_spinlock_key_t key = k_spin_lock(&s_pool_lock);
     memset(s_pool, 0, sizeof(s_pool));
+    k_spin_unlock(&s_pool_lock, key);
     return 0;
 }
 
@@ -52,8 +69,8 @@ SYS_INIT(akira_timer_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
 /* Helpers                                                                     */
 /* -------------------------------------------------------------------------- */
 
-static int slot_validate(wasm_exec_env_t exec_env, int32_t handle,
-                         struct akira_timer_slot **out)
+/* Call with s_pool_lock held. */
+static int slot_validate(int app_slot, int32_t handle, struct akira_timer_slot **out)
 {
     if (handle < 0 || handle >= CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES) {
         return -EINVAL;
@@ -62,9 +79,7 @@ static int slot_validate(wasm_exec_env_t exec_env, int32_t handle,
     if (!s->allocated) {
         return -EINVAL;
     }
-    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    if (s->owner != (const void *)inst) {
-        LOG_WRN("timer %d: cross-app access denied", handle);
+    if (app_slot < 0 || s->owner_slot != app_slot) {
         return -EPERM;
     }
     *out = s;
@@ -79,42 +94,61 @@ int akira_native_timer_create(wasm_exec_env_t exec_env)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_TIMER, -EPERM);
 
-    k_mutex_lock(&s_pool_lock, K_FOREVER);
-
-    for (int i = 0; i < CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES; i++) {
-        if (!s_pool[i].allocated) {
-            s_pool[i].allocated  = true;
-            s_pool[i].running    = false;
-            s_pool[i].start_ms   = 0;
-            s_pool[i].elapsed_ms = 0;
-            s_pool[i].owner = (const void *)wasm_runtime_get_module_inst(exec_env);
-            k_mutex_unlock(&s_pool_lock);
-            LOG_DBG("timer_create: handle=%d", i);
-            return i;
-        }
+    int app_slot = akira_runtime_slot_of_exec_env(exec_env);
+    if (app_slot < 0) {
+        return -EPERM;
     }
 
-    k_mutex_unlock(&s_pool_lock);
-    LOG_ERR("timer_create: pool exhausted (max=%d)", CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES);
-    return -ENOMEM;
+    int handle = -ENOMEM;
+    int owned = 0;
+
+    k_spinlock_key_t key = k_spin_lock(&s_pool_lock);
+    for (int i = 0; i < CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES; i++) {
+        if (s_pool[i].allocated && s_pool[i].owner_slot == app_slot) {
+            owned++;
+        }
+    }
+    if (owned < TIMER_MAX_PER_APP) {
+        for (int i = 0; i < CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES; i++) {
+            if (!s_pool[i].allocated) {
+                s_pool[i].allocated  = true;
+                s_pool[i].running    = false;
+                s_pool[i].start_ms   = 0;
+                s_pool[i].elapsed_ms = 0;
+                s_pool[i].owner_slot = (int8_t)app_slot;
+                handle = i;
+                break;
+            }
+        }
+    }
+    k_spin_unlock(&s_pool_lock, key);
+
+    if (handle < 0) {
+        /* In immediate log mode the line is written under the console lock. */
+        akira_native_critical_enter(exec_env);
+        LOG_WRN_RATELIMIT_RATE(1000, "timer_create: no handle (app holds %d, max %d per app, pool %d)",
+                               owned, TIMER_MAX_PER_APP, CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES);
+        akira_native_critical_exit(exec_env);
+    }
+    return handle;
 }
 
 int akira_native_timer_start(wasm_exec_env_t exec_env, int32_t handle)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_TIMER, -EPERM);
 
+    int app_slot = akira_runtime_slot_of_exec_env(exec_env);
     struct akira_timer_slot *s;
     int ret;
 
-    k_mutex_lock(&s_pool_lock, K_FOREVER);
-    ret = slot_validate(exec_env, handle, &s);
+    k_spinlock_key_t key = k_spin_lock(&s_pool_lock);
+    ret = slot_validate(app_slot, handle, &s);
     if (ret == 0) {
         s->start_ms   = k_uptime_get();
         s->elapsed_ms = 0;
         s->running    = true;
-        LOG_DBG("timer_start: handle=%d", handle);
     }
-    k_mutex_unlock(&s_pool_lock);
+    k_spin_unlock(&s_pool_lock, key);
     return ret;
 }
 
@@ -122,17 +156,17 @@ int akira_native_timer_stop(wasm_exec_env_t exec_env, int32_t handle)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_TIMER, -EPERM);
 
+    int app_slot = akira_runtime_slot_of_exec_env(exec_env);
     struct akira_timer_slot *s;
     int ret;
 
-    k_mutex_lock(&s_pool_lock, K_FOREVER);
-    ret = slot_validate(exec_env, handle, &s);
+    k_spinlock_key_t key = k_spin_lock(&s_pool_lock);
+    ret = slot_validate(app_slot, handle, &s);
     if (ret == 0 && s->running) {
         s->elapsed_ms = k_uptime_get() - s->start_ms;
         s->running    = false;
-        LOG_DBG("timer_stop: handle=%d elapsed=%lldms", handle, s->elapsed_ms);
     }
-    k_mutex_unlock(&s_pool_lock);
+    k_spin_unlock(&s_pool_lock, key);
     return ret;
 }
 
@@ -140,16 +174,17 @@ int akira_native_timer_elapsed(wasm_exec_env_t exec_env, int32_t handle)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_TIMER, -EPERM);
 
+    int app_slot = akira_runtime_slot_of_exec_env(exec_env);
     struct akira_timer_slot *s;
     int ret;
     int64_t ms = 0;
 
-    k_mutex_lock(&s_pool_lock, K_FOREVER);
-    ret = slot_validate(exec_env, handle, &s);
+    k_spinlock_key_t key = k_spin_lock(&s_pool_lock);
+    ret = slot_validate(app_slot, handle, &s);
     if (ret == 0) {
         ms = s->running ? (k_uptime_get() - s->start_ms) : s->elapsed_ms;
     }
-    k_mutex_unlock(&s_pool_lock);
+    k_spin_unlock(&s_pool_lock, key);
 
     if (ret != 0) {
         return ret;
@@ -162,18 +197,41 @@ int akira_native_timer_free(wasm_exec_env_t exec_env, int32_t handle)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_TIMER, -EPERM);
 
+    int app_slot = akira_runtime_slot_of_exec_env(exec_env);
     struct akira_timer_slot *s;
     int ret;
 
-    k_mutex_lock(&s_pool_lock, K_FOREVER);
-    ret = slot_validate(exec_env, handle, &s);
+    k_spinlock_key_t key = k_spin_lock(&s_pool_lock);
+    ret = slot_validate(app_slot, handle, &s);
     if (ret == 0) {
         memset(s, 0, sizeof(*s));
-        LOG_DBG("timer_free: handle=%d", handle);
     }
-    k_mutex_unlock(&s_pool_lock);
+    k_spin_unlock(&s_pool_lock, key);
     return ret;
 }
+
+/* -------------------------------------------------------------------------- */
+/* App teardown                                                                */
+/* -------------------------------------------------------------------------- */
+
+/* Free every handle the app left allocated, however it ended. */
+static void timer_release(int slot, const char *app_name)
+{
+    ARG_UNUSED(app_name);
+    if (slot < 0) {
+        return;
+    }
+
+    k_spinlock_key_t key = k_spin_lock(&s_pool_lock);
+    for (int i = 0; i < CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES; i++) {
+        if (s_pool[i].allocated && s_pool[i].owner_slot == slot) {
+            memset(&s_pool[i], 0, sizeof(s_pool[i]));
+        }
+    }
+    k_spin_unlock(&s_pool_lock, key);
+}
+
+AKIRA_APP_RESOURCE_DEFINE(timer, 50, NULL, timer_release);
 
 #else /* !CONFIG_AKIRA_WASM_RUNTIME */
 

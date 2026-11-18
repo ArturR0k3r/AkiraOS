@@ -45,7 +45,6 @@ static uint32_t *shared_buttons = NULL;
  * 400×240×2 = 192 000 B — sized for the largest supported display (Sharp LS027B7DH01
  * 400×240).  Boards with smaller displays simply leave the tail unused.
  */
-#define AKIRA_FB_MAX_PIXELS (400 * 240)
 #if defined(CONFIG_ESP_SPIRAM)
 __attribute__((section(".ext_ram.bss"), aligned(4))) static uint16_t hw_framebuffer[AKIRA_FB_MAX_PIXELS];
 #elif defined(CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM) && defined(CONFIG_MEMC)
@@ -187,7 +186,12 @@ uint16_t *akira_framebuffer_get(void)
     (defined(CONFIG_AKIRA_FRAMEBUFFER_IN_PSRAM) && defined(CONFIG_MEMC))
     return hw_framebuffer;
 #else
-    LOG_WRN("akira_framebuffer_get: no SPIRAM framebuffer (need CONFIG_ESP_SPIRAM)");
+    static atomic_t warned;
+
+    /* Once: callers may ask per frame (or per pixel, for an app). */
+    if (!atomic_set(&warned, 1)) {
+        LOG_WRN("akira_framebuffer_get: no SPIRAM framebuffer (need CONFIG_ESP_SPIRAM)");
+    }
     return NULL;
 #endif
 }

@@ -262,8 +262,19 @@ SYS_INIT(boot_guard_sys_init, APPLICATION, CONFIG_AKIRA_BOOT_GUARD_INIT_PRIORITY
 #ifdef CONFIG_AKIRA_BOOT_GUARD_FATAL_REBOOT
 /* Zephyr's default handler halts, which would leave a crashed trial image
  * running forever instead of letting MCUboot roll it back. */
+#if defined(CONFIG_AKIRA_WASM_RUNTIME)
+#include <akira_app_containment.h>
+#endif
+
 void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
 {
+#if defined(CONFIG_AKIRA_WASM_RUNTIME)
+    /* A fault in a WASM app's own thread stops the app, not the system:
+     * the image itself is fine, so this is no reason to roll it back. */
+    if (akira_runtime_contain_fault(reason, esf)) {
+        return;
+    }
+#endif
     ARG_UNUSED(esf);
 
     LOG_PANIC();

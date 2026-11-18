@@ -908,7 +908,7 @@ static int ble_hid_send_mouse(const hid_mouse_report_t *report)
         return rc;
     }
 
-    LOG_INF("BLE Mouse notify: btns=%02x dx=%d dy=%d wheel=%d",
+    LOG_DBG("BLE Mouse notify: btns=%02x dx=%d dy=%d wheel=%d",
             current_mouse.buttons, current_mouse.dx, current_mouse.dy,
             current_mouse.wheel);
 #endif
@@ -940,7 +940,7 @@ static int ble_hid_send_consumer(const hid_consumer_report_t *report)
         return rc;
     }
 
-    LOG_INF("BLE Consumer notify: usage=0x%04x", current_consumer.usage);
+    LOG_DBG("BLE Consumer notify: usage=0x%04x", current_consumer.usage);
 #endif
     return 0;
 }

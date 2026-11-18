@@ -10,6 +10,10 @@
  * Channel-indexed interface. WASM passes a logical channel number,
  * frequency in Hz, and duty cycle as a percentage (0–100).
  * Period and pulse width are derived internally.
+ * Channels the system uses (any devicetree "pwms" user, e.g. the display
+ * backlight), channels sharing an LEDC timer with them and channels whose
+ * pad is not an app pin are refused. A channel belongs to the app that set
+ * it until it disables it, and is stopped when that app ends.
  * @stability stable
  * @since 1.4
  */
@@ -38,15 +42,19 @@ extern "C" {
  * @param channel  Logical PWM channel index (0-based; maps to pwm0, pwm1 …).
  * @param freq_hz  Frequency in Hertz (1–10,000,000).
  * @param duty_pct Duty cycle percentage (0–100).
- * @return 0 on success, negative Zephyr errno on failure.
+ * @return 0 on success, negative Zephyr errno on failure: -ENODEV (no such
+ *         channel), -EACCES (system channel), -EBUSY (another app's
+ *         channel), -EINVAL (frequency or duty out of range, or too fast
+ *         for the channel clock).
  */
 int akira_native_pwm_set(wasm_exec_env_t exec_env,
                           int32_t channel, int32_t freq_hz, int32_t duty_pct);
 
 /**
- * @brief Disable a PWM channel (output held low).
+ * @brief Disable a PWM channel (output held low) and free it.
  * @param channel Logical PWM channel index.
- * @return 0 on success, negative Zephyr errno on failure.
+ * @return 0 on success, negative Zephyr errno on failure (-EPERM: another
+ *         app's channel, -EACCES: system channel).
  */
 int akira_native_pwm_disable(wasm_exec_env_t exec_env, int32_t channel);
 

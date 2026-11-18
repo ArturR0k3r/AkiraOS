@@ -9,12 +9,18 @@
  *
  * WASM apps subscribe to named topics, publish messages to them, and
  * receive messages sent by other apps.  Each subscription owns a private
- * k_msgq.  The backing buffer is PSRAM-allocated to avoid exhausting SRAM
- * on low-memory targets.
+ * k_msgq.  An app's backing buffer comes from PSRAM only on boards that have
+ * it (never the internal-DRAM system heap); without PSRAM, the per-app cap
+ * (AKIRA_IPC_MAX_SUBS_PER_APP) bounds what an app can take.
  *
- * Thread-safety: all APIs are safe to call from any Zephyr thread.
- * The cleanup call (akira_ipc_cleanup_app) must be hooked into the app
- * lifecycle so stale queues are released when an app exits.
+ * Two kinds of subscriber: WASM apps, identified by runtime slot (the
+ * *_slot functions; the native API uses these), and system code identified
+ * by a name (the plain functions).  An app's subscriptions are released when
+ * it ends, however it ends, and a stop wakes it out of a receive (-EINTR).
+ *
+ * Thread-safety: all APIs are safe to call from any Zephyr thread.  Topic
+ * names must be shorter than AKIRA_IPC_TOPIC_NAME_MAX (else -EINVAL).  A
+ * call that cannot get the IPC lock within 1 s returns -EBUSY.
  *
  * Limits (configurable via Kconfig):
  *   CONFIG_AKIRA_IPC_MAX_TOPICS          (default 8)
@@ -31,6 +37,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <zephyr/kernel.h>
+#include <zephyr/sys/util.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,6 +62,10 @@ extern "C" {
 
 #define AKIRA_IPC_TOPIC_NAME_MAX 32
 #define AKIRA_IPC_APP_NAME_MAX   32
+
+/** Subscriptions one WASM app may hold (each also pins a topic slot). */
+#define AKIRA_IPC_MAX_SUBS_PER_APP \
+    MIN(CONFIG_AKIRA_IPC_MAX_TOPICS, MAX(2, CONFIG_AKIRA_IPC_MAX_TOPICS / 4))
 
 /** Single message envelope stored in the msgq */
 typedef struct {
@@ -122,14 +133,47 @@ int akira_ipc_recv(const char *topic_name, const char *app_name,
 int akira_ipc_pending(const char *topic_name, const char *app_name);
 
 /**
- * @brief Remove all subscriptions owned by an app (call on app exit/crash)
+ * @brief Remove all system subscriptions registered under a name
  *
- * Frees all PSRAM msgq buffers associated with the app.  Safe to call
- * even if the app has no subscriptions.
+ * Frees the msgq buffers of every system subscription whose subscriber
+ * name is @p app_name.  Safe to call even if there are none.  WASM app
+ * subscriptions are not touched: they are released by slot when the app
+ * ends (akira_ipc_cleanup_slot()).
  *
- * @param app_name  App whose subscriptions should be cleaned up
+ * @param app_name  Subscriber name whose subscriptions should be cleaned up
  */
 void akira_ipc_cleanup_app(const char *app_name);
+
+/**
+ * @brief Subscribe a WASM app (runtime slot @p slot) to a topic
+ *
+ * As akira_ipc_subscribe(), but the subscription belongs to the app slot:
+ * only that slot can receive from or remove it, and it is released when the
+ * app ends.  @p app_name is kept for diagnostics.
+ *
+ * @return 0 on success, -ENOMEM if tables are full, the app already holds
+ *         AKIRA_IPC_MAX_SUBS_PER_APP subscriptions or no PSRAM is left,
+ *         -EINVAL on bad args, -EBUSY if the IPC lock is unavailable
+ */
+int akira_ipc_subscribe_slot(int slot, const char *topic_name, const char *app_name);
+
+/** @brief Remove app slot @p slot's subscription to a topic (-ENOENT if none). */
+int akira_ipc_unsubscribe_slot(int slot, const char *topic_name);
+
+/**
+ * @brief Receive the next message for app slot @p slot
+ *
+ * @return Bytes received (>= 0), -EAGAIN if timed out, -EINTR if the app is
+ *         being stopped, -ENOENT if not subscribed, negative on error
+ */
+int akira_ipc_recv_slot(int slot, const char *topic_name,
+                        void *buf, size_t len, k_timeout_t timeout);
+
+/** @brief Pending message count for app slot @p slot (-ENOENT if not subscribed). */
+int akira_ipc_pending_slot(int slot, const char *topic_name);
+
+/** @brief Remove every subscription owned by app slot @p slot (idempotent). */
+void akira_ipc_cleanup_slot(int slot);
 
 #ifdef __cplusplus
 }

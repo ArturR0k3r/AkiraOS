@@ -32,6 +32,7 @@ typedef void *wasm_module_inst_t;
 #include <runtime/security/sandbox.h>
 #include <runtime/runtime_cache.h>
 #include <runtime/security/trust_levels.h>
+#include <akira_app_containment.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,6 +73,13 @@ typedef struct {
     /* Lifecycle: status replaces old bool running */
     uint8_t status;           /**< akira_app_status_t */
     int8_t exit_code;         /**< Last exit code from WASM main() */
+    bool stop_requested;      /**< akira_runtime_stop() asked WAMR to unwind this slot */
+    bool crashed;             /**< killed by a fault in its own thread (contained) */
+    bool parked;              /**< crashed inside a lock-holding native: slot unusable until reboot */
+    uint32_t generation;      /**< bumped each time the slot is reserved or started */
+    struct k_sem stop_sem;    /**< given on stop: wakes the app's interruptible waits */
+    atomic_t native_critical; /**< >0 while a native holds a system lock (never abort) */
+    atomic_t wamr_bytes;      /**< WAMR memory allocated on the app's thread (linear memory, instance) */
 
     /* Thread synchronization */
     k_tid_t tid;              /**< Thread ID (NULL if not running) */

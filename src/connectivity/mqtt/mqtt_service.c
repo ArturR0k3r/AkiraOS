@@ -5,6 +5,7 @@
 
 #include "mqtt_service.h"
 #include "../../settings/settings.h"
+#include "../../lib/mem_helper.h"
 
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
@@ -26,10 +27,17 @@ LOG_MODULE_REGISTER(mqtt_service, CONFIG_AKIRA_LOG_LEVEL);
 /* ------------------------------------------------------------------------- */
 #define RX_BUF_SIZE     256
 #define TX_BUF_SIZE     256
-#define MAX_SUBS        4
+#define MAX_SUBS        8
 #define RECONNECT_MIN_MS 2000
 #define RECONNECT_MAX_MS 30000
 #define CONNACK_TRIES   20    /* × 100ms = 2s to receive CONNACK */
+#define SOCK_IO_TIMEOUT_S 5   /* SO_SNDTIMEO / SO_RCVTIMEO on the broker socket */
+/* Callers other than the service thread (apps, the shell) wait this long for
+ * the client, then get -EBUSY: a holder's send is itself bounded (see
+ * set_io_timeouts()), so this only trips on a broker that keeps stalling. */
+#define CLIENT_LOCK_TIMEOUT K_MSEC(3000)
+/* The subscription table lock is never held across I/O. */
+#define SUBS_LOCK_TIMEOUT   K_MSEC(500)
 
 /* Broker configuration (loaded from NVS / Kconfig defaults) */
 static char     s_host[64];
@@ -50,9 +58,22 @@ static K_MUTEX_DEFINE(s_client_mutex);      /* guards all mqtt_* client calls */
 static volatile mqtt_svc_state_t s_state = MQTT_SVC_DISCONNECTED;
 static volatile bool s_want_connect;
 
-/* Remembered subscriptions, replayed after every (re)connect */
-static char s_subs[MAX_SUBS][AKIRA_MQTT_TOPIC_MAX];
-static int  s_sub_count;
+/*
+ * Remembered subscriptions, replayed after every (re)connect. An entry being
+ * unsubscribed stays until the service thread has sent the UNSUBSCRIBE, so
+ * mqtt_service_unsubscribe() never does I/O itself. Guarded by
+ * s_subs_mutex, which is never held across I/O; lock order is
+ * s_client_mutex, then s_subs_mutex.
+ */
+enum {
+    SUB_FREE = 0,
+    SUB_ACTIVE,         /* subscribed; replayed on reconnect           */
+    SUB_UNSUB_PENDING,  /* the service thread still has to unsubscribe */
+};
+
+static AKIRA_BULK_BSS char s_subs[MAX_SUBS][AKIRA_MQTT_TOPIC_MAX];
+static uint8_t s_sub_state[MAX_SUBS];
+static K_MUTEX_DEFINE(s_subs_mutex);
 
 /* Inbound message queue */
 static struct akira_mqtt_message s_rxq_buf[CONFIG_AKIRA_MQTT_RX_QUEUE_DEPTH];
@@ -271,18 +292,133 @@ static void setup_client(void)
 #endif
 }
 
-/* Replay remembered subscriptions after a (re)connect. */
+/* Index of @p topic in s_subs (any non-free state), or -1. s_subs_mutex held. */
+static int sub_find_locked(const char *topic)
+{
+    for (int i = 0; i < MAX_SUBS; i++) {
+        if (s_sub_state[i] != SUB_FREE && strcmp(s_subs[i], topic) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* A new session (clean session) has no subscriptions: pending unsubscribes
+ * are moot. s_subs_mutex held. */
+static void subs_drop_pending_locked(void)
+{
+    for (int i = 0; i < MAX_SUBS; i++) {
+        if (s_sub_state[i] == SUB_UNSUB_PENDING) {
+            s_sub_state[i] = SUB_FREE;
+        }
+    }
+}
+
+/*
+ * Copy the next entry in @p state at or after *@p idx into @p out (so no
+ * I/O happens under s_subs_mutex). For SUB_UNSUB_PENDING the entry is freed
+ * as it is taken. @return true if one was found.
+ */
+static bool subs_take_locked(int *idx, uint8_t state, char *out)
+{
+    for (; *idx < MAX_SUBS; (*idx)++) {
+        if (s_sub_state[*idx] == state) {
+            memcpy(out, s_subs[*idx], AKIRA_MQTT_TOPIC_MAX);
+            if (state == SUB_UNSUB_PENDING) {
+                s_sub_state[*idx] = SUB_FREE;
+            }
+            (*idx)++;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Replay remembered subscriptions after a (re)connect. s_client_mutex held. */
 static void replay_subscriptions(void)
 {
-    for (int i = 0; i < s_sub_count; i++) {
+    char topic[AKIRA_MQTT_TOPIC_MAX];
+    int idx = 0;
+
+    k_mutex_lock(&s_subs_mutex, K_FOREVER);
+    subs_drop_pending_locked();
+    k_mutex_unlock(&s_subs_mutex);
+
+    while (true) {
+        k_mutex_lock(&s_subs_mutex, K_FOREVER);
+        bool have = subs_take_locked(&idx, SUB_ACTIVE, topic);
+        k_mutex_unlock(&s_subs_mutex);
+        if (!have) {
+            break;
+        }
+
         struct mqtt_topic t = {
-            .topic = { .utf8 = (uint8_t *)s_subs[i], .size = strlen(s_subs[i]) },
+            .topic = { .utf8 = (uint8_t *)topic, .size = strlen(topic) },
             .qos = MQTT_QOS_0_AT_MOST_ONCE,
         };
         struct mqtt_subscription_list sub = {
             .list = &t, .list_count = 1, .message_id = next_msg_id(),
         };
         (void)mqtt_subscribe(&s_client, &sub);
+    }
+}
+
+/*
+ * Send the UNSUBSCRIBEs mqtt_service_unsubscribe() queued. Service thread
+ * only. Each is taken and sent while holding s_client_mutex, so a
+ * re-subscribe of the same topic (which cancels the pending entry under
+ * s_subs_mutex, then needs s_client_mutex to send its SUBSCRIBE) is always
+ * ordered after it.
+ */
+static void send_pending_unsubscribes(void)
+{
+    char topic[AKIRA_MQTT_TOPIC_MAX];
+    int idx = 0;
+
+    while (s_state == MQTT_SVC_CONNECTED) {
+        k_mutex_lock(&s_client_mutex, K_FOREVER);
+        k_mutex_lock(&s_subs_mutex, K_FOREVER);
+        bool have = subs_take_locked(&idx, SUB_UNSUB_PENDING, topic);
+        k_mutex_unlock(&s_subs_mutex);
+
+        if (have) {
+            struct mqtt_topic t = {
+                .topic = { .utf8 = (uint8_t *)topic, .size = strlen(topic) },
+                .qos = MQTT_QOS_0_AT_MOST_ONCE,
+            };
+            struct mqtt_subscription_list unsub = {
+                .list = &t, .list_count = 1, .message_id = next_msg_id(),
+            };
+            (void)mqtt_unsubscribe(&s_client, &unsub);
+        }
+        k_mutex_unlock(&s_client_mutex);
+
+        if (!have) {
+            break;
+        }
+    }
+}
+
+/*
+ * Bound every blocking socket call on the broker connection, so a broker that
+ * stops reading (or sends half a packet) cannot hold s_client_mutex — and with
+ * it an app thread, the shell or this service — for long. The TLS socket
+ * layer implements both options itself. A plain TCP socket honours them only
+ * with CONFIG_NET_CONTEXT_SNDTIMEO / _RCVTIMEO; without them a blocked send
+ * still gives up after CONFIG_NET_SOCKET_MAX_SEND_WAIT (a partial packet
+ * read stays unbounded, but only the broker can cause that).
+ */
+static void set_io_timeouts(void)
+{
+    struct zsock_timeval tv = { .tv_sec = SOCK_IO_TIMEOUT_S, .tv_usec = 0 };
+    int sock = client_sock();
+
+    if (zsock_setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0) {
+        LOG_DBG("SO_SNDTIMEO not supported (%d): sends bounded by "
+                "CONFIG_NET_SOCKET_MAX_SEND_WAIT", errno);
+    }
+    if (zsock_setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        LOG_DBG("SO_RCVTIMEO not supported (%d)", errno);
     }
 }
 
@@ -300,6 +436,11 @@ static int connect_broker(void)
     setup_client();
     s_state = MQTT_SVC_CONNECTING;
     rc = mqtt_connect(&s_client);
+    if (rc == 0) {
+        /* Before anything can block on the socket: the CONNACK wait,
+         * replays, publishes. */
+        set_io_timeouts();
+    }
     k_mutex_unlock(&s_client_mutex);
     if (rc != 0) {
         LOG_ERR("mqtt_connect failed (%d)", rc);
@@ -337,6 +478,10 @@ static void abort_connection(void)
     mqtt_abort(&s_client);
     k_mutex_unlock(&s_client_mutex);
     s_state = MQTT_SVC_DISCONNECTED;
+
+    k_mutex_lock(&s_subs_mutex, K_FOREVER);
+    subs_drop_pending_locked();
+    k_mutex_unlock(&s_subs_mutex);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -384,7 +529,10 @@ static void mqtt_thread_fn(void *a, void *b, void *c)
         if (rc != 0 || (pr > 0 && (fds.revents & (ZSOCK_POLLERR | ZSOCK_POLLHUP)))) {
             LOG_WRN("connection error (%d) — reconnecting", rc);
             abort_connection();
+            continue;
         }
+
+        send_pending_unsubscribes();
     }
 }
 
@@ -481,7 +629,9 @@ int mqtt_service_publish(const char *topic, const void *payload, size_t len,
     param.dup_flag = 0;
     param.retain_flag = retain ? 1 : 0;
 
-    k_mutex_lock(&s_client_mutex, K_FOREVER);
+    if (k_mutex_lock(&s_client_mutex, CLIENT_LOCK_TIMEOUT) != 0) {
+        return -EBUSY;
+    }
     int rc = mqtt_publish(&s_client, &param);
     k_mutex_unlock(&s_client_mutex);
     return rc;
@@ -489,36 +639,75 @@ int mqtt_service_publish(const char *topic, const void *payload, size_t len,
 
 int mqtt_service_subscribe(const char *topic)
 {
-    if (!topic || strlen(topic) >= AKIRA_MQTT_TOPIC_MAX) {
+    size_t len = topic ? strnlen(topic, AKIRA_MQTT_TOPIC_MAX) : 0;
+
+    if (len == 0 || len >= AKIRA_MQTT_TOPIC_MAX) {
         return -EINVAL;
     }
 
-    /* Remember it so it survives reconnects. */
-    bool known = false;
-    for (int i = 0; i < s_sub_count; i++) {
-        if (strcmp(s_subs[i], topic) == 0) {
-            known = true;
-            break;
+    /* Remember it so it survives reconnects; a re-subscribe cancels a
+     * pending unsubscribe of the same topic. */
+    if (k_mutex_lock(&s_subs_mutex, SUBS_LOCK_TIMEOUT) != 0) {
+        return -EBUSY;
+    }
+    int idx = sub_find_locked(topic);
+
+    if (idx >= 0) {
+        s_sub_state[idx] = SUB_ACTIVE;
+    } else {
+        for (int i = 0; i < MAX_SUBS; i++) {
+            if (s_sub_state[i] == SUB_FREE) {
+                memcpy(s_subs[i], topic, len);
+                s_subs[i][len] = '\0';
+                s_sub_state[i] = SUB_ACTIVE;
+                break;
+            }
         }
+        /* Table full: subscribed for this session only. */
     }
-    if (!known && s_sub_count < MAX_SUBS) {
-        strncpy(s_subs[s_sub_count++], topic, AKIRA_MQTT_TOPIC_MAX - 1);
-    }
+    k_mutex_unlock(&s_subs_mutex);
 
     if (s_state != MQTT_SVC_CONNECTED) {
         return -ENOTCONN;   /* will be replayed on connect */
     }
 
     struct mqtt_topic t = {
-        .topic = { .utf8 = (uint8_t *)topic, .size = strlen(topic) },
+        .topic = { .utf8 = (uint8_t *)topic, .size = len },
         .qos = MQTT_QOS_0_AT_MOST_ONCE,
     };
     struct mqtt_subscription_list sub = {
         .list = &t, .list_count = 1, .message_id = next_msg_id(),
     };
-    k_mutex_lock(&s_client_mutex, K_FOREVER);
+    if (k_mutex_lock(&s_client_mutex, CLIENT_LOCK_TIMEOUT) != 0) {
+        return -EBUSY;      /* remembered: replayed on the next reconnect */
+    }
     int rc = mqtt_subscribe(&s_client, &sub);
     k_mutex_unlock(&s_client_mutex);
+    return rc;
+}
+
+int mqtt_service_unsubscribe(const char *topic)
+{
+    size_t len = topic ? strnlen(topic, AKIRA_MQTT_TOPIC_MAX) : 0;
+
+    if (len == 0 || len >= AKIRA_MQTT_TOPIC_MAX) {
+        return -EINVAL;
+    }
+    if (k_mutex_lock(&s_subs_mutex, SUBS_LOCK_TIMEOUT) != 0) {
+        return -EBUSY;
+    }
+
+    int idx = sub_find_locked(topic);
+    int rc = 0;
+
+    if (idx < 0) {
+        rc = -ENOENT;   /* not remembered: gone at the next reconnect */
+    } else if (s_state == MQTT_SVC_CONNECTED) {
+        s_sub_state[idx] = SUB_UNSUB_PENDING;   /* the service thread sends it */
+    } else {
+        s_sub_state[idx] = SUB_FREE;            /* nothing to tell the broker */
+    }
+    k_mutex_unlock(&s_subs_mutex);
     return rc;
 }
 

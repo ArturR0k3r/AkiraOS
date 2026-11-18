@@ -12,6 +12,12 @@
  *
  * Required manifest capability: "network"
  *
+ * Streams, rings and events belong to the calling app: another app's handle
+ * is -ENOENT, and everything is closed when the app ends, however it ends.
+ * Ring buffers must live in a linear memory that cannot grow (link with
+ * --initial-memory equal to --max-memory, as the SDK Makefiles do): the host
+ * fills them from its own thread, and memory.grow may move linear memory.
+ *
  * Typical WASM app flow — TCP client:
  *
  *   // Allocate ring buffers in WASM memory
@@ -66,9 +72,14 @@ extern "C" {
 
 /**
  * @brief Open a new TCP or UDP socket.
+ *
+ * When more than one app can run, one app may hold all stream slots but one
+ * (CONFIG_AKIRA_NET_MAX_STREAMS - 1), including accepted connections.
+ *
  * @param exec_env  WAMR execution environment.
  * @param type      NET_TYPE_TCP (0) or NET_TYPE_UDP (1).
- * @return Stream handle (>=0) on success; negative errno on failure.
+ * @return Stream handle (>=0) on success; -ENOSPC if no slot is free for this
+ *         app; -ECANCELED if the app is being stopped; negative errno on failure.
  */
 int akira_native_net_open(wasm_exec_env_t exec_env, int32_t type);
 
@@ -76,13 +87,17 @@ int akira_native_net_open(wasm_exec_env_t exec_env, int32_t type);
  * @brief Initiate an async connect to a remote host:port.
  *
  * Returns immediately; NET_EVT_CONNECTED (or NET_EVT_ERROR) is posted
- * asynchronously. For UDP, sets the default peer (no handshake).
+ * asynchronously. For UDP, sets the default peer (no handshake). Connects
+ * are made one at a time system-wide; a TCP connect gives up after 10 s.
  *
  * @param exec_env  WAMR execution environment.
  * @param handle    Stream handle.
- * @param host      Null-terminated hostname or IPv4 dotted-decimal string.
+ * @param host      Null-terminated hostname or IPv4 dotted-decimal string,
+ *                  at most 63 characters.
  * @param port      Remote port (1–65535).
- * @return 0 if queued; negative errno on failure.
+ * @return 0 if queued; -ENAMETOOLONG if @p host is longer than 63
+ *         characters; -EACCES (or the provider's errno) if refused by the
+ *         egress policy; negative errno on failure.
  */
 int akira_native_net_connect(wasm_exec_env_t exec_env, int32_t handle,
 			     const char *host, int32_t port);
@@ -121,12 +136,15 @@ int akira_native_net_close(wasm_exec_env_t exec_env, int32_t handle);
  * The first NET_RING_HDR_SIZE bytes of the buffer become the ring header;
  * the host writes the data-area capacity there.
  * After a successful call the WASM app owns the write_idx; the host owns read_idx.
+ * The host keeps the capacity and its own index privately and never trusts
+ * the header: a corrupted header only stalls this ring.
  *
  * @param exec_env   WAMR execution environment.
  * @param handle     Stream handle.
  * @param wasm_ptr   WASM app-address of the buffer.
  * @param total_size Total buffer size in bytes (must be > NET_RING_HDR_SIZE = 16).
- * @return 0 on success; negative errno on failure.
+ * @return 0 on success; -ENOTSUP if the app's linear memory can still grow;
+ *         -EFAULT if the buffer is outside linear memory; negative errno on failure.
  */
 int akira_native_net_tx_bind(wasm_exec_env_t exec_env, int32_t handle,
 			     int32_t wasm_ptr, int32_t total_size);
@@ -135,30 +153,38 @@ int akira_native_net_tx_bind(wasm_exec_env_t exec_env, int32_t handle,
  * @brief Bind a WASM linear-memory buffer as the RX ring for a stream.
  *
  * After a successful call the host owns write_idx; the WASM app owns read_idx.
+ * When the ring is full, received TCP data waits in the socket; a UDP
+ * datagram that does not fit is dropped.
  *
  * @param exec_env   WAMR execution environment.
  * @param handle     Stream handle.
  * @param wasm_ptr   WASM app-address of the buffer.
  * @param total_size Total buffer size in bytes (must be > NET_RING_HDR_SIZE = 16).
- * @return 0 on success; negative errno on failure.
+ * @return 0 on success; -ENOTSUP if the app's linear memory can still grow;
+ *         -EFAULT if the buffer is outside linear memory; negative errno on failure.
  */
 int akira_native_net_rx_bind(wasm_exec_env_t exec_env, int32_t handle,
 			     int32_t wasm_ptr, int32_t total_size);
 
 /**
- * @brief Drain the TX ring immediately and send pending bytes over the socket.
+ * @brief Wake the poll thread to drain the TX ring now.
  *
- * The poll thread drains automatically on each 10 ms tick. Call this for
- * lower-latency sends without waiting for the next tick.
+ * The poll thread drains automatically on each 10 ms tick and is the only
+ * thread that sends (non-blocking, so a stalled peer never blocks the app).
+ * Call this for lower-latency sends without waiting for the next tick.
  *
  * @param exec_env  WAMR execution environment.
  * @param handle    Stream handle.
- * @return Bytes sent on success; negative errno on failure.
+ * @return 0 on success (the bytes leave asynchronously; send errors arrive as
+ *         NET_EVT_ERROR); -ENOTCONN if not connected; negative errno on failure.
  */
 int akira_native_net_tx_flush(wasm_exec_env_t exec_env, int32_t handle);
 
 /**
  * @brief Pop the next network event from the event queue (non-blocking).
+ *
+ * Each app has its own queue (CONFIG_AKIRA_NET_EVENT_QUEUE_DEPTH events);
+ * events that arrive while it is full are dropped.
  *
  * Event buffer layout:
  *   Byte 0      : event type (NET_EVT_*)

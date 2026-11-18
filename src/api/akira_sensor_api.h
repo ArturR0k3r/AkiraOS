@@ -23,9 +23,12 @@
  * Iterates all static DT devices, finds the first one that is ready and
  * answers the given Zephyr sensor channel, and returns its value.
  *
- * @param channel  Zephyr enum sensor_channel value.
- * @param out      Pointer to store the result (float).
- * @return 0 on success, -ENOTSUP if no device answers, or a negative errno.
+ * @param channel  Zephyr enum sensor_channel value, below SENSOR_CHAN_ALL
+ *                 (ALL and driver-private channels are refused).
+ * @param out      Pointer to store the result (float). For a vector channel
+ *                 (e.g. SENSOR_CHAN_ACCEL_XYZ) this is the first component.
+ * @return 0 on success, -EINVAL for a refused channel, -ENOTSUP if no device
+ *         answers, or a negative errno.
  */
 int akira_sensor_read(int channel, float *out);
 
@@ -35,7 +38,8 @@ int akira_sensor_read(int channel, float *out);
  *
  * @param exec_env  WAMR execution environment (capability checked).
  * @param channel   Zephyr enum sensor_channel integer.
- * @return Value scaled ×1000 as int32, or INT32_MIN on error.
+ * @return Value scaled ×1000 as int32 (saturated to INT32_MIN+1..INT32_MAX),
+ *         or INT32_MIN on error.
  */
 int akira_native_sensor_read(wasm_exec_env_t exec_env, int32_t channel);
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */

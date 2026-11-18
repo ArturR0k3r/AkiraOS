@@ -788,7 +788,7 @@ int fs_manager_alloc_app_storage(const char *app_name, size_t max_size, app_stor
         /* Use RAM storage */
         snprintf(ctx->storage_path, sizeof(ctx->storage_path), "/ram/apps/%s", app_name);
         ctx->storage_type = FS_TYPE_TEMPORARY;
-        LOG_WRN("Using RAM storage for %s (not persistent!)", app_name);
+        LOG_WRN_RATELIMIT("Using RAM storage for %s (not persistent!)", app_name);
     }
 
     return 0;

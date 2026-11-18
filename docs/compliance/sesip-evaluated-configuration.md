@@ -60,7 +60,7 @@ Without `build.sh`: build MCUboot with the same options, then
 | `AKIRA_HTTP_SERVER=n` | No plain-HTTP firmware upload, app install or app control | Secure Update of Platform |
 | WAMR interpreter with full module validation (`AKIRA_WAMR_MINI_LOADER=n`) | Every app's bytecode is validated before it runs | Isolation of Platform |
 | Native API range checks | Every pointer an app passes is checked against its own linear memory for the full length | Isolation of Platform, Isolation of Application Parts |
-| `AKIRA_HARDEN_UNATTESTED_APPS` | An app no verifier attested gets no privileged capability and cannot load AOT native code | Isolation of Application Parts |
+| `AKIRA_HARDEN_UNATTESTED_APPS` | An app no verifier attested gets no privileged capability | Isolation of Application Parts |
 | `akira version`, `GET /api/v1/info` | Reports AkiraOS version and source revision, the MCUboot-verified image version, Zephyr, WAMR and their revisions, board, device ID | Verification of Platform Identity |
 | `AKIRA_SHELL_DEBUG_COMMANDS=n`, no telnet shell | No arbitrary memory read, no network shell | Secure Debugging (not claimed: debug is disabled) |
 
@@ -96,9 +96,15 @@ The configuration above does not meet them on its own.
   higher `VERSION` than the fleet runs. Same-version images are accepted;
   older ones are refused.
 - **Apps.** Without a platform signature verifier (`AKIRA_REQUIRE_SIGNED_APPS`
-  with AkiraPlatform), every app runs as unattested: interpreted WASM only,
-  no privileged capability. Review an app's manifest before installing it.
-- **App data.** Each app's files live under `/akira/apps/<app name>/`. The name
+  with AkiraPlatform), every app runs as unattested, with no privileged
+  capability. Review an app's manifest before installing it.
+- **AOT apps.** An `.aot` file is native code. The isolation above holds for
+  it only if wamrc built it from a source you trust; a hand-crafted one can
+  take over the device. Unattested AOT apps load (with a warning and an audit
+  record), so installing one is the user's risk. Build with
+  `CONFIG_AKIRA_REFUSE_UNATTESTED_AOT=y` to run AOT only for attested apps.
+- **App data.** Each app's files live under `<mount>/apps/<app name>/`
+  (`/SD:` with a card, `/lfs` without). The name
   comes from the app's manifest, so without signatures a second app that
   declares the same name reaches the same files. Install apps only from
   sources you trust with each other's data, or use a signature verifier.
@@ -108,4 +114,5 @@ The configuration above does not meet them on its own.
 
 The Security Target does not claim these in this configuration: TLS or any
 other secure channel, attestation, encrypted storage bound to a hardware key,
-and app signature verification without AkiraPlatform's verifier.
+app signature verification without AkiraPlatform's verifier, and isolation of
+unattested AOT apps (see Operational guidance).

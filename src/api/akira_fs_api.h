@@ -9,7 +9,16 @@
  *
  * Provides seek/tell/stat/mkdir/readdir in addition to the basic
  * open/read/write/close/unlink surface.  Apps are jailed to their
- * sandbox directory.  Requires AKIRA_CAP_FS_READ / AKIRA_CAP_FS_WRITE.
+ * sandbox directory.  Requires AKIRA_CAP_FS_READ / AKIRA_CAP_FS_WRITE;
+ * fs_open with any of WRITE/APPEND/RDWR/CREATE/TRUNC needs the write
+ * capability, fs_close either.
+ *
+ * Limits: CONFIG_AKIRA_WASM_FS_MAX_FILES_PER_APP open files per app (apps
+ * together always leave the OS two of the filesystem's file slots); no file
+ * grows past CONFIG_AKIRA_WASM_FS_QUOTA_BYTES, by write or by seek; writes,
+ * creates and mkdir that would leave less than a quarter of the volume free
+ * return -ENOSPC. Reading a write-only fd or writing a read-only one returns
+ * -EBADF. An app's fds are closed when it ends, however it ends.
  *
  * Gate: CONFIG_AKIRA_WASM_FS=y
  * @stability experimental

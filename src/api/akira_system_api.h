@@ -27,9 +27,11 @@
  * sd_scan_wasm(buf_ptr, buf_len) → int  (WASM signature: "(*~)i")
  *
  * Scans /SD:/apps/ and writes newline-separated *.wasm filenames into the
- * caller's WASM buffer.  Returns the number of files found (≥ 0) or a
- * negative Zephyr errno on error (-ENODEV if no SD card, -EACCES if
- * capability check fails, -ENOMEM if the buffer is too small).
+ * caller's WASM buffer (WAMR validates [buf, buf + buf_len)).  At most 256
+ * directory entries are examined per call; names that don't fit are left
+ * out.  Returns the number of files written (≥ 0) or a negative Zephyr
+ * errno on error (-ENODEV if no SD card, -EPERM if the capability check
+ * fails, -EINVAL on a bad buffer).
  *
  * Capability: "app.control" (AKIRA_CAP_APP_CONTROL)
  */
@@ -44,10 +46,16 @@ int akira_native_sd_scan_wasm(wasm_exec_env_t exec_env,
  * with the app manager, so it appears immediately in the launcher without
  * any reboot or PC connection.
  *
- * @param name  App name string (without .wasm extension, null-terminated)
- * @return 0 on success, negative Zephyr errno on error:
- *   -EACCES  capability "app.control" not granted
- *   -EINVAL  NULL or empty name
+ * The copy runs on the lifecycle work queue when the build has one (the
+ * caller waits for it, stop-aware; see akira_lifecycle_run_deferred()).
+ *
+ * @param name  App name string (without .wasm extension, null-terminated;
+ *              letters, digits, '_', '-', '.', at most 31 characters)
+ * @return app id (≥ 0) on success, negative Zephyr errno on error:
+ *   -EPERM   capability "app.control" not granted
+ *   -EINVAL  NULL, empty or invalid name
+ *   -EBUSY   @p name is the calling app itself
+ *   -EAGAIN / -EBUSY / -EINTR  see akira_lifecycle_run_deferred()
  *   -ENOENT  file not found on SD card
  *   -ENOSPC  LittleFS full
  *   -ENODEV  SD card not mounted

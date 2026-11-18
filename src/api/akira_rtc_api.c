@@ -16,31 +16,49 @@ LOG_MODULE_REGISTER(akira_rtc_api, CONFIG_AKIRA_LOG_LEVEL);
  * On boards without an RTC (e.g., native_sim) all time operations
  * fall back gracefully to k_uptime_get().
  *
+ * Setting the clock needs "rtc.write" and a time >= 0 (1970..2038).  Alarms
+ * are per app and cleared when the app ends.
+ *
  * Gate: CONFIG_AKIRA_WASM_RTC=y
  */
 
 #ifdef CONFIG_AKIRA_WASM_RTC
 
 #include "akira_rtc_api.h"
+#include <akira_app_containment.h>
 #include <runtime/security.h>
 #include <runtime/akira_runtime.h>
 #include <zephyr/kernel.h>
+#include <zephyr/sys/atomic.h>
 #include <errno.h>
-#include <stdatomic.h>
+#include <inttypes.h>
 
 #if defined(CONFIG_RTC) && defined(CONFIG_AKIRA_RTC_DEVICE)
 #include <zephyr/drivers/rtc.h>
+#include <zephyr/sys/timeutil.h>
+#include <string.h>
 static const struct device *g_rtc_dev;
 #endif
 
-/* Unix epoch offset — set by akira_native_rtc_set_unix_time().
- * Stores: (unix_time_at_set - uptime_ms_at_set / 1000) */
+/* Software clock, shared by all apps: Unix time = g_epoch_offset + uptime
+ * seconds, once set.  The lock keeps the 64-bit offset from tearing on
+ * 32-bit CPUs. */
+static struct k_spinlock g_epoch_lock;
 static int64_t g_epoch_offset;    /* seconds */
 static bool    g_epoch_set;
 
-/* Alarm state */
-static int64_t  g_alarm_deadline_ms;
-static atomic_t g_alarm_fired;
+/* One-shot alarm per app slot (uptime ms deadline, 0 = none), so one app
+ * can neither clear nor consume another app's alarm. */
+static struct k_spinlock g_alarm_lock;
+static int64_t g_alarm_deadline_ms[AKIRA_MAX_WASM_INSTANCES];
+static ATOMIC_DEFINE(g_alarm_fired, AKIRA_MAX_WASM_INSTANCES);
+
+static int rtc_slot(wasm_exec_env_t exec_env)
+{
+    int slot = akira_runtime_slot_of_exec_env(exec_env);
+
+    return (slot >= 0 && slot < AKIRA_MAX_WASM_INSTANCES) ? slot : -1;
+}
 
 /* ── internal init ──────────────────────────────────────────────────────── */
 
@@ -48,14 +66,53 @@ static void rtc_api_late_init(void)
 {
 #if defined(CONFIG_RTC) && defined(CONFIG_AKIRA_RTC_DEVICE)
     if (!g_rtc_dev) {
-        g_rtc_dev = DEVICE_DT_GET(DT_ALIAS(rtc0));
-        if (!device_is_ready(g_rtc_dev)) {
-            LOG_WRN("RTC device not ready, using uptime fallback");
-            g_rtc_dev = NULL;
+        const struct device *dev = DEVICE_DT_GET(DT_ALIAS(rtc0));
+
+        if (device_is_ready(dev)) {
+            g_rtc_dev = dev;
+        } else {
+            LOG_WRN_RATELIMIT("RTC device not ready, using uptime fallback");
         }
     }
 #endif
 }
+
+#if defined(CONFIG_RTC) && defined(CONFIG_AKIRA_RTC_DEVICE)
+/* Unix time (>= 0) to broken-down UTC.  Self-contained: gmtime() returns a
+ * shared static buffer, and gmtime_r() is not visible with every libc.
+ * Days to civil date after H. Hinnant's days_from_civil inverse. */
+static void unix_to_rtc_time(int64_t t, struct rtc_time *rtm)
+{
+    static const uint16_t cum_days[12] = {
+        0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334,
+    };
+    int64_t days = t / 86400;
+    int32_t rem = (int32_t)(t % 86400);
+
+    memset(rtm, 0, sizeof(*rtm));
+    rtm->tm_hour = rem / 3600;
+    rtm->tm_min = (rem % 3600) / 60;
+    rtm->tm_sec = rem % 60;
+    rtm->tm_wday = (int)((days + 4) % 7); /* 1970-01-01 was a Thursday */
+
+    int64_t z = days + 719468;
+    int64_t era = z / 146097;
+    uint32_t doe = (uint32_t)(z - era * 146097);
+    uint32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    uint32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    uint32_t mp = (5 * doy + 2) / 153;
+    uint32_t mday = doy - (153 * mp + 2) / 5 + 1;
+    uint32_t mon = (mp < 10) ? mp + 3 : mp - 9;           /* 1..12 */
+    int64_t year = (int64_t)yoe + era * 400 + (mon <= 2);
+    bool leap = (year % 4 == 0) && ((year % 100 != 0) || (year % 400 == 0));
+
+    rtm->tm_year = (int)(year - 1900);
+    rtm->tm_mon = (int)mon - 1;
+    rtm->tm_mday = (int)mday;
+    rtm->tm_yday = cum_days[mon - 1] + (int)mday - 1 + ((leap && mon > 2) ? 1 : 0);
+    rtm->tm_isdst = -1;
+}
+#endif
 
 /* ── get_unix_time ──────────────────────────────────────────────────────── */
 
@@ -66,20 +123,30 @@ int akira_native_rtc_get_unix_time(wasm_exec_env_t exec_env)
 
 #if defined(CONFIG_RTC) && defined(CONFIG_AKIRA_RTC_DEVICE)
     if (g_rtc_dev) {
-        struct rtc_time rtm;
-        if (rtc_get_time(g_rtc_dev, &rtm) == 0) {
+        struct rtc_time rtm = {0};
+
+        /* The driver holds its bus lock for the transfer. */
+        akira_native_critical_enter(exec_env);
+        int ret = rtc_get_time(g_rtc_dev, &rtm);
+        akira_native_critical_exit(exec_env);
+        if (ret == 0) {
             /* Convert rtc_time to seconds since epoch using Zephyr helper */
-            time_t t = timeutil_timegm((struct tm *)&rtm);
+            time_t t = timeutil_timegm(rtc_time_to_tm(&rtm));
             return (int)t;
         }
     }
 #endif
     /* Software fallback */
-    if (!g_epoch_set) {
+    k_spinlock_key_t key = k_spin_lock(&g_epoch_lock);
+    bool set = g_epoch_set;
+    int64_t offset = g_epoch_offset;
+    k_spin_unlock(&g_epoch_lock, key);
+
+    if (!set) {
         return 0;
     }
     int64_t up_s = k_uptime_get() / 1000;
-    return (int)(g_epoch_offset + up_s);
+    return (int)(offset + up_s);
 }
 
 /* ── get_uptime_ms ──────────────────────────────────────────────────────── */
@@ -95,25 +162,37 @@ int akira_native_rtc_get_uptime_ms(wasm_exec_env_t exec_env)
 int akira_native_rtc_set_unix_time(wasm_exec_env_t exec_env, int32_t unix_time)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RTC_WRITE, -EPERM);
+
+    /* Before 1970 is no valid wall-clock time to set (int32 caps 2038). */
+    if (unix_time < 0) {
+        return -EINVAL;
+    }
     rtc_api_late_init();
 
 #if defined(CONFIG_RTC) && defined(CONFIG_AKIRA_RTC_DEVICE)
     if (g_rtc_dev) {
-        struct tm *utc = gmtime((time_t *)&unix_time);
         struct rtc_time rtm;
-        memcpy(&rtm, utc, sizeof(struct tm));
+
+        unix_to_rtc_time((int64_t)unix_time, &rtm);
+        akira_native_critical_enter(exec_env);
         int ret = rtc_set_time(g_rtc_dev, &rtm);
+        akira_native_critical_exit(exec_env);
         if (ret < 0) {
-            LOG_WRN("rtc_set_time failed: %d", ret);
+            LOG_WRN_RATELIMIT("rtc_set_time failed: %d", ret);
         }
     }
 #endif
     /* Always keep the software fallback in sync */
-    int64_t up_s    = k_uptime_get() / 1000;
-    g_epoch_offset  = (int64_t)unix_time - up_s;
-    g_epoch_set     = true;
-    LOG_INF("RTC set to %d (software epoch offset %" PRId64 ")",
-            unix_time, g_epoch_offset);
+    int64_t up_s   = k_uptime_get() / 1000;
+    int64_t offset = (int64_t)unix_time - up_s;
+    k_spinlock_key_t key = k_spin_lock(&g_epoch_lock);
+    g_epoch_offset = offset;
+    g_epoch_set    = true;
+    k_spin_unlock(&g_epoch_lock, key);
+
+    /* App-triggered: rate-limited so a looping app cannot flood the log. */
+    LOG_INF_RATELIMIT("RTC set to %d (software epoch offset %" PRId64 ")",
+                      unix_time, offset);
     return 0;
 }
 
@@ -126,9 +205,16 @@ int akira_native_rtc_set_alarm(wasm_exec_env_t exec_env, int32_t deadline_ms)
     if (deadline_ms <= 0) {
         return -EINVAL;
     }
-    g_alarm_deadline_ms = (int64_t)deadline_ms;
-    atomic_store(&g_alarm_fired, 0);
-    LOG_DBG("RTC alarm set for uptime %" PRId64 " ms", g_alarm_deadline_ms);
+    int slot = rtc_slot(exec_env);
+    if (slot < 0) {
+        return -EPERM;
+    }
+
+    k_spinlock_key_t key = k_spin_lock(&g_alarm_lock);
+    g_alarm_deadline_ms[slot] = (int64_t)deadline_ms;
+    atomic_clear_bit(g_alarm_fired, slot);
+    k_spin_unlock(&g_alarm_lock, key);
+    LOG_DBG("RTC alarm set for uptime %d ms (slot %d)", deadline_ms, slot);
     return 0;
 }
 
@@ -138,13 +224,38 @@ int akira_native_rtc_alarm_fired(wasm_exec_env_t exec_env)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RTC_READ, -EPERM);
 
-    if (g_alarm_deadline_ms > 0 &&
-        k_uptime_get() >= g_alarm_deadline_ms) {
-        g_alarm_deadline_ms = 0;
-        atomic_store(&g_alarm_fired, 1);
+    int slot = rtc_slot(exec_env);
+    if (slot < 0) {
+        return 0;
     }
-    return (int)atomic_exchange(&g_alarm_fired, 0);
+
+    k_spinlock_key_t key = k_spin_lock(&g_alarm_lock);
+    if (g_alarm_deadline_ms[slot] > 0 &&
+        k_uptime_get() >= g_alarm_deadline_ms[slot]) {
+        g_alarm_deadline_ms[slot] = 0;
+        atomic_set_bit(g_alarm_fired, slot);
+    }
+    k_spin_unlock(&g_alarm_lock, key);
+    return atomic_test_and_clear_bit(g_alarm_fired, slot) ? 1 : 0;
 }
+
+/* ── App teardown ───────────────────────────────────────────────────────── */
+
+/* An app's alarm goes with it: the next app in the slot starts clean. */
+static void rtc_release(int slot, const char *app_name)
+{
+    ARG_UNUSED(app_name);
+
+    if (slot < 0 || slot >= AKIRA_MAX_WASM_INSTANCES) {
+        return;
+    }
+    k_spinlock_key_t key = k_spin_lock(&g_alarm_lock);
+    g_alarm_deadline_ms[slot] = 0;
+    atomic_clear_bit(g_alarm_fired, slot);
+    k_spin_unlock(&g_alarm_lock, key);
+}
+
+AKIRA_APP_RESOURCE_DEFINE(rtc, 50, NULL, rtc_release);
 
 #endif /* CONFIG_AKIRA_WASM_RTC */
 

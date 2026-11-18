@@ -16,8 +16,9 @@ extern "C" {
 /**
  * @brief WASM native: wdt_pet() -> 0 on success, negative on error
  *
- * Allows a WASM app to manually pet/feed the system watchdog, signalling
- * that the application is still alive.
+ * Liveness signal from a WASM app.  Never feeds the hardware watchdog (that
+ * would let an app mask a wedged system); returns 0 while the system
+ * watchdog is active, -ENODEV otherwise.
  *
  * Capability: AKIRA_CAP_WDT ("wdt")
  * @stability stable

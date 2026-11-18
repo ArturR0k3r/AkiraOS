@@ -15,9 +15,16 @@ LOG_MODULE_REGISTER(akira_display_api, CONFIG_AKIRA_LOG_LEVEL);
  * to the hardware driver by akira_display_flush() / akira_native_display_flush().
  * An auto-flush work item fires 50 ms after the last draw call so apps that
  * forget to call flush() still get their output shown.
+ *
+ * Containment (see include/akira_app_containment.h): any argument values from
+ * an app are safe.  Geometry is clipped in 64-bit arithmetic and every loop is
+ * bounded by the panel; pixel buffers are length- and alignment-checked; the
+ * calls that hold the panel's bus lock run as native critical sections; and
+ * the auto-flush an app arms is disarmed when that app ends.
  */
 #include "akira_api.h"
 #include "display_clip.h"
+#include <akira_app_containment.h>
 #include <runtime/security.h>
 #include <drivers/platform_hal.h>
 #include "../drivers/display/fonts.h"
@@ -121,56 +128,174 @@ void akira_display_release_owner(wasm_module_inst_t inst) { (void)inst; }
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
 
-void akira_display_clear(uint16_t color)
+/* ---------------------------------------------------------------------------
+ * Draw target and clipping helpers
+ *
+ * Every primitive below is reachable from WASM with arbitrary 32-bit
+ * arguments, so all geometry is computed in 64 bits and clipped to the panel
+ * (display_clip.h) before anything is iterated or written: no int overflow,
+ * no negative span, and no loop longer than the panel, DISP_RADIUS_MAX for
+ * arcs or DISP_TEXT_MAX_BYTES for text.
+ * -------------------------------------------------------------------------*/
+
+/* Arcs (circles, rounded corners) iterate O(radius): bound it.  4096 is ten
+ * panels wide, so the clamp only changes shapes that are off-screen anyway. */
+#define DISP_RADIUS_MAX 4096
+
+/* Text walks at most this many bytes per call.  Drawing is bounded by the
+ * panel already; this bounds the scan over a string that may span the app's
+ * whole linear memory. */
+#define DISP_TEXT_MAX_BYTES 4096
+
+static bool panel_size(int *w, int *h)
 {
 #if AKIRA_PLATFORM_NATIVE_SIM
-    for (int y = 0; y < 320; y++)
-        for (int x = 0; x < 240; x++)
-            akira_sim_draw_pixel(x, y, color);
+    *w = 240;
+    *h = 320;
+    return true;
 #else
     struct display_capabilities caps;
+
     if (akira_display_hal_get_capabilities(&caps) < 0)
-    {
-        LOG_DBG("Failed to get display capabilities");
-        return;
-    }
+        return false;
+    *w = caps.x_resolution;
+    *h = caps.y_resolution;
+    return *w > 0 && *h > 0;
+#endif
+}
 
-    uint16_t *fb = akira_framebuffer_get();
-    if (!fb)
-    {
-        LOG_WRN("No display framebuffer available");
-        return;
-    }
+#if !AKIRA_PLATFORM_NATIVE_SIM
+#define DISP_FB_MAX_PIXELS AKIRA_FB_MAX_PIXELS
 
-    int pixels = caps.x_resolution * caps.y_resolution;
-    /* Fill 2 pixels per 32-bit write for ~2× throughput over scalar uint16 stores */
+/* The framebuffer, or NULL if there is none or the panel does not fit in it
+ * (row offsets would then run past the array).  Looked up once:
+ * akira_framebuffer_get() logs a warning on every call on boards without one,
+ * and the per-pixel paths would turn that into a log flood any app can
+ * trigger.  The pointer is a static array's address, so it never changes. */
+static uint16_t *display_fb(int pw, int ph)
+{
+    static atomic_t probed;
+    static uint16_t *fb;
+
+    if (!atomic_get(&probed))
+    {
+        uint16_t *p = akira_framebuffer_get();
+
+        if (p && (int64_t)pw * ph > DISP_FB_MAX_PIXELS)
+        {
+            LOG_ERR("Panel %dx%d does not fit the %d-pixel framebuffer; drawing disabled",
+                    pw, ph, DISP_FB_MAX_PIXELS);
+            p = NULL;
+        }
+        fb = p;
+        atomic_set(&probed, 1);
+    }
+    return fb;
+}
+#endif
+
+/* Panel size and the framebuffer to draw into; false = nothing to draw on.
+ * On native_sim *fb is NULL and pixels go through akira_sim_draw_pixel(). */
+static bool draw_target(uint16_t **fb, int *pw, int *ph)
+{
+    if (!panel_size(pw, ph))
+        return false;
+#if AKIRA_PLATFORM_NATIVE_SIM
+    *fb = NULL;
+    return true;
+#else
+    *fb = display_fb(*pw, *ph);
+    return *fb != NULL;
+#endif
+}
+
+#if !AKIRA_PLATFORM_NATIVE_SIM
+/* Fill @p n pixels from @p dst, two per 32-bit store.  A 32-bit store needs a
+ * 4-byte aligned address on cores without unaligned access (Cortex-M STRD/STM,
+ * RISC-V), so a row starting on an odd pixel writes that pixel first. */
+static void fill_span(uint16_t *dst, size_t n, uint16_t color)
+{
+    if (n > 0 && ((uintptr_t)dst & 2U))
+    {
+        *dst++ = color;
+        n--;
+    }
     uint32_t c32 = ((uint32_t)color << 16) | color;
-    uint32_t *p = (uint32_t *)(void *)fb;
-    int words = pixels / 2;
-    for (int i = 0; i < words; i++)
+    uint32_t *p = (uint32_t *)(void *)dst;
+    for (size_t i = 0; i < n / 2; i++)
         p[i] = c32;
-    if (pixels & 1)
-        fb[pixels - 1] = color;
+    if (n & 1)
+        dst[n - 1] = color;
+}
+#endif
+
+/* Fill [x0, x1) x [y0, y1), clipped to the panel.  64-bit edges, so callers
+ * pass derived geometry (x + w, x + w - r, ...) without overflowing int. */
+static void fill_box64(int64_t x0, int64_t y0, int64_t x1, int64_t y1, uint16_t color)
+{
+    uint16_t *fb;
+    int pw, ph, cx0, cy0, cx1, cy1;
+
+    if (!draw_target(&fb, &pw, &ph) ||
+        !akira_display_clip_box(x0, y0, x1, y1, pw, ph, &cx0, &cy0, &cx1, &cy1))
+        return;
+
+#if AKIRA_PLATFORM_NATIVE_SIM
+    for (int py = cy0; py < cy1; py++)
+        for (int px = cx0; px < cx1; px++)
+            akira_sim_draw_pixel(px, py, color);
+#else
+    /* Fill the first row, then memcpy it to the remaining rows: the optimised
+     * memcpy beats a scalar per-pixel store loop. */
+    const size_t span = (size_t)(cx1 - cx0);
+    uint16_t *row0 = fb + (size_t)cy0 * (size_t)pw + (size_t)cx0;
+
+    fill_span(row0, span, color);
+    for (int py = cy0 + 1; py < cy1; py++)
+        memcpy(fb + (size_t)py * (size_t)pw + (size_t)cx0, row0, span * sizeof(uint16_t));
+#endif
+}
+
+/* One pixel at 64-bit coordinates; anything off the panel is dropped. */
+static inline void plot64(int64_t x, int64_t y, uint16_t color)
+{
+    if (x < 0 || y < 0 || x > INT16_MAX || y > INT16_MAX)
+        return;
+    akira_display_pixel((int)x, (int)y, color);
+}
+
+void akira_display_clear(uint16_t color)
+{
+    uint16_t *fb;
+    int pw, ph;
+
+    if (!draw_target(&fb, &pw, &ph))
+        return;
+
+#if AKIRA_PLATFORM_NATIVE_SIM
+    for (int y = 0; y < ph; y++)
+        for (int x = 0; x < pw; x++)
+            akira_sim_draw_pixel(x, y, color);
+#else
+    /* draw_target() checked that pw * ph fits the framebuffer. */
+    fill_span(fb, (size_t)pw * (size_t)ph, color);
 #endif
 }
 
 void akira_display_pixel(int x, int y, uint16_t color)
 {
-#if AKIRA_PLATFORM_NATIVE_SIM
-    if (x < 0 || x >= 240 || y < 0 || y >= 320)
+    uint16_t *fb;
+    int pw, ph;
+
+    if (!draw_target(&fb, &pw, &ph))
         return;
+    if (x < 0 || x >= pw || y < 0 || y >= ph)
+        return;
+
+#if AKIRA_PLATFORM_NATIVE_SIM
     akira_sim_draw_pixel(x, y, color);
 #else
-    struct display_capabilities caps;
-    if (akira_display_hal_get_capabilities(&caps) < 0)
-        return;
-
-    if (x < 0 || x >= caps.x_resolution || y < 0 || y >= caps.y_resolution)
-        return;
-
-    uint16_t *fb = akira_framebuffer_get();
-    if (fb)
-        fb[y * caps.x_resolution + x] = color;
+    fb[(size_t)y * (size_t)pw + (size_t)x] = color;
 #endif
 }
 
@@ -178,57 +303,64 @@ void akira_display_rect(int x, int y, int w, int h, uint16_t color)
 {
     if (w <= 0 || h <= 0)
         return;
+    fill_box64(x, y, (int64_t)x + w, (int64_t)y + h, color);
+}
 
-#if AKIRA_PLATFORM_NATIVE_SIM
-    for (int py = y; py < y + h; py++)
-        for (int px = x; px < x + w; px++)
-            akira_sim_draw_pixel(px, py, color);
-#else
-    struct display_capabilities caps;
-    if (akira_display_hal_get_capabilities(&caps) < 0)
+/* draw_string() with bounded work: at most DISP_TEXT_MAX_BYTES bytes are
+ * read, glyphs off the panel are skipped without drawing, and the walk stops
+ * once the cursor is below the panel (it only moves down).  The cursor is
+ * 64-bit, so no position or string length can overflow it.  Layout ('\n',
+ * '\t', spacing) matches draw_string(). */
+static void text_draw(int x, int y, const char *text, uint16_t color, FontType font)
+{
+    int pw, ph;
+
+    if (!text || !panel_size(&pw, &ph))
         return;
 
-    uint16_t *fb = akira_framebuffer_get();
-    if (!fb)
-        return;
+    const int cw = (font == FONT_7X10) ? FONT7X10_WIDTH : FONT11X18_WIDTH;
+    const int ch = (font == FONT_7X10) ? FONT7X10_HEIGHT : FONT11X18_HEIGHT;
+    const int adv = cw + 1; /* 1 pixel between characters */
+    const int tab_size = 4;
+    int64_t cx = x, cy = y;
 
-    /* Clip to screen bounds */
-    int x1, y1, x2, y2;
-    if (!akira_display_clip_rect(x, y, w, h,
-                                 (int)caps.x_resolution, (int)caps.y_resolution,
-                                 &x1, &y1, &x2, &y2))
-        return;
+    for (size_t i = 0; i < DISP_TEXT_MAX_BYTES && text[i] != '\0'; i++)
+    {
+        if (cy >= ph)
+            break;
 
-    int span = x2 - x1;
+        char c = text[i];
 
-    /* Fill first row with 32-bit writes, then memcpy to remaining rows.
-     * This leverages the optimised memcpy (often DMA-backed on Xtensa/ARM)
-     * instead of a scalar per-pixel store loop. */
-    uint16_t *row0 = fb + y1 * caps.x_resolution + x1;
-    uint32_t c32 = ((uint32_t)color << 16) | color;
-    uint32_t *p = (uint32_t *)(void *)row0;
-    int words = span / 2;
-    for (int i = 0; i < words; i++)
-        p[i] = c32;
-    if (span & 1)
-        row0[span - 1] = color;
-    for (int py = y1 + 1; py < y2; py++)
-        memcpy(fb + py * caps.x_resolution + x1, row0, (size_t)span * 2);
-#endif
+        if (c == '\n')
+        {
+            cx = x;
+            cy += ch + 2; /* 2 pixels line spacing */
+        }
+        else if (c == '\t')
+        {
+            int64_t col = (cx - x) / adv;
+            cx += (tab_size - col % tab_size) * adv;
+        }
+        else
+        {
+            /* Visible glyph: its box [cx, cx + cw) x [cy, cy + ch) meets the
+             * panel, so both coordinates fit int and draw_char's x + col,
+             * y + row cannot overflow. */
+            if (cx + cw > 0 && cx < pw && cy + ch > 0)
+                draw_char((int)cx, (int)cy, c, color, akira_display_pixel, font);
+            cx += adv;
+        }
+    }
 }
 
 void akira_display_text(int x, int y, const char *text, uint16_t color)
 {
-    if (!text)
-        return;
-    draw_string(x, y, text, color, akira_display_pixel, FONT_7X10);
+    text_draw(x, y, text, color, FONT_7X10);
 }
 
 void akira_display_text_large(int x, int y, const char *text, uint16_t color)
 {
-    if (!text)
-        return;
-    draw_string(x, y, text, color, akira_display_pixel, FONT_11X18);
+    text_draw(x, y, text, color, FONT_11X18);
 }
 
 void akira_display_flush(void)
@@ -236,34 +368,30 @@ void akira_display_flush(void)
 #if AKIRA_PLATFORM_NATIVE_SIM
     akira_sim_show_display();
 #else
+    uint16_t *fb;
+    int pw, ph;
+
+    /* Without a panel or a framebuffer there is nothing to present, and the
+     * HAL would log an error on every call. */
+    if (!draw_target(&fb, &pw, &ph))
+        return;
     akira_display_hal_flush();
 #endif
 }
 
 void akira_display_get_size(int *width, int *height)
 {
-#if AKIRA_PLATFORM_NATIVE_SIM
-    if (width)
-        *width = 240;
-    if (height)
-        *height = 320;
-#else
-    struct display_capabilities caps;
-    if (akira_display_hal_get_capabilities(&caps) < 0)
-    {
-        LOG_DBG("Failed to get display capabilities");
-        if (width)
-            *width = 0;
-        if (height)
-            *height = 0;
-        return;
-    }
+    int w, h;
 
+    if (!panel_size(&w, &h))
+    {
+        w = 0;
+        h = 0;
+    }
     if (width)
-        *width = caps.x_resolution;
+        *width = w;
     if (height)
-        *height = caps.y_resolution;
-#endif
+        *height = h;
 }
 
 /* ---------------------------------------------------------------------------
@@ -272,36 +400,61 @@ void akira_display_get_size(int *width, int *height)
 
 void akira_display_line(int x0, int y0, int x1, int y1, uint16_t color)
 {
+    int pw, ph, ax, ay, bx, by;
+
+    /* Clip first: Bresenham then runs at most max(panel w, h) + 1 steps,
+     * where the unclipped segment could be billions. */
+    if (!panel_size(&pw, &ph) ||
+        !akira_display_clip_line(x0, y0, x1, y1, pw, ph, &ax, &ay, &bx, &by))
+        return;
+
     /* Bresenham's line algorithm — integer arithmetic only, no FPU */
-    int dx = abs(x1 - x0);
-    int dy = -abs(y1 - y0);
-    int sx = (x0 < x1) ? 1 : -1;
-    int sy = (y0 < y1) ? 1 : -1;
+    int dx = abs(bx - ax);
+    int dy = -abs(by - ay);
+    int sx = (ax < bx) ? 1 : -1;
+    int sy = (ay < by) ? 1 : -1;
     int err = dx + dy;
 
     while (1)
     {
-        akira_display_pixel(x0, y0, color);
-        if (x0 == x1 && y0 == y1)
+        akira_display_pixel(ax, ay, color);
+        if (ax == bx && ay == by)
             break;
         int e2 = 2 * err;
         if (e2 >= dy)
         {
             err += dy;
-            x0 += sx;
+            ax += sx;
         }
         if (e2 <= dx)
         {
             err += dx;
-            y0 += sy;
+            ay += sy;
         }
     }
 }
 
+/* Bound the radius and reject circles whose bounding box misses the panel.
+ * On success the centre is within DISP_RADIUS_MAX of the panel, so int math
+ * on cx +- r cannot overflow. */
+static bool circle_prepare(int cx, int cy, int *r)
+{
+    int pw, ph;
+
+    if (*r <= 0 || !panel_size(&pw, &ph))
+        return false;
+    if (*r > DISP_RADIUS_MAX)
+        *r = DISP_RADIUS_MAX;
+    if ((int64_t)cx + *r < 0 || (int64_t)cx - *r >= pw ||
+        (int64_t)cy + *r < 0 || (int64_t)cy - *r >= ph)
+        return false;
+    return true;
+}
+
 void akira_display_circle(int cx, int cy, int r, uint16_t color)
 {
-    /* Midpoint circle algorithm — O(r) iterations */
-    if (r <= 0)
+    /* Midpoint circle algorithm — O(r) iterations, r <= DISP_RADIUS_MAX */
+    if (!circle_prepare(cx, cy, &r))
         return;
     int x = r, y = 0, d = 1 - r;
 
@@ -323,7 +476,7 @@ void akira_display_circle(int cx, int cy, int r, uint16_t color)
 void akira_display_circle_fill(int cx, int cy, int r, uint16_t color)
 {
     /* Filled circle via horizontal span fill using midpoint loop */
-    if (r <= 0)
+    if (!circle_prepare(cx, cy, &r))
         return;
     int x = r, y = 0, d = 1 - r;
 
@@ -347,48 +500,63 @@ void akira_display_triangle(int x0, int y0, int x1, int y1, int x2, int y2, uint
 
 void akira_display_triangle_fill(int x0, int y0, int x1, int y1, int x2, int y2, uint16_t color)
 {
-    /* Sort vertices ascending by Y */
-#define SWAP_INT(a, b) \
-    do                 \
-    {                  \
-        int _t = (a);  \
-        (a) = (b);     \
-        (b) = _t;      \
-    } while (0)
-    if (y0 > y1)
-    {
-        SWAP_INT(x0, x1);
-        SWAP_INT(y0, y1);
-    }
-    if (y1 > y2)
-    {
-        SWAP_INT(x1, x2);
-        SWAP_INT(y1, y2);
-    }
-    if (y0 > y1)
-    {
-        SWAP_INT(x0, x1);
-        SWAP_INT(y0, y1);
-    }
-#undef SWAP_INT
+    int pw, ph;
 
-    /* Scanline rasteriser — integer fixed-point interpolation */
-    for (int y = y0; y <= y2; y++)
+    if (!panel_size(&pw, &ph))
+        return;
+
+    /* Clamped vertices keep every product below inside int64. */
+    int64_t ax = akira_display_clamp_vertex(x0), ay = akira_display_clamp_vertex(y0);
+    int64_t bx = akira_display_clamp_vertex(x1), by = akira_display_clamp_vertex(y1);
+    int64_t cx = akira_display_clamp_vertex(x2), cy = akira_display_clamp_vertex(y2);
+
+    /* Sort vertices ascending by Y */
+#define SWAP_I64(a, b)    \
+    do                    \
+    {                     \
+        int64_t _t = (a); \
+        (a) = (b);        \
+        (b) = _t;         \
+    } while (0)
+    if (ay > by)
     {
-        int xa = (y2 != y0) ? x0 + (x2 - x0) * (y - y0) / (y2 - y0) : x0;
-        int xb;
-        if (y <= y1)
-            xb = (y1 != y0) ? x0 + (x1 - x0) * (y - y0) / (y1 - y0) : x0;
+        SWAP_I64(ax, bx);
+        SWAP_I64(ay, by);
+    }
+    if (by > cy)
+    {
+        SWAP_I64(bx, cx);
+        SWAP_I64(by, cy);
+    }
+    if (ay > by)
+    {
+        SWAP_I64(ax, bx);
+        SWAP_I64(ay, by);
+    }
+#undef SWAP_I64
+
+    /* Scanline rasteriser over the visible rows only (<= panel height). */
+    if (cy < 0 || ay >= ph)
+        return;
+    int64_t y_first = MAX(ay, 0);
+    int64_t y_last = MIN(cy, (int64_t)ph - 1);
+
+    for (int64_t y = y_first; y <= y_last; y++)
+    {
+        int64_t xa = (cy != ay) ? ax + (cx - ax) * (y - ay) / (cy - ay) : ax;
+        int64_t xb;
+        if (y <= by)
+            xb = (by != ay) ? ax + (bx - ax) * (y - ay) / (by - ay) : bx;
         else
-            xb = (y2 != y1) ? x1 + (x2 - x1) * (y - y1) / (y2 - y1) : x1;
+            xb = (cy != by) ? bx + (cx - bx) * (y - by) / (cy - by) : bx;
 
         if (xa > xb)
         {
-            int t = xa;
+            int64_t t = xa;
             xa = xb;
             xb = t;
         }
-        akira_display_rect(xa, y, xb - xa + 1, 1, color);
+        fill_box64(xa, y, xb + 1, y + 1, color);
     }
 }
 
@@ -396,10 +564,12 @@ void akira_display_rect_outline(int x, int y, int w, int h, uint16_t color)
 {
     if (w <= 0 || h <= 0)
         return;
-    akira_display_line(x, y, x + w - 1, y, color);
-    akira_display_line(x + w - 1, y, x + w - 1, y + h - 1, color);
-    akira_display_line(x + w - 1, y + h - 1, x, y + h - 1, color);
-    akira_display_line(x, y + h - 1, x, y, color);
+    int64_t x0 = x, y0 = y, x1 = (int64_t)x + w, y1 = (int64_t)y + h;
+
+    fill_box64(x0, y0, x1, y0 + 1, color);     /* top    */
+    fill_box64(x0, y1 - 1, x1, y1, color);     /* bottom */
+    fill_box64(x0, y0, x0 + 1, y1, color);     /* left   */
+    fill_box64(x1 - 1, y0, x1, y1, color);     /* right  */
 }
 
 /* ---------------------------------------------------------------------------
@@ -416,7 +586,7 @@ void akira_display_hline(int x, int y, int len, uint16_t color)
 
 void akira_display_vline(int x, int y, int len, uint16_t color)
 {
-    /* Vertical pixel run — implemented as individual pixels stepping by row */
+    /* Vertical pixel run — a 1-pixel-wide rect */
     if (len <= 0)
         return;
     akira_display_rect(x, y, 1, len, color);
@@ -472,50 +642,67 @@ void akira_display_progress_bar(int x, int y, int w, int h,
     akira_display_rect_outline(x, y, w, h, fg);
 }
 
+/* Common set-up for rounded rects: bounded radius, 64-bit right/bottom edges
+ * (exclusive), and an early out when the box misses the panel.
+ * false = nothing to draw. */
+static bool rounded_prepare(int x, int y, int w, int h, int *radius,
+                            int64_t *x1, int64_t *y1)
+{
+    int pw, ph;
+
+    if (w <= 0 || h <= 0 || !panel_size(&pw, &ph))
+        return false;
+    *x1 = (int64_t)x + w;
+    *y1 = (int64_t)y + h;
+    if (*x1 <= 0 || x >= pw || *y1 <= 0 || y >= ph)
+        return false;
+
+    /* Clamp radius so the arcs fit, and so the arc loops stay short. */
+    int max_r = MIN(MIN(w, h) / 2, DISP_RADIUS_MAX);
+    *radius = CLAMP(*radius, 0, max_r);
+    return true;
+}
+
 void akira_display_rounded_rect(int x, int y, int w, int h,
                                 int radius, uint16_t color)
 {
-    if (w <= 0 || h <= 0)
+    int64_t x1, y1;
+
+    if (!rounded_prepare(x, y, w, h, &radius, &x1, &y1))
         return;
-    if (radius < 0)
-        radius = 0;
-
-    /* Clamp radius so the arcs fit */
-    int max_r = (w < h ? w : h) / 2;
-    if (radius > max_r)
-        radius = max_r;
-
     if (radius == 0)
     {
         akira_display_rect_outline(x, y, w, h, color);
         return;
     }
 
+    int64_t r = radius;
+
     /* Four straight edge segments */
-    akira_display_hline(x + radius, y, w - 2 * radius, color);         /* top    */
-    akira_display_hline(x + radius, y + h - 1, w - 2 * radius, color); /* bottom */
-    akira_display_vline(x, y + radius, h - 2 * radius, color);         /* left   */
-    akira_display_vline(x + w - 1, y + radius, h - 2 * radius, color); /* right  */
+    fill_box64(x + r, y, x1 - r, y + 1, color);      /* top    */
+    fill_box64(x + r, y1 - 1, x1 - r, y1, color);    /* bottom */
+    fill_box64(x, y + r, x + 1, y1 - r, color);      /* left   */
+    fill_box64(x1 - 1, y + r, x1, y1 - r, color);    /* right  */
 
     /* Four corner arcs via midpoint algorithm, each restricted to its quadrant.
      * Corner centres: TL=(x+r, y+r), TR=(x+w-1-r, y+r),
      *                 BL=(x+r, y+h-1-r), BR=(x+w-1-r, y+h-1-r) */
-    int cx_l = x + radius;
-    int cx_r = x + w - 1 - radius;
-    int cy_t = y + radius;
-    int cy_b = y + h - 1 - radius;
+    int64_t cx_l = x + r;
+    int64_t cx_r = x1 - 1 - r;
+    int64_t cy_t = y + r;
+    int64_t cy_b = y1 - 1 - r;
 
     int px = radius, py = 0, d = 1 - radius;
     while (px >= py)
     {
-        /* TL */ akira_display_pixel(cx_l - px, cy_t - py, color);
-        akira_display_pixel(cx_l - py, cy_t - px, color);
-        /* TR */ akira_display_pixel(cx_r + px, cy_t - py, color);
-        akira_display_pixel(cx_r + py, cy_t - px, color);
-        /* BL */ akira_display_pixel(cx_l - px, cy_b + py, color);
-        akira_display_pixel(cx_l - py, cy_b + px, color);
-        /* BR */ akira_display_pixel(cx_r + px, cy_b + py, color);
-        akira_display_pixel(cx_r + py, cy_b + px, color);
+        /* TL */ plot64(cx_l - px, cy_t - py, color);
+        plot64(cx_l - py, cy_t - px, color);
+        /* TR */ plot64(cx_r + px, cy_t - py, color);
+        plot64(cx_r + py, cy_t - px, color);
+        /* BL */ plot64(cx_l - px, cy_b + py, color);
+        plot64(cx_l - py, cy_b + px, color);
+        /* BR */ plot64(cx_r + px, cy_b + py, color);
+        plot64(cx_r + py, cy_b + px, color);
         py++;
         d += (d < 0) ? 2 * py + 1 : (px--, 2 * (py - px) + 1);
     }
@@ -524,82 +711,76 @@ void akira_display_rounded_rect(int x, int y, int w, int h,
 void akira_display_rounded_rect_fill(int x, int y, int w, int h,
                                      int radius, uint16_t color)
 {
-    if (w <= 0 || h <= 0)
+    int64_t x1, y1;
+
+    if (!rounded_prepare(x, y, w, h, &radius, &x1, &y1))
         return;
-    if (radius < 0)
-        radius = 0;
-
-    int max_r = (w < h ? w : h) / 2;
-    if (radius > max_r)
-        radius = max_r;
-
     if (radius == 0)
     {
         akira_display_rect(x, y, w, h, color);
         return;
     }
 
-    /* Central cross: horizontal middle band + vertical side strips */
-    akira_display_rect(x, y + radius, w, h - 2 * radius, color);
+    int64_t r = radius;
+
+    /* Central band between the rounded caps */
+    fill_box64(x, y + r, x1, y1 - r, color);
 
     /* Filled corner quarter-discs using midpoint scanline fill */
-    int cx_l = x + radius;
-    int cx_r = x + w - 1 - radius;
-    int cy_t = y + radius;
-    int cy_b = y + h - 1 - radius;
+    int64_t cx_l = x + r;
+    int64_t cx_r = x1 - 1 - r;
+    int64_t cy_t = y + r;
+    int64_t cy_b = y1 - 1 - r;
 
     int px = radius, py = 0, d = 1 - radius;
     while (px >= py)
     {
         /* Fill horizontal spans for top and bottom rounded caps */
-        akira_display_hline(cx_l - px, cy_t - py, cx_r - cx_l + 2 * px + 1, color);
-        akira_display_hline(cx_l - px, cy_b + py, cx_r - cx_l + 2 * px + 1, color);
+        fill_box64(cx_l - px, cy_t - py, cx_r + px + 1, cy_t - py + 1, color);
+        fill_box64(cx_l - px, cy_b + py, cx_r + px + 1, cy_b + py + 1, color);
         if (py != 0)
         {
-            akira_display_hline(cx_l - py, cy_t - px, cx_r - cx_l + 2 * py + 1, color);
-            akira_display_hline(cx_l - py, cy_b + px, cx_r - cx_l + 2 * py + 1, color);
+            fill_box64(cx_l - py, cy_t - px, cx_r + py + 1, cy_t - px + 1, color);
+            fill_box64(cx_l - py, cy_b + px, cx_r + py + 1, cy_b + px + 1, color);
         }
         py++;
         d += (d < 0) ? 2 * py + 1 : (px--, 2 * (py - px) + 1);
     }
 }
 
+/* Offset of image pixel (px, py), given in panel coordinates, in a w-wide
+ * image placed at (x, y).  Only called for pixels inside the clipped image,
+ * so the offsets lie in [0, w) x [0, h) and the result indexes the w * h
+ * pixels the caller supplied.  64-bit differences: py - y overflows int for
+ * y near INT32_MIN. */
+static inline size_t image_index(int px, int py, int x, int y, int w)
+{
+    return (size_t)((int64_t)py - y) * (size_t)w + (size_t)((int64_t)px - x);
+}
+
 void akira_display_bitmap(int x, int y, int w, int h, const uint16_t *data)
 {
-    if (!data || w <= 0 || h <= 0)
+    uint16_t *fb;
+    int pw, ph, x1, y1, x2, y2;
+
+    if (!data || !draw_target(&fb, &pw, &ph) ||
+        !akira_display_clip_rect(x, y, w, h, pw, ph, &x1, &y1, &x2, &y2))
         return;
 
 #if AKIRA_PLATFORM_NATIVE_SIM
-    for (int py = 0; py < h; py++)
-        for (int px = 0; px < w; px++)
-            akira_sim_draw_pixel(x + px, y + py, data[py * w + px]);
+    for (int py = y1; py < y2; py++)
+        for (int px = x1; px < x2; px++)
+            akira_sim_draw_pixel(px, py, data[image_index(px, py, x, y, w)]);
 #else
-    struct display_capabilities caps;
-    if (akira_display_hal_get_capabilities(&caps) < 0)
-        return;
-    uint16_t *fb = akira_framebuffer_get();
-    if (!fb)
-        return;
-
-    int x1, y1, x2, y2;
-    if (!akira_display_clip_rect(x, y, w, h,
-                                 (int)caps.x_resolution, (int)caps.y_resolution,
-                                 &x1, &y1, &x2, &y2))
-        return;
-
-    /* Loop-invariant — hoisted out of the row loop.  It used to be recomputed
-     * per row, which is what made the missing "fully clipped" guard easy to
-     * miss: a negative span became a ~4 GB memcpy into the framebuffer.
-     * akira_display_clip_rect() now guarantees x2 > x1, so span >= 1. */
-    const int span = x2 - x1;
+    /* akira_display_clip_rect() guarantees x2 > x1, so span >= 1: a fully
+     * clipped rect can no longer turn into a negative-span memcpy. */
+    const size_t span = (size_t)(x2 - x1);
 
     for (int py = y1; py < y2; py++)
     {
-        /* In bounds: py < y2 <= y + h gives (py - y) < h, and x1 - x < w
-         * because x2 > x1 implies x + w > x1. */
-        const uint16_t *src = data + (py - y) * w + (x1 - x);
-        uint16_t *dst = fb + py * caps.x_resolution + x1;
-        memcpy(dst, src, (size_t)span * sizeof(uint16_t));
+        const uint16_t *src = data + image_index(x1, py, x, y, w);
+        uint16_t *dst = fb + (size_t)py * (size_t)pw + (size_t)x1;
+        memcpy(dst, src, span * sizeof(uint16_t));
     }
 #endif
 }
@@ -607,38 +788,31 @@ void akira_display_bitmap(int x, int y, int w, int h, const uint16_t *data)
 void akira_display_bitmap_transparent(int x, int y, int w, int h,
                                       const uint16_t *data, uint16_t key)
 {
-    if (!data || w <= 0 || h <= 0)
+    uint16_t *fb;
+    int pw, ph, x1, y1, x2, y2;
+
+    if (!data || !draw_target(&fb, &pw, &ph) ||
+        !akira_display_clip_rect(x, y, w, h, pw, ph, &x1, &y1, &x2, &y2))
         return;
 
 #if AKIRA_PLATFORM_NATIVE_SIM
-    for (int py = 0; py < h; py++)
-        for (int px = 0; px < w; px++)
-        {
-            uint16_t c = data[py * w + px];
-            if (c != key)
-                akira_sim_draw_pixel(x + px, y + py, c);
-        }
-#else
-    struct display_capabilities caps;
-    if (akira_display_hal_get_capabilities(&caps) < 0)
-        return;
-    uint16_t *fb = akira_framebuffer_get();
-    if (!fb)
-        return;
-
-    int x1, y1, x2, y2;
-    if (!akira_display_clip_rect(x, y, w, h,
-                                 (int)caps.x_resolution, (int)caps.y_resolution,
-                                 &x1, &y1, &x2, &y2))
-        return;
-
     for (int py = y1; py < y2; py++)
-    {
         for (int px = x1; px < x2; px++)
         {
-            uint16_t c = data[(py - y) * w + (px - x)];
+            uint16_t c = data[image_index(px, py, x, y, w)];
             if (c != key)
-                fb[py * caps.x_resolution + px] = c;
+                akira_sim_draw_pixel(px, py, c);
+        }
+#else
+    for (int py = y1; py < y2; py++)
+    {
+        const uint16_t *src = data + image_index(x1, py, x, y, w);
+        uint16_t *dst = fb + (size_t)py * (size_t)pw;
+        for (int px = x1; px < x2; px++)
+        {
+            uint16_t c = src[px - x1];
+            if (c != key)
+                dst[px] = c;
         }
     }
 #endif
@@ -647,24 +821,53 @@ void akira_display_bitmap_transparent(int x, int y, int w, int h,
 /* ---------------------------------------------------------------------------
  * WASM native export API
  *
- * Draw calls no longer flush immediately.  The WASM app is expected to call
+ * Draw calls do not flush immediately.  The WASM app is expected to call
  * display_flush() when it has finished composing a frame.  As a safety net
  * g_auto_flush_work fires 50 ms after the last draw call.
+ *
+ * Every primitive above clips in 64-bit arithmetic and bounds its loops, so
+ * any coordinate values are safe here; the wrappers validate buffers.
  * -------------------------------------------------------------------------*/
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 
+/* Slot of the app whose draw call armed the auto-flush (-1 = none). */
+static atomic_t g_auto_flush_slot = ATOMIC_INIT(-1);
+
 static void auto_flush_handler(struct k_work *work)
 {
     ARG_UNUSED(work);
+    /* Disarmed by the app's release: the framebuffer is no longer its. */
+    if (atomic_get(&g_auto_flush_slot) < 0)
+        return;
     akira_display_flush();
 }
 
 static K_WORK_DELAYABLE_DEFINE(g_auto_flush_work, auto_flush_handler);
 
-static inline void schedule_auto_flush(void)
+static inline void schedule_auto_flush(wasm_exec_env_t exec_env)
 {
+    atomic_set(&g_auto_flush_slot, akira_runtime_slot_of_exec_env(exec_env));
     k_work_reschedule(&g_auto_flush_work, K_MSEC(50));
+}
+
+/* A pixel buffer from WASM memory.  WAMR's "*~" signature validated
+ * [data, data + data_size); also require bytes for the whole w x h image
+ * (64-bit: w * h * 2 overflows int) and 2-byte alignment, since the
+ * primitives read it as uint16_t and an odd address faults on cores without
+ * unaligned access (Cortex-M0, RISC-V).  w or h <= 0 passes and draws
+ * nothing, as before. */
+static int check_pixels(const uint8_t *data, uint32_t data_size, int32_t w, int32_t h)
+{
+    if (!data || ((uintptr_t)data & 1U))
+        return -EINVAL;
+    if ((int64_t)data_size < (int64_t)w * h * 2)
+    {
+        LOG_WRN_RATELIMIT("display: pixel buffer of %u B is smaller than %d x %d x 2",
+                          data_size, w, h);
+        return -EINVAL;
+    }
+    return 0;
 }
 
 int akira_native_display_rect(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color)
@@ -672,16 +875,18 @@ int akira_native_display_rect(wasm_exec_env_t exec_env, int32_t x, int32_t y, in
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_rect(x, y, w, h, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
+/* Text natives: "$" makes WAMR check the string is NUL-terminated inside the
+ * app's memory; text_draw() then reads at most DISP_TEXT_MAX_BYTES of it. */
 int akira_native_display_text(wasm_exec_env_t exec_env, int32_t x, int32_t y, const char *text, uint32_t color)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_text(x, y, text, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -690,7 +895,7 @@ int akira_native_display_text_large(wasm_exec_env_t exec_env, int x, int y, cons
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_text_large(x, y, text, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -699,7 +904,7 @@ int akira_native_display_clear(wasm_exec_env_t exec_env, uint32_t color)
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_clear((uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -708,7 +913,7 @@ int akira_native_display_pixel(wasm_exec_env_t exec_env, int32_t x, int32_t y, u
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_pixel(x, y, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -718,7 +923,13 @@ int akira_native_display_flush(wasm_exec_env_t exec_env)
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     /* Cancel pending auto-flush — we're flushing explicitly right now */
     k_work_cancel_delayable(&g_auto_flush_work);
+    /* display_write() holds the panel driver's bus locks for one frame
+     * (bounded: one panel's worth of SPI).  An abort inside it would leave
+     * them held, and every later flush, including the auto-flush on the
+     * system workqueue, would block on them forever. */
+    akira_native_critical_enter(exec_env);
     akira_display_flush();
+    akira_native_critical_exit(exec_env);
     return 0;
 }
 
@@ -741,8 +952,10 @@ int akira_native_display_get_size(wasm_exec_env_t exec_env, int32_t *w_out, int3
 
     int w = 0, h = 0;
     akira_display_get_size(&w, &h);
-    *w_out = (int32_t)w;
-    *h_out = (int32_t)h;
+    /* memcpy: an app pointer need not be 4-byte aligned. */
+    int32_t w32 = w, h32 = h;
+    memcpy(w_out, &w32, sizeof(w32));
+    memcpy(h_out, &h32, sizeof(h32));
     return 0;
 }
 
@@ -754,7 +967,7 @@ int akira_native_display_line(wasm_exec_env_t exec_env,
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_line(x0, y0, x1, y1, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -764,7 +977,7 @@ int akira_native_display_circle(wasm_exec_env_t exec_env,
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_circle(cx, cy, r, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -774,7 +987,7 @@ int akira_native_display_circle_fill(wasm_exec_env_t exec_env,
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_circle_fill(cx, cy, r, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -785,7 +998,7 @@ int akira_native_display_triangle(wasm_exec_env_t exec_env,
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_triangle(x0, y0, x1, y1, x2, y2, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -796,7 +1009,7 @@ int akira_native_display_triangle_fill(wasm_exec_env_t exec_env,
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_triangle_fill(x0, y0, x1, y1, x2, y2, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -806,7 +1019,7 @@ int akira_native_display_rect_outline(wasm_exec_env_t exec_env,
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_rect_outline(x, y, w, h, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -815,16 +1028,12 @@ int akira_native_display_bitmap(wasm_exec_env_t exec_env,
                                 const uint8_t *data, uint32_t data_size)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
+    int ret = check_pixels(data, data_size, w, h);
+    if (ret < 0)
+        return ret;
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
-    if (!data)
-        return -EINVAL;
-    if ((int64_t)data_size < (int64_t)w * h * 2)
-    {
-        LOG_ERR("display_bitmap: data_size %u < w*h*2 (%d)", data_size, w * h * 2);
-        return -EINVAL;
-    }
     akira_display_bitmap(x, y, w, h, (const uint16_t *)data);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -833,18 +1042,20 @@ int akira_native_display_raw_write(wasm_exec_env_t exec_env,
                                    const uint8_t *data, uint32_t data_size)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
+    int ret = check_pixels(data, data_size, w, h);
+    if (ret < 0)
+        return ret;
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
-    if (!data)
-        return -EINVAL;
-    if ((int64_t)data_size < (int64_t)w * h * 2)
-    {
-        LOG_ERR("display_raw_write: data_size %u < w*h*2 (%d)", data_size, w * h * 2);
-        return -EINVAL;
-    }
     /* Write packed pixel buffer directly to display hardware, bypassing the
      * OS framebuffer.  pitch = w (no stride) — lets the display controller
-     * receive exactly w*h pixels with a single SPI window transaction.   */
-    return akira_display_hal_write_raw(x, y, w, h, (const uint16_t *)data);
+     * receive exactly w*h pixels with a single SPI window transaction.  The
+     * HAL rejects any window that is not entirely on the panel, so one call
+     * moves at most a panel's worth while holding the bus: bounded, and an
+     * abort inside it would leak the bus lock. */
+    akira_native_critical_enter(exec_env);
+    ret = akira_display_hal_write_raw(x, y, w, h, (const uint16_t *)data);
+    akira_native_critical_exit(exec_env);
+    return ret;
 }
 
 int akira_native_display_bitmap_transparent(wasm_exec_env_t exec_env,
@@ -852,16 +1063,12 @@ int akira_native_display_bitmap_transparent(wasm_exec_env_t exec_env,
                                             const uint8_t *data, uint32_t data_size, uint32_t key)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
+    int ret = check_pixels(data, data_size, w, h);
+    if (ret < 0)
+        return ret;
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
-    if (!data)
-        return -EINVAL;
-    if ((int64_t)data_size < (int64_t)w * h * 2)
-    {
-        LOG_ERR("display_bitmap_transparent: data_size %u < w*h*2 (%d)", data_size, w * h * 2);
-        return -EINVAL;
-    }
     akira_display_bitmap_transparent(x, y, w, h, (const uint16_t *)data, (uint16_t)key);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -873,7 +1080,7 @@ int akira_native_display_hline(wasm_exec_env_t exec_env,
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_hline(x, y, len, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -883,7 +1090,7 @@ int akira_native_display_vline(wasm_exec_env_t exec_env,
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_vline(x, y, len, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -893,7 +1100,7 @@ int akira_native_display_number(wasm_exec_env_t exec_env,
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_number(x, y, value, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -905,7 +1112,7 @@ int akira_native_display_progress_bar(wasm_exec_env_t exec_env,
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_progress_bar(x, y, w, h, value, max_val,
                                (uint16_t)fg, (uint16_t)bg);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -915,7 +1122,7 @@ int akira_native_display_rounded_rect(wasm_exec_env_t exec_env,
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_rounded_rect(x, y, w, h, radius, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
@@ -925,11 +1132,31 @@ int akira_native_display_rounded_rect_fill(wasm_exec_env_t exec_env,
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_rounded_rect_fill(x, y, w, h, radius, (uint16_t)color);
-    schedule_auto_flush();
+    schedule_auto_flush(exec_env);
     return 0;
 }
 
-#endif
+/* ---------------------------------------------------------------------------
+ * App teardown
+ *
+ * The pending auto-flush is the only thing a draw call leaves behind; display
+ * ownership itself is dropped by the runtime (akira_display_release_owner()),
+ * after this hook.  The flush reads no app memory, so cancelling without
+ * waiting is enough and never blocks: a flush already running just presents
+ * the framebuffer once more.  Idempotent, lock-free, safe on any thread
+ * (including the system workqueue the work item runs on).
+ * -------------------------------------------------------------------------*/
+
+static void display_release(int slot, const char *app_name)
+{
+    ARG_UNUSED(app_name);
+    if (atomic_cas(&g_auto_flush_slot, slot, -1))
+        (void)k_work_cancel_delayable(&g_auto_flush_work);
+}
+
+AKIRA_APP_RESOURCE_DEFINE(display, 20, NULL, display_release);
+
+#endif /* CONFIG_AKIRA_WASM_RUNTIME */
 
 /* ===== WASM exports =====
  * Registered with WAMR by the native API registry (akira_native_registry.h).

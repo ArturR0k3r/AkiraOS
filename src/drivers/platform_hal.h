@@ -208,8 +208,11 @@ void akira_hal_reset(void);
  */
 const char *akira_hal_platform(void);
 
+/** Pixels in the hardware framebuffer array (RGB565): the largest panel it fits. */
+#define AKIRA_FB_MAX_PIXELS (400 * 240)
+
 /**
- * @brief Get pointer to hardware framebuffer (240x320 RGB565)
+ * @brief Get pointer to hardware framebuffer (AKIRA_FB_MAX_PIXELS RGB565 pixels)
  * @return Pointer to framebuffer or NULL if not available
  */
 uint16_t *akira_framebuffer_get(void);

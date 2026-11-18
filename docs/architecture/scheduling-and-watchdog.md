@@ -33,7 +33,7 @@ two complementary mechanisms:
   │                                              │
   │  ┌──────────────┐  ┌──────────────────────┐  │
   │  │  main thread │  │  WASM app thread(s)  │  │
-  │  │  (prio 0 K_  │  │  (prio 5 K_PRIO_     │  │
+  │  │  (prio 0 K_  │  │  (prio 14 K_PRIO_    │  │
   │  │   PRIO_COOP) │  │   PREEMPT, per app)  │  │
   │  └──────────────┘  └──────────┬───────────┘  │
   │                               │              │
@@ -51,9 +51,13 @@ two complementary mechanisms:
   └─────────────────────────────────────────────┘
 ```
 
-Each WASM app runs in its own Zephyr thread at a **preemptible** priority,
-so the kernel time-slices between apps automatically.  The main thread and
-WDT worker run at cooperative priority and are never preempted by WASM threads.
+Each WASM app runs in its own Zephyr thread at a **preemptible** priority
+(`CONFIG_AKIRA_WASM_APP_PRIORITY`, default 14: the lowest, shared with the
+shell), so the kernel time-slices between apps and the shell automatically.
+Every system thread runs at a higher priority and preempts app threads. The
+main thread and WDT worker run at cooperative priority and are never
+preempted by WASM threads. See [App Containment](app-containment.md) for how
+a stuck or crashing app is stopped without affecting the system.
 
 ---
 
@@ -195,21 +199,12 @@ The feed worker is intentionally designed to *not* be preemptible by WASM
 threads, ensuring the hardware WDT fires if the entire OS is live but the
 scheduler is stuck.
 
-### WASM app opt-in petting
+### WASM apps and the hardware watchdog
 
-When `CONFIG_AKIRA_WASM_WDT=y`, a WASM app with the `"wdt"` capability can
-call `wdt_pet()` to reset the hardware WDT timeout window.  This is intended
-for long-running, latency-sensitive apps (e.g., a hardware control loop)
-that need more control over the WDT window.
-
-```c
-/* In WASM app — requires "wdt" capability in manifest */
-wdt_pet();   /* Resets the hardware WDT countdown */
-```
-
-**Security note:** `wdt_pet()` requires the `AKIRA_CAP_WDT` capability.
-Granting this to an untrusted app allows it to prevent automatic device
-recovery.  Only grant `"wdt"` to system-level apps.
+Apps can't feed the hardware watchdog. With `CONFIG_AKIRA_WASM_WDT=y`, an app
+with the `"wdt"` capability may call `wdt_pet()`, but it only reports whether
+the system watchdog is active (`0`, or `-ENODEV`). If an app could feed the
+watchdog, it could keep a wedged system from being reset.
 
 ---
 
@@ -238,7 +233,9 @@ modes:
 | Single WASM function runs too long | Software WDT → app kill |
 | WASM app monopolises CPU for > TIMEOUT_MS | Hardware WDT → device reset |
 | OS deadlock / kernel hang | Hardware WDT → device reset |
-| WASM app crash / exception | WAMR exception handler → app kill |
+| WASM app trap (bad memory access, unreachable, ...) | WAMR exception → app exits with an error |
+| CPU fault or `k_oops()` in an app's thread, even inside a native | `akira_runtime_contain_fault()` → only that app is stopped |
+| App ignores a stop request | staged stop → thread aborted, slot reclaimed |
 
 ---
 
@@ -249,7 +246,7 @@ modes:
 | WDT auto-feed worker | `K_PRIO_COOP(1)` | No |
 | Main / boot thread | `K_PRIO_COOP(0)` | No |
 | App manager | `K_PRIO_PREEMPT(2)` | Yes |
-| WASM app threads | `K_PRIO_PREEMPT(5)` | Yes |
+| WASM app threads | `K_PRIO_PREEMPT(14)` | Yes |
 | BLE/Net stack | `K_PRIO_PREEMPT(3)` | Yes |
 | Shell thread | `K_PRIO_PREEMPT(7)` | Yes |
 

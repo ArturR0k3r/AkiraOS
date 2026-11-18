@@ -8,8 +8,11 @@
  * @brief Full-duplex UART API for WASM applications
  *
  * IRQ-driven RX ring buffer, non-blocking uart_read().
- * UART0 (zephyr_console / shell) is reserved.
+ * UART0 (zephyr_console / shell) is reserved, as is any UART the system uses
+ * (console, shell, Bluetooth HCI, mcumgr, or one carrying a device node).
  * WASM apps access secondary UARTs (port_id 0 = first non-console UART).
+ * A port belongs to the app that opened it and is closed, with its line
+ * settings restored, when that app ends.
  * @stability stable
  * @since 1.4
  */
@@ -35,8 +38,10 @@ int akira_uart_api_init(void);
 /**
  * @brief Open a UART port and start the IRQ-driven RX handler.
  * @param port_id 0-indexed secondary UART (0 = UART1, 1 = UART2).
- * @param baud_rate Desired baud rate (e.g. 115200).
- * @return Handle index ≥0, or negative errno on failure.
+ * @param baud_rate Desired baud rate, 1200..3000000 (e.g. 115200).
+ * @return Handle index ≥0, or negative errno on failure: -EINVAL (bad port
+ *         or baud), -EACCES (the system uses this UART), -EBUSY (already
+ *         open), -ENODEV (no such UART).
  */
 int akira_native_uart_open(wasm_exec_env_t exec_env, int32_t port_id, int32_t baud_rate);
 
@@ -45,7 +50,10 @@ int akira_native_uart_open(wasm_exec_env_t exec_env, int32_t port_id, int32_t ba
  * @param handle Handle from uart_open().
  * @param buf Pointer to data in WASM linear memory.
  * @param len Number of bytes to write.
- * @return Bytes written, or negative errno.
+ * @return Bytes written, or negative errno. May be fewer than @p len: one
+ *         call sends at most 4096 bytes and about 250 ms of wire time at the
+ *         port's baud, and stops early when the app is being stopped.
+ *         Callers loop until everything is sent.
  */
 int akira_native_uart_write(wasm_exec_env_t exec_env, int32_t handle,
                              const uint8_t *buf, uint32_t len);
@@ -63,7 +71,8 @@ int akira_native_uart_read(wasm_exec_env_t exec_env, int32_t handle,
 
 /**
  * @brief Close a UART handle, unregister IRQ callback and flush RX buffer.
- * @return 0, or -EINVAL for unknown handle.
+ * @return 0, -EINVAL (unknown handle), -EBADF (not open) or -EPERM (opened
+ *         by another app).
  */
 int akira_native_uart_close(wasm_exec_env_t exec_env, int32_t handle);
 

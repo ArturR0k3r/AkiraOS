@@ -10,7 +10,9 @@
  * Provides a pool of timer handles backed by k_uptime_get().
  * No callbacks — apps poll elapsed time and call delay() to yield.
  * All handles are process-scoped: a WASM app cannot access timers
- * created by another app instance.
+ * created by another app instance. An app holds at most half the pool
+ * (CONFIG_AKIRA_WASM_TIMER_MAX_HANDLES / 2), and every handle it still
+ * holds is freed when it exits, crashes or is stopped.
  * @stability stable
  * @since 1.3
  */
@@ -38,7 +40,8 @@ int akira_timer_init(void);
 
 /**
  * @brief Allocate a new timer handle.
- * @return Handle index ≥0, or -ENOMEM if pool is exhausted.
+ * @return Handle index ≥0, or -ENOMEM if the pool is exhausted or the app
+ *         already holds its share of it.
  */
 int akira_native_timer_create(wasm_exec_env_t exec_env);
 

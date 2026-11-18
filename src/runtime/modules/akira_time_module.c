@@ -9,6 +9,7 @@
 #include "wasm_export.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <akira_app_containment.h>
 
 LOG_MODULE_REGISTER(akira_time_module, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -17,8 +18,10 @@ static int64_t get_time_ms(wasm_exec_env_t exec_env) {
 }
 
 static void sleep_ms(wasm_exec_env_t exec_env, int32_t ms) {
+    /* Ends early when the app is being stopped: a stop never waits for an
+     * app-chosen sleep. */
     if (ms > 0 && ms < 3600000) {
-        k_msleep(ms);
+        (void)akira_runtime_sleep(exec_env, K_MSEC(ms));
     }
 }
 

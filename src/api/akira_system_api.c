@@ -23,6 +23,8 @@ LOG_MODULE_REGISTER(akira_system, CONFIG_AKIRA_LOG_LEVEL);
 
 #include <wasm_export.h>
 #include <runtime/security.h>
+#include <akira_app_containment.h>
+#include "akira_common_api.h"
 #include <zephyr/fs/fs.h>
 #include <zephyr/kernel.h>
 #include <string.h>
@@ -30,23 +32,30 @@ LOG_MODULE_REGISTER(akira_system, CONFIG_AKIRA_LOG_LEVEL);
 
 #if defined(CONFIG_AKIRA_APP_SOURCE_SD)
 #include "../connectivity/storage/sd_manager.h"
+#if defined(CONFIG_AKIRA_WASM_LIFECYCLE) && defined(CONFIG_AKIRA_APP_MANAGER)
+#include "akira_lifecycle_api.h"
+#endif
 #endif
 
 /* SD card WASM app directory. */
 #define SD_APPS_PATH "/SD:/apps"
 
+/* Directory entries examined per sd_scan_wasm() call: bounds how long the
+ * call holds the filesystem (and how long a stop may have to wait for it). */
+#define SD_SCAN_MAX_ENTRIES 256
+
 /*
- * sd_scan_wasm(buf_ptr, buf_len) → int  (WASM signature: "(*~)i")
+ * sd_scan_wasm(buf, buf_len) → int  (WASM signature: "(*~)i")
  *
  * Scans /SD:/apps/ for *.wasm files and writes their filenames
  * (without path, with extension) newline-separated into the caller's buffer.
+ * At most SD_SCAN_MAX_ENTRIES directory entries are examined.
  *
  * Returns:
  *   ≥ 0  number of .wasm files found and written
- *  -EACCES  capability denied
+ *  -EPERM   capability denied
  *  -EINVAL  bad pointer or buf_len == 0
  *  -ENODEV  SD card not mounted / path not found
- *  -ENOMEM  output buffer too small to hold all names
  */
 int akira_native_sd_scan_wasm(wasm_exec_env_t exec_env,
                                char *native_buf, uint32_t buf_len)
@@ -63,17 +72,22 @@ int akira_native_sd_scan_wasm(wasm_exec_env_t exec_env,
     struct fs_dir_t dir;
     fs_dir_t_init(&dir);
 
+    /* The directory stays open (filesystem state) until closedir: never let a
+     * stop abort the app in between. The scan below is bounded. */
+    akira_native_critical_enter(exec_env);
+
     int ret = fs_opendir(&dir, SD_APPS_PATH);
     if (ret < 0) {
+        akira_native_critical_exit(exec_env);
         /* -ENOENT when SD card is absent or directory doesn't exist */
-        LOG_INF("sd_scan_wasm: opendir '%s' failed: %d", SD_APPS_PATH, ret);
+        LOG_DBG("sd_scan_wasm: opendir '%s' failed: %d", SD_APPS_PATH, ret);
         return -ENODEV;
     }
 
     uint32_t offset = 0;
     int count = 0;
 
-    while (true) {
+    for (int seen = 0; seen < SD_SCAN_MAX_ENTRIES; seen++) {
         struct fs_dirent entry;
         ret = fs_readdir(&dir, &entry);
         if (ret < 0 || entry.name[0] == '\0') {
@@ -97,7 +111,7 @@ int akira_native_sd_scan_wasm(wasm_exec_env_t exec_env,
         /* Write "filename.wasm\n" into the buffer. */
         uint32_t needed = (uint32_t)name_len + 1U; /* +1 for '\n' */
         if (offset + needed >= buf_len) {
-            LOG_WRN("sd_scan_wasm: output buffer full after %d files", count);
+            LOG_DBG("sd_scan_wasm: output buffer full after %d files", count);
             break;
         }
         memcpy(native_buf + offset, entry.name, name_len);
@@ -114,11 +128,32 @@ int akira_native_sd_scan_wasm(wasm_exec_env_t exec_env,
     }
 
     fs_closedir(&dir);
+    akira_native_critical_exit(exec_env);
     LOG_DBG("sd_scan_wasm: found %d .wasm files", count);
     return count;
 }
 
 #if defined(CONFIG_AKIRA_APP_SOURCE_SD)
+/* An app name, not a path: it becomes "/SD:/apps/<name>.wasm". */
+static bool sd_app_name_ok(const char *name)
+{
+    size_t n = 0;
+
+    if (!name || name[0] == '\0' || name[0] == '.') {
+        return false;
+    }
+    for (; name[n] != '\0'; n++) {
+        char c = name[n];
+
+        if (n >= 31 ||
+            !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /*
  * app_install_from_sd(name) → int  (WASM signature: "($)i")
  *
@@ -129,17 +164,41 @@ int akira_native_app_install_from_sd(wasm_exec_env_t exec_env, const char *name)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_APP_CONTROL, -EPERM);
 
-    if (!name || name[0] == '\0') {
+    if (!sd_app_name_ok(name)) {
         return -EINVAL;
     }
 
+    /* Reinstalling a running app stops it first: never the caller itself,
+     * which would have to wait for its own exit. */
+    char self[32];
+    if (akira_app_self_name(exec_env, self, sizeof(self)) == 0 &&
+        strncmp(self, name, sizeof(self)) == 0) {
+        return -EBUSY;
+    }
+
+    /* Log lines are written under the console lock in immediate mode. */
+    akira_native_critical_enter(exec_env);
     LOG_INF("app_install_from_sd: installing '%s'", name);
+    akira_native_critical_exit(exec_env);
+#if defined(CONFIG_AKIRA_WASM_LIFECYCLE) && defined(CONFIG_AKIRA_APP_MANAGER)
+    /* Seconds of SD reads and flash writes under the registry and filesystem
+     * locks: run on the lifecycle queue, never on the app's thread, so an
+     * abort can't leak them. This waits for the result (stop-aware). */
+    int ret = akira_lifecycle_run_deferred(exec_env, sd_manager_install_app, name);
+#else
+    /* No lifecycle queue in this build: the stop path waits for it instead
+     * of aborting in the middle. */
+    akira_native_critical_enter(exec_env);
     int ret = sd_manager_install_app(name);
+    akira_native_critical_exit(exec_env);
+#endif
+    akira_native_critical_enter(exec_env);
     if (ret < 0) {
         LOG_WRN("app_install_from_sd: failed (%d) for '%s'", ret, name);
     } else {
         LOG_INF("app_install_from_sd: '%s' installed (id=%d)", name, ret);
     }
+    akira_native_critical_exit(exec_env);
     return ret;
 }
 #endif /* CONFIG_AKIRA_APP_SOURCE_SD */

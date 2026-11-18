@@ -28,6 +28,9 @@ LOG_MODULE_REGISTER(akira_panic, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/logging/log_ctrl.h>
 #include <string.h>
+#if defined(CONFIG_AKIRA_WASM_RUNTIME)
+#include <akira_app_containment.h>
+#endif
 
 #define PANIC_NVS_ID      1u
 #define CRASH_MAGIC       0xDEADC0DEu
@@ -114,6 +117,13 @@ void akira_panic_set_active_app(const char *name)
  */
 void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
 {
+#if defined(CONFIG_AKIRA_WASM_RUNTIME)
+    /* A fault in a WASM app's own thread stops the app, not the system. */
+    if (akira_runtime_contain_fault(reason, esf)) {
+        return;
+    }
+#endif
+
     /* Flush logs before we potentially corrupt everything */
     LOG_PANIC();
 

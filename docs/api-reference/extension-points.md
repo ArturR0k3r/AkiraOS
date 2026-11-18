@@ -43,8 +43,9 @@ ascending priority order:
 
 - One `DENY` refuses the app.
 - An app is **attested** when a provider returns `ALLOW` with `res->attested`.
-  Attested apps may receive privileged capabilities and, with
-  `CONFIG_AKIRA_HARDEN_UNATTESTED_APPS=y`, run as AOT.
+  With `CONFIG_AKIRA_HARDEN_UNATTESTED_APPS=y` only attested apps receive
+  privileged capabilities; with `CONFIG_AKIRA_REFUSE_UNATTESTED_AOT=y` only
+  attested apps run as AOT.
 - Capability clamps from all providers are ANDed.
 - `CONFIG_AKIRA_REQUIRE_SIGNED_APPS=y` refuses any app nobody attested.
 
@@ -101,6 +102,7 @@ one `AKIRA_AUDIT_DROPPED` record that counts what it missed.
 | `akira_ed25519.h` | Ed25519 signature verification |
 | `akira_capability.h` | product capabilities (`AKIRA_CAPABILITY_DEFINE`), `AKIRA_CHECK_CAP_OR_RETURN()` for native functions |
 | `akira_native_registry.h` | export native functions to WASM (`AKIRA_NATIVE_API_DEFINE`) |
+| `akira_app_containment.h` | rules for natives so no app can hang or crash the system: release what an app owns when it ends (`AKIRA_APP_RESOURCE_DEFINE`), stop-aware sleep, critical sections. See [App Containment](../architecture/app-containment.md) |
 | `akira_identity.h` | versions, board, device ID, provisioned identity |
 | `akira_boot_guard.h` | trial-image confirm / reject |
 

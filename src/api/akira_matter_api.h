@@ -7,12 +7,23 @@
  *
  * Gated behind AKIRA_CAP_MATTER ("matter" in manifest capabilities).
  *
+ * WASM import signatures (must match the SDK's akira_api.h):
+ *   matter_commission (string, ptr[8]) -> i32
+ *   matter_send       (ptr[8], ptr, len) -> i32
+ *   matter_subscribe  (ptr[8], i32) -> i32
+ *   matter_poll       (ptr[8], ptr[4], ptr, len, i32) -> i32
+ *
+ * Event polls with timeout -1 wait until an event arrives, but return
+ * MATTER_ERR_TIMEOUT as soon as the app is being stopped.
+ *
  * @stability experimental
  * @since 1.6
  */
 
 #ifndef AKIRA_MATTER_API_H
 #define AKIRA_MATTER_API_H
+
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,7 +74,7 @@ int akira_native_matter_commission(wasm_exec_env_t exec_env,
 int akira_native_matter_send(wasm_exec_env_t exec_env,
                              const uint8_t *eui64,
                              const uint8_t *payload,
-                             int len);
+                             uint32_t len);
 
 /**
  * Subscribe to attribute change events for a Matter device.
@@ -79,7 +90,7 @@ int akira_native_matter_send(wasm_exec_env_t exec_env,
  */
 int akira_native_matter_subscribe(wasm_exec_env_t exec_env,
                                   const uint8_t *eui64,
-                                  int attr_id);
+                                  int32_t attr_id);
 
 /**
  * Poll for the next incoming Matter event (blocking).
@@ -92,17 +103,17 @@ int akira_native_matter_subscribe(wasm_exec_env_t exec_env,
  * @param attr_id_ptr    WASM pointer to int32 attribute ID output
  * @param buf            WASM pointer to value output buffer
  * @param buf_len        Size of buf in bytes
- * @param timeout_ms     Milliseconds to wait; -1 = forever
+ * @param timeout_ms     Milliseconds to wait; -1 = until an event (or a stop)
  * @return Number of value bytes on success, negative MATTER_ERR_* on failure
  *
  * Required manifest capability: "matter"
  */
 int akira_native_matter_poll(wasm_exec_env_t exec_env,
                              uint8_t *src_eui64,
-                             int *attr_id_ptr,
+                             int32_t *attr_id_ptr,
                              uint8_t *buf,
-                             int buf_len,
-                             int timeout_ms);
+                             uint32_t buf_len,
+                             int32_t timeout_ms);
 
 /* =========================================================================
  * Accessory direction — expose AkiraOS's own hardware as a Matter device.
@@ -118,11 +129,12 @@ int akira_native_matter_poll(wasm_exec_env_t exec_env,
  * @param clusters     WASM pointer to an array of uint32 cluster IDs
  * @param n_clusters   Number of cluster IDs (max 8)
  * @return Assigned endpoint ID (>= 0) on success, negative MATTER_ERR_* on failure
+ *         (MATTER_ERR_INVALID once the app holds 8 endpoints)
  */
 int akira_native_matter_endpoint_add(wasm_exec_env_t exec_env,
-                                     int device_type,
+                                     int32_t device_type,
                                      const uint32_t *clusters,
-                                     int n_clusters);
+                                     uint32_t n_clusters);
 
 /**
  * Report a local attribute value outward to the fabric.
@@ -133,11 +145,12 @@ int akira_native_matter_endpoint_add(wasm_exec_env_t exec_env,
  * @param attr      Attribute ID
  * @param val       WASM pointer to value bytes
  * @param len       Value length in bytes (1..255)
- * @return 0 on success, negative MATTER_ERR_* on failure
+ * @return 0 on success, MATTER_ERR_NOPERM if another running app added
+ *         @p endpoint, other negative MATTER_ERR_* on failure
  */
 int akira_native_matter_report_attr(wasm_exec_env_t exec_env,
-                                    int endpoint, int cluster, int attr,
-                                    const void *val, int len);
+                                    int32_t endpoint, int32_t cluster, int32_t attr,
+                                    const void *val, uint32_t len);
 
 /**
  * Poll for the next inbound command targeting a local endpoint (blocking).
@@ -150,12 +163,12 @@ int akira_native_matter_report_attr(wasm_exec_env_t exec_env,
  * @param cmd         WASM pointer to int32 command-id output
  * @param buf         WASM pointer to value output buffer
  * @param buf_len     Size of buf in bytes
- * @param timeout_ms  Milliseconds to wait; -1 = forever
+ * @param timeout_ms  Milliseconds to wait; -1 = until a command (or a stop)
  * @return Number of value bytes on success, negative MATTER_ERR_* on failure
  */
 int akira_native_matter_cmd_poll(wasm_exec_env_t exec_env,
-                                 int *endpoint, int *cluster, int *cmd,
-                                 uint8_t *buf, int buf_len, int timeout_ms);
+                                 int32_t *endpoint, int32_t *cluster, int32_t *cmd,
+                                 uint8_t *buf, uint32_t buf_len, int32_t timeout_ms);
 
 /**
  * Open this node's commissioning window so a controller can adopt it.
@@ -164,7 +177,7 @@ int akira_native_matter_cmd_poll(wasm_exec_env_t exec_env,
  * @param timeout_sec  Window timeout in seconds (0 = co-processor default)
  * @return 0 on success, negative MATTER_ERR_* on failure
  */
-int akira_native_matter_open_pairing(wasm_exec_env_t exec_env, int timeout_sec);
+int akira_native_matter_open_pairing(wasm_exec_env_t exec_env, int32_t timeout_sec);
 
 /**
  * Fetch this node's onboarding payload (QR string + manual pairing code).
@@ -177,8 +190,8 @@ int akira_native_matter_open_pairing(wasm_exec_env_t exec_env, int timeout_sec);
  * @return 0 on success, negative MATTER_ERR_* on failure
  */
 int akira_native_matter_get_pairing(wasm_exec_env_t exec_env,
-                                    char *qr, int qr_len,
-                                    char *manual, int manual_len);
+                                    char *qr, uint32_t qr_len,
+                                    char *manual, uint32_t manual_len);
 
 #ifdef __cplusplus
 }

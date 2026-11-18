@@ -131,7 +131,7 @@ Array of permission strings.
 | `crypto` | `crypto_sha256()`, `crypto_aes256_*()`, `crypto_hmac_sha256()`, `crypto_random()`, `crypto_ed25519_keygen()`, `crypto_ed25519_sign()` |
 | `rtc.read` | `rtc_get_unix_time()`, `rtc_get_uptime_ms()`, `rtc_alarm_fired()` |
 | `rtc.write` | `rtc_set_unix_time()`, `rtc_set_alarm()` |
-| `ota.trigger` | `ota_check()`, `ota_fetch_and_apply()`, `ota_get_state()`, `ota_confirm()`, `ota_rollback()` |
+| `ota.trigger` | `ota_check()`, `ota_fetch_and_apply()`, `ota_get_state()`, `ota_rollback()` (`ota_confirm()` is system-only and returns `-EPERM` to apps) |
 | `ai.infer` | `aiinfer_load()`, `aiinfer_run()`, `aiinfer_unload()` |
 | `matter` / `matter.*` | All `matter_*()` functions |
 | `wifi.inject` | `wifi_deauth()` and raw 802.11 management-frame injection |

@@ -16,36 +16,36 @@ LOG_MODULE_REGISTER(akira_ipc_api, CONFIG_AKIRA_LOG_LEVEL);
  */
 
 #include "akira_ipc_api.h"
+#include "akira_common_api.h"
 #include "akira_wasm_mem.h"
 #include <runtime/security.h>
 #include <runtime/akira_ipc.h>
+#include <akira_app_containment.h>
 #include <zephyr/kernel.h>
 #include <string.h>
 #include <errno.h>
 
+/* A long or unbounded msg_recv waits in slices of this length, checking
+ * between them whether the app is being stopped (a stop also wakes the
+ * slice itself, see ipc_on_stop in akira_ipc.c). */
+#define IPC_RECV_SLICE_MS 100
+
 /* ── Internal helper ─────────────────────────────────────────────────────── */
 
-/**
- * @brief Resolve the calling app's name from exec_env into @p buf.
- * @return 0 on success, negative on error
- */
-static int resolve_caller(wasm_exec_env_t exec_env,
-                           char *buf, size_t buflen)
+/* Subscriptions belong to the caller's runtime slot, so an app can neither
+ * read nor remove another app's queue, and whatever it holds is released
+ * when it ends. No fallback identity: a subscription not tied to a slot
+ * would outlive the app. */
+static int caller_slot(wasm_exec_env_t exec_env)
 {
-    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    if (!inst) {
-        buf[0] = '\0';
-        return -EINVAL;
-    }
-    int ret = akira_runtime_get_name_for_module_inst(inst, buf, buflen);
-    if (ret < 0 || buf[0] == '\0') {
-        /* Fallback: use a deterministic string so the sub table still works */
-        snprintf(buf, buflen, "app@%p", (void *)inst);
-    }
-    return 0;
+    int slot = akira_runtime_slot_of_exec_env(exec_env);
+
+    return slot >= 0 ? slot : -EINVAL;
 }
 
-/* ── WASM Exports ────────────────────────────────────────────────────────── */
+/* ── WASM Exports ──────────────────────────────────────────────────────────
+ * Every akira_ipc_* call takes the IPC mutex: each is bracketed as a native
+ * critical section so a stop never aborts the app while it holds it. */
 
 int akira_native_msg_subscribe(wasm_exec_env_t exec_env, const char *topic)
 {
@@ -55,12 +55,18 @@ int akira_native_msg_subscribe(wasm_exec_env_t exec_env, const char *topic)
         return -EINVAL;
     }
 
-    char caller[AKIRA_IPC_APP_NAME_MAX];
-    if (resolve_caller(exec_env, caller, sizeof(caller)) < 0) {
-        return -EINVAL;
+    int slot = caller_slot(exec_env);
+    if (slot < 0) {
+        return slot;
     }
 
-    return akira_ipc_subscribe(topic, caller);
+    char caller[AKIRA_IPC_APP_NAME_MAX];
+    (void)akira_app_self_name(exec_env, caller, sizeof(caller));
+
+    akira_native_critical_enter(exec_env);
+    int ret = akira_ipc_subscribe_slot(slot, topic, caller);
+    akira_native_critical_exit(exec_env);
+    return ret;
 }
 
 int akira_native_msg_unsubscribe(wasm_exec_env_t exec_env, const char *topic)
@@ -71,12 +77,15 @@ int akira_native_msg_unsubscribe(wasm_exec_env_t exec_env, const char *topic)
         return -EINVAL;
     }
 
-    char caller[AKIRA_IPC_APP_NAME_MAX];
-    if (resolve_caller(exec_env, caller, sizeof(caller)) < 0) {
-        return -EINVAL;
+    int slot = caller_slot(exec_env);
+    if (slot < 0) {
+        return slot;
     }
 
-    return akira_ipc_unsubscribe(topic, caller);
+    akira_native_critical_enter(exec_env);
+    int ret = akira_ipc_unsubscribe_slot(slot, topic);
+    akira_native_critical_exit(exec_env);
+    return ret;
 }
 
 int akira_native_msg_publish(wasm_exec_env_t exec_env,
@@ -93,12 +102,16 @@ int akira_native_msg_publish(wasm_exec_env_t exec_env,
         return -EMSGSIZE;
     }
 
+    /* Validates the whole [data_ptr, data_ptr + len) range. */
     const void *ptr = akira_wasm_ptr_to_native(exec_env, data_ptr, len);
     if (!ptr) {
         return -EFAULT;
     }
 
-    return akira_ipc_publish(topic, ptr, len);
+    akira_native_critical_enter(exec_env);
+    int ret = akira_ipc_publish(topic, ptr, len);
+    akira_native_critical_exit(exec_env);
+    return ret;
 }
 
 int akira_native_msg_recv(wasm_exec_env_t exec_env,
@@ -112,21 +125,46 @@ int akira_native_msg_recv(wasm_exec_env_t exec_env,
         return -EINVAL;
     }
 
+    /* Validates the whole [buf_ptr, buf_ptr + buf_len) range. */
     void *ptr = akira_wasm_ptr_to_native(exec_env, buf_ptr, buf_len);
     if (!ptr) {
         return -EFAULT;
     }
 
-    char caller[AKIRA_IPC_APP_NAME_MAX];
-    if (resolve_caller(exec_env, caller, sizeof(caller)) < 0) {
-        return -EINVAL;
+    int slot = caller_slot(exec_env);
+    if (slot < 0) {
+        return slot;
     }
 
-    k_timeout_t to = (timeout_ms < 0) ? K_FOREVER :
-                     (timeout_ms == 0)  ? K_NO_WAIT  :
-                                          K_MSEC(timeout_ms);
+    /* Never one long (or K_FOREVER) wait: slices of IPC_RECV_SLICE_MS with
+     * a stop check in between, each re-resolving the subscription. A slice
+     * holds the IPC mutex only briefly but is bracketed as a whole (it is
+     * bounded), so the abort path never lands inside the locked part. */
+    int64_t deadline = (timeout_ms > 0) ? k_uptime_get() + timeout_ms : 0;
+    int ret;
 
-    return akira_ipc_recv(topic, caller, ptr, buf_len, to);
+    do {
+        if (akira_runtime_stop_requested(exec_env)) {
+            return -EINTR;
+        }
+
+        k_timeout_t slice = K_NO_WAIT;
+        if (timeout_ms < 0) {
+            slice = K_MSEC(IPC_RECV_SLICE_MS);
+        } else if (timeout_ms > 0) {
+            int64_t left = deadline - k_uptime_get();
+            if (left <= 0) {
+                return -EAGAIN;
+            }
+            slice = K_MSEC(MIN(left, (int64_t)IPC_RECV_SLICE_MS));
+        }
+
+        akira_native_critical_enter(exec_env);
+        ret = akira_ipc_recv_slot(slot, topic, ptr, buf_len, slice);
+        akira_native_critical_exit(exec_env);
+    } while (ret == -EAGAIN && timeout_ms != 0);
+
+    return ret;
 }
 
 int akira_native_msg_try_recv(wasm_exec_env_t exec_env,
@@ -144,12 +182,15 @@ int akira_native_msg_pending(wasm_exec_env_t exec_env, const char *topic)
         return -EINVAL;
     }
 
-    char caller[AKIRA_IPC_APP_NAME_MAX];
-    if (resolve_caller(exec_env, caller, sizeof(caller)) < 0) {
-        return -EINVAL;
+    int slot = caller_slot(exec_env);
+    if (slot < 0) {
+        return slot;
     }
 
-    return akira_ipc_pending(topic, caller);
+    akira_native_critical_enter(exec_env);
+    int ret = akira_ipc_pending_slot(slot, topic);
+    akira_native_critical_exit(exec_env);
+    return ret;
 }
 
 /* ===== WASM exports =====

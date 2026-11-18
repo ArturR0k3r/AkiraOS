@@ -8,8 +8,11 @@
  * @brief WASM-facing power / battery API declarations.
  *
  * Read-only functions (battery level, mode query) require AKIRA_CAP_POWER_READ.
- * Control functions (set mode, configure wake sources) require AKIRA_CAP_POWER_CTRL
- * and must be enabled at build time with CONFIG_AKIRA_WASM_POWER_CONTROL=y.
+ * Battery readings are cached for 1 s, so polling apps never hammer the
+ * gauge's bus. Control functions (set mode, configure wake sources) require
+ * AKIRA_CAP_POWER_CTRL and must be enabled at build time with
+ * CONFIG_AKIRA_WASM_POWER_CONTROL=y; they are rate-limited, and repeating
+ * the current setting is a no-op.
  * @stability stable
  * @since 1.4
  */
@@ -69,20 +72,28 @@ int akira_native_power_get_battery_status(wasm_exec_env_t exec_env,
 /**
  * @brief Request a power mode transition.
  *
+ * Apps may select ACTIVE or IDLE only: LIGHT_SLEEP and deeper need a wake
+ * source, which the power manager does not arm, so an app could otherwise
+ * leave the device asleep until a reset.
+ *
  * WASM signature: (i)i
  * @param mode  0=ACTIVE, 1=IDLE, 2=LIGHT_SLEEP, 3=DEEP_SLEEP, 4=HIBERNATE
- * @return 0 on success, -ENOTSUP if the mode is compilation-disabled,
- *         -EACCES if denied.
+ * @return 0 on success, -ENOTSUP for LIGHT_SLEEP and deeper (or a
+ *         compiled-out mode), -EAGAIN if power control calls come too fast
+ *         (all apps together: a burst of 8, then 4 per second),
+ *         -EPERM if denied.
  */
 int akira_native_power_set_mode(wasm_exec_env_t exec_env, int mode);
 
 /**
  * @brief Register a GPIO wake source.
  *
+ * Records the intent only; no pin is configured.
+ *
  * WASM signature: (ii)i
- * @param pin   GPIO pin number.
+ * @param pin   GPIO pin number (0-63).
  * @param edge  0=low, 1=high, 2=any.
- * @return 0 on success.
+ * @return 0 on success, -EINVAL on a bad pin or edge, -EAGAIN (rate limit).
  */
 int akira_native_power_wake_on_gpio(wasm_exec_env_t exec_env,
                                     uint32_t pin, int edge);

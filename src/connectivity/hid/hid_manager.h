@@ -156,6 +156,17 @@ extern "C"
      */
     int hid_keyboard_type_string(const char *str);
 
+    /** Longest string the WASM HID API types in one call (-E2BIG beyond). */
+#define HID_TYPE_STRING_MAX 256
+
+    /**
+     * @brief Map an ASCII character to a key code and the modifier it needs
+     * @param c        Character
+     * @param modifier Out: modifier bitmask to hold with the key (0 if none)
+     * @return Key code, or HID_KEY_NONE if the character has no mapping
+     */
+    hid_key_code_t hid_ascii_to_keycode(char c, uint8_t *modifier);
+
     /**
      * @brief Send raw keyboard report
      * @param report Keyboard report
@@ -308,6 +319,37 @@ extern "C"
      * @return 0 on success, -ENOENT if name not found
      */
     int hid_action_trigger(const char *name);
+
+    /**
+     * @brief hid_action_register() on behalf of @p owner (an app slot, or -1
+     *        for the system)
+     *
+     * Each owner has its own names: registering a name updates only the
+     * entry @p owner already has under that name, never another owner's.
+     * hid_action_unregister_owner() drops them when the owner goes.
+     */
+    int hid_action_register_owned(const char *name, uint8_t modifier, uint8_t keycode,
+                                  int owner);
+
+    /**
+     * @brief hid_action_trigger() for @p owner: its own action of that name,
+     *        else a system (owner -1) one; never another app's.
+     */
+    int hid_action_trigger_owned(const char *name, int owner);
+
+    /** @brief Remove every action registered by @p owner (no-op if none or < 0). */
+    void hid_action_unregister_owner(int owner);
+
+    /**
+     * @brief Release HID manager locks held by a dead thread
+     *
+     * A thread aborted or faulted while holding the HID manager or action
+     * table mutex would leave it locked forever, and every later HID call
+     * (including app cleanup on the system work queue) would block on it.
+     * Hands such a lock back on the dead owner's behalf; no-op otherwise.
+     * For app teardown, before touching HID state.
+     */
+    void hid_manager_recover_locks(void);
 
     /*===========================================================================*/
     /* Callbacks                                                                 */

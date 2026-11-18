@@ -52,6 +52,19 @@ void *akira_malloc_buffer(size_t size);
 void *akira_malloc_buffer_ex(size_t size, mem_source_t *source);
 
 /**
+ * @brief Allocate memory whose size a WASM app controls.
+ *
+ * PSRAM only on boards that have it, so an app growing its memory can never
+ * take the internal SRAM that drivers, Bluetooth and Wi-Fi depend on; the
+ * system heap on boards without PSRAM. Never logs: an app can make this fail
+ * in a loop. Free with akira_free_buffer().
+ *
+ * @param size Size in bytes
+ * @return Pointer to allocated memory, or NULL
+ */
+void *akira_malloc_app_buffer(size_t size);
+
+/**
  * @defgroup akira_bulk_bss PSRAM section placement
  * @{
  *

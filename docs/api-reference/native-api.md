@@ -116,6 +116,8 @@ extern int display_flush(void);
 
 > Full display API (20+ functions: `display_line`, `display_circle`, `display_bitmap`, `display_progress_bar`, `display_rounded_rect`, etc.) — see [AkiraSDK API_REFERENCE.md](https://github.com/ArturR0k3r/AkiraSDK/blob/v1.6.x/docs/API_REFERENCE.md#display-api).
 
+> **Argument rules.** Any coordinate, size or radius is safe: shapes are clipped to the panel and each call's work is bounded by the panel size. Radii above 4096 are clamped; `display_text`/`display_text_large` draw at most 4096 bytes of the string. `display_bitmap`, `display_bitmap_transparent` and `display_raw_write` need a 2-byte-aligned buffer with `len >= w * h * 2` (else `-EINVAL`); `display_raw_write` accepts only windows entirely on the panel. A pending auto-flush is cancelled when the app exits.
+
 ---
 
 ## Input Functions
@@ -427,30 +429,20 @@ if (mv >= 0) {
 
 ### `wdt_pet()`
 
-Manually feed the system watchdog, signalling that the app is still alive.
+Report whether the system watchdog is active. It does **not** feed the hardware watchdog: an app that could feed it could keep a wedged system from being reset.
 
 ```c
 extern int wdt_pet(void);
 ```
 
 **Returns:**
-- `0`: Success
+- `0`: The system watchdog is active
 - `-EPERM`: Missing `wdt` capability
 - `-ENODEV`: Watchdog not active
 
 **Capability Required:** `wdt`
 
-The AkiraOS watchdog is auto-fed every `CONFIG_AKIRA_WDT_FEED_INTERVAL_MS` ms by an internal work queue. Call `wdt_pet()` from a long-running computation to supplement the automatic feeding when the main thread may be busy for longer than that interval.
-
-**Example:**
-```c
-for (int i = 0; i < 1000; i++) {
-    heavy_processing_step(i);
-    if (i % 100 == 0) {
-        wdt_pet();   // keep watchdog happy during heavy work
-    }
-}
-```
+The AkiraOS watchdog is fed every `CONFIG_AKIRA_WDT_FEED_INTERVAL_MS` ms by a system work queue that WASM apps can't starve (app threads run at the lowest preemptible priority). A long-running app needs no watchdog calls.
 
 ---
 
@@ -770,6 +762,9 @@ Gated by `CONFIG_AKIRA_WASM_SETTINGS`. Capability: `settings.*`.
 ### Filesystem
 
 Gated by `CONFIG_AKIRA_WASM_FS`. Capability: `fs.read` / `fs.write`.
+Paths are relative to the app's directory, the same one the storage API uses:
+`/SD:/apps/<app>/` with a card, `/lfs/apps/<app>/` without. It is created on
+the first file or directory the app makes, and lists as empty before that.
 
 | Symbol | Signature |
 |--------|-----------|
@@ -786,13 +781,17 @@ Gated by `CONFIG_AKIRA_WASM_FS`. Capability: `fs.read` / `fs.write`.
 
 ### Crypto
 
-Gated by `CONFIG_AKIRA_WASM_CRYPTO`. Capability: `crypto`.
+Gated by `CONFIG_AKIRA_WASM_CRYPTO` (mbedTLS). Capability: `crypto`. The
+Ed25519 pair needs `CONFIG_AKIRA_WASM_CRYPTO_ED25519` and returns `-ENOTSUP`
+without it. `crypto_aes256_ctr` increments only the last 4 bytes of the
+counter block (big-endian, wrapping). HMAC keys are 1-64 bytes. Inputs are
+capped at `CONFIG_AKIRA_WASM_CRYPTO_MAX_INPUT` (64 KB).
 
 | Symbol | Signature |
 |--------|-----------|
-| `crypto_aes256_ctr` | `(ptr, ptr, i32, ptr, len, ptr) -> i32` |
-| `crypto_aes256_decrypt` | `(ptr, ptr, i32, ptr, len, ptr) -> i32` |
-| `crypto_aes256_encrypt` | `(ptr, ptr, i32, ptr, len, ptr) -> i32` |
+| `crypto_aes256_ctr` | `(ptr, ptr, ptr, len, ptr) -> i32` |
+| `crypto_aes256_decrypt` | `(ptr, ptr, ptr, len, ptr) -> i32` |
+| `crypto_aes256_encrypt` | `(ptr, ptr, ptr, len, ptr) -> i32` |
 | `crypto_ed25519_keygen` | `(ptr, ptr) -> i32` |
 | `crypto_ed25519_sign` | `(ptr, ptr, len, ptr) -> i32` |
 | `crypto_hmac_sha256` | `(ptr, len, ptr, len, ptr) -> i32` |
@@ -840,14 +839,14 @@ Gated by `CONFIG_AKIRA_WASM_MATTER`. Capability: `matter`.
 | Symbol | Signature |
 |--------|-----------|
 | `matter_cmd_poll` | `(ptr, ptr, ptr, ptr, len, i32) -> i32` |
-| `matter_commission` | `(string, ptr, len) -> i32` |
+| `matter_commission` | `(string, ptr) -> i32` |
 | `matter_endpoint_add` | `(i32, ptr, len) -> i32` |
 | `matter_get_pairing` | `(ptr, len, ptr, len) -> i32` |
 | `matter_open_pairing` | `(i32) -> i32` |
-| `matter_poll` | `(ptr, len, ptr, i32, ptr, len, i32, i32) -> i32` |
+| `matter_poll` | `(ptr, ptr, ptr, len, i32) -> i32` |
 | `matter_report_attr` | `(i32, i32, i32, ptr, len) -> i32` |
-| `matter_send` | `(ptr, len, ptr, len, i32) -> i32` |
-| `matter_subscribe` | `(ptr, len, i32) -> i32` |
+| `matter_send` | `(ptr, ptr, len) -> i32` |
+| `matter_subscribe` | `(ptr, i32) -> i32` |
 
 ### MQTT / Home Assistant
 

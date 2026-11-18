@@ -207,3 +207,68 @@ ZTEST(display_clip, test_outputs_untouched_when_fully_clipped)
     zassert_equal(x2, -12345, "x2 must not be written on the reject path");
     zassert_equal(y2, -12345, "y2 must not be written on the reject path");
 }
+
+
+/* ------------------------------------------------------------------ */
+/* Line and 64-bit box clipping                                         */
+/* ------------------------------------------------------------------ */
+
+/* Bresenham walks every point of the segment it is given: clipping first is
+ * what bounds display_line() to the panel instead of ~2^32 steps. */
+ZTEST(display_clip, test_line_on_screen_is_unchanged)
+{
+    int x0, y0, x1, y1;
+
+    zassert_true(akira_display_clip_line(10, 20, 300, 200, XRES, YRES,
+                                         &x0, &y0, &x1, &y1), NULL);
+    zassert_equal(x0, 10, NULL);
+    zassert_equal(y0, 20, NULL);
+    zassert_equal(x1, 300, NULL);
+    zassert_equal(y1, 200, NULL);
+}
+
+ZTEST(display_clip, test_line_extremes_end_on_panel)
+{
+    int x0, y0, x1, y1;
+
+    zassert_true(akira_display_clip_line(INT32_MIN, INT32_MIN, INT32_MAX, INT32_MAX,
+                                         XRES, YRES, &x0, &y0, &x1, &y1), NULL);
+    zassert_true(x0 >= 0 && x0 < XRES && x1 >= 0 && x1 < XRES, "x on panel");
+    zassert_true(y0 >= 0 && y0 < YRES && y1 >= 0 && y1 < YRES, "y on panel");
+
+    zassert_true(akira_display_clip_line(-1000, 120, 1000, 120, XRES, YRES,
+                                         &x0, &y0, &x1, &y1), NULL);
+    zassert_equal(x0, 0, "clipped to the left edge");
+    zassert_equal(x1, XRES - 1, "end points are inclusive");
+    zassert_equal(y0, 120, NULL);
+    zassert_equal(y1, 120, NULL);
+}
+
+ZTEST(display_clip, test_line_fully_off_screen_rejected)
+{
+    int x0 = -7, y0 = -7, x1 = -7, y1 = -7;
+
+    zassert_false(akira_display_clip_line(-10, -10, -5, -1, XRES, YRES,
+                                          &x0, &y0, &x1, &y1), NULL);
+    zassert_false(akira_display_clip_line(XRES, 0, INT32_MAX, YRES - 1, XRES, YRES,
+                                          &x0, &y0, &x1, &y1), NULL);
+    zassert_equal(x0, -7, "outputs untouched on reject");
+    zassert_equal(y1, -7, "outputs untouched on reject");
+}
+
+/* Derived edges (x + w - radius, ...) exceed int; the box clip takes them
+ * as int64_t. */
+ZTEST(display_clip, test_box_takes_64bit_edges)
+{
+    int x0, y0, x1, y1;
+
+    zassert_true(akira_display_clip_box((int64_t)INT32_MIN - 5, -1,
+                                        (int64_t)INT32_MAX + 5, 1,
+                                        XRES, YRES, &x0, &y0, &x1, &y1), NULL);
+    zassert_equal(x0, 0, NULL);
+    zassert_equal(y0, 0, NULL);
+    zassert_equal(x1, XRES, NULL);
+    zassert_equal(y1, 1, NULL);
+    zassert_false(akira_display_clip_box(10, 10, 10, 20, XRES, YRES,
+                                         &x0, &y0, &x1, &y1), "empty box");
+}

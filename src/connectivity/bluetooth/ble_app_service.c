@@ -10,6 +10,14 @@ LOG_MODULE_REGISTER(akira_ble_svc, CONFIG_AKIRA_LOG_LEVEL);
 /**
  * @file ble_app_service.c
  * @brief Dynamic GATT service pool for WASM BLE apps.
+ *
+ * Slots are reused, but an attribute table that has been registered is
+ * never cleared, only rebuilt: Zephyr walks the GATT database without a lock
+ * (on the BT RX thread), so a walk that started before a service was
+ * unregistered may still be inside its attributes. Unregistering removes the
+ * service from the database and flips our flags; every attribute keeps
+ * pointing at valid objects, and the read/write callbacks refuse once the
+ * characteristic is no longer used. See ble_app_svc_register() for rebuild.
  */
 
 #include "ble_app_service.h"
@@ -27,6 +35,9 @@ LOG_MODULE_REGISTER(akira_ble_svc, CONFIG_AKIRA_LOG_LEVEL);
 
 /* Number of GATT attrs per characteristic slot (decl + value + CCC) */
 #define ATTRS_PER_CHAR   3
+/* Pool lock wait: -EBUSY after this. Teardown runs from the app release
+ * hook, possibly on the system workqueue, so it must never wait forever. */
+#define POOL_LOCK_TIMEOUT K_MSEC(1000)
 /* Total attrs per service: 1 primary decl + all char attrs */
 #define ATTRS_PER_SERVICE (1 + CONFIG_AKIRA_BLE_MAX_CHARS * ATTRS_PER_CHAR)
 
@@ -70,7 +81,7 @@ static struct ble_service_slot AKIRA_BULK_BSS g_svcs[CONFIG_AKIRA_BLE_MAX_SERVIC
 K_MSGQ_DEFINE(g_evt_q, sizeof(struct ble_event),
 	      CONFIG_AKIRA_BLE_EVENT_QUEUE_DEPTH, 4);
 
-static struct k_mutex g_mutex;
+static K_MUTEX_DEFINE(g_mutex);
 static bool g_initialized;
 
 /* Persistent UUID objects for the standard declaration attributes. The Zephyr
@@ -89,6 +100,11 @@ static const struct bt_uuid_16 g_uuid_ccc =
 /*===========================================================================*/
 /* Internal Helpers                                                          */
 /*===========================================================================*/
+
+static int pool_lock(void)
+{
+	return (k_mutex_lock(&g_mutex, POOL_LOCK_TIMEOUT) == 0) ? 0 : -EBUSY;
+}
 
 /**
  * @brief Parse "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" into 16-byte LE array.
@@ -255,9 +271,9 @@ int ble_app_svc_init(void)
 		return 0;
 	}
 
-	k_mutex_init(&g_mutex);
-	memset(g_chars, 0, sizeof(g_chars));
-	memset(g_svcs,  0, sizeof(g_svcs));
+	/* No clearing of the pools: they start zeroed, teardown leaves every
+	 * slot unused, and a registered attribute table must never be wiped
+	 * (see the file comment). */
 	k_msgq_purge(&g_evt_q);
 	g_initialized = true;
 
@@ -271,9 +287,11 @@ int ble_app_svc_init(void)
 
 int ble_app_svc_deinit(void)
 {
-	ble_app_svc_unregister_all();
-	memset(g_chars, 0, sizeof(g_chars));
-	memset(g_svcs,  0, sizeof(g_svcs));
+	int ret = ble_app_svc_unregister_all();
+
+	if (ret < 0) {
+		return ret;
+	}
 	k_msgq_purge(&g_evt_q);
 	g_initialized = false;
 	return 0;
@@ -287,30 +305,39 @@ int ble_app_svc_alloc(const char *uuid128_str)
 
 	/* Initialize the service layer on first use. The Arduino-style app flow
 	 * (ble_led sample) creates and registers services BEFORE calling
-	 * ble_init() — which also runs ble_app_svc_init(). Without this early
-	 * init, that later call would still see g_initialized==false and
-	 * memset(g_svcs) — wiping the attrs of an already bt_gatt-registered
-	 * service, making it vanish from the GATT. Idempotent via g_initialized. */
+	 * ble_init() — which also runs ble_app_svc_init(). Init used to wipe
+	 * the pools, which made an already registered service vanish from the
+	 * GATT; it no longer clears anything, and stays idempotent via
+	 * g_initialized. */
 	ble_app_svc_init();
 
-	k_mutex_lock(&g_mutex, K_FOREVER);
+	uint8_t val[16];
+
+	if (parse_uuid128(uuid128_str, val) < 0) {
+		LOG_DBG("Invalid service UUID");
+		return -EINVAL;
+	}
+
+	if (pool_lock() < 0) {
+		return -EBUSY;
+	}
 
 	for (int i = 0; i < CONFIG_AKIRA_BLE_MAX_SERVICES; i++) {
-		if (!g_svcs[i].used) {
-			memset(&g_svcs[i], 0, sizeof(g_svcs[i]));
-			g_svcs[i].uuid.uuid.type = BT_UUID_TYPE_128;
+		struct ble_service_slot *sv = &g_svcs[i];
 
-			int ret = parse_uuid128(uuid128_str,
-						g_svcs[i].uuid.val);
-			if (ret < 0) {
-				k_mutex_unlock(&g_mutex);
-				LOG_ERR("Invalid service UUID: %s", uuid128_str);
-				return ret;
-			}
-
-			g_svcs[i].used = true;
+		if (!sv->used) {
+			/* Field by field, never memset: the attribute table may
+			 * still be under a walk of an earlier registration. */
+			sv->uuid.uuid.type = BT_UUID_TYPE_128;
+			memcpy(sv->uuid.val, val, sizeof(val));
+			sv->svc.attrs      = sv->attrs;
+			sv->svc.attr_count = 0;
+			sv->attr_count     = 0;
+			sv->char_count     = 0;
+			sv->registered     = false;
+			sv->used           = true;
 			k_mutex_unlock(&g_mutex);
-			LOG_INF("Service slot %d allocated: %s", i, uuid128_str);
+			LOG_DBG("Service slot %d allocated", i);
 			return i;
 		}
 	}
@@ -327,37 +354,46 @@ int ble_app_char_alloc(const char *uuid128_str, uint8_t props, uint16_t max_len)
 		return -EINVAL;
 	}
 
-	ble_app_svc_init(); /* idempotent; ensures g_mutex is initialized */
+	ble_app_svc_init(); /* idempotent */
 
-	k_mutex_lock(&g_mutex, K_FOREVER);
+	uint8_t val[16];
+
+	if (parse_uuid128(uuid128_str, val) < 0) {
+		LOG_DBG("Invalid char UUID");
+		return -EINVAL;
+	}
+
+	if (pool_lock() < 0) {
+		return -EBUSY;
+	}
 
 	for (int i = 0; i < CONFIG_AKIRA_BLE_MAX_CHARS; i++) {
-		if (!g_chars[i].used) {
-			memset(&g_chars[i], 0, sizeof(g_chars[i]));
-			g_chars[i].uuid.uuid.type = BT_UUID_TYPE_128;
+		struct ble_char_slot *ch = &g_chars[i];
 
-			int ret = parse_uuid128(uuid128_str,
-						g_chars[i].uuid.val);
-			if (ret < 0) {
-				k_mutex_unlock(&g_mutex);
-				LOG_ERR("Invalid char UUID: %s", uuid128_str);
-				return ret;
-			}
+		if (!ch->used) {
+			/* Field by field, never memset: an earlier registration's
+			 * attributes still point here, and a declaration's uuid
+			 * pointer must never be NULL. */
+			ch->uuid.uuid.type = BT_UUID_TYPE_128;
+			memcpy(ch->uuid.val, val, sizeof(val));
 
 			/* Build characteristic declaration */
-			g_chars[i].chrc_decl.uuid       = &g_chars[i].uuid.uuid;
-			g_chars[i].chrc_decl.properties = props;
+			ch->chrc_decl.uuid         = &ch->uuid.uuid;
+			ch->chrc_decl.value_handle = 0;
+			ch->chrc_decl.properties   = props;
 
-			g_chars[i].props   = props;
-			g_chars[i].max_len = max_len;
-			g_chars[i].used    = true;
+			/* All-zero is a valid CCC (nobody subscribed) */
+			memset(&ch->ccc, 0, sizeof(ch->ccc));
+			ch->ccc.cfg_changed = ccc_changed;
 
-			/* Init CCC managed user data */
-			g_chars[i].ccc.cfg_changed = ccc_changed;
+			ch->props      = props;
+			ch->max_len    = max_len;
+			ch->value_len  = 0;
+			ch->subscribed = false;
+			ch->used       = true;
 
 			k_mutex_unlock(&g_mutex);
-			LOG_INF("Char slot %d allocated: %s props=0x%02x", i,
-				uuid128_str, props);
+			LOG_DBG("Char slot %d allocated: props=0x%02x", i, props);
 			return i;
 		}
 	}
@@ -374,7 +410,9 @@ int ble_app_svc_add_char(int svc_h, int char_h)
 		return -EINVAL;
 	}
 
-	k_mutex_lock(&g_mutex, K_FOREVER);
+	if (pool_lock() < 0) {
+		return -EBUSY;
+	}
 
 	struct ble_service_slot *sv = &g_svcs[svc_h];
 	struct ble_char_slot    *ch = &g_chars[char_h];
@@ -406,7 +444,9 @@ int ble_app_svc_register(int svc_h)
 		return -EINVAL;
 	}
 
-	k_mutex_lock(&g_mutex, K_FOREVER);
+	if (pool_lock() < 0) {
+		return -EBUSY;
+	}
 
 	struct ble_service_slot *sv = &g_svcs[svc_h];
 
@@ -420,6 +460,13 @@ int ble_app_svc_register(int svc_h)
 	}
 
 	/*----------- Build the bt_gatt_attr array ---------------------------------
+	 * The table may still be walked from an earlier registration (see the
+	 * file comment), so it is rebuilt in place with every field valid at
+	 * every moment: uuid and user_data never NULL, handle 0 (auto-assign),
+	 * and attr_count published only once the entries below it are filled.
+	 * Rebuilds run on app threads, below the BT RX thread's priority, so on
+	 * this single-core SoC a walk is never actually in progress meanwhile.
+	 *
 	 * Layout per service:
 	 *   [0]     Primary Service declaration
 	 *   [1+N*0] Characteristic declaration  (char N)
@@ -431,6 +478,7 @@ int ble_app_svc_register(int svc_h)
 	uint8_t ai = 0;
 
 	/* Service declaration attr */
+	sv->attrs[ai].handle    = 0;
 	sv->attrs[ai].uuid      = (struct bt_uuid *)&g_uuid_primary;
 	sv->attrs[ai].perm      = BT_GATT_PERM_READ;
 	sv->attrs[ai].read      = bt_gatt_attr_read_service;
@@ -463,6 +511,7 @@ int ble_app_svc_register(int svc_h)
 			LOG_ERR("Attr pool overflow for service %d", svc_h);
 			break;
 		}
+		sv->attrs[ai].handle    = 0;
 		sv->attrs[ai].uuid      = (struct bt_uuid *)&g_uuid_chrc;
 		sv->attrs[ai].perm      = BT_GATT_PERM_READ;
 		sv->attrs[ai].read      = bt_gatt_attr_read_chrc;
@@ -475,6 +524,7 @@ int ble_app_svc_register(int svc_h)
 			LOG_ERR("Attr pool overflow for service %d", svc_h);
 			break;
 		}
+		sv->attrs[ai].handle    = 0;
 		sv->attrs[ai].uuid      = &slot->uuid.uuid;
 		sv->attrs[ai].perm      = perm;
 		sv->attrs[ai].read      = (props & BLE_PROP_READ)
@@ -491,6 +541,7 @@ int ble_app_svc_register(int svc_h)
 				LOG_ERR("Attr pool overflow for service %d", svc_h);
 				break;
 			}
+			sv->attrs[ai].handle    = 0;
 			sv->attrs[ai].uuid      = (struct bt_uuid *)&g_uuid_ccc;
 			sv->attrs[ai].perm      = BT_GATT_PERM_READ |
 						  BT_GATT_PERM_WRITE;
@@ -523,10 +574,15 @@ int ble_app_svc_register(int svc_h)
 
 int ble_app_svc_unregister_all(void)
 {
-	k_mutex_lock(&g_mutex, K_FOREVER);
+	if (pool_lock() < 0) {
+		LOG_ERR("BLE app service pool busy: services left registered");
+		return -EBUSY;
+	}
 
 	for (int i = 0; i < CONFIG_AKIRA_BLE_MAX_SERVICES; i++) {
 		if (g_svcs[i].registered) {
+			/* Out of the database under Zephyr's own lock; the
+			 * attributes stay intact for any walk still inside. */
 			int err = bt_gatt_service_unregister(&g_svcs[i].svc);
 
 			if (err) {
@@ -537,13 +593,15 @@ int ble_app_svc_unregister_all(void)
 		g_svcs[i].used = false;
 	}
 
+	/* From here the read/write callbacks refuse these characteristics. */
 	for (int i = 0; i < CONFIG_AKIRA_BLE_MAX_CHARS; i++) {
-		g_chars[i].used = false;
+		g_chars[i].used       = false;
+		g_chars[i].subscribed = false;
 	}
 
 	k_msgq_purge(&g_evt_q);
 	k_mutex_unlock(&g_mutex);
-	LOG_INF("All BLE app services unregistered");
+	LOG_DBG("All BLE app services unregistered");
 	return 0;
 }
 
@@ -554,22 +612,28 @@ int ble_app_char_write(int char_h, const uint8_t *data, uint16_t len)
 		return -EINVAL;
 	}
 
+	if (pool_lock() < 0) {
+		return -EBUSY;
+	}
+
 	struct ble_char_slot *ch = &g_chars[char_h];
+	const struct bt_gatt_attr *notify_attr = NULL;
 
 	if (!ch->used) {
+		k_mutex_unlock(&g_mutex);
 		return -ENOENT;
 	}
 	if (len > ch->max_len) {
+		k_mutex_unlock(&g_mutex);
 		return -EMSGSIZE;
 	}
 
 	memcpy(ch->value, data, len);
 	ch->value_len = len;
 
-	/* Send BLE notification if any peer subscribed */
+	/* Find the value attr to notify if any peer subscribed */
 	if ((ch->props & BLE_PROP_NOTIFY) && ch->subscribed) {
-		/* Find the value attr for this char in the registered service */
-		for (int si = 0; si < CONFIG_AKIRA_BLE_MAX_SERVICES; si++) {
+		for (int si = 0; si < CONFIG_AKIRA_BLE_MAX_SERVICES && !notify_attr; si++) {
 			if (!g_svcs[si].registered) {
 				continue;
 			}
@@ -589,15 +653,22 @@ int ble_app_char_write(int char_h, const uint8_t *data, uint16_t len)
 						}
 					}
 					attr_idx++; /* skip decl to value */
-					bt_gatt_notify(NULL,
-						&g_svcs[si].attrs[attr_idx],
-						data, len);
-					return 0;
+					if (attr_idx < g_svcs[si].attr_count) {
+						notify_attr = &g_svcs[si].attrs[attr_idx];
+					}
+					break;
 				}
 			}
 		}
 	}
+	k_mutex_unlock(&g_mutex);
 
+	/* Outside the pool lock: the notify may wait for an ATT buffer, and
+	 * teardown must not wait behind it. The attribute is static memory; if
+	 * the service was unregistered meanwhile the stack refuses it. */
+	if (notify_attr) {
+		bt_gatt_notify(NULL, notify_attr, data, len);
+	}
 	return 0;
 }
 
@@ -608,15 +679,21 @@ int ble_app_char_read(int char_h, uint8_t *buf, uint16_t buf_len)
 		return -EINVAL;
 	}
 
+	if (pool_lock() < 0) {
+		return -EBUSY;
+	}
+
 	struct ble_char_slot *ch = &g_chars[char_h];
 
 	if (!ch->used) {
+		k_mutex_unlock(&g_mutex);
 		return -ENOENT;
 	}
 
-	uint16_t copy = (ch->value_len < buf_len) ? ch->value_len : buf_len;
+	uint16_t copy = MIN(MIN(ch->value_len, buf_len), (uint16_t)sizeof(ch->value));
 
 	memcpy(buf, ch->value, copy);
+	k_mutex_unlock(&g_mutex);
 	return copy;
 }
 

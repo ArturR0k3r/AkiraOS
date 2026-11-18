@@ -13,8 +13,15 @@
  * Allows WASM apps to read and write persistent settings backed by
  * Zephyr NVS flash.  Requires the "settings.*" capability.
  *
- * Key format:  "namespace/key"   e.g. "nes/frameskip", "wifi/ssid"
- * Values are plain strings (max AKIRA_SETTINGS_WASM_VAL_MAX bytes).
+ * Each app has a private namespace: the key an app passes (e.g.
+ * "nes/frameskip") names a setting of that app only. OS settings and other
+ * apps' settings can't be read or changed, whatever the key.
+ *
+ * Keys: up to CONFIG_AKIRA_SETTINGS_MAX_KEY_LEN - 6 characters (26 by
+ * default). Values: plain strings shorter than CONFIG_AKIRA_SETTINGS_MAX_VALUE_LEN.
+ * An app may keep up to 40 keys (fewer when the partition is full: -ENOSPC).
+ * Writes (set/delete) are rate-limited per app: a burst of 40, then one per
+ * 2 s (-EAGAIN when exceeded).
  * @stability stable
  * @since 1.4
  */
@@ -32,8 +39,10 @@
  * @param key       NUL-terminated setting key (e.g. "nes/frameskip").
  * @param buf_ptr   WASM linear-memory pointer to output buffer.
  * @param buf_len   Size of output buffer in bytes.
- * @return 0 on success, -ENOENT if key not found, -EACCES if no capability,
- *         -EINVAL on bad args, -EFAULT on invalid WASM pointer.
+ * @return 0 on success, -ENOENT if key not found, -EPERM if no capability,
+ *         -EINVAL on bad args, -EFAULT on invalid WASM pointer,
+ *         -ENAMETOOLONG if the key is too long. The value is truncated to
+ *         fit the buffer; on error the buffer holds "".
  */
 int akira_native_settings_get(wasm_exec_env_t exec_env,
                                const char *key,
@@ -45,8 +54,10 @@ int akira_native_settings_get(wasm_exec_env_t exec_env,
  * @param exec_env  WAMR execution environment (for capability check).
  * @param key       NUL-terminated setting key.
  * @param value     NUL-terminated value string.
- * @return 0 on success, -EACCES if no capability, -EINVAL on bad args,
- *         negative errno on storage failure.
+ * @return 0 on success, -EPERM if no capability, -EINVAL on bad args,
+ *         -ENAMETOOLONG / -E2BIG for a key / value too long, -ENOSPC when the
+ *         app's key quota is used up, -EAGAIN when rate-limited, negative
+ *         errno on storage failure.
  */
 int akira_native_settings_set(wasm_exec_env_t exec_env,
                                const char *key, const char *value);
@@ -56,7 +67,8 @@ int akira_native_settings_set(wasm_exec_env_t exec_env,
  *
  * @param exec_env  WAMR execution environment (for capability check).
  * @param key       NUL-terminated setting key.
- * @return 0 on success, -ENOENT if key not found, -EACCES if no capability.
+ * @return 0 on success, -ENOENT if key not found, -EPERM if no capability,
+ *         -EAGAIN when rate-limited.
  */
 int akira_native_settings_delete(wasm_exec_env_t exec_env, const char *key);
 

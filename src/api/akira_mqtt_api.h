@@ -6,6 +6,18 @@
  * helpers to WASM apps, on top of mqtt_service + ha_discovery. All functions
  * require the "mqtt" manifest capability (AKIRA_CAP_MQTT).
  *
+ * The broker connection is shared with the system, so per app:
+ * - published topics: at most 128 bytes of UTF-8 without control characters
+ *   or wildcards; payloads at most 1024 bytes (-EMSGSIZE); topic filters
+ *   follow the MQTT wildcard rules (-EINVAL otherwise);
+ * - publishes (including ha_light_report/register): 20 at once, then 10 a
+ *   second (-EBUSY);
+ * - at most 4 distinct topic filters and 4 Home Assistant lights (-ENOSPC);
+ *   object ids are [A-Za-z0-9_-], at most 32 characters; names at most 48
+ *   bytes without '"' or '\\';
+ * - waits end when the app is stopped (-ECANCELED).
+ * What an app subscribed to is handed back when it ends.
+ *
  * @stability experimental
  * @since 1.6
  */

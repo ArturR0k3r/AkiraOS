@@ -75,8 +75,23 @@ bool mqtt_service_is_connected(void);
 int mqtt_service_publish(const char *topic, const void *payload, size_t len,
                          int qos, bool retain);
 
-/** Subscribe to a topic filter (QoS 0). */
+/**
+ * Subscribe to a topic filter (QoS 0). The filter is remembered (up to 8)
+ * and replayed after every reconnect.
+ * @return 0 on success, -ENOTCONN if not connected (replayed on connect),
+ *         -EBUSY if the client stayed busy, negative errno otherwise.
+ */
 int mqtt_service_subscribe(const char *topic);
+
+/**
+ * Forget a remembered topic filter and unsubscribe from it.
+ *
+ * Never does I/O: the UNSUBSCRIBE is sent by the service thread (within its
+ * next 500 ms poll), so this is safe from any thread, including the system
+ * workqueue. A later mqtt_service_subscribe() of the same filter cancels it.
+ * @return 0, -ENOENT if the filter is not remembered, -EBUSY, -EINVAL.
+ */
+int mqtt_service_unsubscribe(const char *topic);
 
 /**
  * Pop the next inbound message (blocking up to @p timeout).

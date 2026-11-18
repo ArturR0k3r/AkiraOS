@@ -13,6 +13,14 @@ LOG_MODULE_REGISTER(akira_ble_api, CONFIG_AKIRA_LOG_LEVEL);
  *
  * Bridges WASM BLE calls to the ble_app_service layer.
  * All functions are guarded by AKIRA_CAP_BLE.
+ *
+ * There is one app BLE layer (GATT service pool, BLE_APP mode, the app
+ * advert, the device name), so it belongs to one app at a time: the first app
+ * that sets anything up owns it until it calls ble_deinit() or ends; other
+ * apps get -EBUSY. When the owner ends, however it ends, ble_release() stops
+ * its advert, removes its GATT services, and restores the device name,
+ * bonding and BT mode. Operations that reach the controller or flash
+ * (advertising, service registration, renames) are rate-limited.
  */
 
 #include "akira_api.h"
@@ -24,7 +32,11 @@ LOG_MODULE_REGISTER(akira_ble_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <string.h>
 #include <errno.h>
 #include <zephyr/kernel.h>
+#include <zephyr/sys/atomic.h>
+#include <zephyr/sys/util.h>
+#include <akira_app_containment.h>
 #include "akira_wasm_mem.h"
+#include "mem_helper.h"
 #include "connectivity/bluetooth/ble_app_service.h"
 #include "connectivity/bluetooth/bt_manager.h"
 
@@ -33,11 +45,55 @@ LOG_MODULE_REGISTER(akira_ble_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/bluetooth/conn.h>
 #endif
 
+#ifdef CONFIG_BT_DEVICE_NAME_MAX
+#define BLE_NAME_MAX CONFIG_BT_DEVICE_NAME_MAX
+#else
+#define BLE_NAME_MAX 32
+#endif
+
+#define BLE_UUID_STR_LEN          36    /* "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" */
+#define BLE_PROP_ALL              0x3F  /* BLE_PROP_BROADCAST..BLE_PROP_INDICATE   */
+#define BLE_NAME_MIN_INTERVAL_MS  2000  /* a rename is a flash write on prod      */
+
+/* GATT database changes (each one is a flash write of the DB hash with GATT
+ * caching): a burst of one per service, then one every 2 s. */
+#define BLE_DB_BURST              CONFIG_AKIRA_BLE_MAX_SERVICES
+#define BLE_DB_PER_MIN            30
+/* Advertising start/stop (HCI commands): 8 at once, then 4 a second. */
+#define BLE_ADV_BURST             8
+#define BLE_ADV_PER_MIN           240
+
 /*
  * Track which service UUID should be included in the advertisement.
  * Set by ble_set_advertised_service(); consumed by ble_advertise().
  */
 static int g_adv_svc_handle = -1;
+
+/*
+ * Owner of the app BLE layer: app slot + 1, 0 = nobody. Claimed atomically,
+ * so two apps can never both own it. Uses the slot, not the module instance
+ * (the next app loaded into the slot may get the same instance address).
+ * The state below is touched only by the owner's natives and, once it is
+ * gone, by ble_release().
+ */
+static atomic_t g_ble_owner;
+
+static bool g_mode_set;        /* we put the stack in BT_MODE_BLE_APP        */
+static bool g_adv_started;     /* the advert running is the owner's          */
+static bool g_bondable_off;    /* ble_init() turned bonding off              */
+static bool g_name_changed;    /* g_saved_name holds the name to restore     */
+static int64_t g_last_name_ms;
+static AKIRA_BULK_BSS char g_saved_name[BLE_NAME_MAX + 1];
+
+/* Token buckets, in 1/1000 token. Never reset on teardown, so an app cannot
+ * refill them by releasing and re-claiming BLE in a loop. */
+struct ble_bucket {
+	int32_t tokens;
+	int64_t last;   /* 0 = never used: full */
+};
+
+static struct ble_bucket g_db_bucket;
+static struct ble_bucket g_adv_bucket;
 
 /* ------------------------------------------------------------------ */
 /* Internal helpers                                                    */
@@ -45,6 +101,128 @@ static int g_adv_svc_handle = -1;
 
 /* WASM pointer validation lives in akira_wasm_mem.h (akira_wasm_ptr_to_native). */
 #define wasm_ptr_to_native(env, ptr, len) akira_wasm_ptr_to_native((env), (ptr), (len))
+
+/* App-triggered warnings: at most one a second. */
+static bool ble_log_allowed(void)
+{
+	static uint32_t last;
+	uint32_t now = k_uptime_get_32();
+
+	if (last != 0U && (now - last) < 1000U) {
+		return false;
+	}
+	last = now ? now : 1U;
+	return true;
+}
+
+#define BLE_WRN(...)                                                           \
+	do {                                                                   \
+		if (ble_log_allowed()) {                                       \
+			LOG_WRN(__VA_ARGS__);                                  \
+		}                                                              \
+	} while (0)
+
+static bool bucket_take(struct ble_bucket *b, int burst, int per_min)
+{
+	const int32_t cap = burst * 1000;
+	int64_t now = k_uptime_get();
+
+	if (b->last == 0) {
+		b->tokens = cap;
+	} else {
+		int64_t refill = (now - b->last) * per_min / 60;
+
+		b->tokens = (int32_t)MIN((int64_t)cap, b->tokens + refill);
+	}
+	b->last = now ? now : 1;
+
+	if (b->tokens < 1000) {
+		return false;
+	}
+	b->tokens -= 1000;
+	return true;
+}
+
+/* Claim the app BLE layer for the caller, or confirm it already owns it.
+ * @return 0, -EBUSY if another app owns it, -EACCES if not an app. */
+static int ble_claim(wasm_exec_env_t exec_env)
+{
+	int slot = akira_runtime_slot_of_exec_env(exec_env);
+
+	if (slot < 0) {
+		return -EACCES;
+	}
+
+	atomic_val_t me = (atomic_val_t)slot + 1;
+
+	if (atomic_cas(&g_ble_owner, 0, me) || atomic_get(&g_ble_owner) == me) {
+		return 0;
+	}
+	BLE_WRN("BLE is in use by another app (slot %d)", (int)atomic_get(&g_ble_owner) - 1);
+	return -EBUSY;
+}
+
+/* The caller must already own the app BLE layer.
+ * @return 0, -EBUSY if another app owns it, -ENOENT if nobody does. */
+static int ble_owned(wasm_exec_env_t exec_env)
+{
+	int slot = akira_runtime_slot_of_exec_env(exec_env);
+	atomic_val_t owner = atomic_get(&g_ble_owner);
+
+	if (slot < 0) {
+		return -EACCES;
+	}
+	if (owner == 0) {
+		return -ENOENT;
+	}
+	return (owner == (atomic_val_t)slot + 1) ? 0 : -EBUSY;
+}
+
+static bool uuid_str_ok(const char *s)
+{
+	/* "$" is NUL-terminated inside linear memory; bound the scan anyway. */
+	return strnlen(s, BLE_UUID_STR_LEN + 1) == BLE_UUID_STR_LEN;
+}
+
+/*
+ * Undo everything the owner set up. Runs on the owner's thread (ble_deinit)
+ * or from ble_release() once the owner is gone — then possibly on the system
+ * workqueue: every step here is a bounded stack call (HCI command, GATT DB
+ * change, settings write).
+ */
+static void ble_teardown(void)
+{
+	if (g_adv_started) {
+		bt_manager_stop_advertising();
+		g_adv_started = false;
+	}
+
+	/* Unregisters the app's GATT services and drops queued events. */
+	ble_app_svc_deinit();
+
+#ifdef CONFIG_BT
+	/* An app-set name must not outlive the app (it is persisted). */
+	if (g_name_changed) {
+		(void)bt_set_name(g_saved_name);
+		g_name_changed = false;
+	}
+#if defined(CONFIG_BT_SMP)
+	if (g_bondable_off) {
+		bt_set_bondable(IS_ENABLED(CONFIG_BT_BONDABLE));
+	}
+#endif
+#endif
+	g_bondable_off = false;
+
+	/* Release BLE_APP only if we took it: another mode (companion, mesh,
+	 * scan) must never be knocked out by an app. NONE restores HID if it
+	 * was running. */
+	if (g_mode_set && bt_manager_get_mode() == BT_MODE_BLE_APP) {
+		bt_manager_set_mode(BT_MODE_NONE);
+	}
+	g_mode_set = false;
+	g_adv_svc_handle = -1;
+}
 
 /* ------------------------------------------------------------------ */
 /* WASM-exported native functions                                      */
@@ -54,30 +232,46 @@ int akira_native_ble_init(wasm_exec_env_t exec_env)
 {
 	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
-	int ret = bt_manager_set_mode(BT_MODE_BLE_APP);
+	int ret = ble_claim(exec_env);
 
 	if (ret < 0) {
-		LOG_ERR("ble_init: set_mode failed: %d", ret);
 		return ret;
 	}
+	if (akira_runtime_stop_requested(exec_env)) {
+		return -ECANCELED;
+	}
+
+	/* Mode switch (and lazy BT start), settings: system locks. */
+	akira_native_critical_enter(exec_env);
+
+	ret = bt_manager_set_mode(BT_MODE_BLE_APP);
+	if (ret < 0) {
+		akira_native_critical_exit(exec_env);
+		BLE_WRN("ble_init: set_mode failed: %d", ret);
+		return ret;
+	}
+	g_mode_set = true;
 
 #if defined(CONFIG_BT_SMP)
 	/* A WASM app's GATT services are added dynamically and differ between
 	 * apps/boots. If the peer bonds, it caches this attribute table and will
 	 * not re-discover our service on later connections (the classic "service
 	 * not found" after a service was added). Disable bonding in app mode so
-	 * every connection re-discovers the current GATT. */
+	 * every connection re-discovers the current GATT; teardown restores it. */
 	bt_set_bondable(false);
+	g_bondable_off = true;
 #endif
 
 	ret = ble_app_svc_init();
+	akira_native_critical_exit(exec_env);
+
 	if (ret < 0) {
-		LOG_ERR("ble_init: svc_init failed: %d", ret);
+		BLE_WRN("ble_init: svc_init failed: %d", ret);
 		return ret;
 	}
 
 	g_adv_svc_handle = -1;
-	LOG_INF("BLE app mode initialised");
+	LOG_DBG("BLE app mode initialised");
 	return 0;
 }
 
@@ -85,12 +279,21 @@ int akira_native_ble_deinit(wasm_exec_env_t exec_env)
 {
 	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
-	bt_manager_stop_advertising();
-	ble_app_svc_deinit();
-	bt_manager_set_mode(BT_MODE_NONE);
-	g_adv_svc_handle = -1;
+	int ret = ble_owned(exec_env);
 
-	LOG_INF("BLE app mode released");
+	if (ret == -ENOENT) {
+		return 0; /* nothing set up: never touch another mode's state */
+	}
+	if (ret < 0) {
+		return ret;
+	}
+
+	akira_native_critical_enter(exec_env);
+	ble_teardown();
+	akira_native_critical_exit(exec_env);
+
+	atomic_set(&g_ble_owner, 0);
+	LOG_DBG("BLE app mode released");
 	return 0;
 }
 
@@ -102,17 +305,49 @@ int akira_native_ble_set_local_name(wasm_exec_env_t exec_env,
 	if (!name) {
 		return -EINVAL;
 	}
+	if (strnlen(name, BLE_NAME_MAX + 1) > BLE_NAME_MAX) {
+		return -ENOMEM; /* what bt_set_name() returns for a long name */
+	}
 
-#ifdef CONFIG_BT
-	int ret = bt_set_name(name);
+	int ret = ble_claim(exec_env);
 
 	if (ret < 0) {
-		LOG_ERR("bt_set_name failed: %d", ret);
 		return ret;
 	}
+
+#ifdef CONFIG_BT
+	/* bt_set_name() persists to flash on a prod build (BT_SETTINGS +
+	 * BT_DEVICE_NAME_DYNAMIC). Skip a rename to the current name, and
+	 * rate-limit changes so an app cannot wear out flash by spamming
+	 * renames. */
+	if (strcmp(name, bt_get_name()) == 0) {
+		return 0;
+	}
+
+	int64_t now = k_uptime_get();
+
+	if (g_last_name_ms != 0 && (now - g_last_name_ms) < BLE_NAME_MIN_INTERVAL_MS) {
+		return -EBUSY;
+	}
+
+	if (!g_name_changed) {
+		strncpy(g_saved_name, bt_get_name(), sizeof(g_saved_name) - 1);
+		g_saved_name[sizeof(g_saved_name) - 1] = '\0';
+	}
+
+	akira_native_critical_enter(exec_env);
+	ret = bt_set_name(name);
+	akira_native_critical_exit(exec_env);
+
+	if (ret < 0) {
+		BLE_WRN("bt_set_name failed: %d", ret);
+		return ret;
+	}
+	g_name_changed = true;
+	g_last_name_ms = now ? now : 1;
 #endif
 
-	LOG_INF("BLE local name set to \"%s\"", name);
+	LOG_DBG("BLE local name set to \"%s\"", name);
 	return 0;
 }
 
@@ -121,11 +356,20 @@ int akira_native_ble_service_create(wasm_exec_env_t exec_env,
 {
 	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
-	if (!uuid128_str) {
+	if (!uuid128_str || !uuid_str_ok(uuid128_str)) {
 		return -EINVAL;
 	}
 
-	return ble_app_svc_alloc(uuid128_str);
+	int ret = ble_claim(exec_env);
+
+	if (ret < 0) {
+		return ret;
+	}
+
+	akira_native_critical_enter(exec_env);
+	ret = ble_app_svc_alloc(uuid128_str);
+	akira_native_critical_exit(exec_env);
+	return ret;
 }
 
 int akira_native_ble_char_create(wasm_exec_env_t exec_env,
@@ -135,13 +379,22 @@ int akira_native_ble_char_create(wasm_exec_env_t exec_env,
 {
 	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
-	if (!uuid128_str || max_len <= 0) {
+	if (!uuid128_str || !uuid_str_ok(uuid128_str) ||
+	    max_len <= 0 || max_len > CONFIG_AKIRA_BLE_CHAR_MAX_LEN ||
+	    (props & ~BLE_PROP_ALL) != 0) {
 		return -EINVAL;
 	}
 
-	return ble_app_char_alloc(uuid128_str,
-				  (uint8_t)props,
-				  (uint16_t)max_len);
+	int ret = ble_claim(exec_env);
+
+	if (ret < 0) {
+		return ret;
+	}
+
+	akira_native_critical_enter(exec_env);
+	ret = ble_app_char_alloc(uuid128_str, (uint8_t)props, (uint16_t)max_len);
+	akira_native_critical_exit(exec_env);
+	return ret;
 }
 
 int akira_native_ble_service_add_char(wasm_exec_env_t exec_env,
@@ -149,20 +402,52 @@ int akira_native_ble_service_add_char(wasm_exec_env_t exec_env,
 {
 	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
-	return ble_app_svc_add_char(svc_h, char_h);
+	int ret = ble_owned(exec_env);
+
+	if (ret < 0) {
+		return ret;
+	}
+
+	akira_native_critical_enter(exec_env);
+	ret = ble_app_svc_add_char(svc_h, char_h);
+	akira_native_critical_exit(exec_env);
+	return ret;
 }
 
 int akira_native_ble_add_service(wasm_exec_env_t exec_env, int32_t svc_h)
 {
 	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
-	return ble_app_svc_register((int)svc_h);
+	int ret = ble_owned(exec_env);
+
+	if (ret < 0) {
+		return ret;
+	}
+	if (akira_runtime_stop_requested(exec_env)) {
+		return -ECANCELED;
+	}
+	if (!bucket_take(&g_db_bucket, BLE_DB_BURST, BLE_DB_PER_MIN)) {
+		BLE_WRN("ble_add_service: rate-limited");
+		return -EBUSY;
+	}
+
+	/* GATT DB change: GATT lock, settings write. */
+	akira_native_critical_enter(exec_env);
+	ret = ble_app_svc_register((int)svc_h);
+	akira_native_critical_exit(exec_env);
+	return ret;
 }
 
 int akira_native_ble_set_advertised_service(wasm_exec_env_t exec_env,
 					    int32_t svc_h)
 {
 	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
+
+	int ret = ble_claim(exec_env);
+
+	if (ret < 0) {
+		return ret;
+	}
 
 	g_adv_svc_handle = (int)svc_h;
 	LOG_DBG("Advertised service handle set to %d", g_adv_svc_handle);
@@ -173,25 +458,67 @@ int akira_native_ble_advertise(wasm_exec_env_t exec_env)
 {
 	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
+	int ret = ble_owned(exec_env);
+
+	if (ret < 0) {
+		return (ret == -ENOENT) ? -EINVAL : ret;
+	}
 	if (bt_manager_get_mode() != BT_MODE_BLE_APP) {
-		LOG_ERR("ble_advertise: not in BLE_APP mode (call ble_init first)");
+		BLE_WRN("ble_advertise: not in BLE_APP mode (call ble_init first)");
 		return -EINVAL;
 	}
+	if (akira_runtime_stop_requested(exec_env)) {
+		return -ECANCELED;
+	}
+	if (!bucket_take(&g_adv_bucket, BLE_ADV_BURST, BLE_ADV_PER_MIN)) {
+		return -EBUSY;
+	}
 
+	/* Copied by the stack: the UUID lives in the service pool, not in app
+	 * memory. */
 	const uint8_t *uuid128 = NULL;
 
 	if (g_adv_svc_handle >= 0) {
 		uuid128 = ble_app_svc_get_uuid128(g_adv_svc_handle);
 	}
 
-	return bt_manager_start_advertising_custom(uuid128);
+	/* Only an advert we started is ours to stop later. */
+	bool already = bt_manager_get_state() == BT_STATE_ADVERTISING;
+
+	akira_native_critical_enter(exec_env);
+	ret = bt_manager_start_advertising_custom(uuid128);
+	akira_native_critical_exit(exec_env);
+
+	if (ret == 0 && !already) {
+		g_adv_started = true;
+	}
+	return ret;
 }
 
 int akira_native_ble_stop_advertise(wasm_exec_env_t exec_env)
 {
 	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE, -EPERM);
 
-	return bt_manager_stop_advertising();
+	int ret = ble_owned(exec_env);
+
+	if (ret == -ENOENT) {
+		return 0;
+	}
+	if (ret < 0) {
+		return ret;
+	}
+	if (!g_adv_started) {
+		return 0; /* HID / companion adverts are not the app's to stop */
+	}
+	if (!bucket_take(&g_adv_bucket, BLE_ADV_BURST, BLE_ADV_PER_MIN)) {
+		return -EBUSY;
+	}
+
+	akira_native_critical_enter(exec_env);
+	ret = bt_manager_stop_advertising();
+	akira_native_critical_exit(exec_env);
+	g_adv_started = false;
+	return ret;
 }
 
 int akira_native_ble_is_connected(wasm_exec_env_t exec_env)
@@ -210,17 +537,32 @@ int akira_native_ble_char_write(wasm_exec_env_t exec_env,
 	if (len == 0) {
 		return -EINVAL;
 	}
+	if (len > CONFIG_AKIRA_BLE_CHAR_MAX_LEN) {
+		return -EMSGSIZE;
+	}
 
 	const uint8_t *data = (const uint8_t *)wasm_ptr_to_native(
 		exec_env, data_ptr, len);
 
 	if (!data) {
-		LOG_ERR("ble_char_write: invalid WASM pointer 0x%x len=%u",
+		BLE_WRN("ble_char_write: invalid WASM pointer 0x%x len=%u",
 			data_ptr, len);
 		return -EFAULT;
 	}
 
-	return ble_app_char_write((int)char_h, data, (uint16_t)len);
+	int ret = ble_owned(exec_env);
+
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* A notification waits for an ATT buffer inside the stack (holding a
+	 * connection reference): never abort the thread in there. The data is
+	 * copied into the slot and the buffer before this returns. */
+	akira_native_critical_enter(exec_env);
+	ret = ble_app_char_write((int)char_h, data, (uint16_t)len);
+	akira_native_critical_exit(exec_env);
+	return ret;
 }
 
 int akira_native_ble_char_read(wasm_exec_env_t exec_env,
@@ -236,11 +578,17 @@ int akira_native_ble_char_read(wasm_exec_env_t exec_env,
 	uint8_t *buf = (uint8_t *)wasm_ptr_to_native(exec_env, buf_ptr, len);
 
 	if (!buf) {
-		LOG_ERR("ble_char_read: invalid WASM pointer");
+		BLE_WRN("ble_char_read: invalid WASM pointer");
 		return -EFAULT;
 	}
 
-	return ble_app_char_read((int)char_h, buf, (uint16_t)len);
+	int ret = ble_owned(exec_env);
+
+	if (ret < 0) {
+		return ret;
+	}
+
+	return ble_app_char_read((int)char_h, buf, (uint16_t)MIN(len, UINT16_MAX));
 }
 
 int akira_native_ble_event_pop(wasm_exec_env_t exec_env,
@@ -257,6 +605,16 @@ int akira_native_ble_event_pop(wasm_exec_env_t exec_env,
 
 	if (!buf) {
 		return -EFAULT;
+	}
+
+	/* Only the owner reads the app layer's events. */
+	int ret = ble_owned(exec_env);
+
+	if (ret == -ENOENT) {
+		return BLE_EVT_NONE;
+	}
+	if (ret < 0) {
+		return ret;
 	}
 
 	struct ble_event evt;
@@ -278,16 +636,38 @@ int akira_native_ble_event_pop(wasm_exec_env_t exec_env,
 	buf[3] = (uint8_t)(evt.data_len >> 8);
 
 	if (evt.data_len > 0) {
-		uint16_t copy = (uint16_t)(len - 4);
+		size_t copy = MIN((size_t)(len - 4), (size_t)evt.data_len);
 
-		if (evt.data_len < copy) {
-			copy = evt.data_len;
-		}
+		copy = MIN(copy, sizeof(evt.data));
 		memcpy(buf + 4, evt.data, copy);
 	}
 
 	return evt_type;
 }
+
+/* ------------------------------------------------------------------ */
+/* App teardown                                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Only the owner's BLE state is torn down — another app's advert and
+ * services survive this app's exit. Idempotent: ownership is cleared last,
+ * and a second call finds nothing owned.
+ */
+static void ble_release(int slot, const char *app_name)
+{
+	ARG_UNUSED(app_name);
+
+	if (slot < 0 || atomic_get(&g_ble_owner) != (atomic_val_t)slot + 1) {
+		return;
+	}
+
+	ble_teardown();
+	atomic_set(&g_ble_owner, 0);
+	LOG_INF("BLE released for app slot %d", slot);
+}
+
+AKIRA_APP_RESOURCE_DEFINE(ble, 50, NULL, ble_release);
 
 #else /* !CONFIG_AKIRA_WASM_BLE */
 

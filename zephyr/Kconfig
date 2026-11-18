@@ -35,6 +35,9 @@ config AKIRA_TOUCH_XPT2046
 config AKIRA_WASM_RUNTIME
     bool "Enable WebAssembly runtime (WAMR)"
     default n
+    # Without PSRAM, the app-allocation heap reserve reads the system heap's
+    # free bytes (AKIRA_WASM_APP_HEAP_RESERVE_KB).
+    select SYS_HEAP_RUNTIME_STATS if !AKIRA_PSRAM
     help
       Enable the unified Akira WAMR-based runtime. When enabled, Akira will
       build and link the wasm-micro-runtime (WAMR) and register native APIs.
@@ -63,14 +66,63 @@ config WAMR_AOT_SUPPORT
 
 config AKIRA_WAMR_MINI_LOADER
     bool "Build WAMR's mini loader (skips WASM module validation)"
-    default y if !AKIRA_RELEASE_BUILD
+    default n
     depends on AKIRA_WASM_RUNTIME
     help
       The mini loader saves about 20-30 KB of flash by skipping WAMR's module
-      validation. It assumes every binary is well formed, which only holds when
-      every app is authenticated (AKIRA_REQUIRE_SIGNED_APPS=y). Off by default
-      in release builds; the release checks fail if it is on without
-      AKIRA_REQUIRE_SIGNED_APPS.
+      validation. The SHA-256 integrity check proves a file was not altered,
+      not that its bytecode is well formed: a crafted or corrupt module can
+      then drive the interpreter outside the sandbox and crash the system.
+      Only for flash-starved boards that run nothing but authenticated apps
+      (AKIRA_REQUIRE_SIGNED_APPS=y); the release checks fail if it is on
+      without that.
+
+config AKIRA_WASM_STACK_GUARD_SIZE
+    int "Native stack kept free below a WASM app's stack (bytes)"
+    default 3072
+    range 1024 8192
+    depends on AKIRA_WASM_RUNTIME
+    help
+      WAMR raises "native stack overflow" in the app once its thread has less
+      than this left, so deep recursion stops the app with room to spare for
+      the native call it was making (display, storage, ...) instead of
+      overrunning the stack. Must stay well below AKIRA_WASM_APP_STACK_SIZE.
+
+config AKIRA_WASM_APP_MEM_LIMIT_KB
+    int "Most memory one running app may make WAMR allocate (KB)"
+    default 2048 if AKIRA_PSRAM
+    default 1024
+    range 64 65536
+    depends on AKIRA_WASM_RUNTIME
+    help
+      Counts what WAMR allocates while the app runs: its instance, linear
+      memory, WASM stack and every memory.grow. Past the limit the allocation
+      fails (the app's memory.grow returns -1, or the app traps) instead of
+      draining the heap the system needs. With PSRAM these allocations never
+      fall back to internal SRAM, whatever the limit; without PSRAM,
+      AKIRA_WASM_APP_HEAP_RESERVE_KB keeps part of the system heap free. The
+      largest known app (a Game Boy emulator with its ROM) declares 1.6 MB of
+      linear memory.
+
+config AKIRA_WASM_APP_HEAP_RESERVE_KB
+    int "System heap kept free from app allocations, boards without PSRAM (KB)"
+    default 32
+    range 0 1024
+    depends on AKIRA_WASM_RUNTIME && !AKIRA_PSRAM
+    help
+      Without PSRAM, apps' linear memory and other allocations an app
+      controls come from the system heap that drivers and the network stack
+      also use. Such an allocation is refused if it would leave less than
+      this much of the heap free.
+
+config AKIRA_SANDBOX_SELFTEST
+    bool "Test native that crashes on purpose (selftest_fault)"
+    default n
+    depends on AKIRA_WASM_RUNTIME && AKIRA_WASM_API && !AKIRA_RELEASE_BUILD
+    help
+      Registers selftest_fault(kind) for WASM apps: a kernel oops, a NULL
+      write or runaway recursion in the app's own thread. Used to prove that
+      a crashing app is stopped while the system keeps running. Never ship it.
 
 config AKIRA_RUNTIME_CUSTOM
     bool "Enable Akira unified custom runtime (Minimalist)"
@@ -862,8 +914,8 @@ endif # AKIRA_MQTT
 menuconfig AKIRA_SYNC
     bool "AkiraSync distributed ordering and fair timestamps"
     default n
-    select TINYCRYPT
-    select TINYCRYPT_SHA256
+    select MBEDTLS
+    select MBEDTLS_SHA256
     help
       Leaderless agreement on a single event order and a single clock across
       a small group of devices, with no server and no vote messages. Events
@@ -2046,7 +2098,8 @@ config AKIRA_ED25519
     select MBEDTLS_SHA512
     help
       Ed25519 signature verification (include/akira_ed25519.h), used by the
-      baseline app signature check and available to products.
+      baseline app signature check and available to products, and the
+      signing the WASM crypto API uses (AKIRA_WASM_CRYPTO_ED25519).
 
 config AKIRA_REQUIRE_SIGNED_APPS
     bool "Refuse apps that no signature check attested"
@@ -2091,14 +2144,26 @@ config AKIRA_HARDEN_UNATTESTED_APPS
     help
       An app is attested when an admission provider trusts its signature:
       the baseline check (AKIRA_APP_PUBKEY) or a product/AkiraPlatform
-      provider. When this option is set, an unattested app:
-      - is never granted a privileged capability (AKIRA_CAP_PRIVILEGED, or a
-        product capability flagged AKIRA_CAPABILITY_PRIVILEGED), whatever
-        AKIRA_UNSIGNED_APP_CAP_MASK allows;
-      - is refused if its binary is AOT. An AOT file is native machine code
-        and the loader cannot tell whether wamrc produced it, so WAMR's bounds
-        checks do not confine an AOT file from an untrusted source.
-      On by default in release builds.
+      provider. When this option is set, an unattested app is never granted
+      a privileged capability (AKIRA_CAP_PRIVILEGED, or a product capability
+      flagged AKIRA_CAPABILITY_PRIVILEGED), whatever
+      AKIRA_UNSIGNED_APP_CAP_MASK allows. On by default in release builds.
+      Unattested AOT binaries are a separate choice:
+      AKIRA_REFUSE_UNATTESTED_AOT.
+
+config AKIRA_REFUSE_UNATTESTED_AOT
+    bool "Refuse AOT binaries that no signature verifier has attested"
+    default n
+    help
+      An AOT file is native machine code. The loader cannot tell whether
+      wamrc produced it, so WAMR's bounds checks only confine an AOT file
+      whose source you trust: a hand-crafted one can read and write any
+      memory and take over the device.
+
+      Off by default, in release builds too: installing an unattested AOT
+      app is the user's choice and the user's risk. It still loads with a
+      warning in the log and an audit record. Set this to run AOT only for
+      attested apps (interpreted WASM is unaffected).
 
 config AKIRA_SHELL_DEBUG_COMMANDS
     bool "Shell commands that read arbitrary memory"
@@ -2397,8 +2462,9 @@ config AKIRA_NET_MAX_STREAMS
     depends on AKIRA_WASM_NET
     help
       Number of simultaneous TCP/UDP socket slots available.
-      Each slot uses a small amount of SRAM for metadata.
-      Actual data buffers live in WASM linear memory (PSRAM).
+      The stream table lives in PSRAM where available; data rings live in
+      WASM linear memory. With more than one app slot, one app may hold all
+      stream slots but one.
 
 config AKIRA_NET_POLL_STACK_SIZE
     int "Network poll thread stack size (bytes)"
@@ -2407,8 +2473,7 @@ config AKIRA_NET_POLL_STACK_SIZE
     depends on AKIRA_WASM_NET
     help
       Stack size of the internal poll thread that drives all sockets.
-      The stack must accommodate a per-call RX buffer of
-      CONFIG_AKIRA_NET_MAX_MSG_SIZE bytes.
+      Its receive and send buffers are static, not on this stack.
 
 config AKIRA_NET_EVENT_QUEUE_DEPTH
     int "Network event queue depth (messages)"
@@ -2618,13 +2683,33 @@ config AKIRA_WASM_TIMER_MAX_HANDLES
       Maximum number of simultaneously active timer handles across all WASM apps.
       Each handle uses ~20 bytes of static RAM.
 
+config AKIRA_WASM_GPIO_APP_PINS
+    hex "GPIO pins WASM apps may use (bit n = GPIO n)"
+    default 0xffffffffffffffff
+    depends on AKIRA_WASM_API && GPIO
+    help
+      Per-board allowlist for gpio_configure/gpio_read/gpio_write from WASM
+      apps (pin numbering: 0-31 = gpio0, 32+ = gpio1). Whatever this is set
+      to, pins the devicetree gives the system (any okay node's gpios,
+      cs-gpios, int-gpios, irq-gpios, enable-gpios, dc-gpios, reset-gpios,
+      busy-gpios and every pinctrl-0 pad), SoC-reserved pins (ESP32-S3
+      flash/PSRAM GPIO26-37, USB GPIO19/20, UART0 GPIO43/44) and the ESP32-S3
+      strapping pins GPIO45/46 are always refused. App manifests are
+      self-declared, so this, not the gpio capability, is what keeps an app
+      off the system's pins. Boards should list exactly their free header
+      pins. An app may read or write only pins it configured; they are
+      disconnected when it ends.
+
 config AKIRA_WASM_UART
     bool "Export UART API to WASM"
     default n
     depends on AKIRA_WASM_API && SERIAL
     help
       Export UART read/write functions to WASM applications.
-      UART0 (shell/log) is reserved; WASM apps access UART1+.
+      A UART the system uses (the chosen console, shell, Bluetooth or mcumgr
+      UART, or one with a device node) is refused. A port belongs to the app
+      that opened it and is closed when the app ends; uart_write() sends at
+      most 4096 bytes or ~250 ms of wire time per call.
       Requires AKIRA_CAP_UART capability in the app manifest.
 
 config AKIRA_WASM_UART_RX_BUF_SIZE
@@ -2644,6 +2729,9 @@ config AKIRA_WASM_I2C
     help
       Export raw I2C register read/write functions to WASM applications.
       Stateless API: WASM passes bus_id + device address + register per call.
+      Addresses of the bus's devicetree children (any status), the reserved
+      ranges 0x00-0x07 and 0x78-0x7F and, on AkiraConsole Prod, the
+      LP5817/SE050/STC3115 are refused.
       Requires AKIRA_CAP_I2C capability in the app manifest.
 
 config AKIRA_WASM_PWM
@@ -2653,6 +2741,10 @@ config AKIRA_WASM_PWM
     help
       Export PWM channel control to WASM applications.
       Provides pwm_set(channel, freq_hz, duty_pct) and pwm_disable(channel).
+      Only LEDC channels defined in the devicetree are served, and only if no
+      okay node uses them (or their LEDC timer) through "pwms" and
+      AKIRA_WASM_GPIO_APP_PINS allows their pad. Channels an app leaves
+      running are stopped when it ends.
       Requires AKIRA_CAP_PWM capability in the app manifest.
 
 config AKIRA_WASM_ADC
@@ -2693,6 +2785,18 @@ config AKIRA_WASM_ADC_VREF_MV
       Reference voltage used by adc_read_mv() for raw-to-millivolt conversion.
       Set to the board's actual VREF (e.g. 3300 for 3.3 V, 1800 for 1.8 V).
 
+config AKIRA_WASM_ADC_CHANNEL_MASK
+    hex "ADC channels WASM apps may read (bit n = channel n)"
+    default 0xffff
+    depends on AKIRA_WASM_ADC
+    help
+      Per-board allowlist of akira-adc channels. Setting up a channel turns
+      its pad into an analog input (on ESP32 the driver disconnects the
+      GPIO), so a channel whose pad is a bus or chip-select line takes that
+      bus down on the first read. List only channels wired to analog inputs.
+      On ESP32-S3 a channel whose pad is a system pin (see
+      AKIRA_WASM_GPIO_APP_PINS) is refused regardless of this mask.
+
 config AKIRA_WDT
     bool "AkiraOS system watchdog"
     default n
@@ -2729,8 +2833,9 @@ config AKIRA_WASM_WDT
     default n
     depends on AKIRA_WASM_API && AKIRA_WDT
     help
-      Allows WASM apps to manually pet/feed the system watchdog via wdt_pet().
-      Useful for apps that want to signal liveness to the hardware watchdog.
+      Exports wdt_pet() to WASM apps. It never feeds the hardware watchdog:
+      an app could otherwise keep a wedged system from being reset. It returns
+      0 while the system watchdog is active, -ENODEV otherwise.
       Requires AKIRA_CAP_WDT capability ("wdt") in the app manifest.
 
 config AKIRA_WASM_STORAGE
@@ -2757,6 +2862,27 @@ config AKIRA_WASM_STORAGE_MAX_FDS
       Global limit on open storage file descriptors across all running WASM
       apps.  Each descriptor holds a Zephyr struct fs_file_t (~48 bytes).
 
+config AKIRA_WASM_STORAGE_MAX_FILES_PER_APP
+    int "Storage files one app may keep open"
+    default 2
+    range 1 8
+    depends on AKIRA_WASM_STORAGE
+    help
+      LittleFS has only a few file slots for the whole system; this keeps
+      one app from holding them all. All apps together, through both the
+      storage and FS APIs, leave the OS two of the filesystem's file slots.
+      An app's files are closed when it stops.
+
+config AKIRA_WASM_STORAGE_QUOTA_BYTES
+    int "Largest file an app may write through the storage API (bytes)"
+    default 262144
+    depends on AKIRA_WASM_STORAGE
+    help
+      A write that would grow a file past this returns -ENOSPC. Writes,
+      creates and mkdir that would leave less than a quarter of the volume
+      (64 KB to 8 MB) free also return -ENOSPC, so apps can't fill the
+      filesystem the OS and installed apps live on.
+
 config AKIRA_WASM_FS
     bool "Export rich POSIX-like filesystem API to WASM"
     default n
@@ -2776,18 +2902,35 @@ config AKIRA_WASM_FS_MAX_FDS
       Global limit on open file descriptors for the FS API (independent of
       AKIRA_WASM_STORAGE_MAX_FDS).
 
+config AKIRA_WASM_FS_MAX_FILES_PER_APP
+    int "FS files one app may keep open"
+    default 2
+    range 1 8
+    depends on AKIRA_WASM_FS
+    help
+      Keeps one app from holding every file slot. All apps together, through
+      both the storage and FS APIs, leave the OS two of the filesystem's file
+      slots. An app's files are closed when it stops.
+
+config AKIRA_WASM_FS_QUOTA_BYTES
+    int "Largest file an app may write through the FS API (bytes)"
+    default 262144
+    depends on AKIRA_WASM_FS
+    help
+      A write that would grow a file past this returns -ENOSPC. Writes,
+      creates and mkdir that would leave less than a quarter of the volume
+      (64 KB to 8 MB) free also return -ENOSPC.
+
 config AKIRA_WASM_CRYPTO
     bool "Export cryptographic operations to WASM"
     default n
     depends on AKIRA_WASM_API
-    select TINYCRYPT
-    select TINYCRYPT_SHA256
-    select TINYCRYPT_AES
-    select TINYCRYPT_CBC_MODE
-    select TINYCRYPT_HMAC
+    select MBEDTLS
+    select MBEDTLS_SHA256
+    select MBEDTLS_CIPHER_AES_ENABLED
     help
-      Expose SHA-256, AES-256-CBC, HMAC-SHA256 and random_bytes to WASM.
-      Capability: "crypto" (bit 28).
+      Expose SHA-256, AES-256-CBC, AES-256-CTR, HMAC-SHA256 and random
+      bytes to WASM, on mbedTLS. Capability: "crypto" (bit 28).
       Key material is zeroed in memory after each operation.
 
 config AKIRA_WASM_CRYPTO_MAX_INPUT
@@ -2800,13 +2943,14 @@ config AKIRA_WASM_CRYPTO_MAX_INPUT
       Operations exceeding this limit return -EMSGSIZE.
 
 config AKIRA_WASM_CRYPTO_ED25519
-    bool "Ed25519 sign/verify in the WASM crypto API"
+    bool "Ed25519 key generation and signing in the WASM crypto API"
     default n
     depends on AKIRA_WASM_CRYPTO
+    select AKIRA_ED25519
     help
-      Add Ed25519 (PureEdDSA) sign/verify to the WASM crypto API. Requires a
-      PSA crypto provider with PSA_WANT_ALG_PURE_EDDSA; when disabled the
-      Ed25519 entry points compile to a -ENOTSUP stub.
+      Add Ed25519 (RFC 8032 PureEdDSA) crypto_ed25519_keygen and
+      crypto_ed25519_sign to the WASM crypto API, on the in-tree Ed25519
+      code (src/lib/crypto/ed25519). When disabled they return -ENOTSUP.
 
 config AKIRA_WASM_RTC
     bool "Export real-time clock API to WASM"

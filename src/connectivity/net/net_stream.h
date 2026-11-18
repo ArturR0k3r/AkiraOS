@@ -11,8 +11,8 @@
  * @brief Stream-based TCP/UDP network API for WASM apps.
  *
  * Data path uses a **shared-memory ring buffer** living in WASM linear memory:
- *   - TX ring: WASM writes packets, the poll thread drains them via zsock_send().
- *   - RX ring: the poll thread fills it from zsock_recv(), WASM reads from it.
+ *   - TX ring: WASM writes packets, the poll thread drains them.
+ *   - RX ring: the poll thread fills it from the socket, WASM reads from it.
  *
  * Only net_tx_flush() / net_event_pop() require a WASM→host context switch.
  * Bulk data never does — it flows through the ring without any syscall per packet.
@@ -21,14 +21,24 @@
  *
  *   Offset  0 (u32) : write_idx   — producer increments after writing
  *   Offset  4 (u32) : read_idx    — consumer increments after reading
- *   Offset  8 (u32) : capacity    — data area size, set by host on bind; read-only after
+ *   Offset  8 (u32) : capacity    — data area size, written by the host on bind
  *   Offset 12 (u32) : flags       — reserved (set to 0)
  *   Offset 16+      : data area   — variable-length framed messages:
  *                                   [ len_lo ][ len_hi ][ payload bytes... ]
  *
  * Indices are monotonically increasing; actual byte offset = idx % capacity.
- * A 32-bit aligned read/write of write_idx / read_idx is atomically visible
- * on 32-bit MCUs (ESP32-S3, Cortex-M) and in WASM's linear memory model.
+ *
+ * The header lives in memory the app can write at any time, so the host
+ * never trusts it: the capacity is fixed at bind time (total_size - 16) and
+ * kept host-side, the host keeps its own copy of the index it produces/
+ * consumes (TX read_idx, RX write_idx) and only publishes it to the header,
+ * and every access is reduced modulo the stored capacity. A header that
+ * claims more bytes than the ring can hold just stalls that ring.
+ *
+ * Ownership: every stream belongs to the app slot that opened it (or that
+ * owns the listening stream it was accepted on). Calls on a handle another
+ * slot holds fail with -ENOENT, each slot has its own event queue, and
+ * net_stream_release_owner() closes everything a slot held when the app ends.
  * @stability experimental
  * @since 1.4
  */
@@ -53,6 +63,9 @@ extern "C" {
 /** @brief Size of the ring buffer header in bytes (must be kept in sync with WASM SDK) */
 #define NET_RING_HDR_SIZE  16
 
+/** @brief Longest hostname net_stream_connect() accepts (excluding the NUL). */
+#define NET_STREAM_HOST_MAX  63
+
 /** @brief Network event types returned by net_event_pop() */
 #define NET_EVT_NONE         0
 #define NET_EVT_CONNECTED    1  /**< TCP handshake complete (or UDP peer set)       */
@@ -66,11 +79,10 @@ extern "C" {
  * ======================================================================= */
 
 /**
- * @brief Ring buffer header that lives at the start of each WASM buffer.
+ * @brief Ring buffer header that lives at the start of each ring buffer.
  *
- * Both the host (C) and the WASM app access this struct at the same memory
- * location (the native pointer obtained from wasm_runtime_addr_app_to_native
- * points at the same bytes as the WASM app's buffer pointer).
+ * Documents the shared layout only: the host reads and writes these fields
+ * byte-wise when the buffer is unaligned, and never trusts capacity.
  */
 struct net_ring_hdr {
 	uint32_t write_idx;  /**< Producer advances this                    */
@@ -80,9 +92,9 @@ struct net_ring_hdr {
 } __packed;
 
 /**
- * @brief Network event placed into the k_msgq event queue.
+ * @brief Network event, as returned by net_stream_event_pop().
  *
- * Serialised into the WASM event buffer by net_stream_event_pop():
+ * Serialised into the WASM event buffer by the net_event_pop native:
  *   [0]   type   (uint8)
  *   [1]   handle (uint8)
  *   [2-3] extra  (uint16 LE)  — new handle for ACCEPT, errno for ERROR
@@ -95,118 +107,158 @@ struct net_event {
 
 /* =========================================================================
  * Public API (called from akira_net_api.c)
+ *
+ * @p owner is the calling app's slot (0..AKIRA_MAX_WASM_INSTANCES-1).
+ *
+ * None of these wait on the network: socket I/O and close are done by the
+ * poll thread, DNS and connect by the connect worker on the system
+ * workqueue. The only waits are bounded: a stream-table lock (-EBUSY if it
+ * cannot be had within a second) and net_stream_close(), which waits up to
+ * 200 ms for the socket to be closed.
  * ======================================================================= */
 
 /**
  * @brief Initialise the network stream subsystem and start the poll thread.
  *
- * Called once during runtime init. Safe to call again (no-op if already up).
+ * Idempotent and safe to call concurrently from any thread.
  *
  * @return 0 on success, negative errno on failure.
  */
 int net_stream_init(void);
 
 /**
- * @brief Open a new socket and allocate a stream slot.
+ * @brief Open a new socket and allocate a stream slot owned by @p owner.
  *
+ * When more than one app can run, one app may hold all slots but one.
+ *
+ * @param owner App slot.
  * @param type  NET_TYPE_TCP or NET_TYPE_UDP.
  * @return Stream handle (>=0) on success; negative errno on failure.
  */
-int net_stream_open(int type);
+int net_stream_open(int owner, int type);
 
 /**
- * @brief Initiate an async connect to @p host : @p port.
+ * @brief Queue an async connect to @p host : @p port.
  *
- * DNS resolution and connect() are dispatched to the system workqueue so
- * they do not block the calling WASM thread or the poll thread.
- * On completion, NET_EVT_CONNECTED or NET_EVT_ERROR is posted.
+ * DNS and connect run on the system workqueue, one connect at a time
+ * system-wide, in request order. DNS is bounded by
+ * CONFIG_NET_SOCKETS_DNS_TIMEOUT; the TCP connect is non-blocking and
+ * re-checked every 50 ms for up to 10 s, so the workqueue (which also feeds
+ * the watchdog) is never held for long. On completion NET_EVT_CONNECTED or
+ * NET_EVT_ERROR is posted to the owner's event queue.
  *
- * For UDP, zsock_connect() sets the default peer (no three-way handshake).
+ * For UDP, connect sets the default peer (no handshake).
  *
+ * @param owner   Owner of @p handle.
  * @param handle  Stream handle from net_stream_open().
- * @param host    Null-terminated hostname or dotted-decimal IPv4 string.
+ * @param host    Null-terminated hostname or dotted-decimal IPv4 string,
+ *                at most NET_STREAM_HOST_MAX characters.
  * @param port    Remote port (1–65535).
- * @return 0 if work was queued; negative errno on immediate error.
+ * @return 0 if queued; -ENOENT if @p handle is not @p owner's; -EALREADY if
+ *         already connecting/connected; -EINVAL if not connectable (listening,
+ *         failed or closed); -ENAMETOOLONG if @p host is too long.
  */
-int net_stream_connect(int handle, const char *host, uint16_t port);
+int net_stream_connect(int owner, int handle, const char *host, uint16_t port);
 
 /**
- * @brief Bind a socket to a local port.
+ * @brief Bind an unconnected socket to a local port.
  *
- * Required before net_stream_listen() for TCP servers, or for UDP servers
- * that need to receive datagrams on a specific port.
- *
+ * @param owner   Owner of @p handle.
  * @param handle  Stream handle.
- * @param port    Local port to bind (0 = let kernel choose).
+ * @param port    Local port to bind (0 = let the stack choose).
  * @return 0 on success; negative errno on failure.
  */
-int net_stream_bind(int handle, uint16_t port);
+int net_stream_bind(int owner, int handle, uint16_t port);
 
 /**
- * @brief Mark a TCP socket as listening for inbound connections.
+ * @brief Mark a bound TCP socket as listening for inbound connections.
  *
- * Must be called after net_stream_bind(). On each accepted connection the
- * poll thread allocates a new handle and posts NET_EVT_ACCEPT.
+ * On each accepted connection the poll thread allocates a new handle with the
+ * same owner and posts NET_EVT_ACCEPT (extra = new handle).
  *
+ * @param owner    Owner of @p handle.
  * @param handle   Stream handle (must be NET_TYPE_TCP).
- * @param backlog  Maximum length of the accept queue.
+ * @param backlog  Maximum length of the accept queue (clamped).
  * @return 0 on success; negative errno on failure.
  */
-int net_stream_listen(int handle, int backlog);
+int net_stream_listen(int owner, int handle, int backlog);
 
 /**
- * @brief Close a stream socket and free its slot.
+ * @brief Close a stream and free its slot.
  *
- * Any pending TX / RX ring data is discarded. The poll thread detects the
- * closure on its next iteration (POLLNVAL) and removes the fd from its set.
+ * The rings are detached immediately (the host never touches them again).
+ * The socket itself is closed by the poll thread; this call waits up to
+ * 200 ms for that so a following open can reuse the socket. If a connect is
+ * in flight it returns at once, and the socket is closed as soon as that
+ * connect step returns.
  *
+ * @param owner   Owner of @p handle.
  * @param handle  Stream handle.
- * @return 0 on success; negative errno on failure.
+ * @return 0 on success; -ENOENT if @p handle is not an open stream of @p owner.
  */
-int net_stream_close(int handle);
+int net_stream_close(int owner, int handle);
 
 /**
- * @brief Bind a TX ring buffer (living in WASM linear memory) to a stream.
+ * @brief Bind a TX ring buffer to a stream.
  *
- * @p native_ptr must be the native C pointer for the WASM buffer, obtained via
- * wasm_runtime_addr_app_to_native(). The first NET_RING_HDR_SIZE bytes are the
- * ring header; the host writes @p total_size - NET_RING_HDR_SIZE into hdr->capacity.
+ * The host writes the header (indices 0, capacity = @p total_size - 16) and
+ * keeps the capacity and its read index privately from then on.
  *
+ * @p native_ptr must stay valid and must not move until the stream is closed,
+ * re-bound or released. The WASM native ensures that (it refuses to bind
+ * rings in a linear memory that can still grow) and
+ * net_stream_release_owner() detaches the rings before the instance is freed.
+ *
+ * @param owner       Owner of @p handle.
  * @param handle      Stream handle.
- * @param native_ptr  Native pointer to the start of the WASM TX buffer.
+ * @param native_ptr  Native pointer to the start of the TX buffer (any alignment).
  * @param total_size  Total buffer size in bytes (must be > NET_RING_HDR_SIZE).
  * @return 0 on success; negative errno on failure.
  */
-int net_stream_tx_bind(int handle, uint8_t *native_ptr, uint32_t total_size);
+int net_stream_tx_bind(int owner, int handle, uint8_t *native_ptr, uint32_t total_size);
 
 /**
- * @brief Bind an RX ring buffer (living in WASM linear memory) to a stream.
- *
- * @param handle      Stream handle.
- * @param native_ptr  Native pointer to the start of the WASM RX buffer.
- * @param total_size  Total buffer size in bytes (must be > NET_RING_HDR_SIZE).
- * @return 0 on success; negative errno on failure.
+ * @brief Bind an RX ring buffer to a stream. Same rules as net_stream_tx_bind().
  */
-int net_stream_rx_bind(int handle, uint8_t *native_ptr, uint32_t total_size);
+int net_stream_rx_bind(int owner, int handle, uint8_t *native_ptr, uint32_t total_size);
 
 /**
- * @brief Drain the TX ring and send all pending messages immediately.
+ * @brief Ask the poll thread to drain the TX ring now.
  *
- * The poll thread drains the TX ring on each of its 10 ms iterations.
- * Call this function to force an immediate send without waiting.
+ * Sending is done by the poll thread only (non-blocking, partial sends
+ * resumed when the socket is writable); it drains every ring on each of its
+ * ≤10 ms iterations anyway, this just wakes it. Send errors arrive as
+ * NET_EVT_ERROR.
  *
+ * @param owner   Owner of @p handle.
  * @param handle  Stream handle.
- * @return Total bytes sent on success; negative errno on failure.
+ * @return 0 on success; -ENOTCONN if the stream is not connected; -ENOENT.
  */
-int net_stream_tx_flush(int handle);
+int net_stream_tx_flush(int owner, int handle);
 
 /**
- * @brief Pop the next network event from the event queue (non-blocking).
+ * @brief Pop the next event from @p owner's event queue (non-blocking).
  *
- * @param evt  Output: populated with the event data.
- * @return NET_EVT_* type (>0) if an event was available, 0 if the queue is empty.
+ * @param owner  App slot.
+ * @param evt    Output: populated with the event data.
+ * @return NET_EVT_* type (>0) if an event was available, NET_EVT_NONE if the
+ *         queue is empty, -EINVAL on bad arguments.
  */
-int net_stream_event_pop(struct net_event *evt);
+int net_stream_event_pop(int owner, struct net_event *evt);
+
+/**
+ * @brief Release everything app slot @p owner holds: close every stream it
+ *        owns, stop all use of its rings and drop its queued events.
+ *
+ * When this returns the host no longer touches any memory the app bound as a
+ * ring, so the WASM instance may be freed. Sockets are closed asynchronously
+ * by the poll thread. Never blocks for long: safe from the stopping thread,
+ * the system workqueue and the app's own thread. Idempotent; a no-op for a
+ * slot that owns nothing.
+ *
+ * @param owner App slot; other values are ignored.
+ */
+void net_stream_release_owner(int owner);
 
 #ifdef __cplusplus
 }

@@ -564,6 +564,18 @@ int hid_keyboard_type_string(const char *str)
     return 0;
 }
 
+hid_key_code_t hid_ascii_to_keycode(char c, uint8_t *modifier)
+{
+    uint8_t mod = 0;
+    hid_key_code_t key = ascii_to_keycode(c, &mod);
+
+    if (modifier)
+    {
+        *modifier = mod;
+    }
+    return key;
+}
+
 int hid_keyboard_send_report(const hid_keyboard_report_t *report)
 {
     if (!hid_mgr.initialized || !report)
@@ -829,39 +841,61 @@ typedef struct {
     uint8_t  modifier;
     uint8_t  keycode;
     bool     used;
+    int8_t   owner;    /**< registering app slot, or -1 for the system */
 } hid_action_entry_t;
+
+/* Any owner matches in find_action() (hid_action_trigger() for OS callers). */
+#define HID_ACTION_ANY_OWNER (-2)
 
 /* On PSRAM boards this lands in external RAM; otherwise in internal DRAM.
  * Keep CONFIG_AKIRA_HID_MAX_ACTIONS small (default 8) on non-PSRAM boards. */
 static hid_action_entry_t AKIRA_BULK_BSS g_hid_actions[CONFIG_AKIRA_HID_MAX_ACTIONS];
 static struct k_mutex g_hid_actions_mutex = Z_MUTEX_INITIALIZER(g_hid_actions_mutex);
 
+/* Index of @p owner's action @p name, or -1. Caller holds the table mutex. */
+static int find_action(const char *name, int owner)
+{
+    for (int i = 0; i < CONFIG_AKIRA_HID_MAX_ACTIONS; i++) {
+        if (g_hid_actions[i].used &&
+            (owner == HID_ACTION_ANY_OWNER || g_hid_actions[i].owner == owner) &&
+            strncmp(g_hid_actions[i].name, name, sizeof(g_hid_actions[i].name) - 1) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 int hid_action_register(const char *name, uint8_t modifier, uint8_t keycode)
 {
-    if (!name || name[0] == '\0') {
+    return hid_action_register_owned(name, modifier, keycode, -1);
+}
+
+int hid_action_register_owned(const char *name, uint8_t modifier, uint8_t keycode,
+                              int owner)
+{
+    if (!name || name[0] == '\0' || owner < -1 || owner > INT8_MAX) {
         return -EINVAL;
     }
 
     k_mutex_lock(&g_hid_actions_mutex, K_FOREVER);
 
-    /* Update existing entry if name matches */
-    for (int i = 0; i < CONFIG_AKIRA_HID_MAX_ACTIONS; i++) {
-        if (g_hid_actions[i].used &&
-            strncmp(g_hid_actions[i].name, name, sizeof(g_hid_actions[i].name) - 1) == 0) {
-            g_hid_actions[i].modifier = modifier;
-            g_hid_actions[i].keycode  = keycode;
-            k_mutex_unlock(&g_hid_actions_mutex);
-            return 0;
-        }
+    /* Update the owner's existing entry if the name matches */
+    int i = find_action(name, owner);
+    if (i >= 0) {
+        g_hid_actions[i].modifier = modifier;
+        g_hid_actions[i].keycode  = keycode;
+        k_mutex_unlock(&g_hid_actions_mutex);
+        return 0;
     }
 
     /* Find an empty slot */
-    for (int i = 0; i < CONFIG_AKIRA_HID_MAX_ACTIONS; i++) {
+    for (i = 0; i < CONFIG_AKIRA_HID_MAX_ACTIONS; i++) {
         if (!g_hid_actions[i].used) {
             strncpy(g_hid_actions[i].name, name, sizeof(g_hid_actions[i].name) - 1);
             g_hid_actions[i].name[sizeof(g_hid_actions[i].name) - 1] = '\0';
             g_hid_actions[i].modifier = modifier;
             g_hid_actions[i].keycode  = keycode;
+            g_hid_actions[i].owner    = (int8_t)owner;
             g_hid_actions[i].used     = true;
             k_mutex_unlock(&g_hid_actions_mutex);
             LOG_DBG("Action registered: '%s' mod=0x%02x key=0x%02x",
@@ -871,11 +905,13 @@ int hid_action_register(const char *name, uint8_t modifier, uint8_t keycode)
     }
 
     k_mutex_unlock(&g_hid_actions_mutex);
-    LOG_WRN("Action table full (max %d)", CONFIG_AKIRA_HID_MAX_ACTIONS);
+    /* App-triggerable: keep a full table from flooding the log. */
+    LOG_WRN_RATELIMIT("Action table full (max %d)", CONFIG_AKIRA_HID_MAX_ACTIONS);
     return -ENOMEM;
 }
 
-int hid_action_trigger(const char *name)
+/* Press the action's modifier + key, then release all. */
+static int trigger_action(const char *name, int owner, int fallback_owner)
 {
     if (!name || name[0] == '\0') {
         return -EINVAL;
@@ -883,25 +919,84 @@ int hid_action_trigger(const char *name)
 
     k_mutex_lock(&g_hid_actions_mutex, K_FOREVER);
 
-    for (int i = 0; i < CONFIG_AKIRA_HID_MAX_ACTIONS; i++) {
-        if (g_hid_actions[i].used &&
-            strncmp(g_hid_actions[i].name, name, sizeof(g_hid_actions[i].name)) == 0) {
-
-            uint8_t mod = g_hid_actions[i].modifier;
-            uint8_t key = g_hid_actions[i].keycode;
-            k_mutex_unlock(&g_hid_actions_mutex);
-
-            /* Press modifier + key, then release all */
-            hid_keyboard_set_modifiers(mod);
-            hid_keyboard_press(key);
-            hid_keyboard_release_all();
-            return 0;
-        }
+    int i = find_action(name, owner);
+    if (i < 0 && fallback_owner != owner) {
+        i = find_action(name, fallback_owner);
+    }
+    if (i < 0) {
+        k_mutex_unlock(&g_hid_actions_mutex);
+        LOG_DBG("Action not found: '%s'", name);
+        return -ENOENT;
     }
 
+    uint8_t mod = g_hid_actions[i].modifier;
+    uint8_t key = g_hid_actions[i].keycode;
     k_mutex_unlock(&g_hid_actions_mutex);
-    LOG_WRN("Action not found: '%s'", name);
-    return -ENOENT;
+
+    hid_keyboard_set_modifiers(mod);
+    hid_keyboard_press(key);
+    hid_keyboard_release_all();
+    return 0;
+}
+
+int hid_action_trigger(const char *name)
+{
+    return trigger_action(name, HID_ACTION_ANY_OWNER, HID_ACTION_ANY_OWNER);
+}
+
+int hid_action_trigger_owned(const char *name, int owner)
+{
+    return trigger_action(name, owner, -1);
+}
+
+void hid_action_unregister_owner(int owner)
+{
+    if (owner < 0) {
+        return; /* system actions are never dropped this way */
+    }
+
+    k_mutex_lock(&g_hid_actions_mutex, K_FOREVER);
+    for (int i = 0; i < CONFIG_AKIRA_HID_MAX_ACTIONS; i++) {
+        if (g_hid_actions[i].used && g_hid_actions[i].owner == owner) {
+            g_hid_actions[i].used = false;
+            g_hid_actions[i].name[0] = '\0';
+        }
+    }
+    k_mutex_unlock(&g_hid_actions_mutex);
+}
+
+/* A mutex whose owner thread is dead is handed to the caller and unlocked,
+ * so waiters get it as from a normal unlock. Touches k_mutex internals, so
+ * only on uniprocessor builds, where irq_lock() excludes the kernel. */
+static void recover_dead_owner(struct k_mutex *m, const char *what)
+{
+#ifdef CONFIG_SMP
+    ARG_UNUSED(m);
+    ARG_UNUSED(what);
+#else
+    k_tid_t self = k_current_get();
+    unsigned int key = irq_lock();
+
+    if (m->owner && m->owner != self &&
+        (m->owner->base.thread_state & _THREAD_DEAD) != 0U) {
+        m->owner = self;
+        m->lock_count = 1;
+        m->owner_orig_prio = k_thread_priority_get(self);
+        irq_unlock(key);
+        k_mutex_unlock(m);
+        LOG_WRN("HID: released %s lock held by a dead thread", what);
+        return;
+    }
+    irq_unlock(key);
+#endif
+}
+
+void hid_manager_recover_locks(void)
+{
+    if (hid_mgr.initialized) {
+        recover_dead_owner(&hid_mgr.mutex, "manager");
+    }
+    recover_dead_owner(&g_hid_actions_mutex, "action table");
 }
 /*===========================================================================*/
 

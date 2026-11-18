@@ -42,11 +42,13 @@ target_sources(app PRIVATE
     ${AKIRA_SRC}/connectivity/ota/ota_manager.c
     ${AKIRA_SRC}/runtime/akira_boot_guard.c
     ${AKIRA_SRC}/runtime/akira_hooks.c
+    ${AKIRA_SRC}/runtime/app_resources.c
     ${AKIRA_SRC}/runtime/security/akira_admission.c
     ${AKIRA_SRC}/runtime/security/akira_net_policy.c
     ${AKIRA_SRC}/runtime/security/app_signature_baseline.c
     ${AKIRA_SRC}/lib/crypto/ed25519/curve25519.c
     ${AKIRA_SRC}/lib/crypto/ed25519/akira_ed25519.c
+    ${AKIRA_SRC}/lib/crypto/ed25519/ed25519_sign.c
 
     # Stubs
     stubs/stub_mcuboot.c
@@ -69,6 +71,8 @@ target_sources(app PRIVATE
     src/test_mqtt_ha.c
     src/test_display_clip.c
     src/test_admission.c
+    src/test_app_resources.c
+    src/test_ed25519_sign.c
 )
 
 # The baseline app signature provider reads CONFIG_AKIRA_APP_PUBKEY, which

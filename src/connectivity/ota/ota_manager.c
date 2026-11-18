@@ -1192,7 +1192,8 @@ enum ota_result ota_register_progress_callback(ota_progress_cb_t callback, void 
 
 bool ota_is_update_in_progress(void)
 {
-    return (ota_status.state == OTA_STATE_RECEIVING ||
+    return (ota_status.state == OTA_STATE_IN_PROGRESS ||
+            ota_status.state == OTA_STATE_RECEIVING ||
             ota_status.state == OTA_STATE_VALIDATING ||
             ota_status.state == OTA_STATE_INSTALLING);
 }

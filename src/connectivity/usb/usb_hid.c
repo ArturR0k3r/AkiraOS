@@ -843,9 +843,12 @@ static int usb_hid_transport_disable(void)
 
     LOG_INF("Disabling USB HID transport");
 
+    /* interface_ready is the host's state, set only by its iface_ready
+     * callback; the device stays enumerated, so clearing it here left USB
+     * HID dead after a disable/enable (or an app's transport switch) until
+     * the cable was replugged. */
     k_mutex_lock(&usb_hid_ctx.mutex, K_FOREVER);
     usb_hid_ctx.enabled = false;
-    usb_hid_ctx.interface_ready = false;
     k_mutex_unlock(&usb_hid_ctx.mutex);
 
     LOG_INF("USB HID transport disabled");
@@ -922,7 +925,7 @@ static int usb_hid_transport_send_keyboard(const hid_keyboard_report_t *report)
         return ret;
     }
 
-    LOG_INF("Sent keyboard report: mod=0x%02x keys=[%02x %02x %02x %02x %02x %02x]",
+    LOG_DBG("Sent keyboard report: mod=0x%02x keys=[%02x %02x %02x %02x %02x %02x]",
             report->modifiers,
             report->keys[0], report->keys[1], report->keys[2],
             report->keys[3], report->keys[4], report->keys[5]);
@@ -992,7 +995,7 @@ static int usb_hid_transport_send_mouse(const hid_mouse_report_t *report)
         return ret;
     }
 
-    LOG_INF("Sent mouse report: buttons=0x%02x dx=%d dy=%d wheel=%d",
+    LOG_DBG("Sent mouse report: buttons=0x%02x dx=%d dy=%d wheel=%d",
             report->buttons, report->dx, report->dy, report->wheel);
 
     /* Semaphore will be released in input_report_done callback */
@@ -1054,7 +1057,7 @@ static int usb_hid_transport_send_gamepad(const hid_gamepad_report_t *report)
         return ret;
     }
 
-    LOG_INF("Sent gamepad report: buttons=0x%04x hat=%u",
+    LOG_DBG("Sent gamepad report: buttons=0x%04x hat=%u",
             report->buttons, report->hat);
 
     /* Semaphore will be released in input_report_done callback */

@@ -9,6 +9,12 @@
  *
  * All exported functions require AKIRA_CAP_HID in the app manifest.
  *
+ * Whatever an app leaves pressed or changed is undone when it ends, however
+ * it ends: keys, modifiers, gamepad, mouse buttons and consumer usage are
+ * released, its named actions dropped, queued raw/FIDO OUT reports purged,
+ * and once no running app has changed the transport, device types or
+ * enable state, the system's configuration is restored.
+ *
  * Manifest entry:  "capabilities": ["hid"]
  * @stability experimental
  * @since 1.4
@@ -34,6 +40,8 @@ int akira_native_hid_is_connected(wasm_exec_env_t exec_env);
 int akira_native_hid_key_press(wasm_exec_env_t exec_env, int32_t keycode);
 int akira_native_hid_key_release(wasm_exec_env_t exec_env, int32_t keycode);
 int akira_native_hid_key_release_all(wasm_exec_env_t exec_env);
+/** Types @p str (at most HID_TYPE_STRING_MAX = 256 characters, -E2BIG beyond;
+ *  ~20 ms per character).  Returns -EINTR if the app is stopped meanwhile. */
 int akira_native_hid_type_string(wasm_exec_env_t exec_env, const char *str);
 int akira_native_hid_set_modifiers(wasm_exec_env_t exec_env, int32_t mod_mask);
 
@@ -88,6 +96,8 @@ int akira_native_hid_fido_send(wasm_exec_env_t exec_env,
                                 uint32_t buf_ptr, uint32_t len);
 
 /* ── Named action registry ────────────────────────────────────────────────── */
+/* Actions belong to the registering app: an app triggers its own actions (or
+ * system ones), never rebinds or triggers another app's. */
 int akira_native_hid_action_register(wasm_exec_env_t exec_env,
                                      const char *name,
                                      int32_t modifier,
@@ -99,7 +109,8 @@ int akira_native_hid_action_trigger(wasm_exec_env_t exec_env, const char *name);
 int akira_native_hid_set_transport(wasm_exec_env_t exec_env, int32_t transport);
 
 /** @brief Set device type bitmask before enabling HID (KEYBOARD=1, GAMEPAD=2,
- *         MOUSE=4). Returns -EBUSY if HID is already enabled. Requires HID cap. */
+ *         MOUSE=4; 1..7, else -EINVAL). Returns -EBUSY if HID is already
+ *         enabled. Requires HID cap. */
 int akira_native_hid_set_device_types(wasm_exec_env_t exec_env, int32_t types);
 
 /** @brief One-shot setup: set transport + device types + enable.

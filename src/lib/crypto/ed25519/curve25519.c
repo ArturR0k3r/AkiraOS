@@ -47,6 +47,12 @@
 #define X25519                      akira_fiat_x25519
 #define x25519_ge_frombytes_vartime akira_fiat_ge_frombytes_vartime
 #define x25519_sc_reduce            akira_fiat_sc_reduce
+#define x25519_ge_tobytes           akira_fiat_ge_tobytes
+#define x25519_ge_p3_to_cached      akira_fiat_ge_p3_to_cached
+#define x25519_ge_p1p1_to_p2        akira_fiat_ge_p1p1_to_p2
+#define x25519_ge_p1p1_to_p3        akira_fiat_ge_p1p1_to_p3
+#define x25519_ge_add               akira_fiat_ge_add
+#define x25519_ge_sub               akira_fiat_ge_sub
 
 #include "curve25519.h"
 // Various pre-computed constants.

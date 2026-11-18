@@ -84,6 +84,34 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`.bin`/`.signed.bin`, `.uf2` for Pico, `.hex`, `.elf`, a per-board SBOM and
   `SHA256SUMS`). ESP boards and the nRF/Pico boards no longer collide on one
   `zephyr.bin`. `west akira release` now also collects `.uf2` and `.hex`.
+- `feat(runtime)!`: No WASM app can crash or hang the system
+  ([App Containment](docs/architecture/app-containment.md)).
+  - A CPU fault or `k_oops()` in an app's thread, including inside a native, stops only that
+    app; the slot is reclaimed and the app is reported crashed. A fault inside a lock-holding
+    native parks the slot until reboot instead of running cleanup that could block on the
+    lost lock. Stack overflows are contained only with a hardware stack guard. Every fatal
+    handler (default, `AKIRA_PANIC`, boot guard) asks the runtime first.
+  - Stopping an app wakes every wait it can be in, aborts a thread still spinning in WASM
+    after 1.5 s, and never aborts one inside a lock-holding native critical section (the stop
+    returns `-EBUSY` instead). An aborted app's slot is freed (it used to leak a runtime slot
+    per abort), and a stop never touches a slot that was reused while it waited.
+  - `include/akira_app_containment.h`: `AKIRA_APP_RESOURCE_DEFINE()` release hooks run on every
+    exit path before the app's memory is freed; `akira_runtime_sleep()`,
+    `akira_native_critical_enter/exit()` and `akira_runtime_stop_requested()` for natives,
+    product natives included.
+  - WAMR memory allocated by a running app is capped (`CONFIG_AKIRA_WASM_APP_MEM_LIMIT_KB`) and,
+    with PSRAM, never falls back to internal SRAM.
+  - WAMR validates every module (`CONFIG_AKIRA_WAMR_MINI_LOADER` now defaults to `n`); 3 KB
+    native stack guard (`CONFIG_AKIRA_WASM_STACK_GUARD_SIZE`).
+  - Every native API audited: full-length pointer checks, bounded and stop-aware waits,
+    per-app ownership of streams, files, timers, pins, radios, BLE, HID, alarms, model handles
+    and subscriptions, released when the app ends; rate-limited app output and warnings.
+  - `CONFIG_AKIRA_SANDBOX_SELFTEST` adds `selftest_fault()` to test it (refused in release
+    builds).
+- `feat(api)`: `crypto_ed25519_keygen()` and `crypto_ed25519_sign()` work
+  (`CONFIG_AKIRA_WASM_CRYPTO_ED25519`). They used PSA, which mbedTLS doesn't implement for
+  EdDSA, so they could only fail; signing now runs on the in-tree Ed25519 code
+  (`src/lib/crypto/ed25519/ed25519_sign.c`, checked against RFC 8032 vectors).
 
 ---
 
@@ -95,6 +123,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   longer need an embedded manifest to be attested.
 - `fix(ota)`: `ota_manager_init()` runs whenever OTA is built (MCUboot + flash map), not only
   with the HTTP server, so release builds (`HTTP_SERVER=n`) can update.
+- `feat(api)!`: Fixed rules for app access to shared hardware and data, whatever the manifest
+  asks for:
+  - GPIO: `CONFIG_AKIRA_WASM_GPIO_APP_PINS` minus every devicetree, chip-reserved and strapping
+    pin; an app reads and writes only pins it configured. AkiraConsole Prod: GPIO39/40.
+  - ADC: `CONFIG_AKIRA_WASM_ADC_CHANNEL_MASK`, system pads refused. AkiraConsole Prod's app ADC
+    moves to SAR ADC1 channel 1 (the pot): SAR ADC2's channels are the SPI2 and SD pins.
+  - I2C: system device addresses refused. UART: system UARTs refused, writes bounded. PWM:
+    only channels no system node uses. `wdt_pet()` no longer feeds the hardware watchdog.
+  - Files: 2 open per app, per-file quota, a quarter of the volume kept free, 4 KB chunked I/O.
+  - Settings: each app has a private namespace (keys saved under the old global names are no
+    longer visible to apps); OS keys are out of reach.
+  - Power: apps can't select light sleep, deep sleep or hibernate. OTA: apps can't confirm an
+    image.
+  - `app_start()`, `app_stop()`, `app_install_from_sd()` are queued and rate-limited.
+- `fix(api)!`: Native signatures that didn't match their C functions: `app_check_update`
+  `(*~)i`; `matter_commission`, `matter_send`, `matter_subscribe` and `matter_poll` now match
+  the SDK.
+- `fix(log)`: AkiraConsole Prod logs in deferred mode, so a thread aborted while logging holds
+  no console lock.
+- `feat(security)!`: Unattested AOT apps load in every build, release included, with a
+  warning and an audit record: running one is the user's choice and risk.
+  `CONFIG_AKIRA_HARDEN_UNATTESTED_APPS` now only withholds privileged capabilities; the new
+  `CONFIG_AKIRA_REFUSE_UNATTESTED_AOT` (default `n`) refuses unattested AOT.
 - `chore(version)`: 1.7.0.
 
 ### Deprecated
@@ -112,6 +163,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with it.
 
 ### Fixed
+- `fix(api)`: The WASM crypto API (`CONFIG_AKIRA_WASM_CRYPTO`) didn't build: Zephyr no longer
+  ships TinyCrypt. It runs on mbedTLS now; CBC and CTR keep TinyCrypt's exact behaviour (CTR
+  increments the last 4 bytes of the counter block), so existing ciphertexts still decrypt.
+  `CONFIG_AKIRA_SYNC` no longer selects TinyCrypt either.
+- `fix(api)`: Every `fs_*` call failed: the jail `/akira/apps/<app>/` is on no mounted
+  filesystem. Apps now get the storage API's directory, `/SD:/apps/<app>/` with a card or
+  `/lfs/apps/<app>/` without, created on the first file or directory they make.
+- `fix(settings)`: every settings request freed its work item inside its own handler (a
+  use-after-free); app GETs no longer have the settings thread write into app memory; secret
+  values are no longer logged at boot.
+- `fix(apps)`: installing, uninstalling or shutting down stopped apps while holding the
+  registry lock that their exit callback needs, so a slot could be reused under a live thread;
+  the runtime now also refuses to reuse a slot whose previous thread is still running.
+- `fix(net)`: the network poll thread spun at full CPU once more streams were open than
+  `CONFIG_ZVFS_POLL_MAX` allows.
+- `fix(usb)`: disabling and re-enabling USB HID no longer leaves it dead until replug.
 - `fix(http)`: `POST /api/v1/apps/start`, `/stop` and `DELETE /api/v1/apps` now require the
   upload token like install and firmware upload did.
 - `fix(config)`: `CONFIG_AKIRA_APP_MAX_INSTALLED` range raised to 32 (24 in `prj.conf` broke

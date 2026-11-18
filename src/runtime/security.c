@@ -13,6 +13,11 @@ LOG_MODULE_REGISTER(akira_security, CONFIG_AKIRA_LOG_LEVEL);
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
+#include <zephyr/kernel.h>
+#include <zephyr/spinlock.h>
+#include <akira_app_containment.h>
+#include <runtime/akira_runtime.h> /* AKIRA_MAX_WASM_INSTANCES */
+#include <lib/mem_helper.h>           /* AKIRA_BULK_BSS */
 #endif
 
 /* ===== Core capability registry =====
@@ -320,6 +325,54 @@ uint64_t akira_security_get_cap_mask(wasm_exec_env_t exec_env)
     return akira_runtime_get_cap_mask_for_module_inst(inst);
 }
 
+/*
+ * Capability denials. An app polling a native it may not use would otherwise
+ * print a warning, take the runtime lock (name lookup) and push an audit
+ * entry on every call, flooding the console and wiping the audit ring. Per
+ * app slot, at most one warning and DENIAL_AUDIT_PER_S audit entries per
+ * second; skipped warnings are counted and reported with the next one.
+ */
+#define DENIAL_AUDIT_PER_S 4
+
+struct denial_window {
+    uint32_t second;
+    uint32_t skipped;
+    uint8_t audited;
+    bool logged;
+};
+
+/* Last entry: callers that are not a running app. */
+static struct denial_window AKIRA_BULK_BSS g_denials[AKIRA_MAX_WASM_INSTANCES + 1];
+static struct k_spinlock g_denial_lock;
+
+static void denial_admit(int slot, bool *log_it, bool *audit_it, uint32_t *skipped)
+{
+    int idx = (slot >= 0 && slot < AKIRA_MAX_WASM_INSTANCES) ? slot : AKIRA_MAX_WASM_INSTANCES;
+    uint32_t now = (uint32_t)(k_uptime_get() / 1000);
+    k_spinlock_key_t key = k_spin_lock(&g_denial_lock);
+    struct denial_window *w = &g_denials[idx];
+
+    if (w->second != now) {
+        w->second = now;
+        w->audited = 0;
+        w->logged = false;
+    }
+    *log_it = !w->logged;
+    *audit_it = w->audited < DENIAL_AUDIT_PER_S;
+    *skipped = 0;
+    if (*log_it) {
+        w->logged = true;
+        *skipped = w->skipped;
+        w->skipped = 0;
+    } else if (w->skipped < UINT32_MAX) {
+        w->skipped++;
+    }
+    if (*audit_it) {
+        w->audited++;
+    }
+    k_spin_unlock(&g_denial_lock, key);
+}
+
 bool akira_security_check_exec(wasm_exec_env_t exec_env, uint64_t capability)
 {
     if (!exec_env) return false;
@@ -328,15 +381,42 @@ bool akira_security_check_exec(wasm_exec_env_t exec_env, uint64_t capability)
 
     bool ok = (mask & capability) != 0;
     if (!ok) {
+        bool log_it, audit_it;
+        uint32_t skipped;
+
+        denial_admit(akira_runtime_slot_of_exec_env(exec_env), &log_it, &audit_it, &skipped);
+        if (!log_it && !audit_it) {
+            return false;
+        }
+
+        /* The name lookup takes the runtime lock, and in immediate log mode
+         * the warning is written under the console's lock: a stop must not
+         * abort the app in between. */
+        akira_native_critical_enter(exec_env);
         wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
         char namebuf[32];
-        if (akira_runtime_get_name_for_module_inst(inst, namebuf, sizeof(namebuf)) == 0) {
-            LOG_WRN("Security: capability denied for app %s: %s (0x%016llx)", namebuf, akira_capability_name(capability), (unsigned long long)capability);
-            sandbox_audit_log(AUDIT_EVENT_CAPABILITY_DENIED, namebuf, (uint32_t)(capability & 0xFFFFFFFFu));
-        } else {
-            LOG_WRN("Security: capability denied for unknown app: %s (0x%016llx)", akira_capability_name(capability), (unsigned long long)capability);
-            sandbox_audit_log(AUDIT_EVENT_CAPABILITY_DENIED, "unknown", (uint32_t)(capability & 0xFFFFFFFFu));
+        bool named = akira_runtime_get_name_for_module_inst(inst, namebuf, sizeof(namebuf)) == 0;
+
+        if (log_it && skipped) {
+            LOG_WRN("Security: %u more capability denials for app %s not shown",
+                    skipped, named ? namebuf : "unknown");
         }
+        if (named) {
+            if (log_it) {
+                LOG_WRN("Security: capability denied for app %s: %s (0x%016llx)", namebuf, akira_capability_name(capability), (unsigned long long)capability);
+            }
+            if (audit_it) {
+                sandbox_audit_log(AUDIT_EVENT_CAPABILITY_DENIED, namebuf, (uint32_t)(capability & 0xFFFFFFFFu));
+            }
+        } else {
+            if (log_it) {
+                LOG_WRN("Security: capability denied for unknown app: %s (0x%016llx)", akira_capability_name(capability), (unsigned long long)capability);
+            }
+            if (audit_it) {
+                sandbox_audit_log(AUDIT_EVENT_CAPABILITY_DENIED, "unknown", (uint32_t)(capability & 0xFFFFFFFFu));
+            }
+        }
+        akira_native_critical_exit(exec_env);
     }
     return ok;
 }

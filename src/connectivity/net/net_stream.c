@@ -11,19 +11,34 @@ LOG_MODULE_REGISTER(akira_net_stream, CONFIG_AKIRA_LOG_LEVEL);
  * @file net_stream.c
  * @brief TCP/UDP stream engine with shared-memory ring buffers.
  *
- * Architecture:
- *   - One poll thread monitors all active sockets via zsock_poll() (10 ms timeout).
- *   - On each iteration the poll thread drains all TX rings (WASM→host) and
- *     fills RX rings (host→WASM) from incoming data.
- *   - Network events (CONNECTED, DISCONNECTED, DATA_READY, ACCEPT, ERROR) are
- *     serialised into a k_msgq consumed by net_stream_event_pop().
- *   - Async connect/DNS uses the system workqueue (k_work) so the poll thread
- *     and the WASM app thread are never blocked on DNS resolution.
+ * Threads and who may do what:
+ *   - Poll thread: the only thread that sends, receives, accepts, touches a
+ *     ring, or closes a socket that is not being connected. It drains TX
+ *     rings and fills RX rings with non-blocking socket calls, so one stalled
+ *     peer never holds up the others.
+ *   - Connect worker (system workqueue, one k_work_delayable): one connect at
+ *     a time system-wide. DNS is the only step that blocks it (bounded by
+ *     CONFIG_NET_SOCKETS_DNS_TIMEOUT); the TCP connect is started
+ *     non-blocking and re-checked every 50 ms, so the workqueue — which also
+ *     feeds the watchdog and runs app cleanup — keeps running in between. It
+ *     never waits for the stream table either: if the lock is not free it
+ *     tries again later. While it connects a stream it owns that socket.
+ *   - Callers (app natives): validate ownership and flip state under g_mutex,
+ *     never wait on the network. Their only socket calls are socket()/bind()/
+ *     listen(), which do not block.
  *
- * Ring drain concurrency:
- *   - Only one entity may drain a TX ring at a time; guarded by an atomic flag.
- *   - Ring index updates are 32-bit aligned stores — atomic on all supported MCUs
- *     and within WASM's linear memory model.
+ * Memory safety against the app: ring capacity is fixed at bind time, the
+ * host keeps its own copy of the index it produces/consumes, every offset is
+ * reduced modulo that capacity, and the poll thread accesses ring memory only
+ * while holding g_mutex with the pointer re-checked — so detaching a ring
+ * (close / net_stream_release_owner) under g_mutex ends all access to it.
+ *
+ * Slot lifetime: close/release only mark a stream "closing" and detach its
+ * rings; the poll thread closes the socket — once the connect worker has let
+ * go of it, if it was connecting — and only then is the slot freed and its
+ * generation bumped. Because only the poll thread closes stream sockets, an
+ * fd number is never reused (by another stream, or another subsystem's
+ * socket) while the poll thread may still use it.
  */
 
 #ifdef CONFIG_AKIRA_WASM_NET
@@ -33,10 +48,13 @@ LOG_MODULE_REGISTER(akira_net_stream, CONFIG_AKIRA_LOG_LEVEL);
 #include <string.h>
 #include <errno.h>
 #include <zephyr/kernel.h>
+#include <zephyr/spinlock.h>
 #include <zephyr/net/socket.h>
 #include <zephyr/net/net_ip.h>
-#include <zephyr/sys/atomic.h>
+#include <zephyr/sys/fdtable.h>
+#include <zephyr/sys/util.h>
 #include "mem_helper.h"
+#include <runtime/akira_runtime.h> /* AKIRA_MAX_WASM_INSTANCES */
 
 /* =========================================================================
  * Configuration defaults (overridden by Kconfig)
@@ -58,473 +76,1130 @@ LOG_MODULE_REGISTER(akira_net_stream, CONFIG_AKIRA_LOG_LEVEL);
 #define CONFIG_AKIRA_NET_MAX_MSG_SIZE     1500
 #endif
 
+#define NET_MAX_STREAMS     CONFIG_AKIRA_NET_MAX_STREAMS
+#define NET_EVT_DEPTH       CONFIG_AKIRA_NET_EVENT_QUEUE_DEPTH
+#define NET_OWNERS          AKIRA_MAX_WASM_INSTANCES
+
+/* With more than one app slot, one app can never take every stream: one is
+ * always left for another app. */
+#if AKIRA_MAX_WASM_INSTANCES > 1
+#define NET_STREAMS_PER_APP MAX(1, NET_MAX_STREAMS - 1)
+#else
+#define NET_STREAMS_PER_APP NET_MAX_STREAMS
+#endif
+
+/* zsock_poll() takes at most CONFIG_ZVFS_POLL_MAX wait events (POLLIN, and
+ * POLLOUT on TCP, use one each); more and it fails with ENOMEM. */
+#ifdef CONFIG_ZVFS_POLL_MAX
+#define NET_POLL_EVENTS_MAX CONFIG_ZVFS_POLL_MAX
+#else
+#define NET_POLL_EVENTS_MAX (2 * NET_MAX_STREAMS)
+#endif
+
+#define NET_POLL_TICK_MS        10    /* poll thread iteration                */
+#define NET_CONNECT_POLL_MS     50    /* connect worker re-check interval     */
+#define NET_TCP_CONNECT_MS      10000 /* TCP connect deadline                 */
+#define NET_CLOSE_WAIT_MS       200   /* close() waits this long for the reap */
+#define NET_TX_BUDGET           8     /* messages per stream per iteration    */
+#define NET_CALLER_LOCK_MS      1000  /* natives: -EBUSY after this           */
+#define NET_WORKER_LOCK_MS      100   /* connect worker: retry later after    */
+#define NET_RELEASE_LOCK_MS     2000  /* release hook: give up after          */
+#define NET_LOG_INTERVAL_MS     1000  /* app-triggered warnings: one per      */
+
+#define RING_OFF_WRITE  0
+#define RING_OFF_READ   4
+#define RING_OFF_CAP    8
+#define RING_OFF_FLAGS  12
+
+BUILD_ASSERT(NET_MAX_STREAMS <= 255, "stream handles are reported as uint8");
+BUILD_ASSERT(NET_EVT_DEPTH <= 255, "event ring indices are uint8");
+BUILD_ASSERT(CONFIG_AKIRA_NET_MAX_MSG_SIZE <= 0xFFFF, "ring frame length is u16");
+BUILD_ASSERT(NET_POLL_EVENTS_MAX >= 2, "one stream may need two poll events");
+BUILD_ASSERT(AKIRA_MAX_WASM_INSTANCES <= 127, "owner is stored as int8");
+#ifdef CONFIG_NET_SOCKETS_DNS_TIMEOUT
+/* DNS is the one step that blocks the connect worker, on the system
+ * workqueue that also feeds the watchdog. */
+BUILD_ASSERT(CONFIG_NET_SOCKETS_DNS_TIMEOUT <= 10000,
+	     "DNS lookups must stay far below the watchdog timeout");
+#endif
+
 /* =========================================================================
  * Internal stream state
  * ======================================================================= */
 
 typedef enum {
-	NET_STATE_CLOSED     = 0,
-	NET_STATE_OPEN,        /* socket fd created, idle                      */
-	NET_STATE_CONNECTING,  /* connect work queued or in progress           */
-	NET_STATE_CONNECTED,   /* data can flow                                */
-	NET_STATE_LISTENING,   /* TCP listen socket                            */
-	NET_STATE_ERROR,       /* unrecoverable error — close and reopen       */
+	NET_STATE_CLOSED     = 0,  /* peer closed / poll error; fd kept until close */
+	NET_STATE_OPEN,            /* socket created, idle                          */
+	NET_STATE_CONNECTING,      /* queued for / owned by the connect worker      */
+	NET_STATE_CONNECTED,       /* data can flow                                 */
+	NET_STATE_LISTENING,       /* TCP listen socket                             */
+	NET_STATE_ERROR,           /* connect/send failed                           */
 } net_state_t;
 
 struct net_stream_ctx {
 	bool         used;
-	int          type;           /* NET_TYPE_TCP / NET_TYPE_UDP             */
-	int          fd;             /* zsock fd, -1 if not yet open            */
+	bool         closing;      /* close requested: reaper closes fd, frees slot  */
+	bool         conn_queued;  /* waiting for the connect worker                 */
+	bool         conn_active;  /* the connect worker owns fd right now           */
+	bool         tx_wait_out;  /* send hit EAGAIN / was partial: wait POLLOUT    */
+	bool         drop_fd;      /* connect failed: reaper closes fd, keeps slot   */
+	int8_t       owner;        /* app slot                                       */
+	uint8_t      type;         /* NET_TYPE_*                                     */
 	net_state_t  state;
+	int          fd;           /* zsock fd, -1 if none                           */
+	uint32_t     gen;          /* bumped every time the slot is freed            */
+	uint32_t     conn_seq;     /* connect request order                          */
 
-	/* TX ring (WASM → host) */
-	uint8_t     *tx_native;      /* native ptr into WASM linear memory      */
-	uint32_t     tx_total;       /* total buffer size (hdr + data)          */
-	atomic_t     tx_draining;   /* CAS flag: 1 = drain in progress          */
+	/* TX ring (app → network). Only cap and tx_ri are trusted. */
+	uint8_t     *tx_native;
+	uint32_t     tx_cap;
+	uint32_t     tx_epoch;     /* bumped on every (re)bind                       */
+	uint32_t     tx_ri;        /* host consumer index (authoritative)            */
+	uint32_t     tx_sent;      /* bytes of the current message already sent      */
+	uint16_t     tx_cur_len;   /* length of the message being sent               */
 
-	/* RX ring (host → WASM) */
-	uint8_t     *rx_native;      /* native ptr into WASM linear memory      */
-	uint32_t     rx_total;       /* total buffer size (hdr + data)          */
+	/* RX ring (network → app). Only cap and rx_wi are trusted. */
+	uint8_t     *rx_native;
+	uint32_t     rx_cap;
+	uint32_t     rx_wi;        /* host producer index (authoritative)            */
 
-	/* Async connect context */
-	struct k_work connect_work;
-	char          host[64];
-	uint16_t      port;
+	char         host[NET_STREAM_HOST_MAX + 1];
+	uint16_t     port;
+};
+
+/* Per-owner event ring — one app can neither read nor crowd out another's. */
+struct net_evt_ring {
+	uint8_t          head;
+	uint8_t          count;
+	struct net_event ev[NET_EVT_DEPTH];
 };
 
 /* =========================================================================
  * Global state
+ *
+ * Kernel objects (mutexes, semaphore, delayable work, thread) stay in
+ * internal RAM: the scheduler and the timer ISR walk them. Plain data goes to
+ * PSRAM where there is some.
  * ======================================================================= */
 
-static struct net_stream_ctx g_streams[CONFIG_AKIRA_NET_MAX_STREAMS];
-static struct k_mutex g_mutex;
-static bool g_initialized;
+static struct net_stream_ctx AKIRA_BULK_BSS g_streams[NET_MAX_STREAMS];
+static struct net_evt_ring AKIRA_BULK_BSS g_evt[NET_OWNERS];
+static struct k_spinlock g_evt_lock;
 
-/* Event queue — mirrors the BLE g_evt_q pattern from ble_app_service.c */
-K_MSGQ_DEFINE(g_net_evt_q,
-	      sizeof(struct net_event),
-	      CONFIG_AKIRA_NET_EVENT_QUEUE_DEPTH,
-	      4);
+static K_MUTEX_DEFINE(g_mutex);     /* stream table + ring memory access */
+static K_MUTEX_DEFINE(g_init_lock);
+static bool g_initialized;
+static uint32_t g_conn_seq;
 
 /* Poll thread */
 static void net_poll_thread_fn(void *a, void *b, void *c);
 K_THREAD_STACK_DEFINE(g_poll_stack, CONFIG_AKIRA_NET_POLL_STACK_SIZE);
 static struct k_thread g_poll_thread;
 
+/* Poll-thread-only buffers (never shared with another thread). */
+static AKIRA_BULK_BSS uint8_t g_rx_buf[CONFIG_AKIRA_NET_MAX_MSG_SIZE];
+static AKIRA_BULK_BSS uint8_t g_tx_stage[CONFIG_AKIRA_NET_MAX_MSG_SIZE];
+
+/* Wakes the poll thread: a stream became pollable, something must be reaped,
+ * or a flush was requested. A give before the take is remembered. */
+static K_SEM_DEFINE(g_poll_wake, 0, 1);
+
+/* Connect worker: the single connect in flight. Only the worker touches g_job. */
+enum {
+	CP_START = 0,     /* resolve + start connecting                      */
+	CP_TCP_WAIT,      /* non-blocking TCP connect in progress on job.fd  */
+	CP_FINISH,        /* done; the outcome still has to be recorded      */
+};
+
+static struct {
+	bool               active;
+	uint8_t            phase;
+	uint8_t            type;
+	int                h;
+	uint32_t           gen;
+	int                fd;
+	int                result;
+	uint16_t           port;
+	int64_t            deadline;
+	struct sockaddr_in addr;
+	char               host[NET_STREAM_HOST_MAX + 1];
+} g_job AKIRA_BULK_BSS;
+
+static void connect_work_fn(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(g_conn_work, connect_work_fn);
+
 /* =========================================================================
- * Ring buffer helpers
+ * Small helpers
  * ======================================================================= */
 
-/**
- * @brief Drain the TX ring of @p ctx and send all pending messages.
- *
- * Entries are framed as: [len_lo][len_hi][payload...len bytes].
- * Uses an atomic CAS flag so only one caller drains at a time.
- *
- * @return Total payload bytes sent; 0 if ring empty; negative errno on error.
- */
-static int ring_drain_tx(struct net_stream_ctx *ctx)
+/* App-triggered warnings: at most one per NET_LOG_INTERVAL_MS, so an app in a
+ * loop cannot flood the log. */
+static bool net_log_allowed(void)
 {
-	if (!ctx->tx_native || ctx->fd < 0) {
-		return 0;
+	static uint32_t last;
+	uint32_t now = k_uptime_get_32();
+
+	if (last != 0U && (now - last) < NET_LOG_INTERVAL_MS) {
+		return false;
 	}
-
-	/* Claim exclusive drain */
-	if (!atomic_cas(&ctx->tx_draining, 0, 1)) {
-		return 0; /* another thread is already draining */
-	}
-
-	struct net_ring_hdr *hdr = (struct net_ring_hdr *)ctx->tx_native;
-	uint8_t *data = ctx->tx_native + NET_RING_HDR_SIZE;
-	uint32_t cap = hdr->capacity;
-	int total_sent = 0;
-
-	if (cap == 0) {
-		goto done;
-	}
-
-	while (true) {
-		uint32_t wi = __atomic_load_n(&hdr->write_idx, __ATOMIC_ACQUIRE);
-		uint32_t ri = hdr->read_idx; /* only we update read_idx */
-		uint32_t used = wi - ri;
-
-		if (used < 2) {
-			break; /* not enough bytes for a 2-byte length header */
-		}
-
-		/* Peek at the 2-byte length header (may wrap) */
-		uint32_t ri_mod = ri % cap;
-		uint8_t  len_lo = data[ri_mod];
-		uint8_t  len_hi = data[(ri_mod + 1) % cap];
-		uint16_t plen   = (uint16_t)len_lo | ((uint16_t)len_hi << 8);
-
-		if (used < (uint32_t)(2 + plen)) {
-			break; /* incomplete message — wait for more writes */
-		}
-
-		if (plen == 0) {
-			/* Skip zero-length sentinel */
-			__atomic_store_n(&hdr->read_idx, ri + 2, __ATOMIC_RELEASE);
-			continue;
-		}
-
-		if (plen > CONFIG_AKIRA_NET_MAX_MSG_SIZE) {
-			LOG_WRN("TX ring: oversized message %u — dropping", plen);
-			__atomic_store_n(&hdr->read_idx,
-					 ri + 2 + plen, __ATOMIC_RELEASE);
-			continue;
-		}
-
-		/* Copy payload from ring (handles wrap-around) */
-		static AKIRA_BULK_BSS uint8_t payload[CONFIG_AKIRA_NET_MAX_MSG_SIZE];
-		uint32_t data_ri = (ri_mod + 2) % cap;
-
-		for (uint16_t i = 0; i < plen; i++) {
-			payload[i] = data[(data_ri + i) % cap];
-		}
-
-		/* Send — WASM has set up the default peer via net_stream_connect */
-		int ret = zsock_send(ctx->fd, payload, plen, 0);
-
-		if (ret < 0) {
-			int err = errno;
-			LOG_ERR("zsock_send stream %td failed: %d",
-				ctx - g_streams, err);
-			break;
-		}
-
-		/* Advance consumer index (atomic store so WASM sees the update) */
-		__atomic_store_n(&hdr->read_idx, ri + 2 + plen, __ATOMIC_RELEASE);
-		total_sent += ret;
-	}
-
-done:
-	atomic_set(&ctx->tx_draining, 0);
-	return total_sent;
+	last = now ? now : 1U;
+	return true;
 }
 
-/**
- * @brief Write a received buffer into the RX ring of @p ctx.
- *
- * Entry format: [len_lo][len_hi][payload...].
- * The host is the sole producer of the RX ring; no CAS needed.
- *
- * @return @p in_len on success; -ENOBUFS if ring is full; -EINVAL if args bad.
- */
-static int ring_fill_rx(struct net_stream_ctx *ctx,
-			const uint8_t *in_data, uint16_t in_len)
+#define NET_WRN(...)                                                           \
+	do {                                                                   \
+		if (net_log_allowed()) {                                       \
+			LOG_WRN(__VA_ARGS__);                                  \
+		}                                                              \
+	} while (0)
+
+static inline bool owner_valid(int owner)
 {
-	if (!ctx->rx_native || in_len == 0) {
-		return -EINVAL;
+	return owner >= 0 && owner < NET_OWNERS;
+}
+
+static inline int ctx_handle(const struct net_stream_ctx *c)
+{
+	return (int)(c - g_streams);
+}
+
+/* Slot still the one we looked at, and not being torn down. g_mutex held. */
+static inline bool ctx_live(const struct net_stream_ctx *c, uint32_t gen)
+{
+	return c->used && !c->closing && c->gen == gen;
+}
+
+/* Handle @p h, if it is an open stream of @p owner. g_mutex held. */
+static struct net_stream_ctx *owned_locked(int owner, int h)
+{
+	if (h < 0 || h >= NET_MAX_STREAMS) {
+		return NULL;
 	}
 
-	struct net_ring_hdr *hdr = (struct net_ring_hdr *)ctx->rx_native;
-	uint8_t *data = ctx->rx_native + NET_RING_HDR_SIZE;
-	uint32_t cap  = hdr->capacity;
+	struct net_stream_ctx *c = &g_streams[h];
 
-	if (cap == 0) {
-		return -EINVAL;
+	if (!c->used || c->closing || c->owner != owner) {
+		return NULL;
+	}
+	return c;
+}
+
+/* Natives never wait long for the table: a holder that died with it would
+ * otherwise hang every app that touches the network. */
+static int caller_lock(void)
+{
+	return (k_mutex_lock(&g_mutex, K_MSEC(NET_CALLER_LOCK_MS)) == 0) ? 0 : -EBUSY;
+}
+
+static int owner_count_locked(int owner)
+{
+	int n = 0;
+
+	for (int i = 0; i < NET_MAX_STREAMS; i++) {
+		if (g_streams[i].used && g_streams[i].owner == owner) {
+			n++;
+		}
+	}
+	return n;
+}
+
+static int slot_alloc_locked(int owner, int type, int fd)
+{
+	if (owner_count_locked(owner) >= NET_STREAMS_PER_APP) {
+		return -ENOSPC;
 	}
 
-	uint32_t wi   = hdr->write_idx; /* host is sole writer */
-	uint32_t ri   = __atomic_load_n(&hdr->read_idx, __ATOMIC_ACQUIRE);
-	uint32_t used = wi - ri;
-	uint32_t avail = cap - used;
-	uint32_t need  = (uint32_t)(2 + in_len);
+	for (int i = 0; i < NET_MAX_STREAMS; i++) {
+		struct net_stream_ctx *c = &g_streams[i];
 
-	if (avail < need) {
+		if (c->used) {
+			continue;
+		}
+
+		uint32_t gen = c->gen;
+
+		memset(c, 0, sizeof(*c));
+		c->gen   = gen;
+		c->used  = true;
+		c->owner = (int8_t)owner;
+		c->type  = (uint8_t)type;
+		c->fd    = fd;
+		c->state = NET_STATE_OPEN;
+		return i;
+	}
+	return -ENOSPC;
+}
+
+/* Free a slot whose socket is already closed. g_mutex held. */
+static void slot_free_locked(struct net_stream_ctx *c)
+{
+	uint32_t gen = c->gen + 1;
+
+	memset(c, 0, sizeof(*c));
+	c->gen = gen;
+	c->fd  = -1;
+}
+
+static int set_nonblock(int fd)
+{
+	int fl = zsock_fcntl(fd, ZVFS_F_GETFL, 0);
+
+	if (fl < 0) {
+		return -errno;
+	}
+	if (zsock_fcntl(fd, ZVFS_F_SETFL, fl | ZVFS_O_NONBLOCK) < 0) {
+		return -errno;
+	}
+	return 0;
+}
+
+/* =========================================================================
+ * Events (per owner)
+ * ======================================================================= */
+
+/* Post to @p c's owner. Called with g_mutex held so it is ordered against
+ * net_stream_release_owner()'s purge: a released owner never gets a late
+ * event that a new app in the same slot would then read. */
+static void evt_post_locked(const struct net_stream_ctx *c, uint8_t type, uint16_t extra)
+{
+	if (!owner_valid(c->owner)) {
+		return;
+	}
+
+	struct net_evt_ring *r = &g_evt[c->owner];
+	bool dropped = false;
+	k_spinlock_key_t key = k_spin_lock(&g_evt_lock);
+
+	if (r->count < NET_EVT_DEPTH) {
+		struct net_event *e = &r->ev[(r->head + r->count) % NET_EVT_DEPTH];
+
+		e->type   = type;
+		e->handle = (uint8_t)ctx_handle(c);
+		e->extra  = extra;
+		r->count++;
+	} else {
+		dropped = true;
+	}
+	k_spin_unlock(&g_evt_lock, key);
+
+	if (dropped) {
+		NET_WRN("stream %d: app slot %d event queue full, event %u dropped",
+			ctx_handle(c), c->owner, type);
+	}
+}
+
+static int evt_pop(int owner, struct net_event *out)
+{
+	struct net_evt_ring *r = &g_evt[owner];
+	int type = NET_EVT_NONE;
+	k_spinlock_key_t key = k_spin_lock(&g_evt_lock);
+
+	if (r->count > 0) {
+		*out = r->ev[r->head];
+		r->head = (uint8_t)((r->head + 1) % NET_EVT_DEPTH);
+		r->count--;
+		type = out->type;
+	}
+	k_spin_unlock(&g_evt_lock, key);
+	return type;
+}
+
+/* Drop @p owner's queued events for handle @p h (closed: the number may be
+ * reused). Called with g_mutex held, like every post. */
+static void evt_purge_handle(int owner, int h)
+{
+	struct net_evt_ring *r = &g_evt[owner];
+	k_spinlock_key_t key = k_spin_lock(&g_evt_lock);
+	uint8_t kept = 0;
+
+	for (uint8_t i = 0; i < r->count; i++) {
+		struct net_event e = r->ev[(r->head + i) % NET_EVT_DEPTH];
+
+		if (e.handle != (uint8_t)h) {
+			r->ev[(r->head + kept) % NET_EVT_DEPTH] = e;
+			kept++;
+		}
+	}
+	r->count = kept;
+	k_spin_unlock(&g_evt_lock, key);
+}
+
+static void evt_purge(int owner)
+{
+	struct net_evt_ring *r = &g_evt[owner];
+	k_spinlock_key_t key = k_spin_lock(&g_evt_lock);
+
+	r->head  = 0;
+	r->count = 0;
+	k_spin_unlock(&g_evt_lock, key);
+}
+
+/* =========================================================================
+ * Ring access
+ *
+ * Rings live in app memory: any alignment (byte-wise access when unaligned —
+ * an unaligned 32-bit load faults on Xtensa), any content. Callers hold
+ * g_mutex and have checked the ring pointer.
+ * ======================================================================= */
+
+static uint32_t ring_ld32(const uint8_t *p)
+{
+	uint32_t v;
+
+	if (((uintptr_t)p & 3U) == 0U) {
+		v = __atomic_load_n((const uint32_t *)(const void *)p, __ATOMIC_ACQUIRE);
+	} else {
+		const volatile uint8_t *b = p;
+
+		v = (uint32_t)b[0] | ((uint32_t)b[1] << 8) |
+		    ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+	}
+	return v;
+}
+
+static void ring_st32(uint8_t *p, uint32_t v)
+{
+	if (((uintptr_t)p & 3U) == 0U) {
+		__atomic_store_n((uint32_t *)(void *)p, v, __ATOMIC_RELEASE);
+	} else {
+		volatile uint8_t *b = p;
+
+		__atomic_thread_fence(__ATOMIC_RELEASE);
+		b[0] = (uint8_t)v;
+		b[1] = (uint8_t)(v >> 8);
+		b[2] = (uint8_t)(v >> 16);
+		b[3] = (uint8_t)(v >> 24);
+	}
+}
+
+static void ring_hdr_init(uint8_t *ring, uint32_t cap)
+{
+	ring_st32(ring + RING_OFF_WRITE, 0);
+	ring_st32(ring + RING_OFF_READ, 0);
+	ring_st32(ring + RING_OFF_CAP, cap);
+	ring_st32(ring + RING_OFF_FLAGS, 0);
+}
+
+/* Data-area offset of byte @p skip past index @p idx (matches the SDK's
+ * (idx % cap + skip) % cap without 32-bit overflow). */
+static inline uint32_t ring_off(uint32_t idx, uint32_t skip, uint32_t cap)
+{
+	return (uint32_t)(((uint64_t)(idx % cap) + skip) % cap);
+}
+
+/* @p off < @p cap; @p len is clamped to @p cap, so both copies stay inside
+ * the data area. */
+static void ring_copy_out(uint8_t *dst, const uint8_t *data, uint32_t cap,
+			  uint32_t off, uint32_t len)
+{
+	len = MIN(len, cap);
+
+	uint32_t first = MIN(len, cap - off);
+
+	memcpy(dst, data + off, first);
+	memcpy(dst + first, data, len - first);
+}
+
+static void ring_copy_in(uint8_t *data, uint32_t cap, uint32_t off,
+			 const uint8_t *src, uint32_t len)
+{
+	len = MIN(len, cap);
+
+	uint32_t first = MIN(len, cap - off);
+
+	memcpy(data + off, src, first);
+	memcpy(data, src + first, len - first);
+}
+
+static void tx_consume_locked(struct net_stream_ctx *c, uint32_t n)
+{
+	c->tx_ri += n;
+	ring_st32(c->tx_native + RING_OFF_READ, c->tx_ri);
+}
+
+/* Free bytes in @p c's RX ring; 0 if the app's read_idx is nonsense (a
+ * corrupt header stalls that ring, it never widens it). */
+static uint32_t rx_room_locked(const struct net_stream_ctx *c)
+{
+	uint32_t ri   = ring_ld32(c->rx_native + RING_OFF_READ);
+	uint32_t used = c->rx_wi - ri;
+
+	if (used > c->rx_cap) {
+		return 0;
+	}
+	return c->rx_cap - used;
+}
+
+static int rx_push_locked(struct net_stream_ctx *c, const uint8_t *buf, uint16_t len)
+{
+	uint32_t need = 2U + len;
+
+	if (rx_room_locked(c) < need) {
 		return -ENOBUFS;
 	}
 
-	uint32_t wi_mod = wi % cap;
+	uint8_t *data = c->rx_native + NET_RING_HDR_SIZE;
+	uint32_t cap  = c->rx_cap;
+	uint8_t  hdr[2] = { (uint8_t)(len & 0xFFu), (uint8_t)(len >> 8) };
 
-	data[wi_mod]             = in_len & 0xFFu;
-	data[(wi_mod + 1) % cap] = (in_len >> 8) & 0xFFu;
+	ring_copy_in(data, cap, ring_off(c->rx_wi, 0, cap), hdr, 2);
+	ring_copy_in(data, cap, ring_off(c->rx_wi, 2, cap), buf, len);
 
-	uint32_t data_wi = (wi_mod + 2) % cap;
-
-	for (uint16_t i = 0; i < in_len; i++) {
-		data[(data_wi + i) % cap] = in_data[i];
-	}
-
-	/* Atomic release so WASM consumer sees the complete write */
-	__atomic_store_n(&hdr->write_idx, wi + need, __ATOMIC_RELEASE);
-	return in_len;
+	c->rx_wi += need;
+	ring_st32(c->rx_native + RING_OFF_WRITE, c->rx_wi); /* release: data first */
+	return len;
 }
 
 /* =========================================================================
- * Async connect work
+ * Poll thread: TX drain, RX fill, accept, reap
  * ======================================================================= */
 
-static void connect_work_fn(struct k_work *work)
+/**
+ * Send what @p h's TX ring holds, non-blocking. The message is copied out
+ * under g_mutex, sent without it, and only consumed once fully sent; a
+ * partial send or EAGAIN parks the stream until POLLOUT.
+ *
+ * @return true if the budget ran out with more messages queued.
+ */
+static bool tx_drain(int h)
 {
-	struct net_stream_ctx *ctx =
-		CONTAINER_OF(work, struct net_stream_ctx, connect_work);
-	int h = (int)(ctx - g_streams);
+	struct net_stream_ctx *c = &g_streams[h];
 
-	/* Resolve hostname */
-	struct zsock_addrinfo hints = {
-		.ai_family   = AF_INET,
-		.ai_socktype = (ctx->type == NET_TYPE_TCP)
-				? SOCK_STREAM : SOCK_DGRAM,
-	};
-	struct zsock_addrinfo *res = NULL;
-	int ret = zsock_getaddrinfo(ctx->host, NULL, &hints, &res);
+	for (int n = 0; n < NET_TX_BUDGET; n++) {
+		k_mutex_lock(&g_mutex, K_FOREVER);
 
-	if (ret != 0 || !res) {
-		LOG_ERR("stream %d: DNS failed for \"%s\": %d",
-			h, ctx->host, ret);
+		if (!c->used || c->closing || c->state != NET_STATE_CONNECTED ||
+		    !c->tx_native || c->fd < 0 || c->tx_wait_out) {
+			k_mutex_unlock(&g_mutex);
+			return false;
+		}
+
+		uint32_t gen   = c->gen;
+		uint32_t epoch = c->tx_epoch;
+		int      fd    = c->fd;
+		uint32_t cap   = c->tx_cap;
+		uint8_t *data  = c->tx_native + NET_RING_HDR_SIZE;
+
+		if (c->tx_sent == 0) {
+			uint32_t wi   = ring_ld32(c->tx_native + RING_OFF_WRITE);
+			uint32_t used = wi - c->tx_ri;
+
+			if (used < 2 || used > cap) {
+				/* empty, or a write_idx the ring cannot hold */
+				k_mutex_unlock(&g_mutex);
+				return false;
+			}
+
+			uint16_t plen = (uint16_t)data[ring_off(c->tx_ri, 0, cap)] |
+					((uint16_t)data[ring_off(c->tx_ri, 1, cap)] << 8);
+
+			if (plen == 0) {
+				tx_consume_locked(c, 2); /* zero-length sentinel */
+				k_mutex_unlock(&g_mutex);
+				continue;
+			}
+			if (2U + plen > used) {
+				k_mutex_unlock(&g_mutex); /* incomplete — wait for more */
+				return false;
+			}
+			if (plen > CONFIG_AKIRA_NET_MAX_MSG_SIZE) {
+				NET_WRN("stream %d: TX message %u > %d bytes, dropped",
+					h, plen, CONFIG_AKIRA_NET_MAX_MSG_SIZE);
+				tx_consume_locked(c, 2U + plen);
+				k_mutex_unlock(&g_mutex);
+				continue;
+			}
+			c->tx_cur_len = plen;
+		}
+
+		uint32_t len = (uint32_t)c->tx_cur_len - c->tx_sent;
+
+		ring_copy_out(g_tx_stage, data, cap,
+			      ring_off(c->tx_ri, 2U + c->tx_sent, cap), len);
+		k_mutex_unlock(&g_mutex);
+
+		ssize_t ret = zsock_send(fd, g_tx_stage, len, ZSOCK_MSG_DONTWAIT);
+		int err = (ret < 0) ? errno : 0;
 
 		k_mutex_lock(&g_mutex, K_FOREVER);
-		zsock_close(ctx->fd);
-		ctx->fd    = -1;
-		ctx->state = NET_STATE_ERROR;
+		if (!ctx_live(c, gen)) {
+			k_mutex_unlock(&g_mutex);
+			return false;
+		}
+		if (c->tx_epoch != epoch || !c->tx_native) {
+			/* Ring detached or re-bound while we were sending: what we
+			 * sent belonged to the old ring, leave the new one alone. */
+			k_mutex_unlock(&g_mutex);
+			return false;
+		}
+		if (ret < 0) {
+			if (err == EAGAIN || err == EWOULDBLOCK) {
+				c->tx_wait_out = true;
+			} else {
+				NET_WRN("stream %d: send failed: %d", h, err);
+				c->state = NET_STATE_ERROR;
+				evt_post_locked(c, NET_EVT_ERROR, (uint16_t)err);
+			}
+			k_mutex_unlock(&g_mutex);
+			return false;
+		}
+
+		c->tx_sent += (uint32_t)ret;
+		if (c->tx_sent < c->tx_cur_len) {
+			c->tx_wait_out = true; /* partial: resume when writable */
+			k_mutex_unlock(&g_mutex);
+			return false;
+		}
+		c->tx_sent = 0;
+		tx_consume_locked(c, 2U + c->tx_cur_len);
 		k_mutex_unlock(&g_mutex);
-
-		struct net_event evt = {
-			.type   = NET_EVT_ERROR,
-			.handle = (uint8_t)h,
-			.extra  = (uint16_t)EHOSTUNREACH,
-		};
-		k_msgq_put(&g_net_evt_q, &evt, K_NO_WAIT);
-		return;
 	}
-
-	/* Patch in the target port */
-	struct sockaddr_in *addr4 = (struct sockaddr_in *)res->ai_addr;
-	addr4->sin_port = htons(ctx->port);
-
-	ret = zsock_connect(ctx->fd,
-			    (struct sockaddr *)addr4,
-			    sizeof(*addr4));
-	zsock_freeaddrinfo(res);
-
-	k_mutex_lock(&g_mutex, K_FOREVER);
-
-	if (ret < 0) {
-		int err = errno;
-		LOG_ERR("stream %d: connect to \"%s\":%u failed: %d",
-			h, ctx->host, ctx->port, err);
-		/* Close fd immediately so the socket slot is released */
-		zsock_close(ctx->fd);
-		ctx->fd    = -1;
-		ctx->state = NET_STATE_ERROR;
-		k_mutex_unlock(&g_mutex);
-
-		struct net_event evt = {
-			.type   = NET_EVT_ERROR,
-			.handle = (uint8_t)h,
-			.extra  = (uint16_t)err,
-		};
-		k_msgq_put(&g_net_evt_q, &evt, K_NO_WAIT);
-		return;
-	}
-
-	ctx->state = NET_STATE_CONNECTED;
-	k_mutex_unlock(&g_mutex);
-
-	LOG_INF("stream %d: connected to \"%s\":%u", h, ctx->host, ctx->port);
-
-	struct net_event evt = {
-		.type   = NET_EVT_CONNECTED,
-		.handle = (uint8_t)h,
-		.extra  = 0,
-	};
-	k_msgq_put(&g_net_evt_q, &evt, K_NO_WAIT);
+	return true;
 }
 
-/* =========================================================================
- * Poll thread
- * ======================================================================= */
+/* Peer closed or the socket failed: report once, stop polling. g_mutex held. */
+static void mark_disconnected_locked(struct net_stream_ctx *c)
+{
+	c->state       = NET_STATE_CLOSED;
+	c->tx_wait_out = false;
+	evt_post_locked(c, NET_EVT_DISCONNECTED, 0);
+}
 
-static void net_poll_thread_fn(void *a, void *b, void *c)
+static void rx_service(int h, int fd, uint32_t gen, short revents)
+{
+	struct net_stream_ctx *c = &g_streams[h];
+	bool hup = (revents & (ZSOCK_POLLERR | ZSOCK_POLLHUP | ZSOCK_POLLNVAL)) != 0;
+	size_t want = sizeof(g_rx_buf);
+
+	k_mutex_lock(&g_mutex, K_FOREVER);
+	if (!ctx_live(c, gen)) {
+		k_mutex_unlock(&g_mutex);
+		return;
+	}
+
+	uint8_t type = c->type;
+
+	if (c->rx_native && type != NET_TYPE_UDP) {
+		uint32_t room = rx_room_locked(c);
+
+		if (room < 3) {
+			/* No room: leave the bytes in the socket (backpressure).
+			 * A hang-up we cannot drain ends the stream now. */
+			if (hup) {
+				mark_disconnected_locked(c);
+			}
+			k_mutex_unlock(&g_mutex);
+			return;
+		}
+		want = MIN(want, room - 2);
+	}
+	k_mutex_unlock(&g_mutex);
+
+	ssize_t n = zsock_recv(fd, g_rx_buf, want, ZSOCK_MSG_DONTWAIT);
+	int err = (n < 0) ? errno : 0;
+
+	if (n < 0 && (err == EAGAIN || err == EWOULDBLOCK) && !hup) {
+		return; /* spurious wake-up */
+	}
+
+	k_mutex_lock(&g_mutex, K_FOREVER);
+	if (!ctx_live(c, gen)) {
+		k_mutex_unlock(&g_mutex);
+		return;
+	}
+	if (n > 0) {
+		if (!c->rx_native) {
+			LOG_DBG("stream %d: no RX ring bound, %d bytes dropped", h, (int)n);
+		} else if (rx_push_locked(c, g_rx_buf, (uint16_t)n) < 0) {
+			/* UDP datagram larger than the free space (TCP reads are
+			 * sized to fit, so only a concurrent re-bind gets here). */
+			NET_WRN("stream %d: RX ring full, %d bytes dropped", h, (int)n);
+		} else {
+			evt_post_locked(c, NET_EVT_DATA_READY, 0);
+		}
+	} else if (n == 0 && type == NET_TYPE_UDP && !hup) {
+		/* empty datagram */
+	} else {
+		mark_disconnected_locked(c);
+	}
+	k_mutex_unlock(&g_mutex);
+}
+
+static void accept_service(int h, int fd, uint32_t gen)
+{
+	int newfd = zsock_accept(fd, NULL, NULL); /* listening fd is non-blocking */
+
+	if (newfd < 0) {
+		if (errno != EAGAIN && errno != EWOULDBLOCK) {
+			NET_WRN("stream %d: accept failed: %d", h, errno);
+		}
+		return;
+	}
+
+	int new_h = -ENOENT;
+
+	k_mutex_lock(&g_mutex, K_FOREVER);
+	struct net_stream_ctx *c = &g_streams[h];
+
+	if (ctx_live(c, gen) && c->state == NET_STATE_LISTENING) {
+		new_h = slot_alloc_locked(c->owner, NET_TYPE_TCP, newfd);
+		if (new_h >= 0) {
+			g_streams[new_h].state = NET_STATE_CONNECTED;
+			evt_post_locked(c, NET_EVT_ACCEPT, (uint16_t)new_h);
+		}
+	}
+	k_mutex_unlock(&g_mutex);
+
+	if (new_h < 0) {
+		/* Never in the table, so closing it here is safe. */
+		NET_WRN("stream %d: cannot take connection (%d), closing it", h, new_h);
+		zsock_close(newfd);
+	} else {
+		LOG_DBG("stream %d: accepted new conn -> handle %d", h, new_h);
+	}
+}
+
+/* Close the sockets of streams marked closing (unless the connect worker
+ * owns them) and free their slots; close the socket of a failed connect but
+ * keep its slot for the owner to close. Only the poll thread closes stream
+ * sockets, so a socket is never closed while this thread is inside a call on
+ * it, and an fd number is never reused under its snapshot. */
+static void reap_closing(void)
+{
+	int  fds[NET_MAX_STREAMS];
+	int  hs[NET_MAX_STREAMS];
+	bool free_slot[NET_MAX_STREAMS];
+	int  n = 0;
+
+	k_mutex_lock(&g_mutex, K_FOREVER);
+	for (int i = 0; i < NET_MAX_STREAMS; i++) {
+		struct net_stream_ctx *c = &g_streams[i];
+
+		if (!c->used || c->conn_active || !(c->closing || c->drop_fd)) {
+			continue;
+		}
+		if (c->closing) {
+			c->conn_queued = false;
+			if (c->fd < 0) {
+				slot_free_locked(c);
+				continue;
+			}
+			c->state = NET_STATE_CLOSED;
+		} else if (c->fd < 0) {
+			c->drop_fd = false;
+			continue;
+		}
+		fds[n]       = c->fd;
+		hs[n]        = i;
+		free_slot[n] = c->closing;
+		n++;
+		c->fd      = -1;
+		c->drop_fd = false;
+	}
+	k_mutex_unlock(&g_mutex);
+
+	if (n == 0) {
+		return;
+	}
+	for (int k = 0; k < n; k++) {
+		zsock_close(fds[k]);
+		LOG_DBG("stream %d: socket closed", hs[k]);
+	}
+
+	k_mutex_lock(&g_mutex, K_FOREVER);
+	for (int k = 0; k < n; k++) {
+		/* Still ours: closing slots are only ever freed here. */
+		if (free_slot[k]) {
+			slot_free_locked(&g_streams[hs[k]]);
+		}
+	}
+	k_mutex_unlock(&g_mutex);
+}
+
+/* Wait events zsock_poll() needs for @p p. */
+static int poll_events_of(const struct zsock_pollfd *p)
+{
+	return ((p->events & ZSOCK_POLLIN) ? 1 : 0) + ((p->events & ZSOCK_POLLOUT) ? 1 : 0);
+}
+
+/* zsock_poll() over @p nfds entries in batches that fit NET_POLL_EVENTS_MAX.
+ * Only the last batch waits (and only if nothing was ready before it).
+ * @return number of entries with events, or -1 if the first batch failed. */
+static int poll_batched(struct zsock_pollfd *pfds, int nfds, int timeout_ms)
+{
+	int total = 0;
+	int i = 0;
+
+	while (i < nfds) {
+		int cnt = 0;
+		int ev  = 0;
+
+		while (i + cnt < nfds) {
+			int need = poll_events_of(&pfds[i + cnt]);
+
+			if (cnt > 0 && ev + need > NET_POLL_EVENTS_MAX) {
+				break;
+			}
+			ev += need;
+			cnt++;
+		}
+
+		bool last = (i + cnt) >= nfds;
+		int n = zsock_poll(&pfds[i], cnt, (last && total == 0) ? timeout_ms : 0);
+
+		if (n < 0) {
+			return (total > 0) ? total : -1;
+		}
+		total += n;
+		i += cnt;
+	}
+	return total;
+}
+
+static void net_poll_thread_fn(void *a, void *b, void *c_)
 {
 	ARG_UNUSED(a);
 	ARG_UNUSED(b);
-	ARG_UNUSED(c);
+	ARG_UNUSED(c_);
+
+	struct zsock_pollfd pfds[NET_MAX_STREAMS];
+	int                 handles[NET_MAX_STREAMS];
+	uint32_t            gens[NET_MAX_STREAMS];
 
 	LOG_INF("Net poll thread started");
 
-	struct zsock_pollfd pfds[CONFIG_AKIRA_NET_MAX_STREAMS];
-	int                 handles[CONFIG_AKIRA_NET_MAX_STREAMS];
-	static AKIRA_BULK_BSS uint8_t rx_buf[CONFIG_AKIRA_NET_MAX_MSG_SIZE];
-
 	while (1) {
-		/* ---- 1. Snapshot active fds under mutex ---- */
-		int nfds = 0;
+		/* ---- 1. Close what was asked to close ---- */
+		reap_closing();
+
+		/* ---- 2. Drain TX rings (non-blocking) ---- */
+		bool tx_more = false;
+
+		for (int h = 0; h < NET_MAX_STREAMS; h++) {
+			tx_more |= tx_drain(h);
+		}
+
+		/* ---- 3. Snapshot what to poll ---- */
+		int  nfds = 0;
+		bool any_live = false;
 
 		k_mutex_lock(&g_mutex, K_FOREVER);
-		for (int i = 0; i < CONFIG_AKIRA_NET_MAX_STREAMS; i++) {
-			struct net_stream_ctx *ctx = &g_streams[i];
+		for (int i = 0; i < NET_MAX_STREAMS; i++) {
+			struct net_stream_ctx *c = &g_streams[i];
+			short events = 0;
 
-			if (!ctx->used || ctx->fd < 0) {
-				continue;
-			}
-			if (ctx->state == NET_STATE_CONNECTING ||
-			    ctx->state == NET_STATE_CLOSED ||
-			    ctx->state == NET_STATE_ERROR) {
+			if (!c->used || c->closing || c->fd < 0) {
 				continue;
 			}
 
-			pfds[nfds].fd      = ctx->fd;
-			pfds[nfds].events  = ZSOCK_POLLIN |
-					     ZSOCK_POLLERR |
-					     ZSOCK_POLLHUP;
+			/* Only connected streams, listeners and UDP sockets are
+			 * polled. An unconnected TCP socket has nothing to read,
+			 * and one the connect worker owns is not ours to touch. */
+			bool data_stream = c->state == NET_STATE_CONNECTED ||
+					   (c->state == NET_STATE_OPEN &&
+					    c->type == NET_TYPE_UDP);
+
+			if (c->state == NET_STATE_LISTENING) {
+				events = ZSOCK_POLLIN;
+			} else if (data_stream) {
+				/* Parked streams (RX ring full, TX waiting for
+				 * the app) need a re-check every tick. */
+				any_live = true;
+				if (!c->rx_native || rx_room_locked(c) >= 3) {
+					events |= ZSOCK_POLLIN;
+				}
+				if (c->state == NET_STATE_CONNECTED && c->tx_wait_out) {
+					events |= ZSOCK_POLLOUT;
+				}
+			}
+			if (events == 0) {
+				continue;
+			}
+			pfds[nfds].fd      = c->fd;
+			pfds[nfds].events  = events;
 			pfds[nfds].revents = 0;
 			handles[nfds]      = i;
+			gens[nfds]         = c->gen;
 			nfds++;
 		}
 		k_mutex_unlock(&g_mutex);
 
 		if (nfds == 0) {
-			k_sleep(K_MSEC(10));
+			/* Nothing to poll. Streams that exist but are parked (RX ring
+			 * full, TX waiting for the app) are re-checked every tick;
+			 * with no stream at all, sleep until one opens. */
+			k_sem_take(&g_poll_wake,
+				   (any_live || tx_more) ? K_MSEC(NET_POLL_TICK_MS) : K_FOREVER);
 			continue;
 		}
 
-		/* ---- 2. Drain TX rings before polling ---- */
-		for (int i = 0; i < nfds; i++) {
-			int h = handles[i];
-			struct net_stream_ctx *ctx = &g_streams[h];
+		/* ---- 4. Poll ---- */
+		int n = poll_batched(pfds, nfds, tx_more ? 0 : NET_POLL_TICK_MS);
 
-			if (ctx->state == NET_STATE_CONNECTED && ctx->tx_native) {
-				ring_drain_tx(ctx);
-			}
+		if (n < 0) {
+			LOG_DBG("zsock_poll failed: %d", errno);
+			k_sleep(K_MSEC(NET_POLL_TICK_MS)); /* never spin on a poll error */
+			continue;
 		}
-
-		/* ---- 3. Poll (10 ms timeout) ---- */
-		int n = zsock_poll(pfds, nfds, 10);
-
-		if (n <= 0) {
+		if (n == 0) {
 			continue;
 		}
 
-		/* ---- 4. Process events ---- */
+		/* ---- 5. Process events ---- */
 		for (int i = 0; i < nfds; i++) {
-			if (pfds[i].revents == 0) {
+			short rev = pfds[i].revents;
+
+			if (rev == 0) {
 				continue;
 			}
 
 			int h = handles[i];
-			struct net_stream_ctx *ctx = &g_streams[h];
+			struct net_stream_ctx *c = &g_streams[h];
 
-			/* Error / hang-up */
-			if (pfds[i].revents & (ZSOCK_POLLERR | ZSOCK_POLLHUP | ZSOCK_POLLNVAL)) {
-				k_mutex_lock(&g_mutex, K_FOREVER);
-				if (ctx->used) {
-					ctx->state = NET_STATE_CLOSED;
-				}
-				k_mutex_unlock(&g_mutex);
-
-				struct net_event evt = {
-					.type   = NET_EVT_DISCONNECTED,
-					.handle = (uint8_t)h,
-					.extra  = 0,
-				};
-				k_msgq_put(&g_net_evt_q, &evt, K_NO_WAIT);
-				continue;
-			}
-
-			if (!(pfds[i].revents & ZSOCK_POLLIN)) {
-				continue;
-			}
-
-			/* Data or accept ready */
 			k_mutex_lock(&g_mutex, K_FOREVER);
-			net_state_t state = ctx->state;
+			bool live = ctx_live(c, gens[i]);
+			net_state_t state = c->state;
+
+			if (live && (rev & ZSOCK_POLLOUT)) {
+				c->tx_wait_out = false; /* writable: drain next pass */
+			}
 			k_mutex_unlock(&g_mutex);
 
+			if (!live) {
+				continue;
+			}
 			if (state == NET_STATE_LISTENING) {
-				/* Accept */
-				int newfd = zsock_accept(ctx->fd, NULL, NULL);
-
-				if (newfd < 0) {
-					LOG_ERR("stream %d: accept failed: %d", h, errno);
-					continue;
+				if (rev & ZSOCK_POLLIN) {
+					accept_service(h, pfds[i].fd, gens[i]);
 				}
-
-				int new_h = -1;
-
-				k_mutex_lock(&g_mutex, K_FOREVER);
-				for (int j = 0; j < CONFIG_AKIRA_NET_MAX_STREAMS; j++) {
-					if (!g_streams[j].used) {
-						memset(&g_streams[j], 0, sizeof(g_streams[j]));
-						g_streams[j].used  = true;
-						g_streams[j].fd    = newfd;
-						g_streams[j].type  = NET_TYPE_TCP;
-						g_streams[j].state = NET_STATE_CONNECTED;
-						k_work_init(&g_streams[j].connect_work,
-							    connect_work_fn);
-						new_h = j;
-						break;
-					}
-				}
-				k_mutex_unlock(&g_mutex);
-
-				if (new_h >= 0) {
-					LOG_INF("stream %d: accepted new conn → handle %d",
-						h, new_h);
-					struct net_event evt = {
-						.type   = NET_EVT_ACCEPT,
-						.handle = (uint8_t)h,
-						.extra  = (uint16_t)new_h,
-					};
-					k_msgq_put(&g_net_evt_q, &evt, K_NO_WAIT);
-				} else {
-					LOG_WRN("stream %d: no free slots, closing accepted fd", h);
-					zsock_close(newfd);
-				}
-
-			} else {
-				/* Receive data */
-				int recvd = zsock_recv(pfds[i].fd, rx_buf,
-						       sizeof(rx_buf),
-						       ZSOCK_MSG_DONTWAIT);
-
-				if (recvd <= 0) {
-					/* Peer closed or error */
-					k_mutex_lock(&g_mutex, K_FOREVER);
-					if (ctx->used) {
-						ctx->state = NET_STATE_CLOSED;
-					}
-					k_mutex_unlock(&g_mutex);
-
-					struct net_event evt = {
-						.type   = NET_EVT_DISCONNECTED,
-						.handle = (uint8_t)h,
-						.extra  = 0,
-					};
-					k_msgq_put(&g_net_evt_q, &evt, K_NO_WAIT);
-					continue;
-				}
-
-				/* Write into RX ring */
-				k_mutex_lock(&g_mutex, K_FOREVER);
-				uint8_t *rx_native = ctx->rx_native;
-				k_mutex_unlock(&g_mutex);
-
-				if (!rx_native) {
-					LOG_DBG("stream %d: no RX ring bound, %d bytes dropped",
-						h, recvd);
-					continue;
-				}
-
-				int ret = ring_fill_rx(ctx, rx_buf, (uint16_t)recvd);
-
-				if (ret < 0) {
-					LOG_WRN("stream %d: RX ring full — %d bytes dropped",
-						h, recvd);
-					continue;
-				}
-
-				struct net_event evt = {
-					.type   = NET_EVT_DATA_READY,
-					.handle = (uint8_t)h,
-					.extra  = 0,
-				};
-				k_msgq_put(&g_net_evt_q, &evt, K_NO_WAIT);
+				continue;
+			}
+			if (rev & (ZSOCK_POLLIN | ZSOCK_POLLERR | ZSOCK_POLLHUP | ZSOCK_POLLNVAL)) {
+				rx_service(h, pfds[i].fd, gens[i], rev);
 			}
 		}
 	}
+}
+
+/* =========================================================================
+ * Connect worker (system workqueue, one connect at a time)
+ * ======================================================================= */
+
+/* Take the next queued connect, in request order. g_mutex held. */
+static bool job_pick_locked(void)
+{
+	struct net_stream_ctx *best = NULL;
+
+	for (int i = 0; i < NET_MAX_STREAMS; i++) {
+		struct net_stream_ctx *c = &g_streams[i];
+
+		if (!c->used || c->closing || !c->conn_queued) {
+			continue;
+		}
+		if (!best || (int32_t)(c->conn_seq - best->conn_seq) < 0) {
+			best = c;
+		}
+	}
+	if (best) {
+		best->conn_queued = false;
+		best->conn_active = true;
+
+		g_job.active = true;
+		g_job.phase  = CP_START;
+		g_job.type   = best->type;
+		g_job.h      = ctx_handle(best);
+		g_job.gen    = best->gen;
+		g_job.fd     = best->fd;
+		g_job.result = 0;
+		g_job.port   = best->port;
+		memcpy(g_job.host, best->host, sizeof(g_job.host));
+		g_job.host[sizeof(g_job.host) - 1] = '\0';
+	}
+	return best != NULL;
+}
+
+/* DNS (bounded by CONFIG_NET_SOCKETS_DNS_TIMEOUT); IPv4 literals skip it. */
+static int job_resolve(void)
+{
+	memset(&g_job.addr, 0, sizeof(g_job.addr));
+	g_job.addr.sin_family = AF_INET;
+	g_job.addr.sin_port   = htons(g_job.port);
+
+	if (zsock_inet_pton(AF_INET, g_job.host, &g_job.addr.sin_addr) == 1) {
+		return 0;
+	}
+
+	struct zsock_addrinfo hints = {
+		.ai_family   = AF_INET,
+		.ai_socktype = (g_job.type == NET_TYPE_UDP) ? SOCK_DGRAM : SOCK_STREAM,
+	};
+	struct zsock_addrinfo *res = NULL;
+	int ret = zsock_getaddrinfo(g_job.host, NULL, &hints, &res);
+
+	if (ret != 0 || !res || res->ai_family != AF_INET || !res->ai_addr) {
+		NET_WRN("stream %d: DNS failed for \"%s\": %d", g_job.h, g_job.host, ret);
+		if (res) {
+			zsock_freeaddrinfo(res);
+		}
+		return -EHOSTUNREACH;
+	}
+	g_job.addr.sin_addr = ((struct sockaddr_in *)res->ai_addr)->sin_addr;
+	zsock_freeaddrinfo(res);
+	return 0;
+}
+
+/* Start a non-blocking TCP connect on @p fd. @return 1 = in progress. */
+static int job_nb_connect(int fd, uint32_t timeout_ms)
+{
+	int ret = set_nonblock(fd);
+
+	if (ret < 0) {
+		return ret;
+	}
+	if (zsock_connect(fd, (struct sockaddr *)&g_job.addr, sizeof(g_job.addr)) == 0) {
+		return 0;
+	}
+	if (errno != EINPROGRESS) {
+		return -errno;
+	}
+	g_job.phase    = CP_TCP_WAIT;
+	g_job.deadline = k_uptime_get() + timeout_ms;
+	return 1;
+}
+
+/* Check a non-blocking connect without waiting. @return 1 = still going. */
+static int job_nb_check(int fd)
+{
+	struct zsock_pollfd p = { .fd = fd, .events = ZSOCK_POLLOUT };
+	int n = zsock_poll(&p, 1, 0);
+
+	if (n < 0) {
+		return -errno;
+	}
+	if (n == 0 || p.revents == 0) {
+		return (k_uptime_get() >= g_job.deadline) ? -ETIMEDOUT : 1;
+	}
+
+	int soerr = 0;
+	socklen_t len = sizeof(soerr);
+
+	if (zsock_getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &len) == 0 && soerr != 0) {
+		return -soerr;
+	}
+	if (p.revents & (ZSOCK_POLLERR | ZSOCK_POLLHUP | ZSOCK_POLLNVAL)) {
+		return -ECONNREFUSED;
+	}
+	if (!(p.revents & ZSOCK_POLLOUT)) {
+		return (k_uptime_get() >= g_job.deadline) ? -ETIMEDOUT : 1;
+	}
+	return 0;
+}
+
+/* Run the current phase. @return 1 = re-check later, 0 = connected, <0 = -errno. */
+static int job_step(void)
+{
+	switch (g_job.phase) {
+	case CP_START: {
+		int ret = job_resolve();
+
+		if (ret < 0) {
+			return ret;
+		}
+		if (g_job.type == NET_TYPE_UDP) {
+			/* Just sets the default peer. */
+			if (zsock_connect(g_job.fd, (struct sockaddr *)&g_job.addr,
+					  sizeof(g_job.addr)) < 0) {
+				return -errno;
+			}
+			return 0;
+		}
+		/* If the stream was closed during DNS, the next run sees it and
+		 * gives the socket back; connecting it meanwhile is harmless. */
+		return job_nb_connect(g_job.fd, NET_TCP_CONNECT_MS);
+	}
+	case CP_TCP_WAIT:
+		return job_nb_check(g_job.fd);
+	default:
+		return -EINVAL;
+	}
+}
+
+/* Record the outcome of the current job. g_mutex held. */
+static void job_finish_locked(int err)
+{
+	struct net_stream_ctx *c = &g_streams[g_job.h];
+
+	/* conn_active kept the slot from being freed: it is still ours. */
+	if (c->used && c->gen == g_job.gen) {
+		c->conn_active = false;
+		if (c->closing) {
+			/* Closed while connecting: the reaper closes the socket. */
+		} else if (err == 0) {
+			c->state = NET_STATE_CONNECTED;
+			evt_post_locked(c, NET_EVT_CONNECTED, 0);
+			LOG_DBG("stream %d: connected to \"%s\":%u",
+				g_job.h, g_job.host, g_job.port);
+		} else {
+			/* The poll thread closes the socket right away; the slot
+			 * stays until the owner closes the handle. */
+			c->state   = NET_STATE_ERROR;
+			c->drop_fd = true;
+			evt_post_locked(c, NET_EVT_ERROR, (uint16_t)(-err));
+			NET_WRN("stream %d: connect to \"%s\":%u failed: %d",
+				g_job.h, g_job.host, g_job.port, -err);
+		}
+	}
+	g_job.active = false;
+}
+
+static void connect_work_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	/* Never block the system workqueue on the stream table: retry later. */
+	if (k_mutex_lock(&g_mutex, K_MSEC(NET_WORKER_LOCK_MS)) != 0) {
+		k_work_schedule(&g_conn_work, K_MSEC(NET_CONNECT_POLL_MS));
+		return;
+	}
+	if (!g_job.active && !job_pick_locked()) {
+		k_mutex_unlock(&g_mutex);
+		return; /* nothing queued */
+	}
+
+	bool cancelled = !ctx_live(&g_streams[g_job.h], g_job.gen);
+
+	k_mutex_unlock(&g_mutex);
+
+	int ret;
+
+	if (g_job.phase == CP_FINISH) {
+		ret = g_job.result;
+	} else if (cancelled) {
+		ret = -ECANCELED;
+	} else {
+		ret = job_step();
+	}
+
+	if (ret > 0) {
+		k_work_schedule(&g_conn_work, K_MSEC(NET_CONNECT_POLL_MS));
+		return;
+	}
+
+	if (k_mutex_lock(&g_mutex, K_MSEC(NET_WORKER_LOCK_MS)) != 0) {
+		g_job.phase  = CP_FINISH;
+		g_job.result = ret;
+		k_work_schedule(&g_conn_work, K_MSEC(NET_CONNECT_POLL_MS));
+		return;
+	}
+	job_finish_locked(ret);
+	k_mutex_unlock(&g_mutex);
+
+	k_sem_give(&g_poll_wake); /* poll it, or reap it */
+
+	/* Next queued connect (if any) in a fresh run, so other workqueue items
+	 * get to run in between. */
+	k_work_schedule(&g_conn_work, K_NO_WAIT);
 }
 
 /* =========================================================================
@@ -533,18 +1208,21 @@ static void net_poll_thread_fn(void *a, void *b, void *c)
 
 int net_stream_init(void)
 {
+	if (k_mutex_lock(&g_init_lock, K_MSEC(NET_CALLER_LOCK_MS)) != 0) {
+		return -EBUSY;
+	}
 	if (g_initialized) {
+		k_mutex_unlock(&g_init_lock);
 		return 0;
 	}
 
-	k_mutex_init(&g_mutex);
 	memset(g_streams, 0, sizeof(g_streams));
-	k_msgq_purge(&g_net_evt_q);
-
-	for (int i = 0; i < CONFIG_AKIRA_NET_MAX_STREAMS; i++) {
+	for (int i = 0; i < NET_MAX_STREAMS; i++) {
 		g_streams[i].fd = -1;
-		k_work_init(&g_streams[i].connect_work, connect_work_fn);
 	}
+	memset(g_evt, 0, sizeof(g_evt));
+	memset(&g_job, 0, sizeof(g_job));
+	g_job.fd = -1;
 
 	k_thread_create(&g_poll_thread, g_poll_stack,
 			K_THREAD_STACK_SIZEOF(g_poll_stack),
@@ -553,107 +1231,126 @@ int net_stream_init(void)
 	k_thread_name_set(&g_poll_thread, "akira_net_poll");
 
 	g_initialized = true;
-	LOG_INF("Net stream subsystem initialised (max_streams=%d)",
-		CONFIG_AKIRA_NET_MAX_STREAMS);
+	k_mutex_unlock(&g_init_lock);
+
+	LOG_INF("Net stream subsystem initialised (max_streams=%d, per app %d)",
+		NET_MAX_STREAMS, NET_STREAMS_PER_APP);
 	return 0;
 }
 
-int net_stream_open(int type)
+int net_stream_open(int owner, int type)
 {
 	if (type != NET_TYPE_TCP && type != NET_TYPE_UDP) {
 		return -EINVAL;
 	}
-
-	/*
-	 * Lazy cleanup: reclaim any ERROR or CLOSED streams left over from a
-	 * crashed WASM app that never called net_close().  This prevents fd
-	 * exhaustion in the ESP32 LwIP socket pool and frees slots for reuse.
-	 */
-	k_mutex_lock(&g_mutex, K_FOREVER);
-	for (int i = 0; i < CONFIG_AKIRA_NET_MAX_STREAMS; i++) {
-		struct net_stream_ctx *c = &g_streams[i];
-
-		if (c->used && (c->state == NET_STATE_ERROR ||
-				c->state == NET_STATE_CLOSED)) {
-			int leaked_fd = c->fd;
-
-			memset(c, 0, sizeof(*c));
-			c->fd = -1;
-			k_work_init(&c->connect_work, connect_work_fn);
-
-			if (leaked_fd >= 0) {
-				zsock_close(leaked_fd);
-			}
-			LOG_INF("stream %d: reclaimed leaked slot", i);
-		}
-	}
-	k_mutex_unlock(&g_mutex);
-
-	int sock_type = (type == NET_TYPE_TCP) ? SOCK_STREAM : SOCK_DGRAM;
-	int proto     = (type == NET_TYPE_TCP) ? IPPROTO_TCP : IPPROTO_UDP;
-
-	int fd = zsock_socket(AF_INET, sock_type, proto);
-
-	if (fd < 0) {
-		LOG_ERR("zsock_socket(%s) failed: %d",
-			(type == NET_TYPE_TCP) ? "TCP" : "UDP", errno);
-		return -errno;
-	}
-
-	k_mutex_lock(&g_mutex, K_FOREVER);
-	for (int i = 0; i < CONFIG_AKIRA_NET_MAX_STREAMS; i++) {
-		if (!g_streams[i].used) {
-			memset(&g_streams[i], 0, sizeof(g_streams[i]));
-			g_streams[i].used  = true;
-			g_streams[i].type  = type;
-			g_streams[i].fd    = fd;
-			g_streams[i].state = NET_STATE_OPEN;
-			k_work_init(&g_streams[i].connect_work, connect_work_fn);
-			k_mutex_unlock(&g_mutex);
-			LOG_INF("stream %d opened (%s fd=%d)", i,
-				(type == NET_TYPE_TCP) ? "TCP" : "UDP", fd);
-			return i;
-		}
-	}
-	k_mutex_unlock(&g_mutex);
-
-	zsock_close(fd);
-	LOG_ERR("No free stream slots (max=%d)", CONFIG_AKIRA_NET_MAX_STREAMS);
-	return -ENOSPC;
-}
-
-int net_stream_connect(int handle, const char *host, uint16_t port)
-{
-	if (handle < 0 || handle >= CONFIG_AKIRA_NET_MAX_STREAMS || !host || !port) {
+	if (!owner_valid(owner)) {
 		return -EINVAL;
 	}
 
-	k_mutex_lock(&g_mutex, K_FOREVER);
-	struct net_stream_ctx *ctx = &g_streams[handle];
+	int ret = net_stream_init();
 
-	if (!ctx->used || ctx->fd < 0) {
+	if (ret < 0) {
+		return ret;
+	}
+
+	/* Refuse before creating a socket an app at its cap could churn. */
+	if (caller_lock() != 0) {
+		return -EBUSY;
+	}
+	bool full = owner_count_locked(owner) >= NET_STREAMS_PER_APP;
+
+	k_mutex_unlock(&g_mutex);
+	if (full) {
+		return -ENOSPC;
+	}
+
+	int sock_type = (type == NET_TYPE_TCP) ? SOCK_STREAM : SOCK_DGRAM;
+	int proto     = (type == NET_TYPE_TCP) ? IPPROTO_TCP : IPPROTO_UDP;
+	int fd = zsock_socket(AF_INET, sock_type, proto);
+
+	if (fd < 0) {
+		int err = errno;
+
+		NET_WRN("zsock_socket(%s) failed: %d",
+			(type == NET_TYPE_TCP) ? "TCP" : "UDP", err);
+		return -err;
+	}
+
+	int h;
+
+	if (caller_lock() != 0) {
+		h = -EBUSY;
+	} else {
+		h = slot_alloc_locked(owner, type, fd);
+		k_mutex_unlock(&g_mutex);
+	}
+
+	if (h < 0) {
+		zsock_close(fd); /* never in the table: nobody else knows it */
+		NET_WRN("app slot %d: no free stream slot (%d)", owner, h);
+		return h;
+	}
+
+	k_sem_give(&g_poll_wake);
+	LOG_DBG("stream %d opened (%s fd=%d owner=%d)", h,
+		(type == NET_TYPE_TCP) ? "TCP" : "UDP", fd, owner);
+	return h;
+}
+
+int net_stream_connect(int owner, int handle, const char *host, uint16_t port)
+{
+	if (!host || !port) {
+		return -EINVAL;
+	}
+
+	size_t hlen = strnlen(host, NET_STREAM_HOST_MAX + 1);
+
+	if (hlen == 0) {
+		return -EINVAL;
+	}
+	if (hlen > NET_STREAM_HOST_MAX) {
+		return -ENAMETOOLONG; /* never connect to a silently truncated name */
+	}
+
+	if (caller_lock() != 0) {
+		return -EBUSY;
+	}
+	struct net_stream_ctx *c = owned_locked(owner, handle);
+
+	if (!c) {
 		k_mutex_unlock(&g_mutex);
 		return -ENOENT;
 	}
-	if (ctx->state == NET_STATE_CONNECTING ||
-	    ctx->state == NET_STATE_CONNECTED) {
+	if (c->state == NET_STATE_CONNECTING || c->state == NET_STATE_CONNECTED) {
 		k_mutex_unlock(&g_mutex);
 		return -EALREADY;
 	}
+	if (c->state != NET_STATE_OPEN || c->fd < 0) {
+		k_mutex_unlock(&g_mutex);
+		return -EINVAL;
+	}
 
-	strncpy(ctx->host, host, sizeof(ctx->host) - 1);
-	ctx->host[sizeof(ctx->host) - 1] = '\0';
-	ctx->port  = port;
-	ctx->state = NET_STATE_CONNECTING;
+	memcpy(c->host, host, hlen);
+	c->host[hlen]  = '\0';
+	c->port        = port;
+	c->state       = NET_STATE_CONNECTING;
+	c->conn_queued = true;
+	c->conn_seq    = ++g_conn_seq;
+	uint32_t gen   = c->gen;
+
 	k_mutex_unlock(&g_mutex);
 
-	int ret = k_work_submit(&ctx->connect_work);
+	int ret = k_work_schedule(&g_conn_work, K_NO_WAIT);
 
 	if (ret < 0) {
-		k_mutex_lock(&g_mutex, K_FOREVER);
-		ctx->state = NET_STATE_OPEN;
-		k_mutex_unlock(&g_mutex);
-		LOG_ERR("stream %d: k_work_submit failed: %d", handle, ret);
+		if (caller_lock() == 0) {
+			if (ctx_live(c, gen) && c->conn_queued) {
+				c->conn_queued = false;
+				c->state = NET_STATE_OPEN;
+			}
+			k_mutex_unlock(&g_mutex);
+		}
+		NET_WRN("stream %d: cannot queue connect: %d", handle, ret);
 		return -EAGAIN;
 	}
 
@@ -661,214 +1358,278 @@ int net_stream_connect(int handle, const char *host, uint16_t port)
 	return 0;
 }
 
-int net_stream_bind(int handle, uint16_t port)
+int net_stream_bind(int owner, int handle, uint16_t port)
 {
-	if (handle < 0 || handle >= CONFIG_AKIRA_NET_MAX_STREAMS) {
-		return -EINVAL;
+	if (caller_lock() != 0) {
+		return -EBUSY;
 	}
+	struct net_stream_ctx *c = owned_locked(owner, handle);
 
-	k_mutex_lock(&g_mutex, K_FOREVER);
-	struct net_stream_ctx *ctx = &g_streams[handle];
-
-	if (!ctx->used || ctx->fd < 0) {
+	if (!c) {
 		k_mutex_unlock(&g_mutex);
 		return -ENOENT;
 	}
-	k_mutex_unlock(&g_mutex);
+	if (c->state != NET_STATE_OPEN || c->fd < 0) {
+		k_mutex_unlock(&g_mutex);
+		return -EINVAL;
+	}
 
+	/* Held across the (non-blocking) bind so the socket cannot be closed
+	 * and its fd number reused underneath us. */
 	int reuse = 1;
-	zsock_setsockopt(ctx->fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-
 	struct sockaddr_in addr = {
 		.sin_family = AF_INET,
 		.sin_addr   = { .s_addr = INADDR_ANY },
 		.sin_port   = htons(port),
 	};
 
-	int ret = zsock_bind(ctx->fd, (struct sockaddr *)&addr, sizeof(addr));
+	(void)zsock_setsockopt(c->fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+	int ret = zsock_bind(c->fd, (struct sockaddr *)&addr, sizeof(addr));
+	int err = (ret < 0) ? errno : 0;
+
+	k_mutex_unlock(&g_mutex);
 
 	if (ret < 0) {
-		LOG_ERR("stream %d: bind to port %u failed: %d", handle, port, errno);
-		return -errno;
+		NET_WRN("stream %d: bind to port %u failed: %d", handle, port, err);
+		return -err;
 	}
 
-	LOG_INF("stream %d: bound to port %u", handle, port);
+	k_sem_give(&g_poll_wake); /* a bound UDP socket becomes pollable */
+	LOG_DBG("stream %d: bound to port %u", handle, port);
 	return 0;
 }
 
-int net_stream_listen(int handle, int backlog)
+int net_stream_listen(int owner, int handle, int backlog)
 {
-	if (handle < 0 || handle >= CONFIG_AKIRA_NET_MAX_STREAMS) {
-		return -EINVAL;
+	if (caller_lock() != 0) {
+		return -EBUSY;
 	}
+	struct net_stream_ctx *c = owned_locked(owner, handle);
 
-	k_mutex_lock(&g_mutex, K_FOREVER);
-	struct net_stream_ctx *ctx = &g_streams[handle];
-
-	if (!ctx->used || ctx->fd < 0) {
+	if (!c) {
 		k_mutex_unlock(&g_mutex);
 		return -ENOENT;
 	}
-	if (ctx->type != NET_TYPE_TCP) {
+	if (c->type != NET_TYPE_TCP) {
 		k_mutex_unlock(&g_mutex);
 		return -EPROTOTYPE;
 	}
+	if (c->state != NET_STATE_OPEN || c->fd < 0) {
+		k_mutex_unlock(&g_mutex);
+		return -EINVAL;
+	}
 
-	int ret = zsock_listen(ctx->fd, backlog);
+	/* Non-blocking so the poll thread's accept() can never wait. */
+	int ret = set_nonblock(c->fd);
+
+	if (ret == 0 && zsock_listen(c->fd, CLAMP(backlog, 1, NET_MAX_STREAMS)) < 0) {
+		ret = -errno;
+	}
+	if (ret == 0) {
+		c->state = NET_STATE_LISTENING;
+	}
+	k_mutex_unlock(&g_mutex);
 
 	if (ret < 0) {
-		k_mutex_unlock(&g_mutex);
-		LOG_ERR("stream %d: listen failed: %d", handle, errno);
-		return -errno;
+		NET_WRN("stream %d: listen failed: %d", handle, ret);
+		return ret;
 	}
 
-	ctx->state = NET_STATE_LISTENING;
-	k_mutex_unlock(&g_mutex);
-
-	LOG_INF("stream %d: listening (backlog=%d)", handle, backlog);
+	k_sem_give(&g_poll_wake); /* a listening socket is pollable for accepts */
+	LOG_DBG("stream %d: listening (backlog=%d)", handle, backlog);
 	return 0;
 }
 
-int net_stream_close(int handle)
+int net_stream_close(int owner, int handle)
 {
-	if (handle < 0 || handle >= CONFIG_AKIRA_NET_MAX_STREAMS) {
-		return -EINVAL;
+	if (caller_lock() != 0) {
+		return -EBUSY;
 	}
+	struct net_stream_ctx *c = owned_locked(owner, handle);
 
-	k_mutex_lock(&g_mutex, K_FOREVER);
-	struct net_stream_ctx *ctx = &g_streams[handle];
-
-	if (!ctx->used) {
+	if (!c) {
 		k_mutex_unlock(&g_mutex);
 		return -ENOENT;
 	}
 
-	int fd = ctx->fd;
+	/* Detach the rings now: the host never touches them again. No event for
+	 * this handle can be posted after this (closing streams post none). */
+	c->tx_native   = NULL;
+	c->rx_native   = NULL;
+	c->conn_queued = false;
+	evt_purge_handle(owner, handle);
 
-	/* Mark closed before releasing fd — poll thread sees state first */
-	ctx->state      = NET_STATE_CLOSED;
-	ctx->fd         = -1;
-	ctx->tx_native  = NULL;
-	ctx->rx_native  = NULL;
-	ctx->used       = false;
-	k_mutex_unlock(&g_mutex);
-
-	if (fd >= 0) {
-		zsock_close(fd);
+	if (c->fd < 0 && !c->conn_active) {
+		slot_free_locked(c); /* nothing left to close */
+		k_mutex_unlock(&g_mutex);
+		LOG_DBG("stream %d: closed", handle);
+		return 0;
 	}
 
-	LOG_INF("stream %d: closed", handle);
+	/* The poll thread (after the connect worker lets go, if it holds it)
+	 * closes the socket and frees the slot. */
+	c->closing = true;
+	uint32_t gen = c->gen;
+	bool wait = !c->conn_active;
+
+	k_mutex_unlock(&g_mutex);
+	k_sem_give(&g_poll_wake);
+
+	if (wait) {
+		/* Bounded and fixed: lets a following open reuse the socket. The
+		 * gen read is unlocked; it only decides when to stop waiting. */
+		for (int t = 0; t < NET_CLOSE_WAIT_MS; t += NET_POLL_TICK_MS) {
+			k_sleep(K_MSEC(NET_POLL_TICK_MS));
+			if (*(volatile uint32_t *)&c->gen != gen) {
+				break;
+			}
+		}
+	}
 	return 0;
 }
 
-int net_stream_tx_bind(int handle, uint8_t *native_ptr, uint32_t total_size)
+static int ring_bind(int owner, int handle, uint8_t *native_ptr, uint32_t total_size, bool tx)
 {
-	if (handle < 0 || handle >= CONFIG_AKIRA_NET_MAX_STREAMS ||
-	    !native_ptr || total_size <= NET_RING_HDR_SIZE) {
+	if (!native_ptr || total_size <= NET_RING_HDR_SIZE) {
 		return -EINVAL;
 	}
 
 	uint32_t cap = total_size - NET_RING_HDR_SIZE;
 
-	k_mutex_lock(&g_mutex, K_FOREVER);
-	struct net_stream_ctx *ctx = &g_streams[handle];
+	if (caller_lock() != 0) {
+		return -EBUSY;
+	}
+	struct net_stream_ctx *c = owned_locked(owner, handle);
 
-	if (!ctx->used) {
+	if (!c) {
 		k_mutex_unlock(&g_mutex);
 		return -ENOENT;
 	}
 
-	ctx->tx_native = native_ptr;
-	ctx->tx_total  = total_size;
+	/* Header written under g_mutex: the poll thread never sees a half-set-up
+	 * ring, and the old ring (if any) is no longer used once we unlock. */
+	ring_hdr_init(native_ptr, cap);
+	if (tx) {
+		c->tx_native   = native_ptr;
+		c->tx_cap      = cap;
+		c->tx_epoch++;
+		c->tx_ri       = 0;
+		c->tx_sent     = 0;
+		c->tx_cur_len  = 0;
+		c->tx_wait_out = false;
+	} else {
+		c->rx_native = native_ptr;
+		c->rx_cap    = cap;
+		c->rx_wi     = 0;
+	}
 	k_mutex_unlock(&g_mutex);
 
-	/* Initialise ring header: zero indices, set capacity */
-	struct net_ring_hdr *hdr = (struct net_ring_hdr *)native_ptr;
-	hdr->write_idx = 0;
-	hdr->read_idx  = 0;
-	hdr->capacity  = cap;
-	hdr->flags     = 0;
-
-	LOG_DBG("stream %d: TX ring bound (%u bytes data area)", handle, cap);
+	k_sem_give(&g_poll_wake);
+	LOG_DBG("stream %d: %s ring bound (%u bytes data area)", handle, tx ? "TX" : "RX", cap);
 	return 0;
 }
 
-int net_stream_rx_bind(int handle, uint8_t *native_ptr, uint32_t total_size)
+int net_stream_tx_bind(int owner, int handle, uint8_t *native_ptr, uint32_t total_size)
 {
-	if (handle < 0 || handle >= CONFIG_AKIRA_NET_MAX_STREAMS ||
-	    !native_ptr || total_size <= NET_RING_HDR_SIZE) {
-		return -EINVAL;
-	}
-
-	uint32_t cap = total_size - NET_RING_HDR_SIZE;
-
-	k_mutex_lock(&g_mutex, K_FOREVER);
-	struct net_stream_ctx *ctx = &g_streams[handle];
-
-	if (!ctx->used) {
-		k_mutex_unlock(&g_mutex);
-		return -ENOENT;
-	}
-
-	ctx->rx_native = native_ptr;
-	ctx->rx_total  = total_size;
-	k_mutex_unlock(&g_mutex);
-
-	/* Initialise ring header */
-	struct net_ring_hdr *hdr = (struct net_ring_hdr *)native_ptr;
-	hdr->write_idx = 0;
-	hdr->read_idx  = 0;
-	hdr->capacity  = cap;
-	hdr->flags     = 0;
-
-	LOG_DBG("stream %d: RX ring bound (%u bytes data area)", handle, cap);
-	return 0;
+	return ring_bind(owner, handle, native_ptr, total_size, true);
 }
 
-int net_stream_tx_flush(int handle)
+int net_stream_rx_bind(int owner, int handle, uint8_t *native_ptr, uint32_t total_size)
 {
-	if (handle < 0 || handle >= CONFIG_AKIRA_NET_MAX_STREAMS) {
-		return -EINVAL;
+	return ring_bind(owner, handle, native_ptr, total_size, false);
+}
+
+int net_stream_tx_flush(int owner, int handle)
+{
+	if (caller_lock() != 0) {
+		return -EBUSY;
 	}
+	struct net_stream_ctx *c = owned_locked(owner, handle);
+	int ret = 0;
 
-	k_mutex_lock(&g_mutex, K_FOREVER);
-	struct net_stream_ctx *ctx = &g_streams[handle];
-
-	if (!ctx->used || ctx->state != NET_STATE_CONNECTED) {
-		k_mutex_unlock(&g_mutex);
-		return -ENOTCONN;
+	if (!c) {
+		ret = -ENOENT;
+	} else if (c->state != NET_STATE_CONNECTED) {
+		ret = -ENOTCONN;
 	}
 	k_mutex_unlock(&g_mutex);
 
-	return ring_drain_tx(ctx);
+	if (ret == 0) {
+		k_sem_give(&g_poll_wake);
+	}
+	return ret;
 }
 
-int net_stream_event_pop(struct net_event *evt)
+int net_stream_event_pop(int owner, struct net_event *evt)
 {
-	if (!evt) {
+	if (!evt || !owner_valid(owner)) {
 		return -EINVAL;
 	}
+	if (!g_initialized) {
+		return NET_EVT_NONE;
+	}
+	return evt_pop(owner, evt);
+}
 
-	if (k_msgq_get(&g_net_evt_q, evt, K_NO_WAIT) == 0) {
-		return evt->type;
+void net_stream_release_owner(int owner)
+{
+	if (!owner_valid(owner) || !g_initialized) {
+		return;
 	}
 
-	return NET_EVT_NONE;
+	/* Bounded: this runs on the stop path or the system workqueue. Only a
+	 * thread that died holding g_mutex can keep it this long, and then
+	 * nothing can ever take it to touch the rings again either. */
+	if (k_mutex_lock(&g_mutex, K_MSEC(NET_RELEASE_LOCK_MS)) != 0) {
+		LOG_ERR("app slot %d: stream table locked, streams not released", owner);
+		return;
+	}
+
+	int released = 0;
+
+	for (int i = 0; i < NET_MAX_STREAMS; i++) {
+		struct net_stream_ctx *c = &g_streams[i];
+
+		if (!c->used || c->owner != owner || c->closing) {
+			continue;
+		}
+		c->tx_native   = NULL;
+		c->rx_native   = NULL;
+		c->conn_queued = false;
+		if (c->fd < 0 && !c->conn_active) {
+			slot_free_locked(c);
+		} else {
+			c->closing = true;
+		}
+		released++;
+	}
+	/* Under g_mutex: every event post is too, so none can land after this. */
+	evt_purge(owner);
+	k_mutex_unlock(&g_mutex);
+
+	if (released > 0) {
+		k_sem_give(&g_poll_wake);
+		LOG_INF("app slot %d: released %d stream(s)", owner, released);
+	}
 }
 
 #else /* !CONFIG_AKIRA_WASM_NET */
 
-/* Stubs — return -ENOTSUP when the module is disabled */
-int net_stream_init(void)                                           { return -ENOTSUP; }
-int net_stream_open(int t)                                          { (void)t; return -ENOTSUP; }
-int net_stream_connect(int h, const char *host, uint16_t p)         { (void)h; (void)host; (void)p; return -ENOTSUP; }
-int net_stream_bind(int h, uint16_t p)                              { (void)h; (void)p; return -ENOTSUP; }
-int net_stream_listen(int h, int b)                                 { (void)h; (void)b; return -ENOTSUP; }
-int net_stream_close(int h)                                         { (void)h; return -ENOTSUP; }
-int net_stream_tx_bind(int h, uint8_t *p, uint32_t s)              { (void)h; (void)p; (void)s; return -ENOTSUP; }
-int net_stream_rx_bind(int h, uint8_t *p, uint32_t s)              { (void)h; (void)p; (void)s; return -ENOTSUP; }
-int net_stream_tx_flush(int h)                                      { (void)h; return -ENOTSUP; }
+#include <errno.h>
 #include "net_stream.h"
-int net_stream_event_pop(struct net_event *e)                       { (void)e; return -ENOTSUP; }
+
+/* Stubs — return -ENOTSUP when the module is disabled */
+int net_stream_init(void)                                            { return -ENOTSUP; }
+int net_stream_open(int o, int t)                                    { (void)o; (void)t; return -ENOTSUP; }
+int net_stream_connect(int o, int h, const char *s, uint16_t p)      { (void)o; (void)h; (void)s; (void)p; return -ENOTSUP; }
+int net_stream_bind(int o, int h, uint16_t p)                        { (void)o; (void)h; (void)p; return -ENOTSUP; }
+int net_stream_listen(int o, int h, int b)                           { (void)o; (void)h; (void)b; return -ENOTSUP; }
+int net_stream_close(int o, int h)                                   { (void)o; (void)h; return -ENOTSUP; }
+int net_stream_tx_bind(int o, int h, uint8_t *p, uint32_t s)         { (void)o; (void)h; (void)p; (void)s; return -ENOTSUP; }
+int net_stream_rx_bind(int o, int h, uint8_t *p, uint32_t s)         { (void)o; (void)h; (void)p; (void)s; return -ENOTSUP; }
+int net_stream_tx_flush(int o, int h)                                { (void)o; (void)h; return -ENOTSUP; }
+int net_stream_event_pop(int o, struct net_event *e)                 { (void)o; (void)e; return -ENOTSUP; }
+void net_stream_release_owner(int o)                                 { (void)o; }
 
 #endif /* CONFIG_AKIRA_WASM_NET */

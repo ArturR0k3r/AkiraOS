@@ -31,6 +31,7 @@
 #endif
 
 #include "app_events.h"
+#include <settings/settings.h>
 LOG_MODULE_REGISTER(app_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 /* ===== Configuration ===== */
@@ -251,22 +252,30 @@ void app_manager_shutdown(void)
 
     LOG_INF("Shutting down App Manager");
 
-    /* Stop all running apps */
-    k_mutex_lock(&g_registry_mutex, K_FOREVER);
-
+    /* Stop all running apps, without the registry lock: each app thread's
+     * exit callback takes it. */
     for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++)
     {
+        k_mutex_lock(&g_registry_mutex, K_FOREVER);
+        int cid = -1;
+
         if (g_registry[i].state == APP_STATE_RUNNING && g_registry[i].container_id >= 0)
         {
             LOG_INF("Stopping app: %s (container %d)", g_registry[i].name, g_registry[i].container_id);
-            akira_runtime_stop(g_registry[i].container_id);
+            cid = g_registry[i].container_id;
+            g_registry[i].container_id = -1;
             g_registry[i].state = APP_STATE_STOPPED;
+        }
+        k_mutex_unlock(&g_registry_mutex);
+        if (cid >= 0)
+        {
+            akira_runtime_stop(cid);
         }
     }
 
     /* Save registry */
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
     registry_save();
-
     k_mutex_unlock(&g_registry_mutex);
 
     g_initialized = false;
@@ -467,25 +476,29 @@ static int install_admitted(const char *name, const void *binary, size_t size,
 
     /* Check if already exists */
     app_entry_t *existing = find_app_by_name(app_name);
+    if (existing && existing->container_id >= 0)
+    {
+        /* Zero container_id under the lock first so a second concurrent install
+         * thread sees -1 and skips the destroy. Then stop without the lock: the
+         * app thread's exit callback takes g_registry_mutex, so stopping while
+         * holding it stalls the join and frees the slot under a live thread. */
+        int old_cid = existing->container_id;
+        bool was_running = existing->state == APP_STATE_RUNNING;
+
+        existing->container_id = -1;
+        k_mutex_unlock(&g_registry_mutex);
+        if (was_running)
+        {
+            akira_runtime_stop(old_cid);
+        }
+        akira_runtime_destroy(old_cid);
+        k_mutex_lock(&g_registry_mutex, K_FOREVER);
+        existing = find_app_by_name(app_name); /* may have changed meanwhile */
+    }
     if (existing)
     {
         /* Update existing app */
         LOG_INF("Updating existing app: %s", app_name);
-
-        /* Zero container_id under the lock first so a second concurrent install
-         * thread will see -1 and skip the destroy even if akira_runtime_stop()
-         * momentarily drops g_registry_mutex internally. */
-        int old_cid = existing->container_id;
-        existing->container_id = -1;
-
-        if (old_cid >= 0)
-        {
-            if (existing->state == APP_STATE_RUNNING)
-            {
-                akira_runtime_stop(old_cid);
-            }
-            akira_runtime_destroy(old_cid);
-        }
     }
     else
     {
@@ -714,10 +727,22 @@ int app_manager_uninstall(const char *name)
         return -EPERM;
     }
 
-    /* Stop if running */
-    if (app->state == APP_STATE_RUNNING && app->container_id >= 0)
+    /* Stop and destroy without the registry lock (the app thread's exit
+     * callback takes it); container_id = -1 first so nobody else reuses it. */
+    if (app->container_id >= 0)
     {
-        akira_runtime_stop(app->container_id);
+        int cid = app->container_id;
+
+        app->container_id = -1;
+        k_mutex_unlock(&g_registry_mutex);
+        akira_runtime_uninstall(name, cid);
+        k_mutex_lock(&g_registry_mutex, K_FOREVER);
+        app = find_app_by_name(name);
+        if (!app)
+        {
+            k_mutex_unlock(&g_registry_mutex);
+            return -ENOENT; /* uninstalled concurrently */
+        }
     }
 
     /* Delete app binary */
@@ -725,8 +750,9 @@ int app_manager_uninstall(const char *name)
         LOG_WRN("Failed to delete app: %s",name);
     }
 
-    /* Destroy container */
-    akira_runtime_uninstall(app->name, app->container_id);
+    /* Drop its private settings namespace, or stale namespaces use up the
+     * all-apps key budget. */
+    (void)akira_settings_app_purge(name);
 
     int uninstalled_id = app->id;
 
@@ -1003,12 +1029,19 @@ int app_manager_stop(const char *name)
     k_mutex_unlock(&g_registry_mutex);
 
     int ret = akira_runtime_stop(container_id);
-    if (ret < 0)
+    if (ret == -EBUSY)
+    {
+        /* Inside a lock-holding native: it was asked to stop and its thread
+         * ends when that call returns, freeing its runtime slot itself. */
+        LOG_WRN("App '%s' is inside a system call: it stops when the call returns",
+                lc_name_s);
+    }
+    else if (ret < 0)
     {
         LOG_ERR("Failed to stop app: %d", ret);
-        /* Even on failure, update registry to reflect the stopped state so
-         * the app can be restarted cleanly. */
     }
+    /* Even on failure, update registry to reflect the stopped state so
+     * the app can be restarted cleanly (in a new runtime slot). */
 
     k_mutex_lock(&g_registry_mutex, K_FOREVER);
     app = find_app_by_name(name); /* re-find: mutex was temporarily released */

@@ -16,6 +16,7 @@ fw-only:ota_rollback
 fw-only:rtc_alarm_fired
 fw-only:rtc_set_alarm
 fw-only:rtc_set_unix_time
+fw-only:selftest_fault
 fw-only:setjmp
 sdk-only:app_run_from_sd
 sdk-only:ble_scan_pop
@@ -26,6 +27,8 @@ sdk-only:ble_spam_start
 sdk-only:ble_spam_stop
 sdk-only:crypto_p256_keygen
 sdk-only:crypto_p256_sign
+sdk-only:display_raw_wait
+sdk-only:display_raw_write_async
 sdk-only:display_text_huge
 sdk-only:hid_gamepad_send_report
 sdk-only:input_get_buttons

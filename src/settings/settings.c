@@ -8,6 +8,9 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/sys/base64.h>
+#include <zephyr/sys/slist.h>
+#include <zephyr/sys/util.h>
+#include <lib/mem_helper.h>
 #include <errno.h>
 #include <string.h>
 #include <stdio.h>
@@ -354,20 +357,49 @@ static K_MUTEX_DEFINE(akira_settings_mutex);
 
 K_THREAD_STACK_DEFINE(work_stack, 2048);
 
+/* Longest app name kept with an app request (akira_managed_app_t.name). */
+#define SETTINGS_APP_NAME_MAX 32
+
+/*
+ * One queued settings operation. Requests are plain heap blocks in a list that
+ * one static work item (s_pump) drains, so a request can be freed as soon as
+ * it is done: a k_work freed by its own handler is still written by the work
+ * queue after the handler returns.
+ *
+ * A request owns copies of its key and value. A synchronous caller holds a
+ * reference, waits on @done and copies a GET result out; whoever drops the
+ * last reference frees the request. Nothing in it points at the caller's
+ * stack or buffers, so a caller that never comes back (an app thread aborted
+ * while it waited) leaves nothing behind for the handler to write into.
+ */
 struct akira_setting_work
 {
-    struct k_work work;
+    sys_snode_t node;
     settings_op_type_t type;
-    char *key;
-    char *value;
     uint16_t max_len;
     uint8_t encrypted;
+    bool is_app;    /* key lives in app's namespace (akira_settings_app_*) */
+    bool counted;   /* counted in s_app_pending */
 
     settings_wq_callback_t callback;
     void *user_data;
-    struct k_sem *completion_sem;
-    int *result_ptr;
+
+    atomic_t refs;
+    struct k_sem done;
+    int result;
+
+    char key[MAX_KEY_LEN];
+    char value[MAX_VALUE_LEN];
+    char app[SETTINGS_APP_NAME_MAX];
 };
+
+static sys_slist_t s_req_list;
+static struct k_spinlock s_req_lock;
+
+/* App requests queued or running: bounds what apps that give up waiting
+ * can leave in the queue. */
+#define APP_PENDING_MAX 16
+static atomic_t s_app_pending;
 
 static struct
 {
@@ -1331,101 +1363,619 @@ static int settings_clear(void)
     return 0;
 }
 
-// Work queue handler and submission
+// Request queue: one static work item drains s_req_list
 
-static void setting_work_handler(struct k_work *work)
+/* Length of @p s, at most @p max, reading no byte past the NUL (strnlen()
+ * is not in every libc here; @p s may sit at the end of an app's memory). */
+static size_t bounded_len(const char *s, size_t max)
 {
-    struct akira_setting_work *sw = CONTAINER_OF(work, struct akira_setting_work, work);
+    size_t n = 0;
+
+    while (n < max && s[n] != '\0')
+    {
+        n++;
+    }
+    return n;
+}
+
+/* Apps' requests come from PSRAM only on boards that have it (an app can
+ * make that fail); the OS's may fall back to internal SRAM. */
+static struct akira_setting_work *request_new(settings_op_type_t type, bool for_app)
+{
+    struct akira_setting_work *sw = for_app ? akira_malloc_app_buffer(sizeof(*sw))
+                                            : akira_malloc_buffer(sizeof(*sw));
+
+    if (sw)
+    {
+        memset(sw, 0, sizeof(*sw));
+        sw->type = type;
+        atomic_set(&sw->refs, 1);
+        k_sem_init(&sw->done, 0, 1);
+    }
+    return sw;
+}
+
+static void request_put(struct akira_setting_work *sw)
+{
+    if (atomic_dec(&sw->refs) == 1)
+    {
+        akira_free_buffer(sw);
+    }
+}
+
+static int app_request(struct akira_setting_work *sw);
+
+static void run_request(struct akira_setting_work *sw)
+{
     int result = -1;
 
     k_mutex_lock(&akira_settings_mutex, K_FOREVER);
 
-    switch (sw->type)
+    if (sw->is_app)
     {
-    case AKIRA_SETTINGS_OP_SET:
+        result = app_request(sw);
+    }
+    else
     {
-        if (sw->key && sw->value)
+        switch (sw->type)
         {
+        case AKIRA_SETTINGS_OP_SET:
             result = settings_set(sw->key, sw->value, sw->encrypted);
-        }
-        break;
-    }
-    case AKIRA_SETTINGS_OP_GET:
-    {
-        if (sw->key && sw->value)
-        {
+            break;
+        case AKIRA_SETTINGS_OP_GET:
             result = settings_get(sw->key, sw->value, sw->max_len);
-        }
-        break;
-    }
-    case AKIRA_SETTINGS_OP_DELETE:
-    {
-        if (sw->key)
-        {
+            break;
+        case AKIRA_SETTINGS_OP_DELETE:
             result = settings_delete(sw->key);
+            break;
+        case AKIRA_SETTINGS_OP_CLEAR:
+            result = settings_clear();
+            break;
+        default:
+            LOG_WRN("PUSHED UNKNOWN TYPE TO WORKQUEUE (%d)", sw->type);
+            break;
         }
-        break;
-    }
-    case AKIRA_SETTINGS_OP_CLEAR:
-    {
-        result = settings_clear();
-        break;
-    }
-    default:
-    {
-        LOG_WRN("PUSHED UNKNOWN TYPE TO WORKQUEUE (%d)", sw->type);
-        break;
-    }
     }
 
     k_mutex_unlock(&akira_settings_mutex);
 
+    if (sw->counted)
+    {
+        atomic_dec(&s_app_pending);
+    }
     if (sw->callback)
     {
         sw->callback(result, sw->user_data);
     }
-
-    if (sw->completion_sem)
-    {
-        if (sw->result_ptr)
-        {
-            *sw->result_ptr = result;
-        }
-        k_sem_give(sw->completion_sem);
-    }
-
-    if (sw->callback)
-    {
-        if (sw->key)
-            k_free(sw->key);
-        if (sw->type == AKIRA_SETTINGS_OP_SET && sw->value)
-        {
-            k_free(sw->value);
-        }
-    }
-
-    k_free(sw);
+    sw->result = result;
+    k_sem_give(&sw->done);
+    request_put(sw);
 }
 
+static void pump_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    for (;;)
+    {
+        k_spinlock_key_t key = k_spin_lock(&s_req_lock);
+        sys_snode_t *node = sys_slist_get(&s_req_list);
+
+        k_spin_unlock(&s_req_lock, key);
+        if (!node)
+        {
+            return;
+        }
+        run_request(CONTAINER_OF(node, struct akira_setting_work, node));
+    }
+}
+
+static K_WORK_DEFINE(s_pump, pump_handler);
+
+/* Queue @p work. On failure it is freed, whatever references it had. */
 static int submit_settings_work(struct akira_setting_work *work)
 {
     if (!storage.initialized)
     {
-        if (work->callback)
-        {
-            if (work->key)
-                k_free(work->key);
-            if (work->type == AKIRA_SETTINGS_OP_SET && work->value)
-                k_free(work->value);
-        }
-        k_free(work);
+        akira_free_buffer(work);
         return -EINVAL;
     }
 
-    k_work_init(&work->work, setting_work_handler);
-    k_work_submit_to_queue(&storage.work_queue, &work->work);
+    k_spinlock_key_t key = k_spin_lock(&s_req_lock);
+
+    sys_slist_append(&s_req_list, &work->node);
+    k_spin_unlock(&s_req_lock, key);
+    /* Already queued: nothing to do; running: it runs once more. */
+    (void)k_work_submit_to_queue(&storage.work_queue, &s_pump);
 
     return 0;
+}
+
+/* Copy a GET result out of a finished request. */
+static void request_copy_value(const struct akira_setting_work *sw, char *out, size_t out_len)
+{
+    size_t n = bounded_len(sw->value, MIN(out_len - 1, sizeof(sw->value) - 1));
+
+    memcpy(out, sw->value, n);
+    out[n] = '\0';
+}
+
+/* Queue @p sw and wait for it, as long as it takes (OS callers). */
+static int run_sync(struct akira_setting_work *sw, char *out, size_t out_len)
+{
+    atomic_set(&sw->refs, 2);
+
+    int ret = submit_settings_work(sw);
+
+    if (ret != 0)
+    {
+        return ret;
+    }
+
+    (void)k_sem_take(&sw->done, K_FOREVER);
+    ret = sw->result;
+    if (out && ret == 0)
+    {
+        request_copy_value(sw, out, out_len);
+    }
+    request_put(sw);
+    return ret;
+}
+
+/*===========================================================================*/
+/* WASM app settings                                                         */
+/*===========================================================================*/
+
+/*
+ * Each app's keys live in a namespace of their own, "a/<ns>/<key>", where
+ * <ns> is two hex digits bound to the app's exact name by a record
+ * "a/n/<ns>" = <app name>. An app can't name a key outside its namespace, so
+ * the OS's keys (Wi-Fi, MQTT, mesh identity, boot guard...) and other apps'
+ * keys are out of reach, and no hash collision can share a namespace.
+ *
+ * New keys are limited per app, for all apps together and by the
+ * partition's key budget (MAX_KEYS), so apps can't fill the partition the
+ * OS's settings live in. Writes are rate-limited by the caller
+ * (akira_settings_api.c), per app.
+ */
+#define APP_NS_NAME_PREFIX "a/n/"
+#define APP_NS_MAX         64   /* namespaces 00..3f */
+#define APP_NS_PREFIX_LEN  5    /* "a/<ns>/" */
+#define APP_KEYS_PER_APP   40
+#define APP_KEYS_ALL_APPS  64   /* names included */
+#define APP_WAIT_SLICE_MS  50
+
+#define NS_BIT_TEST(map, ns) (((map)[(ns) / 8] & BIT((ns) % 8)) != 0)
+#define NS_BIT_SET(map, ns)  ((map)[(ns) / 8] |= (uint8_t)BIT((ns) % 8))
+
+struct app_ns_scan
+{
+    int ns;                          /* the app's namespace, or -1 */
+    int all;                         /* entries under "a/": names and keys */
+    int total;                       /* entries in the partition */
+    uint8_t keys[APP_NS_MAX];        /* keys per namespace */
+    uint8_t named[APP_NS_MAX / 8];   /* namespaces bound to a name */
+    uint8_t has_key[APP_NS_MAX / 8]; /* namespaces holding the key asked for */
+};
+
+/* Two lowercase hex digits, or -1. */
+static int ns_parse(const char *p)
+{
+    int v = 0;
+
+    for (int i = 0; i < 2; i++)
+    {
+        char c = p[i];
+        int d = (c >= '0' && c <= '9') ? c - '0' : (c >= 'a' && c <= 'f') ? c - 'a' + 10 : -1;
+
+        if (d < 0)
+        {
+            return -1;
+        }
+        v = v * 16 + d;
+    }
+    return v;
+}
+
+static const char ns_hex[] = "0123456789abcdef";
+
+/* out (MAX_KEY_LEN bytes) = "a/<ns>/<key>"; callers checked the key fits. */
+static void app_ns_key(char *out, int ns, const char *key)
+{
+    size_t n = bounded_len(key, MAX_KEY_LEN - APP_NS_PREFIX_LEN - 1);
+
+    out[0] = 'a';
+    out[1] = '/';
+    out[2] = ns_hex[(ns >> 4) & 0xf];
+    out[3] = ns_hex[ns & 0xf];
+    out[4] = '/';
+    memcpy(out + APP_NS_PREFIX_LEN, key, n);
+    out[APP_NS_PREFIX_LEN + n] = '\0';
+}
+
+/* out (MAX_KEY_LEN bytes) = "a/n/<ns>" */
+static void app_ns_name(char *out, int ns)
+{
+    memcpy(out, APP_NS_NAME_PREFIX, 4);
+    out[4] = ns_hex[(ns >> 4) & 0xf];
+    out[5] = ns_hex[ns & 0xf];
+    out[6] = '\0';
+}
+
+/* One pass over the partition: the app's namespace, the counts the quotas
+ * need, and which namespaces hold @p key. Caller holds the mutex. */
+static int app_ns_scan(const char *app, const char *key, struct app_ns_scan *s)
+{
+    uint16_t counter;
+    settings_entry_t entry;
+    int ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
+
+    memset(s, 0, sizeof(*s));
+    s->ns = -1;
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    for (uint16_t i = 0; i < counter; i++)
+    {
+        memset(&entry, 0, sizeof(entry));
+        ret = nvs_read(&storage.nvs, SETTINGS_START_ID + i, &entry, sizeof(entry));
+        if (ret == -ENOENT)
+        {
+            continue; /* hole */
+        }
+        if (ret < 0)
+        {
+            return ret;
+        }
+        s->total++;
+        entry.key[sizeof(entry.key) - 1] = '\0';
+        entry.value[sizeof(entry.value) - 1] = '\0';
+        if (entry.key[0] != 'a' || entry.key[1] != '/')
+        {
+            continue;
+        }
+
+        int ns;
+
+        if (strncmp(entry.key, APP_NS_NAME_PREFIX, 4) == 0)
+        {
+            ns = ns_parse(entry.key + 4);
+            s->all++;
+            if (ns >= 0 && ns < APP_NS_MAX && entry.key[6] == '\0')
+            {
+                NS_BIT_SET(s->named, ns);
+                if (s->ns < 0 && strcmp(entry.value, app) == 0)
+                {
+                    s->ns = ns;
+                }
+            }
+        }
+        else if ((ns = ns_parse(entry.key + 2)) >= 0 && entry.key[4] == '/')
+        {
+            s->all++;
+            if (ns < APP_NS_MAX)
+            {
+                if (s->keys[ns] < UINT8_MAX)
+                {
+                    s->keys[ns]++;
+                }
+                if (key && strcmp(entry.key + APP_NS_PREFIX_LEN, key) == 0)
+                {
+                    NS_BIT_SET(s->has_key, ns);
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+static int app_set(struct akira_setting_work *sw, const struct app_ns_scan *scan)
+{
+    char full[MAX_KEY_LEN];
+    int ns = scan->ns;
+    bool named_now = false;
+    int ret;
+
+    if (ns < 0 || !NS_BIT_TEST(scan->has_key, ns))
+    {
+        /* A new key; a new app also needs its name record. */
+        int need = (ns < 0) ? 2 : 1;
+
+        if ((ns >= 0 && scan->keys[ns] >= APP_KEYS_PER_APP) ||
+            scan->all + need > APP_KEYS_ALL_APPS ||
+            scan->total + need > MAX_KEYS)
+        {
+            return -ENOSPC;
+        }
+        if (ns < 0)
+        {
+            for (ns = 0; ns < APP_NS_MAX; ns++)
+            {
+                if (!NS_BIT_TEST(scan->named, ns) && scan->keys[ns] == 0)
+                {
+                    break;
+                }
+            }
+            if (ns == APP_NS_MAX)
+            {
+                return -ENOSPC;
+            }
+            app_ns_name(full, ns);
+            ret = settings_set(full, sw->app, 0);
+            if (ret != 0)
+            {
+                return ret;
+            }
+            named_now = true;
+        }
+    }
+
+    app_ns_key(full, ns, sw->key);
+    ret = settings_set(full, sw->value, 0);
+    if (ret != 0 && named_now)
+    {
+        app_ns_name(full, ns);
+        (void)settings_delete(full);
+    }
+    return ret;
+}
+
+/* Delete every key of namespace @p ns, then its name. */
+static int app_purge(int ns)
+{
+    uint16_t counter;
+    settings_entry_t entry;
+    char prefix[MAX_KEY_LEN];
+    int ret;
+
+    if (ns < 0)
+    {
+        return 0;
+    }
+    app_ns_key(prefix, ns, "");
+    ret = nvs_read(&storage.nvs, SETTINGS_COUNTER_ID, &counter, sizeof(counter));
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    /* Top down: settings_delete() moves the last entry into the hole, and
+     * every entry above has been looked at already. */
+    for (int i = (int)counter - 1; i >= 0; i--)
+    {
+        memset(&entry, 0, sizeof(entry));
+        if (nvs_read(&storage.nvs, SETTINGS_START_ID + i, &entry, sizeof(entry)) < 0)
+        {
+            continue;
+        }
+        entry.key[sizeof(entry.key) - 1] = '\0';
+        if (strncmp(entry.key, prefix, APP_NS_PREFIX_LEN) == 0)
+        {
+            ret = settings_delete(entry.key);
+            if (ret != 0)
+            {
+                return ret;
+            }
+        }
+    }
+
+    app_ns_name(entry.key, ns);
+    ret = settings_delete(entry.key);
+    return (ret == -1) ? 0 : ret;
+}
+
+/* Runs on the settings work queue, mutex held. */
+static int app_request(struct akira_setting_work *sw)
+{
+    struct app_ns_scan scan;
+    char full[MAX_KEY_LEN];
+    int ret;
+
+    if (storage.type != AKIRA_SETTINGS_STORAGE_FLASH)
+    {
+        return -ENOTSUP;
+    }
+    ret = app_ns_scan(sw->app, sw->key[0] ? sw->key : NULL, &scan);
+    if (ret < 0)
+    {
+        return ret;
+    }
+    int ns = scan.ns;
+
+    switch (sw->type)
+    {
+    case AKIRA_SETTINGS_OP_GET:
+        if (ns < 0 || !NS_BIT_TEST(scan.has_key, ns))
+        {
+            return -ENOENT;
+        }
+        app_ns_key(full, ns, sw->key);
+        ret = settings_get(full, sw->value, sw->max_len);
+        return (ret == -1) ? -ENOENT : ret;
+
+    case AKIRA_SETTINGS_OP_DELETE:
+        if (ns < 0 || !NS_BIT_TEST(scan.has_key, ns))
+        {
+            return -ENOENT;
+        }
+        app_ns_key(full, ns, sw->key);
+        ret = settings_delete(full);
+        if (ret == 0 && scan.keys[ns] <= 1)
+        {
+            /* That was the app's last key: its name goes too. */
+            app_ns_name(full, ns);
+            (void)settings_delete(full);
+        }
+        return (ret == -1) ? -ENOENT : ret;
+
+    case AKIRA_SETTINGS_OP_SET:
+        return app_set(sw, &scan);
+
+    case AKIRA_SETTINGS_OP_CLEAR:
+        return app_purge(ns);
+
+    default:
+        return -EINVAL;
+    }
+}
+
+/* A request for app @p app with key @p key, or NULL. */
+static struct akira_setting_work *app_request_new(settings_op_type_t op, const char *app,
+                                                  const char *key)
+{
+    size_t app_len = bounded_len(app, SETTINGS_APP_NAME_MAX);
+    size_t key_len = key ? bounded_len(key, MAX_KEY_LEN) : 0;
+    struct akira_setting_work *sw;
+
+    if (app_len == 0 || app_len >= SETTINGS_APP_NAME_MAX ||
+        APP_NS_PREFIX_LEN + key_len >= MAX_KEY_LEN)
+    {
+        return NULL;
+    }
+    sw = request_new(op, true);
+    if (sw)
+    {
+        sw->is_app = true;
+        memcpy(sw->app, app, app_len);
+        if (key)
+        {
+            memcpy(sw->key, key, key_len);
+        }
+    }
+    return sw;
+}
+
+int akira_settings_app_call(settings_op_type_t op, const char *app,
+                            const char *key, const char *value,
+                            char *out, size_t out_len, k_timeout_t timeout,
+                            bool (*give_up)(void *ctx), void *ctx)
+{
+    size_t key_len, value_len = 0;
+
+    if (!app || !app[0] || !key || !key[0])
+    {
+        return -EINVAL;
+    }
+    if (op != AKIRA_SETTINGS_OP_GET && op != AKIRA_SETTINGS_OP_SET &&
+        op != AKIRA_SETTINGS_OP_DELETE)
+    {
+        return -EINVAL;
+    }
+    if (op == AKIRA_SETTINGS_OP_GET && (!out || out_len == 0))
+    {
+        return -EINVAL;
+    }
+    if (bounded_len(app, SETTINGS_APP_NAME_MAX) >= SETTINGS_APP_NAME_MAX)
+    {
+        return -EINVAL;
+    }
+    key_len = bounded_len(key, MAX_KEY_LEN);
+    if (APP_NS_PREFIX_LEN + key_len >= MAX_KEY_LEN)
+    {
+        return -ENAMETOOLONG;
+    }
+    if (op == AKIRA_SETTINGS_OP_SET)
+    {
+        if (!value)
+        {
+            return -EINVAL;
+        }
+        value_len = bounded_len(value, MAX_VALUE_LEN);
+        if (value_len >= MAX_VALUE_LEN)
+        {
+            return -E2BIG;
+        }
+    }
+    if (!storage.initialized)
+    {
+        return -EAGAIN;
+    }
+
+    if (atomic_inc(&s_app_pending) >= APP_PENDING_MAX)
+    {
+        atomic_dec(&s_app_pending);
+        return -EBUSY;
+    }
+
+    struct akira_setting_work *sw = app_request_new(op, app, key);
+
+    if (!sw)
+    {
+        atomic_dec(&s_app_pending);
+        return -ENOMEM;
+    }
+    sw->counted = true;
+    if (op == AKIRA_SETTINGS_OP_SET)
+    {
+        memcpy(sw->value, value, value_len);
+    }
+    sw->max_len = (uint16_t)MIN(out_len, sizeof(sw->value));
+    atomic_set(&sw->refs, 2);
+
+    int ret = submit_settings_work(sw);
+
+    if (ret != 0)
+    {
+        atomic_dec(&s_app_pending);
+        return ret;
+    }
+
+    /* Wait in slices: a stopping app returns instead of being aborted here,
+     * and gives up after @p timeout. A request left behind still finishes
+     * and frees itself. */
+    k_timepoint_t end = sys_timepoint_calc(timeout);
+
+    ret = -ETIMEDOUT;
+    for (;;)
+    {
+        k_timeout_t left = sys_timepoint_timeout(end);
+        k_timeout_t slice = K_MSEC(APP_WAIT_SLICE_MS);
+
+        if (!K_TIMEOUT_EQ(left, K_FOREVER) && left.ticks < slice.ticks)
+        {
+            slice = left;
+        }
+        if (k_sem_take(&sw->done, slice) == 0)
+        {
+            ret = sw->result;
+            break;
+        }
+        if (give_up && give_up(ctx))
+        {
+            ret = -ECANCELED;
+            break;
+        }
+        if (sys_timepoint_expired(end))
+        {
+            break;
+        }
+    }
+
+    if (op == AKIRA_SETTINGS_OP_GET && ret == 0)
+    {
+        request_copy_value(sw, out, out_len);
+    }
+    request_put(sw);
+    return ret;
+}
+
+int akira_settings_app_purge(const char *app)
+{
+    if (!app || !app[0] || !storage.initialized ||
+        bounded_len(app, SETTINGS_APP_NAME_MAX) >= SETTINGS_APP_NAME_MAX)
+    {
+        return -EINVAL;
+    }
+
+    struct akira_setting_work *sw = app_request_new(AKIRA_SETTINGS_OP_CLEAR, app, NULL);
+
+    if (!sw)
+    {
+        return -ENOMEM;
+    }
+    return run_sync(sw, NULL, 0);
 }
 
 /*===========================================================================*/
@@ -1517,34 +2067,20 @@ int akira_settings_set(const char *key, const char *value, uint8_t is_encrypted)
         return -E2BIG;
     }
 
-    struct k_sem completion_sem;
-    k_sem_init(&completion_sem, 0, 1);
-
-    int result = -1;
-    struct akira_setting_work *work = k_malloc(sizeof(struct akira_setting_work));
+    struct akira_setting_work *work = request_new(AKIRA_SETTINGS_OP_SET, false);
     if (!work)
         return -ENOMEM;
 
-    work->type = AKIRA_SETTINGS_OP_SET;
-    work->key = (char *)key;
-    work->value = (char *)value;
+    strcpy(work->key, key);
+    strcpy(work->value, value);
     work->encrypted = is_encrypted;
-    work->callback = NULL;
-    work->user_data = NULL;
-    work->completion_sem = &completion_sem;
-    work->result_ptr = &result;
 
-    int ret = submit_settings_work(work);
-    if (ret != 0)
-    {
-        return ret;
-    }
-
-    k_sem_take(&completion_sem, K_FOREVER);
+    int result = run_sync(work, NULL, 0);
 
     if (result == 0)
     {
-        LOG_INF("Set: %s = %s", key, value);
+        /* Key only: values may be secrets. */
+        LOG_DBG("Set: %s", key);
     }
     return result;
 }
@@ -1562,34 +2098,20 @@ int akira_settings_get(const char *key, char *value, size_t max_len)
         return -EINVAL;
     }
 
-    struct k_sem completion_sem;
-    k_sem_init(&completion_sem, 0, 1);
-
-    int result = -1;
-    struct akira_setting_work *work = k_malloc(sizeof(struct akira_setting_work));
+    struct akira_setting_work *work = request_new(AKIRA_SETTINGS_OP_GET, false);
     if (!work)
         return -ENOMEM;
 
-    work->type = AKIRA_SETTINGS_OP_GET;
-    work->key = (char *)key;
-    work->value = value;
-    work->max_len = max_len;
-    work->callback = NULL;
-    work->user_data = NULL;
-    work->completion_sem = &completion_sem;
-    work->result_ptr = &result;
+    strcpy(work->key, key);
+    /* Stored values (and their decryptions) are shorter than MAX_VALUE_LEN,
+     * so capping the length changes no result. */
+    work->max_len = (uint16_t)MIN(max_len, sizeof(work->value));
 
-    int ret = submit_settings_work(work);
-    if (ret != 0)
-    {
-        return ret;
-    }
-
-    k_sem_take(&completion_sem, K_FOREVER);
+    int result = run_sync(work, value, max_len);
 
     if (result == 0)
     {
-        LOG_INF("GET: %s = %s", key, value);
+        LOG_DBG("GET: %s", key);
     }
     return result;
 }
@@ -1600,30 +2122,18 @@ int akira_settings_delete(const char *key)
     {
         return -EINVAL;
     }
+    if (strlen(key) >= MAX_KEY_LEN)
+    {
+        return -1; /* no stored key is this long: not found, as before */
+    }
 
-    struct k_sem completion_sem;
-    k_sem_init(&completion_sem, 0, 1);
-
-    int result = -1;
-    struct akira_setting_work *work = k_malloc(sizeof(struct akira_setting_work));
+    struct akira_setting_work *work = request_new(AKIRA_SETTINGS_OP_DELETE, false);
     if (!work)
         return -ENOMEM;
 
-    work->type = AKIRA_SETTINGS_OP_DELETE;
-    work->key = (char *)key;
-    work->value = NULL;
-    work->callback = NULL;
-    work->user_data = NULL;
-    work->completion_sem = &completion_sem;
-    work->result_ptr = &result;
+    strcpy(work->key, key);
 
-    int ret = submit_settings_work(work);
-    if (ret != 0)
-    {
-        return ret;
-    }
-
-    k_sem_take(&completion_sem, K_FOREVER);
+    int result = run_sync(work, NULL, 0);
 
     if (result == 0)
     {
@@ -1639,29 +2149,11 @@ int akira_settings_clear(void)
         return -EINVAL;
     }
 
-    struct k_sem completion_sem;
-    k_sem_init(&completion_sem, 0, 1);
-
-    int result = -1;
-    struct akira_setting_work *work = k_malloc(sizeof(struct akira_setting_work));
+    struct akira_setting_work *work = request_new(AKIRA_SETTINGS_OP_CLEAR, false);
     if (!work)
         return -ENOMEM;
 
-    work->type = AKIRA_SETTINGS_OP_CLEAR;
-    work->key = NULL;
-    work->value = NULL;
-    work->callback = NULL;
-    work->user_data = NULL;
-    work->completion_sem = &completion_sem;
-    work->result_ptr = &result;
-
-    int ret = submit_settings_work(work);
-    if (ret != 0)
-    {
-        return ret;
-    }
-
-    k_sem_take(&completion_sem, K_FOREVER);
+    int result = run_sync(work, NULL, 0);
 
     if (result == 0)
     {
@@ -1774,31 +2266,15 @@ int akira_settings_set_async(const char *key, const char *value, settings_wq_cal
         return -E2BIG;
     }
 
-    struct akira_setting_work *work = k_malloc(sizeof(struct akira_setting_work));
+    struct akira_setting_work *work = request_new(AKIRA_SETTINGS_OP_SET, false);
     if (!work)
         return -ENOMEM;
 
-    work->type = AKIRA_SETTINGS_OP_SET;
-    work->key = k_malloc(strlen(key) + 1);
-    work->value = k_malloc(strlen(value) + 1);
+    strcpy(work->key, key);
+    strcpy(work->value, value);
     work->encrypted = is_encrypted;
     work->callback = callback;
     work->user_data = user_data;
-    work->completion_sem = NULL;
-    work->result_ptr = NULL;
-
-    if (!work->key || !work->value)
-    {
-        if (work->key)
-            k_free(work->key);
-        if (work->value)
-            k_free(work->value);
-        k_free(work);
-        return -ENOMEM;
-    }
-
-    strcpy(work->key, key);
-    strcpy(work->value, value);
 
     return submit_settings_work(work);
 }
@@ -1809,26 +2285,18 @@ int akira_settings_delete_async(const char *key, settings_wq_callback_t callback
     {
         return -EINVAL;
     }
+    if (strlen(key) >= MAX_KEY_LEN)
+    {
+        return -E2BIG;
+    }
 
-    struct akira_setting_work *work = k_malloc(sizeof(struct akira_setting_work));
+    struct akira_setting_work *work = request_new(AKIRA_SETTINGS_OP_DELETE, false);
     if (!work)
         return -ENOMEM;
 
-    work->type = AKIRA_SETTINGS_OP_DELETE;
-    work->key = k_malloc(strlen(key) + 1);
-    work->value = NULL;
+    strcpy(work->key, key);
     work->callback = callback;
     work->user_data = user_data;
-    work->completion_sem = NULL;
-    work->result_ptr = NULL;
-
-    if (!work->key)
-    {
-        k_free(work);
-        return -ENOMEM;
-    }
-
-    strcpy(work->key, key);
 
     return submit_settings_work(work);
 }

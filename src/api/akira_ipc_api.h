@@ -11,8 +11,11 @@
  *
  * Manifest entry:  "capabilities": ["ipc"]
  *
- * The calling app's name is resolved automatically from the exec_env so
- * msg_recv() cannot eavesdrop on another app's subscription.
+ * Subscriptions belong to the calling app (resolved from the exec_env), so
+ * msg_recv() cannot eavesdrop on another app's subscription, and they are
+ * released when the app ends.  An app holds at most
+ * AKIRA_IPC_MAX_SUBS_PER_APP subscriptions; topic names are shorter than
+ * AKIRA_IPC_TOPIC_NAME_MAX (32) characters.
  * @stability experimental
  * @since 1.4
  */
@@ -29,8 +32,9 @@ extern "C" {
 
 /**
  * @brief Subscribe to a named topic
- * @param topic  Null-terminated topic name
- * @return 0 on success, -ENOMEM if tables full, -EINVAL on bad args
+ * @param topic  Null-terminated topic name (< 32 characters)
+ * @return 0 on success, -ENOMEM if tables are full or the app already holds
+ *         its maximum of subscriptions, -EINVAL on bad args
  */
 int akira_native_msg_subscribe(wasm_exec_env_t exec_env, const char *topic);
 
@@ -54,11 +58,16 @@ int akira_native_msg_publish(wasm_exec_env_t exec_env,
 
 /**
  * @brief Receive next message from a topic (blocking with timeout)
+ *
+ * The wait ends early with -EINTR when the app is being stopped, so even
+ * timeout_ms < 0 never keeps a stop waiting.
+ *
  * @param topic       Topic name
  * @param buf_ptr     WASM pointer to receive buffer
  * @param buf_len     Buffer capacity
- * @param timeout_ms  Timeout in ms (0 = non-blocking, -1 = wait forever)
- * @return Bytes received, -EAGAIN on timeout, negative on error
+ * @param timeout_ms  Timeout in ms (0 = non-blocking, < 0 = wait forever)
+ * @return Bytes received, -EAGAIN on timeout, -EINTR if stopping,
+ *         negative on error
  */
 int akira_native_msg_recv(wasm_exec_env_t exec_env,
                           const char *topic,

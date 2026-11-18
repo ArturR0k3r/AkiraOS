@@ -97,6 +97,17 @@ int ha_parse_light_command(const char *json, size_t len, int *on,
     if (!json || len == 0) {
         return 0;
     }
+
+    /* The string scans below need a terminator, and an MQTT payload has
+     * none: parse a NUL-terminated copy of at most @p len bytes (no stored
+     * payload is longer than AKIRA_MQTT_PAYLOAD_MAX). */
+    char text[AKIRA_MQTT_PAYLOAD_MAX + 1];
+    size_t n = MIN(len, sizeof(text) - 1);
+
+    memcpy(text, json, n);
+    text[n] = '\0';
+    json = text;
+
     int fields = 0;
 
     /* state: look for the value after "state". */

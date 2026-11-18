@@ -8,40 +8,44 @@
 
 #include "wasm_export.h"
 #include <zephyr/logging/log.h>
+#include <api/akira_common_api.h>
 
 LOG_MODULE_REGISTER(akira_log_module, CONFIG_AKIRA_LOG_LEVEL);
 
-static void log_debug(wasm_exec_env_t exec_env, const char *message) {
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    uint32_t off = (uint32_t)(uintptr_t)message;
-    if (!wasm_runtime_validate_app_str_addr(module_inst, off)) {
-        LOG_ERR("Invalid string address in log_debug");
-        return;
+/*
+ * "($)v": WAMR has already checked that the whole string lies in the app's
+ * memory and passes a native pointer (it is not an app offset). Output goes
+ * through the app console, which cuts lines and rate-limits each app, so an
+ * app logging in a loop can't drown the console.
+ */
+#define LOG_MAX_SCAN 640 /* characters looked at per call */
+
+static size_t log_strlen(const char *s)
+{
+    size_t n = 0;
+
+    while (n < LOG_MAX_SCAN && s[n] != '\0') {
+        n++;
     }
-    const char *s = (const char *)wasm_runtime_addr_app_to_native(module_inst, off);
-    LOG_DBG("WASM: %s", s ? s : "(invalid)");
+    return n;
+}
+
+static void log_debug(wasm_exec_env_t exec_env, const char *message) {
+    if (message) {
+        akira_app_log_write(exec_env, LOG_LEVEL_DBG, message, log_strlen(message));
+    }
 }
 
 static void log_info(wasm_exec_env_t exec_env, const char *message) {
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    uint32_t off = (uint32_t)(uintptr_t)message;
-    if (!wasm_runtime_validate_app_str_addr(module_inst, off)) {
-        LOG_ERR("Invalid string address in log_info");
-        return;
+    if (message) {
+        akira_app_log_write(exec_env, LOG_LEVEL_INF, message, log_strlen(message));
     }
-    const char *s = (const char *)wasm_runtime_addr_app_to_native(module_inst, off);
-    LOG_INF("WASM: %s", s ? s : "(invalid)");
 }
 
 static void log_error(wasm_exec_env_t exec_env, const char *message) {
-    wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(exec_env);
-    uint32_t off = (uint32_t)(uintptr_t)message;
-    if (!wasm_runtime_validate_app_str_addr(module_inst, off)) {
-        LOG_ERR("Invalid string address in log_error");
-        return;
+    if (message) {
+        akira_app_log_write(exec_env, LOG_LEVEL_ERR, message, log_strlen(message));
     }
-    const char *s = (const char *)wasm_runtime_addr_app_to_native(module_inst, off);
-    LOG_ERR("WASM: %s", s ? s : "(invalid)");
 }
 
 #ifdef CONFIG_AKIRA_WASM_API

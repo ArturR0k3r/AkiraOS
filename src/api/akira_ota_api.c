@@ -18,6 +18,15 @@ LOG_MODULE_REGISTER(akira_ota_api, CONFIG_AKIRA_LOG_LEVEL);
  *   - The manifest URL is validated before any network operation.
  *   - WASM sandbox cannot write flash directly — only via this native API.
  *   - Requires AKIRA_CAP_OTA_TRIGGER on the calling app.
+ *   - Apps can never confirm an image (make it permanent), and cannot
+ *     request a rollback while an update is in progress.
+ *
+ * Containment (akira_app_containment.h): one app OTA operation runs at a
+ * time and is owned by the calling app's slot.  DNS + connect and every OTA
+ * manager call run as bounded native critical sections; the download wait
+ * is woken by a stop (the socket is shut down).  If the app dies mid-update
+ * ota_release() aborts the half-written session and closes its socket, so
+ * the OTA manager is never left "in progress" until reboot.
  *
  * Gate: CONFIG_AKIRA_WASM_OTA=y
  */
@@ -25,8 +34,10 @@ LOG_MODULE_REGISTER(akira_ota_api, CONFIG_AKIRA_LOG_LEVEL);
 #ifdef CONFIG_AKIRA_WASM_OTA
 
 #include "akira_ota_api.h"
+#include <akira_app_containment.h>
 #include <runtime/security.h>
 #include <runtime/akira_runtime.h>
+#include <zephyr/sys/atomic.h>
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
 #include <connectivity/ota/ota_manager.h>
 #endif
@@ -56,6 +67,58 @@ LOG_MODULE_REGISTER(akira_ota_api, CONFIG_AKIRA_LOG_LEVEL);
 
 #define MANIFEST_URL_MAX 256
 
+/* ── App ownership ──────────────────────────────────────────────────────────
+ * ota_check / ota_fetch_and_apply share static receive buffers and the OTA
+ * manager is a singleton, so one app operation runs at a time.  The owner's
+ * slot, its OTA session phase and its socket are recorded so that a stop
+ * can wake the download and a dead app's leftovers can be released. */
+
+#define OTA_SESS_NONE       0   /* no OTA manager session open            */
+#define OTA_SESS_STREAMING  1   /* ota_start_update() done, writing       */
+#define OTA_SESS_FINALIZING 2   /* handed to the worker: let it finish    */
+
+static atomic_t g_ota_owner;    /* slot + 1 of the app running an op, 0 = none */
+static atomic_t g_ota_session;  /* OTA_SESS_* of the owner's session           */
+
+/* Claim the OTA API for the calling app. Returns its slot or -errno. */
+static int ota_claim(wasm_exec_env_t exec_env)
+{
+    int slot = akira_runtime_slot_of_exec_env(exec_env);
+
+    if (slot < 0) {
+        return -EPERM;
+    }
+    if (!atomic_cas(&g_ota_owner, 0, (atomic_val_t)slot + 1)) {
+        return -EBUSY;
+    }
+    atomic_set(&g_ota_session, OTA_SESS_NONE);
+    return slot;
+}
+
+static void ota_unclaim(void)
+{
+    atomic_set(&g_ota_session, OTA_SESS_NONE);
+    atomic_set(&g_ota_owner, 0);
+}
+
+#if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
+/* Current OTA manager state (ota_get_progress() takes the manager mutex). */
+static enum ota_state ota_state_now(wasm_exec_env_t exec_env)
+{
+    akira_native_critical_enter(exec_env);
+    const struct ota_progress *p = ota_get_progress();
+    enum ota_state st = p ? p->state : OTA_STATE_IDLE;
+    akira_native_critical_exit(exec_env);
+    return st;
+}
+
+static bool ota_state_busy(enum ota_state st)
+{
+    return st == OTA_STATE_IN_PROGRESS || st == OTA_STATE_RECEIVING ||
+           st == OTA_STATE_VALIDATING || st == OTA_STATE_INSTALLING;
+}
+#endif
+
 /* ── URL security check ─────────────────────────────────────────────────── */
 
 static int validate_https_url(const char *url)
@@ -64,7 +127,8 @@ static int validate_https_url(const char *url)
         return -EINVAL;
     }
     if (strncmp(url, "https://", 8) != 0) {
-        LOG_WRN("OTA API: only HTTPS URLs allowed (got '%.*s...')", 16, url);
+        /* App-supplied: keep a looping app from flooding the log. */
+        LOG_WRN_RATELIMIT("OTA API: only HTTPS URLs allowed (got '%.*s...')", 16, url);
         return -EPROTO;
     }
     return 0;
@@ -214,7 +278,7 @@ static int ota_connect(const char *host, const char *port, bool use_tls)
 
     int ret = zsock_getaddrinfo(host, port, &hints, &res);
     if (ret != 0 || res == NULL) {
-        LOG_ERR("OTA: DNS resolution failed for %s (%d)", host, ret);
+        LOG_WRN_RATELIMIT("OTA: DNS resolution failed for %s (%d)", host, ret);
         return -EHOSTUNREACH;
     }
 
@@ -223,7 +287,7 @@ static int ota_connect(const char *host, const char *port, bool use_tls)
 #if defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS)
         sock = zsock_socket(res->ai_family, res->ai_socktype, IPPROTO_TLS_1_2);
 #else
-        LOG_ERR("OTA: https requested but TLS sockets are not enabled");
+        LOG_WRN_RATELIMIT("OTA: https requested but TLS sockets are not enabled");
         zsock_freeaddrinfo(res);
         return -EPROTONOSUPPORT;
 #endif
@@ -254,9 +318,60 @@ static int ota_connect(const char *host, const char *port, bool use_tls)
     ret = zsock_connect(sock, res->ai_addr, res->ai_addrlen);
     zsock_freeaddrinfo(res);
     if (ret < 0) {
-        LOG_ERR("OTA: connect to %s:%s failed (errno %d)", host, port, errno);
+        LOG_WRN_RATELIMIT("OTA: connect to %s:%s failed (errno %d)", host, port, errno);
         zsock_close(sock);
         return -ECONNREFUSED;
+    }
+    return sock;
+}
+
+/* The owner's connected socket, so a stop can wake its blocked receive. */
+static int g_ota_sock = -1;
+static K_MUTEX_DEFINE(g_ota_sock_lock);
+
+/*
+ * ota_connect() for the calling app.  DNS + connect run as a native critical
+ * section: zsock_getaddrinfo() keeps its query state on this stack and the
+ * resolver callback writes into it later, so the thread must never be
+ * aborted inside it.  Both are bounded (CONFIG_NET_SOCKETS_DNS_TIMEOUT,
+ * CONFIG_NET_SOCKETS_CONNECT_TIMEOUT).  The socket is published before the
+ * stop flag is checked: a stop either sees it (and shuts it down) or has
+ * already set the flag.
+ */
+/* Unpublish and close a socket from ota_app_connect(). */
+static void ota_app_close(wasm_exec_env_t exec_env, int sock)
+{
+    akira_native_critical_enter(exec_env);
+    k_mutex_lock(&g_ota_sock_lock, K_FOREVER);
+    if (g_ota_sock == sock) {
+        g_ota_sock = -1;
+    }
+    k_mutex_unlock(&g_ota_sock_lock);
+    akira_native_critical_exit(exec_env);
+    zsock_close(sock);
+}
+
+static int ota_app_connect(wasm_exec_env_t exec_env, const char *host,
+                           const char *port, bool use_tls)
+{
+    akira_native_critical_enter(exec_env);
+    int sock = ota_connect(host, port, use_tls);
+    akira_native_critical_exit(exec_env);
+    if (sock < 0) {
+        return sock;
+    }
+
+    /* g_ota_sock_lock is held by an app thread only inside a critical
+     * section, so a stop never aborts the thread while it holds it. */
+    akira_native_critical_enter(exec_env);
+    k_mutex_lock(&g_ota_sock_lock, K_FOREVER);
+    g_ota_sock = sock;
+    k_mutex_unlock(&g_ota_sock_lock);
+    akira_native_critical_exit(exec_env);
+
+    if (akira_runtime_stop_requested(exec_env)) {
+        ota_app_close(exec_env, sock);
+        return -EINTR;
     }
     return sock;
 }
@@ -404,7 +519,7 @@ static int ota_manifest_cb(struct http_response *rsp,
 }
 
 /* Fetch and parse the manifest at @manifest_url. Returns 0 on success. */
-static int ota_fetch_manifest(const char *manifest_url,
+static int ota_fetch_manifest(wasm_exec_env_t exec_env, const char *manifest_url,
                               struct ota_manifest *out)
 {
     char host[128];
@@ -415,11 +530,11 @@ static int ota_fetch_manifest(const char *manifest_url,
     int ret = ota_split_url(manifest_url, host, sizeof(host), port,
                             sizeof(port), path, sizeof(path), &use_tls);
     if (ret < 0) {
-        LOG_ERR("OTA: cannot parse manifest URL (%d)", ret);
+        LOG_WRN_RATELIMIT("OTA: cannot parse manifest URL (%d)", ret);
         return ret;
     }
 
-    int sock = ota_connect(host, port, use_tls);
+    int sock = ota_app_connect(exec_env, host, port, use_tls);
     if (sock < 0) {
         return sock;
     }
@@ -448,8 +563,11 @@ static int ota_fetch_manifest(const char *manifest_url,
 
     ret = http_client_req(sock, &req, CONFIG_AKIRA_OTA_HTTP_TIMEOUT_MS, &rx);
     uint16_t status = req.internal.response.http_status_code;
-    zsock_close(sock);
+    ota_app_close(exec_env, sock);
 
+    if (akira_runtime_stop_requested(exec_env)) {
+        return -EINTR;
+    }
     if (ret < 0) {
         LOG_ERR("OTA: manifest request failed (%d)", ret);
         return ret;
@@ -510,6 +628,7 @@ static int ota_version_cmp(const int a[3], const int b[3])
 
 /* Streams the firmware body straight into the OTA manager, chunk by chunk. */
 struct ota_fw_rx {
+    wasm_exec_env_t exec_env;   /* the calling app (callbacks run on its thread) */
     size_t  written;
     size_t  total;
     int     err;        /* first negative errno from a write, else 0 */
@@ -524,13 +643,22 @@ static int ota_firmware_cb(struct http_response *rsp,
     if (rx->err) {
         return rx->err;   /* abort the download */
     }
+    if (akira_runtime_stop_requested(rx->exec_env)) {
+        rx->err = -EINTR;
+        return rx->err;
+    }
     if (rx->total == 0 && rsp->content_length) {
         rx->total = rsp->content_length;
     }
 
     if (rsp->body_frag_start && rsp->body_frag_len) {
+        /* One fragment (<= the receive buffer) per call; the pipe write
+         * waits at most 5 s for the OTA worker.  A partial write would
+         * corrupt the image stream, so it is never aborted halfway. */
+        akira_native_critical_enter(rx->exec_env);
         enum ota_result r = ota_write_chunk(rsp->body_frag_start,
                                             rsp->body_frag_len);
+        akira_native_critical_exit(rx->exec_env);
         if (r != OTA_OK) {
             LOG_ERR("OTA: write_chunk failed (%d)", r);
             rx->err = -EIO;
@@ -553,8 +681,18 @@ static int ota_firmware_cb(struct http_response *rsp,
     return 0;
 }
 
+/* Abort the calling app's open OTA manager session. */
+static void ota_app_abort(wasm_exec_env_t exec_env)
+{
+    akira_native_critical_enter(exec_env);
+    (void)ota_abort_update();
+    akira_native_critical_exit(exec_env);
+    atomic_set(&g_ota_session, OTA_SESS_NONE);
+}
+
 /* Download the firmware described by @m and stage it in the secondary slot. */
-static int ota_download_and_apply(const struct ota_manifest *m)
+static int ota_download_and_apply(wasm_exec_env_t exec_env,
+                                  const struct ota_manifest *m)
 {
     char host[128];
     char port[8];
@@ -568,36 +706,44 @@ static int ota_download_and_apply(const struct ota_manifest *m)
         return ret;
     }
 
-    int sock = ota_connect(host, port, use_tls);
+    int sock = ota_app_connect(exec_env, host, port, use_tls);
     if (sock < 0) {
         return sock;
     }
 
-    /* Prepare the secondary slot (erases it). */
+    /* Prepare the secondary slot (the worker erases it). */
+    akira_native_critical_enter(exec_env);
     enum ota_result r = ota_start_update(m->size);
+    if (r == OTA_OK) {
+        /* From here on ota_release() aborts the session if the app dies. */
+        atomic_set(&g_ota_session, OTA_SESS_STREAMING);
+    }
+    akira_native_critical_exit(exec_env);
     if (r != OTA_OK) {
         LOG_ERR("OTA: start_update failed (%d)", r);
-        zsock_close(sock);
-        return -EIO;
+        ota_app_close(exec_env, sock);
+        return (r == OTA_ERROR_ALREADY_IN_PROGRESS) ? -EBUSY : -EIO;
     }
 
     if (m->have_sha) {
+        akira_native_critical_enter(exec_env);
         r = ota_set_expected_sha256(m->sha256);
+        akira_native_critical_exit(exec_env);
         if (r != OTA_OK) {
             LOG_ERR("OTA: set_expected_sha256 failed (%d)", r);
-            ota_abort_update();
-            zsock_close(sock);
+            ota_app_abort(exec_env);
+            ota_app_close(exec_env, sock);
             return -EIO;
         }
     } else if (IS_ENABLED(CONFIG_AKIRA_OTA_REQUIRE_HASH)) {
         LOG_ERR("OTA: manifest has no sha256 but AKIRA_OTA_REQUIRE_HASH=y");
-        ota_abort_update();
-        zsock_close(sock);
+        ota_app_abort(exec_env);
+        ota_app_close(exec_env, sock);
         return -EPERM;
     }
 
     static uint8_t recv_buf[CONFIG_AKIRA_OTA_MAX_CHUNK_SIZE];
-    struct ota_fw_rx rx = { .total = m->size };
+    struct ota_fw_rx rx = { .exec_env = exec_env, .total = m->size };
 
     static const char *const headers[] = {
         "Connection: close\r\n",
@@ -620,33 +766,44 @@ static int ota_download_and_apply(const struct ota_manifest *m)
 
     ret = http_client_req(sock, &req, CONFIG_AKIRA_OTA_HTTP_TIMEOUT_MS, &rx);
     uint16_t status = req.internal.response.http_status_code;
-    zsock_close(sock);
+    ota_app_close(exec_env, sock);
 
+    /* A stop shuts the socket down, which ends the request early: never
+     * finalize what may be a truncated image. */
+    if (!rx.err && akira_runtime_stop_requested(exec_env)) {
+        rx.err = -EINTR;
+    }
     if (rx.err) {
-        ota_abort_update();
+        ota_app_abort(exec_env);
         return rx.err;
     }
     if (ret < 0) {
         LOG_ERR("OTA: firmware request failed (%d)", ret);
-        ota_abort_update();
+        ota_app_abort(exec_env);
         return ret;
     }
     if (status != 200) {
         LOG_ERR("OTA: firmware HTTP status %u", status);
-        ota_abort_update();
+        ota_app_abort(exec_env);
         return -EIO;
     }
-    if (rx.written == 0) {
-        LOG_ERR("OTA: empty firmware body");
-        ota_abort_update();
+    if (rx.written == 0 || (rx.total && rx.written != rx.total)) {
+        LOG_ERR("OTA: incomplete firmware body (%zu of %zu bytes)",
+                rx.written, rx.total);
+        ota_app_abort(exec_env);
         return -EIO;
     }
 
-    /* Recomputes and verifies the SHA-256 against ota_set_expected_sha256(). */
+    /* Recomputes and verifies the SHA-256 against ota_set_expected_sha256().
+     * Waits for the OTA worker without holding any lock, so this is not a
+     * critical section; if the app dies here the worker still finishes the
+     * (complete) image on its own. */
+    atomic_set(&g_ota_session, OTA_SESS_FINALIZING);
     r = ota_finalize_update();
+    atomic_set(&g_ota_session, OTA_SESS_NONE);
     if (r != OTA_OK) {
         LOG_ERR("OTA: finalize failed (%d) - hash mismatch or invalid image", r);
-        ota_abort_update();
+        ota_app_abort(exec_env);
         return -EIO;
     }
 
@@ -659,20 +816,22 @@ static int ota_download_and_apply(const struct ota_manifest *m)
 
 #endif /* net + flash */
 
-/* ── ota_check ──────────────────────────────────────────────────────────── */
+/* ── common argument check ──────────────────────────────────────────────── */
 
-int akira_native_ota_check(wasm_exec_env_t exec_env, const char *manifest_url)
+/* "$" already proved the URL is a NUL-terminated string inside the app's
+ * memory; bound its length and run the scheme + egress policy checks. */
+static int ota_check_url_arg(wasm_exec_env_t exec_env, const char *manifest_url)
 {
-    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EPERM);
-
     if (!manifest_url) {
         return -EINVAL;
     }
 
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    if (!wasm_runtime_validate_native_addr(inst, (void *)manifest_url,
-                                           strnlen(manifest_url,
-                                                   MANIFEST_URL_MAX) + 1)) {
+    size_t len = strnlen(manifest_url, MANIFEST_URL_MAX);
+    if (len >= MANIFEST_URL_MAX) {
+        return -EINVAL;
+    }
+    if (!wasm_runtime_validate_native_addr(inst, (void *)manifest_url, len + 1)) {
         return -EFAULT;
     }
 
@@ -680,22 +839,24 @@ int akira_native_ota_check(wasm_exec_env_t exec_env, const char *manifest_url)
     if (ret < 0) {
         return ret;
     }
-    ret = ota_url_policy_gate(exec_env, manifest_url);
-    if (ret < 0) {
-        return ret;
-    }
+    return ota_url_policy_gate(exec_env, manifest_url);
+}
 
+/* ── ota_check ──────────────────────────────────────────────────────────── */
+
+static int ota_check_owned(wasm_exec_env_t exec_env, const char *manifest_url)
+{
 #if defined(CONFIG_HTTP_CLIENT) && defined(CONFIG_NET_SOCKETS)
     struct ota_manifest m;
-    ret = ota_fetch_manifest(manifest_url, &m);
+    int ret = ota_fetch_manifest(exec_env, manifest_url, &m);
     if (ret < 0) {
-        LOG_WRN("OTA check: manifest fetch failed (%d)", ret);
+        LOG_WRN_RATELIMIT("OTA check: manifest fetch failed (%d)", ret);
         return ret;
     }
 
     int mv[3];
     if (ota_version_parse(m.version, mv) < 0) {
-        LOG_ERR("OTA check: invalid manifest version '%s'", m.version);
+        LOG_WRN_RATELIMIT("OTA check: invalid manifest version '%s'", m.version);
         return -EINVAL;
     }
 
@@ -715,51 +876,48 @@ int akira_native_ota_check(wasm_exec_env_t exec_env, const char *manifest_url)
             cur[0], cur[1], cur[2], m.version);
     return 0;
 #else
-    LOG_WRN("OTA check: HTTP client not enabled (CONFIG_HTTP_CLIENT)");
+    ARG_UNUSED(exec_env);
+    ARG_UNUSED(manifest_url);
+    LOG_WRN_RATELIMIT("OTA check: HTTP client not enabled (CONFIG_HTTP_CLIENT)");
     return -ENOSYS;
 #endif
 }
 
-/* ── ota_fetch_and_apply ────────────────────────────────────────────────── */
-
-int akira_native_ota_fetch_and_apply(wasm_exec_env_t exec_env,
-                                      const char *manifest_url)
+int akira_native_ota_check(wasm_exec_env_t exec_env, const char *manifest_url)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EPERM);
 
-    if (!manifest_url) {
-        return -EINVAL;
-    }
-
-    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    if (!wasm_runtime_validate_native_addr(inst, (void *)manifest_url,
-                                           strnlen(manifest_url,
-                                                   MANIFEST_URL_MAX) + 1)) {
-        return -EFAULT;
-    }
-
-    int ret = validate_https_url(manifest_url);
-    if (ret < 0) {
-        return ret;
-    }
-    ret = ota_url_policy_gate(exec_env, manifest_url);
+    int ret = ota_check_url_arg(exec_env, manifest_url);
     if (ret < 0) {
         return ret;
     }
 
-    /* Check OTA is not already in progress */
-#if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
-    const struct ota_progress *p = ota_get_progress();
-    if (p && p->state == OTA_STATE_IN_PROGRESS) {
-        return -EBUSY;
+    ret = ota_claim(exec_env);
+    if (ret < 0) {
+        return ret;
     }
-#endif
+    ret = ota_check_owned(exec_env, manifest_url);
+    ota_unclaim();
+    return ret;
+}
 
+/* ── ota_fetch_and_apply ────────────────────────────────────────────────── */
+
+static int ota_fetch_and_apply_owned(wasm_exec_env_t exec_env,
+                                     const char *manifest_url)
+{
 #if defined(CONFIG_HTTP_CLIENT) && defined(CONFIG_NET_SOCKETS) && \
     defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
+    /* Check OTA is not already in progress (another transport, or a staged
+     * image still being validated).  ota_start_update() re-checks under the
+     * manager's lock. */
+    if (ota_state_busy(ota_state_now(exec_env))) {
+        return -EBUSY;
+    }
+
     /* 1. Fetch + parse the manifest. */
     struct ota_manifest m;
-    ret = ota_fetch_manifest(manifest_url, &m);
+    int ret = ota_fetch_manifest(exec_env, manifest_url, &m);
     if (ret < 0) {
         LOG_ERR("OTA apply: manifest fetch failed (%d)", ret);
         return ret;
@@ -803,7 +961,7 @@ int akira_native_ota_fetch_and_apply(wasm_exec_env_t exec_env,
     }
 
     /* 4. Download, verify (SHA-256) and stage the image in the 2nd slot. */
-    ret = ota_download_and_apply(&m);
+    ret = ota_download_and_apply(exec_env, &m);
     if (ret < 0) {
         LOG_ERR("OTA apply: download/stage failed (%d)", ret);
         return ret;
@@ -812,9 +970,30 @@ int akira_native_ota_fetch_and_apply(wasm_exec_env_t exec_env,
     LOG_INF("OTA apply: firmware %s staged; reboot to apply", m.version);
     return 0;
 #else
-    LOG_WRN("OTA apply: requires CONFIG_HTTP_CLIENT + MCUboot flash map");
+    ARG_UNUSED(exec_env);
+    ARG_UNUSED(manifest_url);
+    LOG_WRN_RATELIMIT("OTA apply: requires CONFIG_HTTP_CLIENT + MCUboot flash map");
     return -ENOSYS;
 #endif
+}
+
+int akira_native_ota_fetch_and_apply(wasm_exec_env_t exec_env,
+                                      const char *manifest_url)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EPERM);
+
+    int ret = ota_check_url_arg(exec_env, manifest_url);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = ota_claim(exec_env);
+    if (ret < 0) {
+        return ret;
+    }
+    ret = ota_fetch_and_apply_owned(exec_env, manifest_url);
+    ota_unclaim();
+    return ret;
 }
 
 /* ── ota_get_state ──────────────────────────────────────────────────────── */
@@ -824,30 +1003,24 @@ int akira_native_ota_get_state(wasm_exec_env_t exec_env)
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EPERM);
 
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
-    const struct ota_progress *p = ota_get_progress();
-    if (!p) {
-        return -ENODEV;
-    }
-    return (int)p->state;
+    return (int)ota_state_now(exec_env);
 #else
     return -ENOTSUP;
 #endif
 }
 
-/* ── ota_confirm ────────────────────────────────────────────────────────── */
+/* ── ota_confirm ────────────────────────────────────────────────────────────
+ * Refused from apps.  Confirming makes a trial (test-swap) image permanent
+ * and disarms MCUboot's automatic revert, the only safety net for firmware
+ * that boots but is broken.  App capabilities are self-declared, so
+ * "ota.trigger" is no proof the owner wants that.  The system confirms
+ * images itself (boot guard / shell). */
 
 int akira_native_ota_confirm(wasm_exec_env_t exec_env)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EPERM);
-
-#ifdef CONFIG_AKIRA_BOOT_GUARD
-    return akira_boot_guard_confirm();
-#elif defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
-    enum ota_result r = ota_confirm_firmware();
-    return (r == OTA_OK) ? 0 : -EIO;
-#else
-    return -ENOTSUP;
-#endif
+    LOG_WRN_RATELIMIT("OTA API: ota_confirm refused for apps (system-only)");
+    return -EPERM;
 }
 
 /* ── ota_rollback ───────────────────────────────────────────────────────── */
@@ -857,12 +1030,92 @@ int akira_native_ota_rollback(wasm_exec_env_t exec_env)
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EPERM);
 
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
+    /* Never pull the state machine back to IDLE (and reboot) under an
+     * update that is still being written or validated, by any transport.
+     * Holding the OTA API claim keeps an app download from starting
+     * meanwhile. */
+    int ret = ota_claim(exec_env);
+    if (ret < 0) {
+        return -EBUSY;
+    }
+    if (ota_state_busy(ota_state_now(exec_env))) {
+        ota_unclaim();
+        return -EBUSY;
+    }
+    akira_native_critical_enter(exec_env);
     enum ota_result r = ota_request_rollback();
+    akira_native_critical_exit(exec_env);
+    ota_unclaim();
+    if (r == OTA_ERROR_ALREADY_IN_PROGRESS) {
+        return -EBUSY;
+    }
     return (r == OTA_OK) ? 0 : -EIO;
 #else
     return -ENOTSUP;
 #endif
 }
+
+/* ── App teardown ───────────────────────────────────────────────────────── */
+
+/* A stop was requested: wake the owner's blocked download.  Shutting the
+ * read side down ends the HTTP client's poll/recv at once; the app then
+ * returns -EINTR from its own thread and closes the socket itself. */
+static void ota_on_stop(int slot, const char *app_name)
+{
+    ARG_UNUSED(app_name);
+
+    if (atomic_get(&g_ota_owner) != (atomic_val_t)slot + 1) {
+        return;
+    }
+#if defined(CONFIG_HTTP_CLIENT) && defined(CONFIG_NET_SOCKETS)
+    /* Must not block.  If the app holds the lock it is publishing (and then
+     * sees the stop flag) or closing the socket: nothing to wake either way. */
+    if (k_mutex_lock(&g_ota_sock_lock, K_NO_WAIT) == 0) {
+        if (g_ota_sock >= 0) {
+            (void)zsock_shutdown(g_ota_sock, ZSOCK_SHUT_RD);
+        }
+        k_mutex_unlock(&g_ota_sock_lock);
+    }
+#endif
+}
+
+/* The app is gone: release an OTA operation it died in the middle of. */
+static void ota_release(int slot, const char *app_name)
+{
+    ARG_UNUSED(app_name);
+
+    if (atomic_get(&g_ota_owner) != (atomic_val_t)slot + 1) {
+        return;
+    }
+
+#if defined(CONFIG_HTTP_CLIENT) && defined(CONFIG_NET_SOCKETS)
+    int sock = -1;
+
+    if (k_mutex_lock(&g_ota_sock_lock, K_MSEC(500)) == 0) {
+        sock = g_ota_sock;
+        g_ota_sock = -1;
+        k_mutex_unlock(&g_ota_sock_lock);
+    }
+    if (sock >= 0) {
+        zsock_close(sock);
+    }
+#endif
+
+#if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
+    /* A half-written image would keep the OTA manager "in progress" until
+     * reboot.  A session already handed to the worker for finalizing holds
+     * a complete image: the worker finishes it on its own. */
+    if (atomic_cas(&g_ota_session, OTA_SESS_STREAMING, OTA_SESS_NONE)) {
+        LOG_WRN("OTA: app '%s' ended mid-update, aborting the session",
+                app_name ? app_name : "");
+        (void)ota_abort_update();
+    }
+#endif
+
+    ota_unclaim();
+}
+
+AKIRA_APP_RESOURCE_DEFINE(ota, 50, ota_on_stop, ota_release);
 
 #endif /* CONFIG_AKIRA_WASM_OTA */
 

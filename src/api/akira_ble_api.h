@@ -12,6 +12,13 @@
  *
  * Required manifest capability: "ble"
  *
+ * The app BLE layer (GATT services, BLE_APP mode, the app advert, the device
+ * name) belongs to one app at a time: the first app that sets anything up
+ * owns it until it calls ble_deinit() or ends, and other apps get -EBUSY.
+ * When the owner ends, however it ends, its advert is stopped, its services
+ * are removed and the device name, bonding and BT mode are restored.
+ * Service registration and advertising start/stop are rate-limited (-EBUSY).
+ *
  * Typical WASM app flow (mirrors Arduino BLE usage):
  *
  *   int svc  = ble_service_create("19B10000-E8F2-537E-4F6C-D104768A1214");
@@ -49,18 +56,28 @@ extern "C" {
 
 /**
  * @brief Initialise BLE in BLE_APP mode (lazy BT stack start).
- * Fails with -EBUSY if HID mode is already active.
+ * Fails with -EBUSY if another app owns BLE or another BT mode (companion,
+ * mesh, scan) holds the radio.
  */
 int akira_native_ble_init(wasm_exec_env_t exec_env);
 
 /**
  * @brief Deinitialise BLE, unregister all services, release BLE_APP lock.
+ *
+ * Only undoes what this app set up; returns 0 without touching anything if
+ * it owns nothing, -EBUSY if another app owns BLE.
  */
 int akira_native_ble_deinit(wasm_exec_env_t exec_env);
 
 /**
- * @brief Set the BLE device name seen by scanning peers.
- * @param name  Null-terminated C string (max 29 bytes).
+ * @brief Set the BLE (GAP) device name.
+ *
+ * The name is persisted by the stack, so it is restored when the app ends.
+ * A rename to the current name is a no-op; otherwise one rename per 2 s
+ * (-EBUSY sooner).
+ *
+ * @param name  Null-terminated C string (max CONFIG_BT_DEVICE_NAME_MAX
+ *              bytes, -ENOMEM if longer).
  */
 int akira_native_ble_set_local_name(wasm_exec_env_t exec_env,
 				    const char *name);
@@ -76,8 +93,8 @@ int akira_native_ble_service_create(wasm_exec_env_t exec_env,
 /**
  * @brief Create a GATT characteristic.
  * @param uuid128_str  128-bit UUID string.
- * @param props        OR of BLE_PROP_* flags.
- * @param max_len      Maximum value length (bytes).
+ * @param props        OR of BLE_PROP_* flags (other bits: -EINVAL).
+ * @param max_len      Maximum value length (1..CONFIG_AKIRA_BLE_CHAR_MAX_LEN bytes).
  * @return Characteristic handle (>=0) or negative errno.
  */
 int akira_native_ble_char_create(wasm_exec_env_t exec_env,
@@ -95,7 +112,9 @@ int akira_native_ble_service_add_char(wasm_exec_env_t exec_env,
 
 /**
  * @brief Finalise a service and register it with the GATT server.
- * Call this once all characteristics have been added.
+ * Call this once all characteristics have been added. Each GATT database
+ * change is persisted by the stack, so registrations are rate-limited: one
+ * per service at once, then one every 2 s (-EBUSY sooner).
  * @param svc_h  Service handle.
  */
 int akira_native_ble_add_service(wasm_exec_env_t exec_env, int32_t svc_h);
@@ -113,7 +132,8 @@ int akira_native_ble_set_advertised_service(wasm_exec_env_t exec_env,
 int akira_native_ble_advertise(wasm_exec_env_t exec_env);
 
 /**
- * @brief Stop BLE advertising.
+ * @brief Stop the advertising this app started (another mode's advertising
+ * is left alone).
  */
 int akira_native_ble_stop_advertise(wasm_exec_env_t exec_env);
 
@@ -126,7 +146,8 @@ int akira_native_ble_is_connected(wasm_exec_env_t exec_env);
  * @brief Write (and optionally notify) a characteristic value.
  * @param char_h   Characteristic handle.
  * @param data_ptr WASM pointer to data buffer.
- * @param len      Number of bytes.
+ * @param len      Number of bytes (at most the characteristic's max_len;
+ *                 -EMSGSIZE above CONFIG_AKIRA_BLE_CHAR_MAX_LEN).
  */
 int akira_native_ble_char_write(wasm_exec_env_t exec_env,
 				int32_t char_h,

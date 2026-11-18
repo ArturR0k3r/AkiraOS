@@ -28,6 +28,7 @@
 #include <string.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/sys/atomic.h>
+#include <akira_app_containment.h>
 
 #ifdef CONFIG_WIFI
 #include <zephyr/net/net_if.h>
@@ -240,7 +241,7 @@ int akira_rf_receive(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
 
 int akira_rf_set_frequency(uint32_t freq_hz)
 {
-    LOG_INF("RF set frequency: %u Hz", freq_hz);
+    LOG_DBG("RF set frequency: %u Hz", freq_hz);
     if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
     radio_handle_t *h = g_active_handle;
     int ret = (h && h->ops && h->ops->set_frequency) ? h->ops->set_frequency(h, freq_hz) : -ENODEV;
@@ -250,7 +251,7 @@ int akira_rf_set_frequency(uint32_t freq_hz)
 
 int akira_rf_set_power(int8_t dbm)
 {
-    LOG_INF("RF set power: %d dBm", dbm);
+    LOG_DBG("RF set power: %d dBm", dbm);
     if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
     radio_handle_t *h = g_active_handle;
     int ret = (h && h->ops && h->ops->set_power) ? h->ops->set_power(h, dbm) : -ENODEV;
@@ -260,7 +261,7 @@ int akira_rf_set_power(int8_t dbm)
 
 int akira_rf_set_modulation(radio_modulation_t mod)
 {
-    LOG_INF("RF set modulation: %d", mod);
+    LOG_DBG("RF set modulation: %d", mod);
     if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
     radio_handle_t *h = g_active_handle;
     int ret = (h && h->ops && h->ops->set_modulation) ? h->ops->set_modulation(h, mod) : -ENODEV;
@@ -270,7 +271,7 @@ int akira_rf_set_modulation(radio_modulation_t mod)
 
 int akira_rf_set_spreading_factor(uint8_t sf)
 {
-    LOG_INF("RF set LoRa SF: %u", sf);
+    LOG_DBG("RF set LoRa SF: %u", sf);
     if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
     radio_handle_t *h = g_active_handle;
     int ret = (h && h->ops && h->ops->set_spreading_factor) ? h->ops->set_spreading_factor(h, sf) : -ENODEV;
@@ -280,7 +281,7 @@ int akira_rf_set_spreading_factor(uint8_t sf)
 
 int akira_rf_set_bandwidth(uint32_t bw_hz)
 {
-    LOG_INF("RF set BW: %u Hz", bw_hz);
+    LOG_DBG("RF set BW: %u Hz", bw_hz);
     if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
     radio_handle_t *h = g_active_handle;
     int ret = (h && h->ops && h->ops->set_bandwidth) ? h->ops->set_bandwidth(h, bw_hz) : -ENODEV;
@@ -290,7 +291,7 @@ int akira_rf_set_bandwidth(uint32_t bw_hz)
 
 int akira_rf_set_coding_rate(uint8_t cr)
 {
-    LOG_INF("RF set LoRa CR: 4/%u", cr);
+    LOG_DBG("RF set LoRa CR: 4/%u", cr);
     if (k_mutex_lock(&s_chip_lock, K_MSEC(CHIP_LOCK_TIMEOUT_MS)) != 0) return -EBUSY;
     radio_handle_t *h = g_active_handle;
     int ret = (h && h->ops && h->ops->set_coding_rate) ? h->ops->set_coding_rate(h, cr) : -ENODEV;
@@ -358,7 +359,7 @@ static void rf_rx_daemon_fn(void *p1, void *p2, void *p3)
             k_mutex_unlock(&s_chip_lock);
             if (n <= 0) { k_msleep(RF_DAEMON_SLEEP_MS); continue; }
         }
-        LOG_INF("RF RX %d bytes: %02x %02x %02x %02x %02x %02x %02x %02x",
+        LOG_DBG("RF RX %d bytes: %02x %02x %02x %02x %02x %02x %02x %02x",
                 n,
                 n > 0 ? s_rf_poll_buf.data[0] : 0, n > 1 ? s_rf_poll_buf.data[1] : 0,
                 n > 2 ? s_rf_poll_buf.data[2] : 0, n > 3 ? s_rf_poll_buf.data[3] : 0,
@@ -383,14 +384,21 @@ K_THREAD_DEFINE(rf_rx_daemon, CONFIG_AKIRA_RF_DAEMON_STACK_SIZE,
 int akira_rf_raw_capture(uint8_t *buf, size_t max_bytes,
                          uint32_t sample_rate_hz, uint32_t timeout_ms)
 {
-    radio_handle_t *h = g_active_handle;
-    if (!h || !h->ops || !h->ops->raw_capture) return -ENOSYS;
-    if (!(h->capabilities & RADIO_CAP_RAW_MODE)) return -ENOTSUP;
+    if (!buf || max_bytes == 0) return -EINVAL;
 
     akira_rf_daemon_pause();
     int ret = -EBUSY;
     if (k_mutex_lock(&s_chip_lock, K_MSEC(5000)) == 0) {
-        ret = h->ops->raw_capture(h, buf, max_bytes, sample_rate_hz, timeout_ms);
+        /* Read the active handle under the lock: another thread may have
+         * deinit'd it between the pause and here. */
+        radio_handle_t *h = g_active_handle;
+        if (!h || !h->ops || !h->ops->raw_capture) {
+            ret = -ENOSYS;
+        } else if (!(h->capabilities & RADIO_CAP_RAW_MODE)) {
+            ret = -ENOTSUP;
+        } else {
+            ret = h->ops->raw_capture(h, buf, max_bytes, sample_rate_hz, timeout_ms);
+        }
         k_mutex_unlock(&s_chip_lock);
     }
     akira_rf_daemon_resume();
@@ -400,14 +408,19 @@ int akira_rf_raw_capture(uint8_t *buf, size_t max_bytes,
 int akira_rf_raw_replay(const uint8_t *buf, size_t len,
                         uint32_t sample_rate_hz, uint32_t repeat)
 {
-    radio_handle_t *h = g_active_handle;
-    if (!h || !h->ops || !h->ops->raw_replay) return -ENOSYS;
-    if (!(h->capabilities & RADIO_CAP_RAW_MODE)) return -ENOTSUP;
+    if (!buf || len == 0) return -EINVAL;
 
     akira_rf_daemon_pause();
     int ret = -EBUSY;
     if (k_mutex_lock(&s_chip_lock, K_MSEC(5000)) == 0) {
-        ret = h->ops->raw_replay(h, buf, len, sample_rate_hz, repeat);
+        radio_handle_t *h = g_active_handle;
+        if (!h || !h->ops || !h->ops->raw_replay) {
+            ret = -ENOSYS;
+        } else if (!(h->capabilities & RADIO_CAP_RAW_MODE)) {
+            ret = -ENOTSUP;
+        } else {
+            ret = h->ops->raw_replay(h, buf, len, sample_rate_hz, repeat);
+        }
         k_mutex_unlock(&s_chip_lock);
     }
     akira_rf_daemon_resume();
@@ -436,12 +449,120 @@ int akira_rf_recv_pop(uint8_t *buf, size_t max_len, uint32_t timeout_ms)
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 
-/* WASM Native export API */
+#include <runtime/akira_runtime.h>
+
+/* WASM Native export API
+ *
+ * Every native that drives a chip runs inside akira_native_critical_enter/
+ * exit: it holds s_chip_lock (and the SPI bus) while the driver works, and a
+ * stop must never k_thread_abort() the app thread there — that would leak the
+ * lock and leave the radios unusable until reboot. The bracketed work is
+ * bounded: chip-lock waits <= 5 s, and raw capture/replay <= RF_RAW_MAX_CALL_MS.
+ * Waits for packets hold no lock and run in short slices that honour a stop. */
+
+BUILD_ASSERT(AKIRA_MAX_WASM_INSTANCES <= 32, "RF slot bitmask is 32-bit");
+
+#define RF_WAIT_SLICE_MS          100u
+#define RF_WAIT_MAX_MS            60000u
+#define RF_TX_MAX_BYTES           RF_RX_MAX_PACKET
+#define RF_RAW_MAX_CALL_MS        2000u   /* one capture/replay call, all repeats */
+#define RF_RAW_REPEAT_OVERHEAD_MS 15u     /* driver's ~10 ms inter-repeat gap */
+#define RF_RAW_MIN_RATE_HZ        1000u
+#define RF_RAW_MAX_RATE_HZ        500000u
+
+/* bit n: slot n drove the RF API; used so a slot that never touched RF leaves
+ * the shell's/another app's radio alone on teardown. */
+static atomic_t s_rf_app_slots;
+/* Slot currently inside a raw capture/replay (-1: none). A fault there leaves
+ * s_chip_lock held and the daemon paused; the release hook resumes the daemon. */
+static int s_rf_raw_slot = -1;
+
+/* Run a chip-touching call so a stop cannot abort the app mid-call. */
+#define RF_CRITICAL(env, expr)                  \
+    ({                                          \
+        akira_native_critical_enter(env);       \
+        int rf_crit_ret_ = (expr);              \
+        akira_native_critical_exit(env);        \
+        rf_crit_ret_;                           \
+    })
+
+static int rf_note_slot(wasm_exec_env_t exec_env)
+{
+    int slot = akira_runtime_slot_of_exec_env(exec_env);
+
+    if (slot >= 0 && slot < AKIRA_MAX_WASM_INSTANCES) {
+        atomic_set_bit(&s_rf_app_slots, slot);
+    }
+    return slot;
+}
+
+#ifdef CONFIG_AKIRA_RF_RX_DAEMON
+/* Pop one packet, waiting at most timeout_ms (capped at RF_WAIT_MAX_MS) in
+ * RF_WAIT_SLICE_MS slices so a stop is honoured promptly and no app-chosen
+ * timeout is passed straight to the kernel. Holds no lock.
+ *  0 = packet; -ENOMSG = empty (timeout 0); -EAGAIN = timed out after waiting;
+ *  -ECANCELED = the app is being stopped. */
+static int rf_pop_sliced(wasm_exec_env_t exec_env, struct rf_rx_packet *pkt,
+                         uint32_t timeout_ms)
+{
+    uint32_t left = MIN(timeout_ms, RF_WAIT_MAX_MS);
+
+    for (;;) {
+        uint32_t slice = MIN(left, RF_WAIT_SLICE_MS);
+        int ret = k_msgq_get(&s_rf_rx_msgq, pkt,
+                             slice ? K_MSEC(slice) : K_NO_WAIT);
+
+        if (ret == 0) {
+            return 0;
+        }
+        if (slice == 0) {
+            return -ENOMSG;  /* non-blocking and empty */
+        }
+        left -= slice;
+        if (akira_runtime_stop_requested(exec_env)) {
+            return -ECANCELED;
+        }
+        if (left == 0) {
+            return -EAGAIN;
+        }
+    }
+}
+#endif /* CONFIG_AKIRA_RF_RX_DAEMON */
+
+/* Release everything RF app @p slot left running: resume the RX daemon if the
+ * slot died inside a raw capture/replay, purge the RX queue, and drop RF
+ * ownership of the active chip so the mesh or another app can claim it. No-op
+ * if the slot never used the RF API. Idempotent; may run on any thread. */
+void akira_rf_api_release(int slot)
+{
+    if (slot < 0 || slot >= AKIRA_MAX_WASM_INSTANCES) {
+        return;
+    }
+    if (!atomic_test_and_clear_bit(&s_rf_app_slots, slot)) {
+        return;  /* never touched the RF API: leave the shell's radio alone */
+    }
+
+    if (s_rf_raw_slot == slot) {
+        /* Died inside a raw capture/replay (a fault — a stop never aborts
+         * inside the critical section). The daemon was left paused. */
+        s_rf_raw_slot = -1;
+        akira_rf_daemon_resume();
+    }
+#ifdef CONFIG_AKIRA_RF_RX_DAEMON
+    k_msgq_purge(&s_rf_rx_msgq);
+#endif
+    /* Drops radio_manager ownership + powers the active chip down, so the mesh
+     * or another app can acquire it. Uses a timed chip lock, so it cannot hang
+     * even if the dead thread held the lock. */
+    (void)akira_rf_deinit();
+    LOG_INF("RF: released resources of app slot %d", slot);
+}
 
 int akira_native_rf_select(wasm_exec_env_t exec_env, int chip)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
-    return akira_rf_select((akira_rf_chip_t)chip);
+    rf_note_slot(exec_env);
+    return RF_CRITICAL(exec_env, akira_rf_select((akira_rf_chip_t)chip));
 }
 
 int akira_native_rf_recv_pop(wasm_exec_env_t exec_env, uint32_t buf_ptr,
@@ -452,19 +573,34 @@ int akira_native_rf_recv_pop(wasm_exec_env_t exec_env, uint32_t buf_ptr,
     if (max_len == 0)
         return -EINVAL;
 
-    /* Validate the whole [buf_ptr, buf_ptr+max_len) range, not just the base. */
-    uint8_t *buf = (uint8_t *)akira_wasm_ptr_to_native(exec_env, buf_ptr, max_len);
+#ifdef CONFIG_AKIRA_RF_RX_DAEMON
+    /* A packet is at most RF_RX_MAX_PACKET bytes: validate exactly the span
+     * that can be written. */
+    uint32_t span = MIN(max_len, (uint32_t)RF_RX_MAX_PACKET);
+    uint8_t *buf = (uint8_t *)akira_wasm_ptr_to_native(exec_env, buf_ptr, span);
     if (!buf)
         return -EFAULT;
 
-    return akira_rf_recv_pop(buf, (size_t)max_len, timeout_ms);
+    rf_note_slot(exec_env);
+    struct rf_rx_packet pkt;
+    int ret = rf_pop_sliced(exec_env, &pkt, timeout_ms);
+    if (ret < 0)
+        return ret;
+    size_t copy = MIN((size_t)pkt.len, (size_t)span);
+    memcpy(buf, pkt.data, copy);
+    return (int)copy;
+#else
+    ARG_UNUSED(buf_ptr);
+    ARG_UNUSED(timeout_ms);
+    return -ENOSYS;
+#endif
 }
 
 int akira_native_rf_send(wasm_exec_env_t exec_env, uint32_t payload_ptr, uint32_t len)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
-    if (len == 0)
+    if (len == 0 || len > RF_TX_MAX_BYTES)
         return -EINVAL;
 
     /* payload_ptr is a raw app offset (signature "(ii)i"); validate base+len. */
@@ -472,7 +608,8 @@ int akira_native_rf_send(wasm_exec_env_t exec_env, uint32_t payload_ptr, uint32_
     if (!ptr)
         return -EFAULT;
 
-    return akira_rf_send(ptr, len);
+    rf_note_slot(exec_env);
+    return RF_CRITICAL(exec_env, akira_rf_send(ptr, len));
 }
 
 int akira_native_rf_receive(wasm_exec_env_t exec_env, uint32_t buffer_ptr,
@@ -483,51 +620,72 @@ int akira_native_rf_receive(wasm_exec_env_t exec_env, uint32_t buffer_ptr,
     if (max_len == 0)
         return -EINVAL;
 
-    /* Validate the whole [buffer_ptr, buffer_ptr+max_len) range, not just the base. */
-    uint8_t *ptr = (uint8_t *)akira_wasm_ptr_to_native(exec_env, buffer_ptr, max_len);
+#ifdef CONFIG_AKIRA_RF_RX_DAEMON
+    uint32_t span = MIN(max_len, (uint32_t)RF_RX_MAX_PACKET);
+    uint8_t *ptr = (uint8_t *)akira_wasm_ptr_to_native(exec_env, buffer_ptr, span);
     if (!ptr)
         return -EFAULT;
 
-    return akira_rf_receive(ptr, max_len, timeout_ms);
+    rf_note_slot(exec_env);
+    struct rf_rx_packet pkt;
+    int ret = rf_pop_sliced(exec_env, &pkt, timeout_ms);
+    if (ret == -ECANCELED)
+        return ret;
+    if (ret < 0)
+        return 0;  /* timeout, no packet (historical rf_receive contract) */
+    size_t copy = MIN((size_t)pkt.len, (size_t)span);
+    memcpy(ptr, pkt.data, copy);
+    return (int)copy;
+#else
+    ARG_UNUSED(buffer_ptr);
+    ARG_UNUSED(timeout_ms);
+    return -ENOSYS;
+#endif
 }
 
 int akira_native_rf_set_frequency(wasm_exec_env_t exec_env, uint32_t freq_hz)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
-    return akira_rf_set_frequency(freq_hz);
+    rf_note_slot(exec_env);
+    return RF_CRITICAL(exec_env, akira_rf_set_frequency(freq_hz));
 }
 
 int akira_native_rf_set_modulation(wasm_exec_env_t exec_env, int mod)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
-    return akira_rf_set_modulation((radio_modulation_t)mod);
+    rf_note_slot(exec_env);
+    return RF_CRITICAL(exec_env, akira_rf_set_modulation((radio_modulation_t)mod));
 }
 
 int akira_native_rf_set_spreading_factor(wasm_exec_env_t exec_env, int sf)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
     if (sf < 6 || sf > 12) return -EINVAL;
-    return akira_rf_set_spreading_factor((uint8_t)sf);
+    rf_note_slot(exec_env);
+    return RF_CRITICAL(exec_env, akira_rf_set_spreading_factor((uint8_t)sf));
 }
 
 int akira_native_rf_set_bandwidth(wasm_exec_env_t exec_env, uint32_t bw_hz)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
-    return akira_rf_set_bandwidth(bw_hz);
+    rf_note_slot(exec_env);
+    return RF_CRITICAL(exec_env, akira_rf_set_bandwidth(bw_hz));
 }
 
 int akira_native_rf_set_coding_rate(wasm_exec_env_t exec_env, int cr)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
     if (cr < 5 || cr > 8) return -EINVAL;
-    return akira_rf_set_coding_rate((uint8_t)cr);
+    rf_note_slot(exec_env);
+    return RF_CRITICAL(exec_env, akira_rf_set_coding_rate((uint8_t)cr));
 }
 
 int akira_native_rf_get_rssi(wasm_exec_env_t exec_env)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
     int16_t rssi = 0;
-    int ret = akira_rf_get_rssi(&rssi);
+    rf_note_slot(exec_env);
+    int ret = RF_CRITICAL(exec_env, akira_rf_get_rssi(&rssi));
     if (ret < 0) {
         return ret;
     }
@@ -537,7 +695,9 @@ int akira_native_rf_get_rssi(wasm_exec_env_t exec_env)
 int akira_native_rf_set_power(wasm_exec_env_t exec_env, int8_t dbm)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
-    return akira_rf_set_power(dbm);
+    rf_note_slot(exec_env);
+    /* The driver clamps to the PA's limits for the current band. */
+    return RF_CRITICAL(exec_env, akira_rf_set_power(dbm));
 }
 
 #if defined(CONFIG_WIFI) && defined(CONFIG_AKIRA_RF_FRAMEWORK)
@@ -800,6 +960,7 @@ BUILD_ASSERT(sizeof(struct deauth_frame) == 24, "deauth_frame must be 24 bytes")
 
 #define DEAUTH_MAX_COUNT      9999
 #define DEAUTH_MIN_INTERVAL_MS  10
+#define DEAUTH_MAX_INTERVAL_MS 1000
 
 /*
  * wifi_deauth(bssid, client_mac, channel, count, interval_ms) → int
@@ -823,10 +984,16 @@ int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
     if (channel < 1 || channel > 14)        return -EINVAL;
     if (count   < 1 || count > DEAUTH_MAX_COUNT) return -EINVAL;
     if (interval_ms < DEAUTH_MIN_INTERVAL_MS) interval_ms = DEAUTH_MIN_INTERVAL_MS;
+    if (interval_ms > DEAUTH_MAX_INTERVAL_MS) interval_ms = DEAUTH_MAX_INTERVAL_MS;
 
+    /* "(**iii)i": WAMR validated only one byte of each pointer — re-check the
+     * full 6-byte MAC before reading it. */
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    WASM_ADDR_CHECK(inst, bssid_ptr,  6);
-    WASM_ADDR_CHECK(inst, client_ptr, 6);
+    if (!inst ||
+        !wasm_runtime_validate_native_addr(inst, bssid_ptr, 6) ||
+        !wasm_runtime_validate_native_addr(inst, client_ptr, 6)) {
+        return -EFAULT;
+    }
 
     const uint8_t *bssid  = (const uint8_t *)bssid_ptr;
     const uint8_t *client = (const uint8_t *)client_ptr;
@@ -844,6 +1011,12 @@ int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
 
     int sent = 0;
     for (int32_t i = 0; i < count; i++) {
+        /* Honour a stop between frames: this native holds no system lock, so
+         * breaking out early is safe and keeps a misbehaving app bounded. */
+        if (akira_runtime_stop_requested(exec_env)) {
+            break;
+        }
+
         /* Increment sequence number — low 12 bits of seq[0:1], LE */
         uint16_t seq = (uint16_t)(i << 4);
         frame.seq[0] = (uint8_t)(seq & 0xFF);
@@ -852,7 +1025,10 @@ int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
         esp_err_t err = esp_wifi_80211_tx(WIFI_IF_STA, &frame, sizeof(frame), true);
         if (err == ESP_OK) sent++;
 
-        if (i < count - 1) k_msleep(interval_ms);
+        /* Stop-aware gap: a stop wakes this and the next loop test bails. */
+        if (i < count - 1 && akira_runtime_sleep(exec_env, K_MSEC(interval_ms))) {
+            break;
+        }
     }
 
     LOG_INF("wifi_deauth: channel=%d count=%d sent=%d", channel, count, sent);
@@ -865,6 +1041,9 @@ int akira_native_wifi_deauth(wasm_exec_env_t exec_env,
 
 #define RF_RAW_MAX_BYTES 8192u
 
+/* One call owns the chip (daemon paused, s_chip_lock held, driver busy-waiting)
+ * for its whole duration, so a single call is capped at RF_RAW_MAX_CALL_MS:
+ * longer captures/replays are made of several calls. */
 int akira_native_rf_raw_capture(wasm_exec_env_t exec_env,
                                  uint32_t buf_wasm, uint32_t max_bytes,
                                  uint32_t sample_rate_hz, int32_t timeout_ms)
@@ -872,16 +1051,26 @@ int akira_native_rf_raw_capture(wasm_exec_env_t exec_env,
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
     if (max_bytes == 0 || max_bytes > RF_RAW_MAX_BYTES) return -EINVAL;
-    if (timeout_ms <= 0) timeout_ms = 5000;
+    if (sample_rate_hz < RF_RAW_MIN_RATE_HZ || sample_rate_hz > RF_RAW_MAX_RATE_HZ) {
+        return -EINVAL;
+    }
+    if (timeout_ms <= 0 || (uint32_t)timeout_ms > RF_RAW_MAX_CALL_MS) {
+        timeout_ms = (int32_t)RF_RAW_MAX_CALL_MS;
+    }
 
-    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    if (!inst) return -EFAULT;
-    uint8_t *buf = (uint8_t *)wasm_runtime_addr_app_to_native(inst, buf_wasm);
-    if (!buf || !wasm_runtime_validate_native_addr(inst, buf, max_bytes))
+    uint8_t *buf = (uint8_t *)akira_wasm_ptr_to_native(exec_env, buf_wasm, max_bytes);
+    if (!buf)
         return -EFAULT;
 
-    return akira_rf_raw_capture(buf, max_bytes, sample_rate_hz,
-                                (uint32_t)timeout_ms);
+    int slot = rf_note_slot(exec_env);
+    s_rf_raw_slot = slot;
+    int ret = RF_CRITICAL(exec_env,
+                          akira_rf_raw_capture(buf, max_bytes, sample_rate_hz,
+                                               (uint32_t)timeout_ms));
+    if (s_rf_raw_slot == slot) {
+        s_rf_raw_slot = -1;
+    }
+    return ret;
 }
 
 int akira_native_rf_raw_replay(wasm_exec_env_t exec_env,
@@ -891,15 +1080,55 @@ int akira_native_rf_raw_replay(wasm_exec_env_t exec_env,
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_RF_TRANSCEIVE, -EPERM);
 
     if (len == 0 || len > RF_RAW_MAX_BYTES) return -EINVAL;
+    if (sample_rate_hz < RF_RAW_MIN_RATE_HZ || sample_rate_hz > RF_RAW_MAX_RATE_HZ) {
+        return -EINVAL;
+    }
     if (repeat < 1) repeat = 1;
 
-    wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
-    if (!inst) return -EFAULT;
-    const uint8_t *buf = (const uint8_t *)wasm_runtime_addr_app_to_native(inst, buf_wasm);
-    if (!buf || !wasm_runtime_validate_native_addr(inst, (void *)buf, len))
+    /* Air time of one pass (8 samples/byte) plus the driver's per-repeat
+     * overhead; the whole call (all repeats) must fit RF_RAW_MAX_CALL_MS so it
+     * cannot own the chip indefinitely. */
+    uint32_t pass_ms = (uint32_t)DIV_ROUND_UP((uint64_t)len * 8u * 1000u,
+                                              sample_rate_hz) +
+                       RF_RAW_REPEAT_OVERHEAD_MS;
+    if (pass_ms > RF_RAW_MAX_CALL_MS) {
+        return -E2BIG;
+    }
+    uint32_t max_repeat = RF_RAW_MAX_CALL_MS / pass_ms;
+    if ((uint32_t)repeat > max_repeat) {
+        repeat = (int32_t)max_repeat;
+    }
+
+    const uint8_t *buf = (const uint8_t *)akira_wasm_ptr_to_native(exec_env, buf_wasm, len);
+    if (!buf)
         return -EFAULT;
 
-    return akira_rf_raw_replay(buf, len, sample_rate_hz, (uint32_t)repeat);
+    int slot = rf_note_slot(exec_env);
+    s_rf_raw_slot = slot;
+    int ret = RF_CRITICAL(exec_env,
+                          akira_rf_raw_replay(buf, len, sample_rate_hz,
+                                              (uint32_t)repeat));
+    if (s_rf_raw_slot == slot) {
+        s_rf_raw_slot = -1;
+    }
+    return ret;
+}
+
+/* Release RF resources of a WASM app when it ends, however it ends. After the
+ * mesh (order 40), which hands any chip it owns back to the RF layer first. */
+static void rf_release(int slot, const char *app_name)
+{
+    ARG_UNUSED(app_name);
+    akira_rf_api_release(slot);
+}
+
+AKIRA_APP_RESOURCE_DEFINE(rf, 60, NULL, rf_release);
+
+#else /* !CONFIG_AKIRA_WASM_RUNTIME */
+
+void akira_rf_api_release(int slot)
+{
+    ARG_UNUSED(slot);
 }
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */

@@ -8,7 +8,12 @@
  * @brief OTA update WASM native API.
  *
  * Allows trusted WASM apps (with AKIRA_CAP_OTA_TRIGGER) to check for,
- * fetch, and apply firmware updates, and to query/confirm/rollback OTA.
+ * fetch, and apply firmware updates, query OTA state and request a rollback.
+ * Confirming an image is system-only.
+ *
+ * One app OTA operation (check, fetch-apply, rollback) runs at a time; a
+ * second one returns -EBUSY.  A stop ends a running fetch with -EINTR, and
+ * a session left open by an app that ended mid-update is aborted.
  *
  * Gate: CONFIG_AKIRA_WASM_OTA=y (depends on CONFIG_AKIRA_OTA)
  * Capability: AKIRA_CAP_OTA_TRIGGER (bit 31)
@@ -53,14 +58,16 @@ int akira_native_ota_fetch_and_apply(wasm_exec_env_t exec_env,
 int akira_native_ota_get_state(wasm_exec_env_t exec_env);
 
 /**
- * @brief Confirm the running firmware (clears boot guard counter).
- * @return 0 on success, negative errno on failure.
+ * @brief Refused: confirming makes a trial image permanent and disarms
+ *        MCUboot's automatic revert, so only the system does it.
+ * @return -EPERM always.
  */
 int akira_native_ota_confirm(wasm_exec_env_t exec_env);
 
 /**
  * @brief Request an immediate rollback to the previous firmware.
- * @return 0 on success (device will reboot), negative errno on failure.
+ * @return 0 on success (device will reboot), -EBUSY while an update is in
+ *         progress, other negative errno on failure.
  */
 int akira_native_ota_rollback(wasm_exec_env_t exec_env);
 

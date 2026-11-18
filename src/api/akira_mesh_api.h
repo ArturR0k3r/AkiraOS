@@ -37,12 +37,21 @@ int akira_native_mesh_distribute_app(wasm_exec_env_t exec_env, void *dest_id,
                                      uint32_t len);
 
 /**
- * @brief Tear down any app-owned mesh session.
+ * @brief Tear down any app-owned mesh session, whoever owns it.
  *
- * Called by the runtime when a WASM app exits so a crashed or force-killed
- * app does not leave the radio acquired and the RX queue allocated.
+ * Unconditional: stops the mesh and frees the RX queue if a session exists.
  */
 void akira_mesh_api_cleanup(void);
+
+/**
+ * @brief Release the mesh session owned by WASM app @p slot.
+ *
+ * Called by the runtime when a WASM app exits so a crashed or force-killed app
+ * does not leave the radio acquired and the RX queue allocated. No-op unless
+ * @p slot is the slot that set the session up — a different app ending must not
+ * kill another app's live session. Idempotent; safe from any thread.
+ */
+void akira_mesh_api_release(int slot);
 
 #ifdef __cplusplus
 }

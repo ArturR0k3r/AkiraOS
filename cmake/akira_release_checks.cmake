@@ -47,16 +47,22 @@ if(NOT CONFIG_AKIRA_APP_SIGNING)
     "CONFIG_AKIRA_APP_SIGNING is not set - WASM app signatures are not verified")
 endif()
 # Without a platform verifier (REQUIRE_SIGNED_APPS) no app is attested, so the
-# sandbox alone has to hold: no privileged grants, no AOT, full WAMR validation.
+# sandbox alone has to hold: no privileged grants, full WAMR validation.
+# Unattested AOT stays the user's choice (CONFIG_AKIRA_REFUSE_UNATTESTED_AOT).
 if(CONFIG_AKIRA_WASM_RUNTIME AND NOT CONFIG_AKIRA_REQUIRE_SIGNED_APPS)
   if(NOT CONFIG_AKIRA_HARDEN_UNATTESTED_APPS)
     list(APPEND _akira_findings
-      "CONFIG_AKIRA_HARDEN_UNATTESTED_APPS is not set - unattested apps can be granted privileged capabilities and load AOT native code")
+      "CONFIG_AKIRA_HARDEN_UNATTESTED_APPS is not set - unattested apps can be granted privileged capabilities")
   endif()
   if(CONFIG_AKIRA_WAMR_MINI_LOADER)
     list(APPEND _akira_findings
       "CONFIG_AKIRA_WAMR_MINI_LOADER=y - WAMR skips module validation for apps no verifier has authenticated")
   endif()
+endif()
+
+if(CONFIG_AKIRA_SANDBOX_SELFTEST)
+  list(APPEND _akira_findings
+    "CONFIG_AKIRA_SANDBOX_SELFTEST=y - apps can call selftest_fault() to crash their own thread on purpose")
 endif()
 
 # --- MCUboot firmware images ------------------------------------------------
