@@ -170,6 +170,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `fix(api)`: Every `fs_*` call failed: the jail `/akira/apps/<app>/` is on no mounted
   filesystem. Apps now get the storage API's directory, `/SD:/apps/<app>/` with a card or
   `/lfs/apps/<app>/` without, created on the first file or directory they make.
+- `fix(wdt)`: The hardware watchdog was never armed on any board: `akira_wdt` looked only
+  for a `zephyr,watchdog` node, and real watchdogs have vendor compatibles. It now uses the
+  board's `watchdog0` alias. A hang is now reset after `CONFIG_AKIRA_WDT_TIMEOUT_MS` (30 s
+  by default); verified on AkiraConsole Prod.
+- `fix(shell)`: Zephyr's app version shell (on by default once an application has a
+  `VERSION` file) registered a second root `app` command and hid AkiraOS's
+  `app install/start/stop/list`. AkiraOS now defaults `CONFIG_APP_VERSION_SHELL` to `n`.
+- `fix(log)`: AkiraConsole Prod's deferred log buffer is 4 KB; 2 KB dropped about 24 boot
+  messages.
 - `fix(settings)`: every settings request freed its work item inside its own handler (a
   use-after-free); app GETs no longer have the settings thread write into app memory; secret
   values are no longer logged at boot.

@@ -1605,7 +1605,8 @@ int akira_runtime_stop(int instance_id)
             }
             LOG_ERR("App thread (slot %d) didn't stop: aborting it (%s)", instance_id,
                     blocked ? "still blocked in a native call after the full timeout"
-                            : "spinning in WASM code");
+                            : "still running after the grace period, in WASM code or "
+                              "in a native outside a critical section");
             k_thread_abort(app->tid);
             app->tid = NULL;
             /* Stopped on request: report it as a clean stop (exit code 0). */

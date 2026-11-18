@@ -13,6 +13,12 @@ menuconfig AKIRA_OS
       Build the AkiraOS runtime, services and drivers from the akira-os
       module into this application.
 
+# Zephyr's app version shell (on by default once the application has a
+# VERSION file) registers a root "app" command too, and hides AkiraOS's
+# `app install/start/stop/list`. `akira version` reports the versions.
+configdefault APP_VERSION_SHELL
+    default n if AKIRA_OS
+
 if AKIRA_OS
 
 config AKIRA_LOG_LEVEL

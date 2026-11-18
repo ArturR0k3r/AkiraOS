@@ -73,9 +73,13 @@ system keeps running; that lock's driver may stay busy.
 A fault anywhere else (an ISR, a system thread, a kernel panic) keeps
 Zephyr's policy, and so does a stack overflow on a board without a hardware
 stack guard (`CONFIG_HW_STACK_PROTECTION`): the sentinel or a canary finds it
-only after it may have overwritten heap memory next to the stack. WAMR keeps
+only after it may have overwritten heap memory next to the stack, if at all.
+On AkiraConsole Prod (ESP32-S3) a runaway native recursion is not detected:
+the device hangs until the hardware watchdog resets it (about 30 s,
+`CONFIG_AKIRA_WDT_TIMEOUT_MS`). WAMR keeps
 `CONFIG_AKIRA_WASM_STACK_GUARD_SIZE` free for natives, so only a native that
-uses more than that can overflow. A contained app fault is not a reason for
+uses more than that can overflow: a firmware bug, not something an app
+controls. A contained app fault is not a reason for
 the boot guard to roll back firmware.
 
 ## Memory
@@ -222,7 +226,7 @@ write into app memory from other threads, 50 by default.
 |---|---|
 | 0 | `k_oops()` |
 | 1 | NULL write (hardware only; on native_sim it kills the host process) |
-| 2 | runaway native recursion (hardware only). Contained only with a hardware stack guard; without one (ESP32-S3) Zephyr's fatal policy applies |
+| 2 | runaway native recursion (hardware only). Contained only with a hardware stack guard; without one (ESP32-S3) the device hangs until the hardware watchdog resets it |
 | 3 | spin forever inside the native, holding no lock |
 | 4 | `k_oops()` inside a critical section: the slot must stay parked |
 

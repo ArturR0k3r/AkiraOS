@@ -11,10 +11,10 @@ LOG_MODULE_REGISTER(akira_wdt, CONFIG_AKIRA_LOG_LEVEL);
  * @file akira_wdt.c
  * @brief AkiraOS system watchdog manager.
  *
- * Finds the hardware WDT device via DT (first zephyr,watchdog node that is
- * enabled in the board overlay), installs a single timeout channel, enables
- * the watchdog, and auto-feeds it from a k_work_delayable at the configured
- * interval.
+ * Finds the hardware WDT device via DT (the watchdog0 alias every board
+ * defines, else a zephyr,watchdog node), installs a single timeout channel,
+ * enables the watchdog, and auto-feeds it from a k_work_delayable at the
+ * configured interval.
  *
  * All timing parameters come from Kconfig — no board-specific constants in
  * this file.  Board overlays enable the WDT node; board .conf files set:
@@ -29,6 +29,15 @@ LOG_MODULE_REGISTER(akira_wdt, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/device.h>
 #include <zephyr/drivers/watchdog.h>
 #include <errno.h>
+
+/* Real watchdogs have vendor compatibles (espressif,esp32-watchdog,
+ * st,stm32-watchdog, nordic,nrf-wdt...), so look for the board's alias first:
+ * a zephyr,watchdog-only lookup found nothing on any board. */
+#if DT_NODE_HAS_STATUS(DT_ALIAS(watchdog0), okay)
+#define AKIRA_WDT_DEV() DEVICE_DT_GET(DT_ALIAS(watchdog0))
+#else
+#define AKIRA_WDT_DEV() DEVICE_DT_GET_ANY(zephyr_watchdog)
+#endif
 
 static const struct device *s_wdt_dev;
 static int s_wdt_channel = -1;
@@ -76,7 +85,7 @@ bool akira_wdt_is_active(void)
 
 int akira_wdt_init(void)
 {
-    s_wdt_dev = DEVICE_DT_GET_ANY(zephyr_watchdog);
+    s_wdt_dev = AKIRA_WDT_DEV();
     if (!s_wdt_dev || !device_is_ready(s_wdt_dev)) {
         LOG_WRN("WDT device not ready — watchdog disabled");
         return -ENODEV;

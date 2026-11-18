@@ -181,6 +181,10 @@ CONFIG_AKIRA_WDT_TIMEOUT_MS=30000    # reset if not fed within 30 s
 CONFIG_AKIRA_WDT_FEED_INTERVAL_MS=10000   # auto-feed every 10 s
 ```
 
+The device is the board's `watchdog0` devicetree alias (or a `zephyr,watchdog`
+node). Before 1.7 only the latter was looked up, no board has one, and the
+watchdog was never armed; the boot log now shows `WDT enabled`.
+
 **Invariant:** `FEED_INTERVAL_MS < TIMEOUT_MS`.  The build will fail if this
 is violated (checked via Kconfig `range` and a static assert in
 `src/drivers/wdt/akira_wdt.c`).
