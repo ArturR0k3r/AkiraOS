@@ -42,6 +42,7 @@ LOG_MODULE_REGISTER(akira_ota_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <connectivity/ota/ota_manager.h>
 #endif
 #include <zephyr/kernel.h>
+#include <lib/mem_helper.h>
 #include <string.h>
 #include <errno.h>
 
@@ -539,7 +540,7 @@ static int ota_fetch_manifest(wasm_exec_env_t exec_env, const char *manifest_url
         return sock;
     }
 
-    static uint8_t recv_buf[1024];
+    static uint8_t recv_buf[1024] AKIRA_BULK_BSS;
     char body[1024];
     struct ota_manifest_rx rx = {
         .buf = body, .cap = sizeof(body), .len = 0, .overflow = false,
@@ -742,7 +743,7 @@ static int ota_download_and_apply(wasm_exec_env_t exec_env,
         return -EPERM;
     }
 
-    static uint8_t recv_buf[CONFIG_AKIRA_OTA_MAX_CHUNK_SIZE];
+    static uint8_t recv_buf[CONFIG_AKIRA_OTA_MAX_CHUNK_SIZE] AKIRA_BULK_BSS;
     struct ota_fw_rx rx = { .exec_env = exec_env, .total = m->size };
 
     static const char *const headers[] = {

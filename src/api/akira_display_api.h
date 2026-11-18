@@ -14,7 +14,9 @@
 #define AKIRA_DISPLAY_API_H
 
 #include <stdint.h>
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
+#endif
 
 /* ---------------------------------------------------------------------------
  * Platform-agnostic primitives (no security checks)
@@ -31,7 +33,15 @@ void akira_display_pixel(int x, int y, uint16_t color);
 void akira_display_rect(int x, int y, int w, int h, uint16_t color);
 void akira_display_text(int x, int y, const char *text, uint16_t color);
 void akira_display_text_large(int x, int y, const char *text, uint16_t color);
+void akira_display_text_huge(int x, int y, const char *text, uint16_t color);
 void akira_display_flush(void);
+/** Flush only rows [y0, y1): nothing outside that band may have been drawn
+ *  since the previous flush (e.g. a status-bar-only repaint). */
+void akira_display_flush_rows(int y0, int y1);
+/* Present only the rect [x, x+w) x [y, y+h): nothing outside it may have
+ * changed since the last flush.  A small animated region then costs a small
+ * SPI transfer instead of the full frame (~120 ms on the ST7789V). */
+void akira_display_flush_rect(int x, int y, int w, int h);
 void akira_display_get_size(int *width, int *height);
 
 /**
@@ -87,8 +97,11 @@ int akira_native_display_pixel(wasm_exec_env_t exec_env, int32_t x, int32_t y, u
 int akira_native_display_rect(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color);
 int akira_native_display_text(wasm_exec_env_t exec_env, int32_t x, int32_t y, const char *text, uint32_t color);
 int akira_native_display_text_large(wasm_exec_env_t exec_env, int x, int y, const char *text, uint32_t color);
+int akira_native_display_text_huge(wasm_exec_env_t exec_env, int x, int y, const char *text, uint32_t color);
 int akira_native_display_flush(wasm_exec_env_t exec_env);
 int akira_native_display_get_size(wasm_exec_env_t exec_env, int32_t *w_out, int32_t *h_out);
+int akira_native_display_get_width(wasm_exec_env_t exec_env);
+int akira_native_display_get_height(wasm_exec_env_t exec_env);
 
 /* Phase 3.5 native wrappers */
 int akira_native_display_line(wasm_exec_env_t exec_env, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t color);
@@ -100,6 +113,10 @@ int akira_native_display_rect_outline(wasm_exec_env_t exec_env, int32_t x, int32
 int akira_native_display_bitmap(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t *data, uint32_t data_size);
 int akira_native_display_bitmap_transparent(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t *data, uint32_t data_size, uint32_t key);
 int akira_native_display_raw_write(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t *data, uint32_t data_size);
+int akira_native_display_raw_write_async(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t w, int32_t h, const uint8_t *data, uint32_t data_size);
+int akira_native_display_raw_wait(wasm_exec_env_t exec_env);
+/** Block until any queued asynchronous raw write has reached the panel. */
+void akira_display_raw_async_wait(void);
 
 /* Phase 4 native wrappers */
 int akira_native_display_hline(wasm_exec_env_t exec_env, int32_t x, int32_t y, int32_t len, uint32_t color);

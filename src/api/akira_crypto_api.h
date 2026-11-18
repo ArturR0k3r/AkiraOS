@@ -19,7 +19,9 @@
 #ifndef AKIRA_CRYPTO_API_H
 #define AKIRA_CRYPTO_API_H
 
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -130,6 +132,72 @@ int akira_native_crypto_ed25519_sign(wasm_exec_env_t exec_env,
                                       void *seed_ptr,
                                       void *msg_ptr, uint32_t msg_len,
                                       void *sig_ptr);
+
+/**
+ * @brief Generate a new P-256 (secp256r1) key pair from hardware entropy.
+ *
+ * Unlike Ed25519, this goes through PSA properly (P-256 is a supported
+ * Weierstrass curve in this mbedTLS build).
+ *
+ * Gate: CONFIG_AKIRA_WASM_CRYPTO_ECDSA_P256=y.
+ *
+ * @param priv_ptr  WASM pointer to 32-byte output buffer (private scalar).
+ * @param pub_ptr   WASM pointer to 65-byte output buffer (uncompressed point).
+ * @return 0 on success, -ENOTSUP if not compiled in, -EIO on PSA failure.
+ */
+int akira_native_crypto_p256_keygen(wasm_exec_env_t exec_env,
+                                     void *priv_ptr,
+                                     void *pub_ptr);
+
+/**
+ * @brief Sign a message with a P-256 private key (ECDSA/SHA-256).
+ *
+ * Imports the 32-byte private scalar into a volatile PSA key slot, signs
+ * the message, then immediately destroys the slot. Output is raw r||s
+ * (32+32 bytes), NOT DER — caller DER-encodes for CTAP2/U2F if needed.
+ *
+ * @param priv_ptr  WASM pointer to 32-byte private key scalar.
+ * @param msg_ptr   WASM pointer to message buffer.
+ * @param msg_len   Message length in bytes.
+ * @param sig_ptr   WASM pointer to 64-byte signature output (raw r||s).
+ * @return 0 on success, -ENOTSUP if not compiled in, -EIO on PSA failure.
+ */
+int akira_native_crypto_p256_sign(wasm_exec_env_t exec_env,
+                                   void *priv_ptr,
+                                   void *msg_ptr, uint32_t msg_len,
+                                   void *sig_ptr);
+
+/**
+ * @brief Generate a hardware-backed P-256 key pair inside the SE050.
+ *
+ * The private key is generated on-die and is NON-EXPORTABLE — only the public
+ * key is returned. Keys are addressed by @p slot (mapped to an SE050 object
+ * ID); regenerating an existing slot is a no-op. For hardware-backed U2F/FIDO.
+ *
+ * Gate: CONFIG_AKIRA_SE050_U2F=y.
+ *
+ * @param slot     Key slot index (0..N); maps to SE050 object id base+slot.
+ * @param pub_ptr  WASM pointer to 65-byte output buffer (uncompressed point).
+ * @return 0 on success, -ENOTSUP if not compiled in, -ENODEV if no SE050.
+ */
+int akira_native_crypto_p256_keygen_se050(wasm_exec_env_t exec_env,
+                                          uint32_t slot, void *pub_ptr);
+
+/**
+ * @brief ECDSA/SHA-256 sign a 32-byte digest with an SE050-held P-256 key.
+ *
+ * The private key never leaves the SE050. Output is raw r||s (64 bytes).
+ *
+ * Gate: CONFIG_AKIRA_SE050_U2F=y.
+ *
+ * @param slot      Key slot index used at keygen time.
+ * @param hash_ptr  WASM pointer to the 32-byte message digest.
+ * @param sig_ptr   WASM pointer to 64-byte signature output (raw r||s).
+ * @return 0 on success, -ENOTSUP if not compiled in, -ENODEV if no SE050.
+ */
+int akira_native_crypto_p256_sign_se050(wasm_exec_env_t exec_env,
+                                        uint32_t slot,
+                                        void *hash_ptr, void *sig_ptr);
 
 #ifdef __cplusplus
 }

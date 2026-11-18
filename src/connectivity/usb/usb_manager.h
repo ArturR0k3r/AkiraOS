@@ -45,8 +45,22 @@ typedef enum {
     USB_EVENT_RESUMED,       /**< Device has been resumed */
     USB_EVENT_RESET,         /**< USB reset received */
     USB_EVENT_DISCONNECTED,  /**< Device disconnected */
-    USB_EVENT_ERROR          /**< USB error occurred */
+    USB_EVENT_ERROR,         /**< USB error occurred */
+    USB_EVENT_VBUS_ATTACH_IDLE, /**< VBUS attached while USB mode is IDLE — trust prompt trigger */
 } usb_manager_event_t;
+
+/**
+ * @brief Mutually exclusive USB device personalities.
+ *
+ * Only one of HID or MSC can be registered on the composite USB descriptor
+ * at a time — IDLE is a genuine baseline (nothing registered), not a
+ * privileged default occupant.
+ */
+enum usb_mode {
+    USB_MODE_IDLE,
+    USB_MODE_MSC,
+    USB_MODE_HID,
+};
 
 /**
  * @brief USB event callback function type
@@ -150,6 +164,25 @@ int usb_manager_register_callback(usb_manager_event_cb_t callback, void *user_da
 int usb_manager_unregister_callback(int callback_handle);
 
 /**
+ * @brief Switch the active USB personality.
+ *
+ * Registering/unregistering a USBD class is only legal while the stack is
+ * disabled, so this always does a full usbd_disable()/usbd_enable() cycle —
+ * host-visible as a disconnect/reconnect. No-op if already in the requested
+ * mode.
+ *
+ * @param want Desired mode.
+ * @return 0 on success, -EBUSY if requesting HID while MSC mode is active,
+ *         other negative errno from the underlying USBD calls.
+ */
+int usb_manager_activate(enum usb_mode want);
+
+/**
+ * @brief Get the currently active USB personality.
+ */
+enum usb_mode usb_manager_get_mode(void);
+
+/**
  * @brief Report a VBUS presence change detected by hardware the on-chip
  * dwc2 controller can't see itself.
  *
@@ -162,6 +195,19 @@ int usb_manager_unregister_callback(int callback_handle);
  * @param present true = VBUS just appeared, false = VBUS just disappeared.
  */
 void usb_manager_report_vbus_state(bool present);
+
+/**
+ * @brief Register a mode's classes before the very first usbd_init(), and
+ * record that mode as active — for a transport's own init function, which
+ * must register its classes before usb_manager_finalize() (usbd_init()) but
+ * runs before any usb_manager_activate() call. Skips activate()'s
+ * disable/unregister-old/enable cycle, which would double-register classes
+ * that are about to be added for the first time.
+ *
+ * @param mode Mode whose classes to register (also becomes usb_manager_get_mode()).
+ * @return 0 on success, negative errno from the underlying USBD calls.
+ */
+int usb_manager_register_initial_classes(enum usb_mode mode);
 
 /**
  * @brief Get current USB device state

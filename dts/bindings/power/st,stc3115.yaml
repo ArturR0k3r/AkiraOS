@@ -1,0 +1,35 @@
+# Copyright (c) 2026 AkiraOS Project
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  STC3115 1-cell Li-Ion battery fuel gauge (STMicroelectronics).
+
+  Fitted as U4 on AkiraConsole Production, I2C address 0x70.  Current is
+  sensed across R16 (10 mOhm) between the battery negative terminal (J9
+  pin 3) and ground; the ALM output drives BAT_INT (GPIO3).
+
+compatible: "st,stc3115"
+
+include: [i2c-device.yaml, fuel-gauge.yaml]
+
+properties:
+  sense-resistor-milliohm:
+    type: int
+    default: 10
+    description: |
+      Value of the external current-sense resistor in milliohms.
+      AkiraConsole Production fits R16 = 10 mOhm.
+
+  design-capacity-mah:
+    type: int
+    default: 2000
+    description: |
+      Nominal battery capacity in mAh.  Used to derive the STC3115 CC_CNF
+      coulomb-counter configuration register.
+
+  internal-resistance-milliohm:
+    type: int
+    default: 200
+    description: |
+      Battery internal impedance in milliohms.  Used to derive the STC3115
+      VM_CNF voltage-mode configuration register.

@@ -28,13 +28,9 @@ list(APPEND EXTRA_ZEPHYR_MODULES ${CMAKE_CURRENT_LIST_DIR})
 # with a service profile (akira-profile-*). Snippets passed with `west build -S`
 # are applied after these and override them.
 set(AKIRA_SNIPPETS akira-board akira-reference)
-set(_akira_board "${BOARD}")
-if(NOT _akira_board)
-  set(_akira_board "$ENV{BOARD}")
-endif()
-if(_akira_board MATCHES "^akiraconsole_prod(/|$)")
-  list(APPEND AKIRA_SNIPPETS akira-display-sharp)
-endif()
+# AkiraConsole firmware drives the ST7789V panel on akiraconsole_prod (the
+# native shell is laid out for 320 px). For the Sharp LS027B7DH01 variant, add
+# `-S akira-display-sharp` and set CONFIG_AKIRA_OS_SHELL_SCREEN_W=400.
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 # The version is owned by the top-level VERSION file, which Zephyr parses into

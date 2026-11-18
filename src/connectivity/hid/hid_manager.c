@@ -40,7 +40,7 @@ static struct
 
     /* Mutex for thread safety */
     struct k_mutex mutex;
-} hid_mgr;
+} hid_mgr AKIRA_BULK_BSS;
 
 /*===========================================================================*/
 /* Internal Functions                                                        */
@@ -216,9 +216,9 @@ int hid_manager_init(const hid_config_t *config)
          * WASM apps call hid_set_transport(BLE) + hid_enable() explicitly. */
         hid_mgr.config.device_types = HID_DEVICE_KEYBOARD;
         hid_mgr.config.preferred_transport = HID_TRANSPORT_NONE;
-        hid_mgr.config.device_name = "AkiraOS HID";
-        hid_mgr.config.vendor_id = 0x1234;
-        hid_mgr.config.product_id = 0x5678;
+        hid_mgr.config.device_name = "AkiraConsole";
+        hid_mgr.config.vendor_id = 0x303A; /* Espressif VID */
+        hid_mgr.config.product_id = 0x8363; /* PenEngineering S.R.L - AkiraConsole */
         hid_mgr.state.device_type = HID_DEVICE_KEYBOARD;
     }
 
@@ -396,6 +396,10 @@ int hid_manager_set_device_types(hid_device_type_t types)
 
 int hid_manager_setup(hid_transport_t transport, hid_device_type_t device_types)
 {
+    /* Disable first so set_transport won't re-enable and set_device_types can proceed */
+    if (hid_mgr.initialized && hid_mgr.state.enabled) {
+        hid_manager_disable();
+    }
     int rc = hid_manager_set_transport(transport);
     if (rc < 0) {
         LOG_ERR("hid_manager_setup: set_transport failed: %d", rc);

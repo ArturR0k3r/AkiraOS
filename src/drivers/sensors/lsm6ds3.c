@@ -107,6 +107,48 @@ int lsm6ds3_init(struct lsm6ds3_config *config)
     return 0;
 }
 
+int lsm6ds3_suspend(struct lsm6ds3_config *config)
+{
+    if (!config || !config->i2c_dev)
+    {
+        return -EINVAL;
+    }
+
+    /* ODR=0 in CTRL1_XL/CTRL2_G is the part's power-down state — a few hundred
+     * µA saved while the console is blanked.  Register contents (range, BDU)
+     * survive, so resume only has to rewrite the ODR fields. */
+    int ret = lsm6ds3_write_reg(config, LSM6DS3_CTRL1_XL,
+                                (LSM6DS3_ACCEL_ODR_POWER_DOWN << 4) |
+                                    (config->accel_range << 2));
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    return lsm6ds3_write_reg(config, LSM6DS3_CTRL2_G,
+                             (LSM6DS3_GYRO_ODR_POWER_DOWN << 4) |
+                                 (config->gyro_range << 2));
+}
+
+int lsm6ds3_resume(struct lsm6ds3_config *config)
+{
+    if (!config || !config->i2c_dev)
+    {
+        return -EINVAL;
+    }
+
+    int ret = lsm6ds3_write_reg(config, LSM6DS3_CTRL1_XL,
+                                (config->accel_odr << 4) |
+                                    (config->accel_range << 2));
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    return lsm6ds3_write_reg(config, LSM6DS3_CTRL2_G,
+                             (config->gyro_odr << 4) | (config->gyro_range << 2));
+}
+
 int lsm6ds3_read_accel(struct lsm6ds3_config *config, struct lsm6ds3_accel_data *data)
 {
     uint8_t raw_data[6];

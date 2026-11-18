@@ -21,6 +21,7 @@
  */
 
 #include <stdbool.h>
+#include <zephyr/kernel.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,6 +51,41 @@ void akira_sd_card_unregister_hotplug_cb(akira_sd_hotplug_cb_t cb);
  * indicator immediately when the card is detected.
  */
 void akira_sd_card_register_pre_insert_cb(akira_sd_hotplug_cb_t cb, void *user_data);
+
+/** True if the card-detect GPIO last read "inserted" — independent of
+ *  akira_sd_card_is_present(), which tracks AkiraOS's own mount state and
+ *  goes false for the whole duration of a USB MSC session. */
+bool akira_sd_card_is_physically_present(void);
+
+/** Stop the card-detect poll (called when the display blanks — a card cannot
+ *  be inserted while the device is pocketed, so the periodic I2C read is drain).
+ *  Idempotent. */
+void akira_sd_card_hotplug_pause(void);
+/** Restart the card-detect poll and do one immediate check. Idempotent. */
+void akira_sd_card_hotplug_resume(void);
+
+/**
+ * Unmount the card to save power while the display is blanked.
+ *
+ * An idle but enumerated SD card draws roughly 200 µA–1 mA depending on the
+ * card.  Refuses (returning false, leaving the card mounted) while a transfer
+ * is in flight, or — under CONFIG_AKIRA_SD_XIP — while any app is running,
+ * since a running app's module may still be backed by the card.
+ *
+ * @return true if the card was unmounted, false if it was left alone.
+ */
+bool akira_sd_card_idle_unmount(void);
+
+/** Re-mount a card unmounted by akira_sd_card_idle_unmount(). No-op otherwise. */
+void akira_sd_card_idle_remount(void);
+
+#else /* !CONFIG_AKIRA_SD_HOTPLUG */
+
+static inline bool akira_sd_card_is_physically_present(void) { return true; }
+static inline void akira_sd_card_hotplug_pause(void)  {}
+static inline void akira_sd_card_hotplug_resume(void) {}
+static inline bool akira_sd_card_idle_unmount(void)   { return false; }
+static inline void akira_sd_card_idle_remount(void)   {}
 
 #endif /* CONFIG_AKIRA_SD_HOTPLUG */
 
@@ -85,6 +121,22 @@ void akira_sd_card_deinit(void);
  */
 void akira_sd_card_deinit_force(void);
 
+/**
+ * @brief Unmount the SD card for USB MSC — like akira_sd_card_deinit(), but
+ * leaves the physical disk powered (no DISK_IOCTL_CTRL_DEINIT), since the
+ * USB MSC shim disk needs it live to hand to the host.
+ */
+void akira_sd_card_release_for_usb_msc(void);
+
+/** Mark a long-running SD transfer as active, so power management does not deep-sleep mid-write. */
+void akira_sd_card_set_transfer_active(bool active);
+/** True while a long-running SD transfer is in flight. */
+bool akira_sd_card_is_transfer_active(void);
+
+/** Hold the card for a BLE file-explorer session: blocks USB MSC, app install and mesh writes. */
+void akira_sd_card_set_fs_session(bool active);
+bool akira_sd_card_is_fs_session(void);
+
 #else /* !CONFIG_AKIRA_SD_CARD */
 
 /* Stubs for boards where SD is not enabled */
@@ -92,6 +144,16 @@ static inline int  akira_sd_card_init(void)       { return -ENOTSUP; }
 static inline bool akira_sd_card_is_present(void) { return false; }
 static inline void akira_sd_card_deinit(void)      {}
 static inline void akira_sd_card_deinit_force(void) {}
+static inline void akira_sd_card_release_for_usb_msc(void) {}
+static inline void akira_sd_card_set_transfer_active(bool active) { (void)active; }
+static inline bool akira_sd_card_is_transfer_active(void) { return false; }
+static inline void akira_sd_card_set_fs_session(bool active) { (void)active; }
+static inline bool akira_sd_card_is_fs_session(void) { return false; }
+static inline bool akira_sd_card_is_physically_present(void) { return false; }
+static inline void akira_sd_card_hotplug_pause(void)  {}
+static inline void akira_sd_card_hotplug_resume(void) {}
+static inline bool akira_sd_card_idle_unmount(void)   { return false; }
+static inline void akira_sd_card_idle_remount(void)   {}
 
 #endif /* CONFIG_AKIRA_SD_CARD */
 

@@ -16,6 +16,7 @@
 #include "akira_shell.h"
 #include "shell_display.h"
 #include "../drivers/platform_hal.h"
+#include "../drivers/nfc/st25dv.h"
 #include "../settings/settings.h"
 #if defined(CONFIG_BT)
 #include <zephyr/bluetooth/gatt.h>
@@ -84,6 +85,10 @@
 #endif
 #if defined(CONFIG_AKIRA_MESH)
 #include "connectivity/akira_mesh.h"
+#include "lib/mem_helper.h"
+#if defined(CONFIG_AKIRA_PSRAM)
+#include <zephyr/multi_heap/shared_multi_heap.h>
+#endif
 #include "api/akira_rf_api.h"
 #endif
 
@@ -432,11 +437,6 @@ static const struct gpio_dt_spec button_specs[] = {
     /* Add more buttons as defined in overlay */
 };
 
-/* Work queue for periodic tasks */
-static struct k_work_q shell_workq;
-static K_THREAD_STACK_DEFINE(shell_workq_stack, 1024); /* Reduced to save memory */
-static struct k_work_delayable stats_update_work;
-
 /* Helper functions */
 static inline uint8_t rotation_to_index(uint16_t degrees)
 {
@@ -565,29 +565,6 @@ static void update_system_stats(void)
     shell_state.last_stats_update = k_uptime_get();
 }
 
-/* Work handler for periodic stats update */
-static void stats_update_work_handler(struct k_work *work)
-{
-    update_system_stats();
-
-    /* Reschedule for next update */
-    k_work_reschedule_for_queue(&shell_workq, &stats_update_work, K_SECONDS(30));
-}
-
-/* Status bar update work */
-static void status_bar_update_work_handler(struct k_work *work)
-{
-    if (shell_display_enabled && shell_display_is_enabled())
-    {
-        shell_display_update_status();
-    }
-
-    /* Reschedule for next update */
-    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-    k_work_reschedule_for_queue(&shell_workq, dwork, K_SECONDS(1));
-}
-static K_WORK_DELAYABLE_DEFINE(status_bar_work, status_bar_update_work_handler);
-
 /* Public API Implementation */
 int akira_shell_init(void)
 {
@@ -598,16 +575,6 @@ int akira_shell_init(void)
         LOG_ERR("GPIO initialization failed: %d", ret);
         return ret;
     }
-
-    /* Initialize work queue with smaller stack */
-    k_work_queue_init(&shell_workq);
-    k_work_queue_start(&shell_workq, shell_workq_stack,
-                       K_THREAD_STACK_SIZEOF(shell_workq_stack),
-                       K_PRIO_COOP(8), NULL);
-
-    /* Initialize periodic stats update */
-    k_work_init_delayable(&stats_update_work, stats_update_work_handler);
-    k_work_schedule_for_queue(&shell_workq, &stats_update_work, K_SECONDS(5));
 
     /* Initialize cached stats */
     update_system_stats();
@@ -623,9 +590,6 @@ int akira_shell_init(void)
         }
         else
         {
-            /* Start status bar updates */
-            k_work_schedule_for_queue(&shell_workq, &status_bar_work, K_SECONDS(1));
-
             /* Welcome message */
             shell_display_print("", SHELL_TEXT_NORMAL);
             shell_display_print("=== AkiraOS Shell ===", SHELL_TEXT_PROMPT);
@@ -1887,6 +1851,419 @@ static int cmd_hwtest(const struct shell *sh, size_t argc, char **argv)
 }
 #endif
 
+#ifdef CONFIG_AKIRA_NFC_MANAGER
+#include "connectivity/nfc_interface.h"
+
+static nfc_handle_t *nfc_get_handle(const struct shell *sh)
+{
+    nfc_handle_t *h = nfc_manager_get(NFC_TYPE_NONE);
+    if (!h)
+    {
+        shell_error(sh, "no NFC device registered");
+        return NULL;
+    }
+    return h;
+}
+
+static int cmd_nfc_uid(const struct shell *sh, size_t argc, char **argv)
+{
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
+
+    uint8_t uid[8];
+    int ret = nfc_read_uid(h, uid);
+    if (ret < 0)
+    {
+        shell_error(sh, "read_uid failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "UID: %02X%02X%02X%02X%02X%02X%02X%02X",
+                uid[0], uid[1], uid[2], uid[3], uid[4], uid[5], uid[6], uid[7]);
+    return 0;
+}
+
+static int cmd_nfc_field(const struct shell *sh, size_t argc, char **argv)
+{
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
+
+    bool present = false;
+    int ret = nfc_field_present(h, &present);
+    if (ret < 0)
+    {
+        shell_error(sh, "field_present failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "RF field: %s", present ? "present" : "absent");
+    return 0;
+}
+
+static int cmd_nfc_read(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 3)
+    {
+        shell_error(sh, "Usage: nfc read <addr> <len>");
+        return -EINVAL;
+    }
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
+
+    uint16_t addr = (uint16_t)strtoul(argv[1], NULL, 0);
+    size_t len = (size_t)strtoul(argv[2], NULL, 0);
+    if (len == 0 || len > ST25DV_MAX_XFER_LEN)
+    {
+        shell_error(sh, "len must be 1-%d", ST25DV_MAX_XFER_LEN);
+        return -EINVAL;
+    }
+
+    uint8_t buf[ST25DV_MAX_XFER_LEN];
+    int ret = nfc_read_mem(h, addr, buf, len);
+    if (ret < 0)
+    {
+        shell_error(sh, "read_mem failed: %d", ret);
+        return ret;
+    }
+    for (size_t i = 0; i < len; i += 16)
+    {
+        char line[16 * 3 + 1] = {0};
+        for (size_t j = i; j < len && j < i + 16; j++)
+        {
+            snprintf(line + (j - i) * 3, 4, "%02X ", buf[j]);
+        }
+        shell_print(sh, "%04X: %s", (unsigned)(addr + i), line);
+    }
+    return 0;
+}
+
+static int cmd_nfc_write(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 3)
+    {
+        shell_error(sh, "Usage: nfc write <addr> <hex_byte> [hex_byte...]");
+        return -EINVAL;
+    }
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
+
+    uint16_t addr = (uint16_t)strtoul(argv[1], NULL, 0);
+    size_t len = argc - 2;
+    if (len > ST25DV_MAX_XFER_LEN)
+    {
+        shell_error(sh, "len must be 1-%d", ST25DV_MAX_XFER_LEN);
+        return -EINVAL;
+    }
+
+    uint8_t buf[ST25DV_MAX_XFER_LEN];
+    for (size_t i = 0; i < len; i++)
+    {
+        buf[i] = (uint8_t)strtoul(argv[2 + i], NULL, 16);
+    }
+
+    int ret = nfc_write_mem(h, addr, buf, len);
+    if (ret < 0)
+    {
+        shell_error(sh, "write_mem failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "Wrote %u bytes at 0x%04X", (unsigned)len, addr);
+    return 0;
+}
+
+static int cmd_nfc_mb_enable(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "Usage: nfc mb_enable <0|1> [wdg]");
+        return -EINVAL;
+    }
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
+
+    bool enable = strtoul(argv[1], NULL, 0) != 0;
+    uint8_t wdg = (argc >= 3) ? (uint8_t)strtoul(argv[2], NULL, 0) : 0;
+
+    int ret = nfc_mailbox_enable(h, enable, wdg);
+    if (ret < 0)
+    {
+        shell_error(sh, "mb_enable failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "FTM mailbox %s", enable ? "enabled" : "disabled");
+    return 0;
+}
+
+static int cmd_nfc_mb_put(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "Usage: nfc mb_put <hex_byte> [hex_byte...]");
+        return -EINVAL;
+    }
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
+
+    size_t len = argc - 1;
+    if (len > ST25DV_MAILBOX_MAX_LEN)
+    {
+        shell_error(sh, "len must be 1-%d", ST25DV_MAILBOX_MAX_LEN);
+        return -EINVAL;
+    }
+
+    uint8_t buf[ST25DV_MAILBOX_MAX_LEN];
+    for (size_t i = 0; i < len; i++)
+    {
+        buf[i] = (uint8_t)strtoul(argv[1 + i], NULL, 16);
+    }
+
+    int ret = nfc_mailbox_put_msg(h, buf, len);
+    if (ret < 0)
+    {
+        shell_error(sh, "mb_put failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "Put %u bytes in mailbox", (unsigned)len);
+    return 0;
+}
+
+static int cmd_nfc_mb_get(const struct shell *sh, size_t argc, char **argv)
+{
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
+
+    uint8_t buf[ST25DV_MAILBOX_MAX_LEN];
+    size_t len = 0;
+    int ret = nfc_mailbox_get_msg(h, buf, sizeof(buf), &len);
+    if (ret < 0)
+    {
+        shell_error(sh, "mb_get failed: %d", ret);
+        return ret;
+    }
+    for (size_t i = 0; i < len; i += 16)
+    {
+        char line[16 * 3 + 1] = {0};
+        for (size_t j = i; j < len && j < i + 16; j++)
+        {
+            snprintf(line + (j - i) * 3, 4, "%02X ", buf[j]);
+        }
+        shell_print(sh, "%04X: %s", (unsigned)i, line);
+    }
+    return 0;
+}
+
+static int cmd_nfc_mb_status(const struct shell *sh, size_t argc, char **argv)
+{
+    nfc_handle_t *h = nfc_get_handle(sh);
+    if (!h) return -ENODEV;
+
+    uint8_t ctrl = 0;
+    size_t msg_len = 0;
+    int ret = nfc_mailbox_status(h, &ctrl, &msg_len);
+    if (ret < 0)
+    {
+        shell_error(sh, "mb_status failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh,
+                "MB_CTRL=0x%02X EN=%d HOST_PUT=%d RF_PUT=%d HOST_MISS=%d RF_MISS=%d HOST_CUR=%d RF_CUR=%d len=%u",
+                ctrl,
+                !!(ctrl & BIT(0)), !!(ctrl & BIT(1)), !!(ctrl & BIT(2)),
+                !!(ctrl & BIT(4)), !!(ctrl & BIT(5)),
+                !!(ctrl & BIT(6)), !!(ctrl & BIT(7)),
+                (unsigned)msg_len);
+    return 0;
+}
+
+#ifdef CONFIG_AKIRA_ST25DV
+/* ST25DV-specific raw register debug read — not part of the generic
+ * nfc_manager vtable since dynamic vs. static register addressing is
+ * chip-specific. */
+static int cmd_nfc_reg(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "Usage: nfc reg <addr>");
+        return -EINVAL;
+    }
+    const struct device *dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(st25dv));
+    if (!dev || !device_is_ready(dev))
+    {
+        shell_error(sh, "st25dv not present or not ready");
+        return -ENODEV;
+    }
+
+    uint16_t addr = (uint16_t)strtoul(argv[1], NULL, 0);
+    uint8_t val = 0;
+    int ret = st25dv_read_sys_reg(dev, addr, &val);
+    if (ret < 0)
+    {
+        shell_error(sh, "read_sys_reg failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "reg 0x%04X = 0x%02X", addr, val);
+    return 0;
+}
+
+/* Opens the I2C security session required to write password-protected
+ * static registers (e.g. FTM). Not part of the generic nfc_manager vtable
+ * since the session/password concept is chip-specific. */
+static int cmd_nfc_session_open(const struct shell *sh, size_t argc, char **argv)
+{
+    const struct device *dev = DEVICE_DT_GET_OR_NULL(DT_NODELABEL(st25dv));
+    if (!dev || !device_is_ready(dev))
+    {
+        shell_error(sh, "st25dv not present or not ready");
+        return -ENODEV;
+    }
+
+    uint8_t password[8] = {0};
+    if (argc >= 2)
+    {
+        if (strlen(argv[1]) != 16)
+        {
+            shell_error(sh, "Usage: nfc session_open [16_hex_chars]  (default: all-zero)");
+            return -EINVAL;
+        }
+        for (int i = 0; i < 8; i++)
+        {
+            char byte_str[3] = {argv[1][i * 2], argv[1][i * 2 + 1], 0};
+            password[i] = (uint8_t)strtoul(byte_str, NULL, 16);
+        }
+    }
+
+    int ret = st25dv_open_i2c_session(dev, password);
+    if (ret < 0)
+    {
+        shell_error(sh, "session_open failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "I2C security session opened");
+    return 0;
+}
+#endif /* CONFIG_AKIRA_ST25DV */
+
+SHELL_STATIC_SUBCMD_SET_CREATE(nfc_cmds,
+                               SHELL_CMD(uid, NULL, "Read tag UID", cmd_nfc_uid),
+                               SHELL_CMD(field, NULL, "Show RF field presence", cmd_nfc_field),
+#ifdef CONFIG_AKIRA_ST25DV
+                               SHELL_CMD(reg, NULL, "Read sys register: reg <addr>", cmd_nfc_reg),
+                               SHELL_CMD(session_open, NULL, "Open I2C security session: session_open [16_hex_chars]", cmd_nfc_session_open),
+#endif
+                               SHELL_CMD(read, NULL, "Read user memory: read <addr> <len>", cmd_nfc_read),
+                               SHELL_CMD(write, NULL, "Write user memory: write <addr> <hex...>", cmd_nfc_write),
+                               SHELL_CMD(mb_enable, NULL, "Enable/disable FTM mailbox: mb_enable <0|1> [wdg]", cmd_nfc_mb_enable),
+                               SHELL_CMD(mb_put, NULL, "Put FTM mailbox message: mb_put <hex...>", cmd_nfc_mb_put),
+                               SHELL_CMD(mb_get, NULL, "Get FTM mailbox message", cmd_nfc_mb_get),
+                               SHELL_CMD(mb_status, NULL, "Show FTM mailbox status", cmd_nfc_mb_status),
+                               SHELL_SUBCMD_SET_END);
+
+SHELL_CMD_REGISTER(nfc, &nfc_cmds, "NFC tag commands", NULL);
+#endif /* CONFIG_AKIRA_NFC_MANAGER */
+
+#if defined(CONFIG_AKIRA_WASM_NET_TLS) && defined(CONFIG_AKIRA_SHELL_NET_TESTS)
+#include "connectivity/net/net_stream.h"
+
+/**
+ * @brief Manual test for the NET_TYPE_TLS plumbing: open, connect, wait for
+ * NET_EVT_CONNECTED/NET_EVT_ERROR, report result.
+ */
+static int cmd_net_tls_test(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2)
+    {
+        shell_error(sh, "usage: net_tls_test <host> [port] [tcp]");
+        return -EINVAL;
+    }
+
+    uint16_t port = (argc > 2) ? (uint16_t)atoi(argv[2]) : 443;
+    bool plain_tcp = (argc > 3) && (strcmp(argv[3], "tcp") == 0);
+
+    int ret = net_stream_init();
+    if (ret < 0)
+    {
+        shell_error(sh, "net_stream_init failed: %d", ret);
+        return ret;
+    }
+
+    int h = net_stream_open(NET_OWNER_SYSTEM, plain_tcp ? NET_TYPE_TCP : NET_TYPE_TLS);
+    if (h < 0)
+    {
+        shell_error(sh, "net_stream_open(%s) failed: %d", plain_tcp ? "TCP" : "TLS", h);
+        return h;
+    }
+    shell_print(sh, "stream %d opened, connecting to %s:%u ...", h, argv[1], port);
+
+    ret = net_stream_connect(NET_OWNER_SYSTEM, h, argv[1], port);
+    if (ret < 0)
+    {
+        shell_error(sh, "net_stream_connect failed: %d", ret);
+        return ret;
+    }
+
+    struct net_event evt;
+    int64_t deadline = k_uptime_get() + 10000;
+
+    while (k_uptime_get() < deadline)
+    {
+        int evtype = net_stream_event_pop(NET_OWNER_SYSTEM, &evt);
+
+        if (evtype == NET_EVT_CONNECTED)
+        {
+            shell_print(sh, "TLS handshake OK (stream %d)", h);
+            net_stream_close(NET_OWNER_SYSTEM, h);
+            return 0;
+        }
+        else if (evtype == NET_EVT_ERROR)
+        {
+            shell_error(sh, "connect failed, errno=%d", evt.extra);
+            net_stream_close(NET_OWNER_SYSTEM, h);
+            return -evt.extra;
+        }
+        k_sleep(K_MSEC(50));
+    }
+
+    shell_error(sh, "timeout waiting for TLS connect");
+    net_stream_close(NET_OWNER_SYSTEM, h);
+    return -ETIMEDOUT;
+}
+
+SHELL_CMD_REGISTER(net_tls_test, NULL, "Test TLS connect <host> [port]", cmd_net_tls_test);
+
+#include "console_shell/catalog_net.h"
+
+/**
+ * @brief Diagnostic shell command: fetch the app catalogue over TLS via
+ * catalog_net.c's synchronous wrapper. AkiraPlay (akiraplay_screen.c) is the
+ * real on-device browse UI; this stays as a quick host-side connectivity
+ * check independent of button input.
+ */
+static int cmd_catalog_test(const struct shell *sh, size_t argc, char **argv)
+{
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+
+    static uint8_t body[4096];
+    /* CONFIG_NET_SOCKETS_CONNECT_TIMEOUT=15000 bounds the underlying TLS
+     * handshake (see boards/akiraconsole_prod_esp32s3_procpu.conf); this
+     * app-level budget must clear that with real margin or the poll loop
+     * can close the socket moments before the handshake actually finishes. */
+    int n = catalog_https_get("console.app.akiraos.dev", 443,
+        "/catalog/catalogue.json",
+        body, sizeof(body), 25000);
+
+    if (n < 0)
+    {
+        shell_print(sh, "catalog fetch failed: %d", n);
+        return 0;
+    }
+
+    shell_print(sh, "catalog fetch OK: %d bytes", n);
+    shell_print(sh, "first 200 bytes:");
+    shell_print(sh, "%.*s", n < 200 ? n : 200, body);
+    return 0;
+}
+SHELL_CMD_REGISTER(catalog_test, NULL, "TEST-ONLY: fetch catalogue.json over TLS", cmd_catalog_test);
+#endif
+
 SHELL_STATIC_SUBCMD_SET_CREATE(ram_cmds,
                                SHELL_CMD(ls, NULL, "List files in RAM storage", cmd_ram_ls),
                                SHELL_CMD(cat, NULL, "Show file contents <path>", cmd_ram_cat),
@@ -1924,7 +2301,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(system_cmds,
                                SHELL_CMD(reboot, NULL, "Reboot system [delay_seconds]", cmd_reboot),
                                SHELL_SUBCMD_SET_END);
 
-#ifdef CONFIG_GPIO
+#ifdef CONFIG_GPIO342134213
 SHELL_STATIC_SUBCMD_SET_CREATE(gpio_cmds,
                                SHELL_CMD(read, NULL, "Read GPIO pin state", cmd_gpio_read),
                                SHELL_CMD(configure, NULL, "Configure GPIO pin", cmd_gpio_configure),
@@ -1944,7 +2321,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(debug_cmds,
                                SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(sys, &system_cmds, "System management commands", NULL);
-#ifdef CONFIG_GPIO
+#ifdef CONFIG_GPIO123123
 SHELL_CMD_REGISTER(gpio, &gpio_cmds, "GPIO control commands", NULL);
 #endif
 SHELL_CMD_REGISTER(debug, &debug_cmds, "Debug and diagnostic commands", NULL);
@@ -2344,6 +2721,13 @@ static int cmd_mesh_info(const struct shell *sh, size_t argc, char **argv)
                stats.messages_sent, stats.messages_received, stats.messages_forwarded);
     shell_print(sh, "Active routes: %u", stats.routes_active);
     shell_print(sh, "Apps distributed: %u", stats.apps_distributed);
+
+    akira_mesh_app_rx_status_t rx;
+    if (akira_mesh_get_app_rx_status(&rx) == 0 && rx.active) {
+        shell_print(sh, "App RX: '%s' %u/%u chunks (%u bytes), last activity %u ms ago",
+                    rx.app_name, rx.received_count, rx.chunk_count,
+                    rx.total_len, rx.age_ms);
+    }
     return 0;
 }
 
@@ -2382,26 +2766,67 @@ static void mesh_shell_rx_cb(const uint8_t *src_id, const uint8_t *data,
            src_id[AKIRA_MESH_NODE_ID_LEN - 1], len, (int)len, data);
 }
 
+/* Parse up to 2*AKIRA_MESH_NODE_ID_LEN hex digits into a node id, left-padded
+ * with zeros, so "1", "01" and "0000000000000001" all mean the same node. Stops
+ * at the first non-hex character. */
+static void parse_node_id(const char *hex, uint8_t id[AKIRA_MESH_NODE_ID_LEN])
+{
+    char padded[2 * AKIRA_MESH_NODE_ID_LEN + 1];
+    size_t len = strnlen(hex, sizeof(padded));
+    if (len > 2 * AKIRA_MESH_NODE_ID_LEN) {
+        len = 2 * AKIRA_MESH_NODE_ID_LEN;
+    }
+    memset(padded, '0', sizeof(padded) - 1);
+    memcpy(&padded[2 * AKIRA_MESH_NODE_ID_LEN - len], hex, len);
+    padded[2 * AKIRA_MESH_NODE_ID_LEN] = '\0';
+
+    for (size_t i = 0; i < AKIRA_MESH_NODE_ID_LEN; i++) {
+        char byte[3] = {padded[2 * i], padded[2 * i + 1], '\0'};
+        id[i] = (uint8_t)strtoul(byte, NULL, 16);
+    }
+}
+
 static int cmd_mesh_init(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 2) {
-        shell_error(sh, "Usage: mesh init <node_id_hex>  (e.g. mesh init 01)");
+        shell_error(sh, "Usage: mesh init <node_id_hex> [ble|sub|lora|wifi] [gw]  (e.g. mesh init 01 wifi gw)");
         return -EINVAL;
     }
 
     uint8_t id = (uint8_t)strtoul(argv[1], NULL, 16);
+    akira_mesh_transport_t transport = AKIRA_MESH_TRANSPORT_SUBGHZ;
+    const char *transport_name = "sub";
+
+    if (argc >= 3) {
+        if (strcmp(argv[2], "ble") == 0) {
+            transport = AKIRA_MESH_TRANSPORT_BLE;
+            transport_name = "ble";
+        } else if (strcmp(argv[2], "sub") == 0) {
+            transport = AKIRA_MESH_TRANSPORT_SUBGHZ;
+            transport_name = "sub";
+        } else if (strcmp(argv[2], "lora") == 0) {
+            transport = AKIRA_MESH_TRANSPORT_LORA;
+            transport_name = "lora";
+        } else if (strcmp(argv[2], "wifi") == 0) {
+            transport = AKIRA_MESH_TRANSPORT_WIFI;
+            transport_name = "wifi";
+        } else {
+            shell_error(sh, "Unknown transport '%s' (want ble|sub|lora|wifi)", argv[2]);
+            return -EINVAL;
+        }
+    }
+
+    bool is_gateway = (argc >= 4) && (strcmp(argv[3], "gw") == 0);
 
     akira_mesh_config_t cfg = {0};
     cfg.node_id[AKIRA_MESH_NODE_ID_LEN - 1] = id;
     snprintf(cfg.node_name, sizeof(cfg.node_name), "akira-%02x", id);
-    cfg.role = AKIRA_MESH_ROLE_NODE;
-    cfg.transport_caps = RADIO_CAP_TX | RADIO_CAP_RX |
-                         RADIO_CAP_BAND_SUBGHZ;
+    cfg.role = is_gateway ? AKIRA_MESH_ROLE_GATEWAY : AKIRA_MESH_ROLE_NODE;
+    cfg.transport = transport;
     cfg.max_hops = AKIRA_MESH_MAX_HOPS;
     cfg.beacon_interval_ms = 5000;
 
-    /* Release RF API ownership so mesh can acquire the LR2021. */
-    akira_rf_deinit();
+    akira_rf_release_all();
 
     int ret = akira_mesh_init(&cfg);
     if (ret) {
@@ -2410,7 +2835,7 @@ static int cmd_mesh_init(const struct shell *sh, size_t argc, char **argv)
     }
 
     akira_mesh_register_rx_callback(mesh_shell_rx_cb, NULL);
-    shell_print(sh, "mesh init: node %02x (%s), transport=SUBGHZ", id, cfg.node_name);
+    shell_print(sh, "mesh init: node %02x (%s), transport=%s", id, cfg.node_name, transport_name);
     return 0;
 }
 
@@ -2422,17 +2847,219 @@ static int cmd_mesh_send(const struct shell *sh, size_t argc, char **argv)
     }
 
     uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
-    dest[AKIRA_MESH_NODE_ID_LEN - 1] = (uint8_t)strtoul(argv[1], NULL, 16);
+    parse_node_id(argv[1], dest);
 
     const char *text = argv[2];
+    int64_t t0 = k_uptime_get();
     int ret = akira_mesh_send(dest, (const uint8_t *)text, strlen(text));
+    int64_t ms = k_uptime_get() - t0;
     if (ret) {
-        shell_error(sh, "mesh send failed: %d", ret);
+        shell_error(sh, "mesh send failed: %d (%lld ms)", ret, ms);
         return ret;
     }
 
-    shell_print(sh, "sent %zu bytes to %02x", strlen(text),
-                dest[AKIRA_MESH_NODE_ID_LEN - 1]);
+    shell_print(sh, "sent %zu bytes to %02x in %lld ms", strlen(text),
+                dest[AKIRA_MESH_NODE_ID_LEN - 1], ms);
+    return 0;
+}
+
+static int cmd_mesh_sendu(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 3) {
+        shell_error(sh, "Usage: mesh sendu <dest_id_hex> <text>");
+        return -EINVAL;
+    }
+
+    uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
+    parse_node_id(argv[1], dest);
+
+    const char *text = argv[2];
+    int64_t t0 = k_uptime_get();
+    int ret = akira_mesh_send_unreliable(dest, (const uint8_t *)text, strlen(text));
+    int64_t ms = k_uptime_get() - t0;
+    if (ret) {
+        shell_error(sh, "mesh sendu failed: %d (%lld ms)", ret, ms);
+        return ret;
+    }
+
+    shell_print(sh, "sent %zu bytes to %02x in %lld ms (unreliable)", strlen(text),
+                dest[AKIRA_MESH_NODE_ID_LEN - 1], ms);
+    return 0;
+}
+
+/* Sustained fire-and-forget throughput: back-to-back akira_mesh_send_unreliable()
+ * calls, no per-frame wait — this is the actual code path a continuous
+ * PCM-style stream would use, unlike sendstream's ARQ+pacing. */
+static int cmd_mesh_sendu_burst(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 4) {
+        shell_error(sh, "Usage: mesh sendu_burst <dest_id_hex> <count> <size_bytes>");
+        return -EINVAL;
+    }
+
+    uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
+    parse_node_id(argv[1], dest);
+    uint32_t count = (uint32_t)strtoul(argv[2], NULL, 10);
+    size_t size = (size_t)strtoul(argv[3], NULL, 10);
+
+    static uint8_t AKIRA_BULK_BSS burst_buf[256];
+    if (count == 0 || size == 0 || size > sizeof(burst_buf)) {
+        shell_error(sh, "count must be >0, size must be 1..%zu", sizeof(burst_buf));
+        return -EINVAL;
+    }
+    for (size_t i = 0; i < size; i++) {
+        burst_buf[i] = (uint8_t)i;
+    }
+
+    uint32_t sent = 0, failed = 0;
+    int64_t t0 = k_uptime_get();
+    for (uint32_t i = 0; i < count; i++) {
+        int ret = akira_mesh_send_unreliable(dest, burst_buf, size);
+        if (ret) {
+            failed++;
+        } else {
+            sent++;
+        }
+    }
+    int64_t ms = k_uptime_get() - t0;
+
+    uint64_t bytes = (uint64_t)sent * size;
+    uint32_t kbps = (ms > 0) ? (uint32_t)((bytes * 8) / (uint64_t)ms) : 0;
+    shell_print(sh, "sendu_burst: %u/%u sent (%u failed), %llu bytes in %lld ms (%u kbit/s)",
+                sent, count, failed, bytes, ms, kbps);
+    return 0;
+}
+
+static int cmd_mesh_linkdrop(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: mesh linkdrop <peer_id_hex>  (test-only: simulate peer out of range)");
+        return -EINVAL;
+    }
+    uint8_t peer[AKIRA_MESH_NODE_ID_LEN] = {0};
+    parse_node_id(argv[1], peer);
+    int ret = akira_mesh_debug_link_drop(peer);
+    if (ret) {
+        shell_error(sh, "mesh linkdrop failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "dropping all frames from %02x", peer[AKIRA_MESH_NODE_ID_LEN - 1]);
+    return 0;
+}
+
+static int cmd_mesh_linkrestore(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: mesh linkrestore <peer_id_hex>");
+        return -EINVAL;
+    }
+    uint8_t peer[AKIRA_MESH_NODE_ID_LEN] = {0};
+    parse_node_id(argv[1], peer);
+    int ret = akira_mesh_debug_link_restore(peer);
+    if (ret) {
+        shell_error(sh, "mesh linkrestore failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "restored link to %02x", peer[AKIRA_MESH_NODE_ID_LEN - 1]);
+    return 0;
+}
+
+static int cmd_mesh_power(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: mesh power <dbm>");
+        return -EINVAL;
+    }
+    int8_t dbm = (int8_t)atoi(argv[1]);
+    int ret = akira_mesh_set_tx_power(dbm);
+    if (ret) {
+        shell_error(sh, "mesh power failed: %d", ret);
+        return ret;
+    }
+    shell_print(sh, "TX power set to %d dBm", dbm);
+    return 0;
+}
+
+static int cmd_mesh_app(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 3) {
+        shell_error(sh, "Usage: mesh app <dest_id_hex> <name>  (name must be installed locally)");
+        return -EINVAL;
+    }
+
+    uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
+    parse_node_id(argv[1], dest);
+    const char *name = argv[2];
+
+    /* Borrowed from the PSRAM heap for the command only: a static buffer of
+     * the maximum app size used to pin 2 MB of the PSRAM window (which the
+     * flash code/rodata copies share) for a debug command.  PSRAM only —
+     * never fall back to internal DRAM for a buffer this size. */
+    const size_t cap = (size_t)CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024;
+#if defined(CONFIG_AKIRA_PSRAM)
+    uint8_t *app_buf = shared_multi_heap_alloc(SMH_REG_ATTR_EXTERNAL, cap);
+#else
+    uint8_t *app_buf = NULL;
+#endif
+    if (!app_buf) {
+        shell_error(sh, "no PSRAM for a %u KB app buffer", (unsigned)(cap / 1024));
+        return -ENOMEM;
+    }
+    int len = app_manager_read_binary(name, app_buf, cap);
+    if (len < 0) {
+        shell_error(sh, "app '%s' not found/installed locally: %d", name, len);
+#if defined(CONFIG_AKIRA_PSRAM)
+        shared_multi_heap_free(app_buf);
+#endif
+        return len;
+    }
+
+    int64_t t0 = k_uptime_get();
+    int ret = akira_mesh_distribute_app(dest, name, app_buf, (size_t)len);
+    int64_t ms = k_uptime_get() - t0;
+#if defined(CONFIG_AKIRA_PSRAM)
+    shared_multi_heap_free(app_buf);
+#endif
+    if (ret) {
+        shell_error(sh, "mesh app distribute failed: %d (%lld ms)", ret, ms);
+        return ret;
+    }
+
+    shell_print(sh, "distributed '%s' (%d bytes) to %02x in %lld ms",
+                name, len, dest[AKIRA_MESH_NODE_ID_LEN - 1], ms);
+    return 0;
+}
+
+static int cmd_mesh_sendstream(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 3) {
+        shell_error(sh, "Usage: mesh sendstream <dest_id_hex> <size_bytes>");
+        return -EINVAL;
+    }
+
+    uint8_t dest[AKIRA_MESH_NODE_ID_LEN] = {0};
+    parse_node_id(argv[1], dest);
+    size_t size = (size_t)strtoul(argv[2], NULL, 10);
+
+    static uint8_t AKIRA_BULK_BSS stream_buf[4096];
+    if (size == 0 || size > sizeof(stream_buf)) {
+        shell_error(sh, "size must be 1..%zu", sizeof(stream_buf));
+        return -EINVAL;
+    }
+    for (size_t i = 0; i < size; i++) {
+        stream_buf[i] = (uint8_t)i;
+    }
+
+    int64_t t0 = k_uptime_get();
+    int ret = akira_mesh_send_stream(dest, stream_buf, size);
+    int64_t ms = k_uptime_get() - t0;
+    if (ret) {
+        shell_error(sh, "mesh sendstream failed: %d (%lld ms)", ret, ms);
+        return ret;
+    }
+
+    shell_print(sh, "streamed %zu bytes to %02x in %lld ms",
+                size, dest[AKIRA_MESH_NODE_ID_LEN - 1], ms);
     return 0;
 }
 
@@ -2467,8 +3094,15 @@ static int cmd_mesh_stop(const struct shell *sh, size_t argc, char **argv)
 }
 
 SHELL_STATIC_SUBCMD_SET_CREATE(mesh_cmds,
-    SHELL_CMD_ARG(init, NULL, "Init mesh: <node_id_hex>", cmd_mesh_init, 2, 0),
+    SHELL_CMD_ARG(init, NULL, "Init mesh: <node_id_hex> [ble|sub|lora|wifi] [gw]", cmd_mesh_init, 2, 2),
     SHELL_CMD_ARG(send, NULL, "Send: <dest_id_hex> <text>", cmd_mesh_send, 3, 0),
+    SHELL_CMD_ARG(sendu, NULL, "Fire-and-forget send: <dest_id_hex> <text>", cmd_mesh_sendu, 3, 0),
+    SHELL_CMD_ARG(sendu_burst, NULL, "Fire-and-forget throughput test: <dest_id_hex> <count> <size_bytes>", cmd_mesh_sendu_burst, 4, 0),
+    SHELL_CMD_ARG(sendstream, NULL, "Stream send: <dest_id_hex> <size_bytes>", cmd_mesh_sendstream, 3, 0),
+    SHELL_CMD_ARG(app, NULL, "Distribute installed app: <dest_id_hex> <name>", cmd_mesh_app, 3, 0),
+    SHELL_CMD_ARG(linkdrop, NULL, "Test-only: simulate peer out of range: <peer_id_hex>", cmd_mesh_linkdrop, 2, 0),
+    SHELL_CMD_ARG(linkrestore, NULL, "Undo linkdrop: <peer_id_hex>", cmd_mesh_linkrestore, 2, 0),
+    SHELL_CMD_ARG(power, NULL, "Set mesh radio TX power: <dbm>", cmd_mesh_power, 2, 0),
     SHELL_CMD(info, NULL, "Show mesh statistics", cmd_mesh_info),
     SHELL_CMD(nodes, NULL, "List discovered nodes", cmd_mesh_nodes),
     SHELL_CMD(start, NULL, "Start mesh networking", cmd_mesh_start),

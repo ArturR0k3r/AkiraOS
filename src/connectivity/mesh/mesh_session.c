@@ -85,6 +85,18 @@ void mesh_session_install(struct session_table *t,
     memset(okm, 0, sizeof(okm));
 }
 
+void mesh_session_touch(struct session_table *t, const uint8_t *peer_id,
+                        uint32_t new_expiry_ms)
+{
+    for (size_t i = 0; i < CONFIG_AKIRA_MESH_MAX_SESSIONS; i++) {
+        struct session_entry *e = &t->e[i];
+        if (e->valid && memcmp(e->peer_id, peer_id, AKIRA_MESH_NODE_ID_LEN) == 0) {
+            e->expiry_ms = new_expiry_ms;
+            return;
+        }
+    }
+}
+
 void mesh_session_gc(struct session_table *t, uint32_t now_ms)
 {
     for (size_t i = 0; i < CONFIG_AKIRA_MESH_MAX_SESSIONS; i++) {

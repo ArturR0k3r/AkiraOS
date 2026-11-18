@@ -95,6 +95,7 @@ extern "C"
         APP_SOURCE_SD,
         APP_SOURCE_FIRMWARE,
         APP_SOURCE_FLEET, /**< device-management client (akira_apps.h) */
+        APP_SOURCE_MESH,  /**< received over the mesh (mesh_app_dist.c) */
     } app_source_t;
 
     /**
@@ -242,6 +243,25 @@ extern "C"
                             const app_manifest_t *manifest, app_source_t source);
 
     /**
+     * @brief Register an app binary that's already fully written to disk
+     *
+     * For callers that stream a binary straight to its final storage location
+     * (e.g. mesh app reassembly) instead of holding it in a buffer — skips the
+     * write app_manager_install() always does, moving the file into place
+     * instead. `tmp_path` must point at a file already validated as WASM/AOT
+     * (magic bytes present); it is moved to the canonical install path.
+     *
+     * @param name App name
+     * @param tmp_path Path to the already-written binary
+     * @param size Binary size in bytes
+     * @param source Where the app came from
+     * @param use_sd true = final path is on the SD card, false = internal flash
+     * @return App ID (>= 0) on success, negative on error
+     */
+    int app_manager_register_installed(const char *name, const char *tmp_path, size_t size,
+                                       app_source_t source, bool use_sd);
+
+    /**
      * @brief Install app from file path
      *
      * @param path Path to .wasm file (e.g., "/sd/apps/myapp.wasm")
@@ -335,6 +355,25 @@ extern "C"
      * @return Buffer of APP_MANAGER_LIST_CAPACITY entries, or NULL on failure
      */
     app_info_t *app_manager_list_alloc(int *out_count);
+
+    /**
+     * @brief Identity of an installed app build: a hash of its name, version,
+     * size and install time.  Changes when the app is updated or reinstalled,
+     * so consent bound to it (Seal ALWAYS grants) does not carry over.
+     *
+     * @return the identity, or 0 if no app is installed under @p name
+     */
+    uint32_t app_manager_identity(const char *name);
+
+    /**
+     * @brief Read an installed app's binary back into memory
+     *
+     * @param name App name
+     * @param buf Output buffer
+     * @param buf_size Buffer capacity
+     * @return Bytes read (>= 0) on success, -ENOENT if not found or unreadable
+     */
+    int app_manager_read_binary(const char *name, void *buf, size_t buf_size);
 
     /**
      * @brief Get app info by name
@@ -493,6 +532,51 @@ extern "C"
     int app_manager_install_akpkg(char *name, size_t name_size,
                                   const uint8_t *pkg, size_t pkg_len,
                                   app_source_t source);
+
+    /**
+     * @brief Decompress any .akpkg archives found in a directory in place.
+     *
+     * For each "<base>.akpkg" in @p dir, inflates the gzip+tar archive and
+     * writes its contents back to the same directory as "<base>.wasm" or
+     * "<base>.aot" (chosen by binary magic) plus "<base>.json" (manifest),
+     * then deletes the archive. Failed archives are left untouched for retry.
+     * Intended to run as a pre-pass before scanning /SD:/apps/ for apps.
+     *
+     * @param dir Directory to scan (e.g. "/SD:/apps").
+     * @return Number of archives extracted, negative errno on error.
+     */
+    int app_manager_extract_sd_akpkgs(const char *dir);
+
+    /**
+     * @brief Register apps found in /SD:/apps/ as in-memory registry entries.
+     *
+     * Scans the SD card and adds APP_SOURCE_SD entries to g_registry without
+     * copying binaries to flash.  Skips names already in the registry.
+     * Call after SD card is mounted (e.g. from hotplug callback).
+     *
+     * @return Number of apps registered, negative on error.
+     */
+    int app_manager_register_sd_apps(void);
+
+    /**
+     * @brief Remove all APP_SOURCE_SD entries from the in-memory registry.
+     *
+     * Stops any running SD apps before removing them.  Does not touch flash.
+     * Call when SD card is removed.
+     *
+     * @return Number of apps removed, negative on error.
+     */
+    int app_manager_unregister_sd_apps(void);
+
+    /**
+     * @brief Bring the SD registry in line with /SD:/apps/ after files changed.
+     *
+     * Unpacks new .akpkg archives, adds new apps, and drops idle SD entries
+     * whose binary was deleted. Running apps are not touched.
+     *
+     * @return Number of apps added, negative on error.
+     */
+    int app_manager_resync_sd_apps(void);
 
 #ifdef __cplusplus
 }

@@ -23,13 +23,70 @@ LOG_MODULE_REGISTER(akira_power_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 #include "power_manager.h"
 #include <zephyr/kernel.h>
+#include <zephyr/init.h>
 #include <zephyr/pm/pm.h>
 #include <zephyr/pm/state.h>
+#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 
+#ifdef CONFIG_AKIRA_MODULE_RF
+#include <api/akira_rf_api.h>
+#endif
+#if defined(CONFIG_BT)
+#include <connectivity/bluetooth/bt_manager.h>
+#endif
+#ifdef CONFIG_AKIRA_SD_CARD
+#include <storage/sd_card.h>
+#endif
+#ifdef CONFIG_PM_DEVICE
+#include <zephyr/pm/device.h>
+#endif
+#if defined(CONFIG_AKIRA_WIFI_MANAGER) && defined(CONFIG_WIFI_ESP32)
+#include <connectivity/wifi/wifi_manager.h>
+#include <esp_wifi.h>
+#endif
+
+#if defined(CONFIG_SOC_ESP32S3) && !defined(CONFIG_PM)
+/* CONFIG_PM=n: deep sleep goes via sys_poweroff() -> esp_deep_sleep_start(). */
+#include <zephyr/sys/poweroff.h>
+#include <esp_sleep.h>
+#endif
+
 #ifdef CONFIG_FUEL_GAUGE
 #include <zephyr/drivers/fuel_gauge.h>
+#endif
+#ifdef CONFIG_FUEL_GAUGE_STC3115
+#include "stc3115.h"
+#endif
+#ifdef CONFIG_CHARGER_BQ25601
+#include "drivers/charger/bq25601.h"
+#endif
+
+#include "drivers/platform_hal.h"
+#ifdef CONFIG_AKIRA_FUSB302_VBUS
+#include <drivers/usbc/fusb302_vbus.h>
+#endif
+#if defined(CONFIG_AKIRA_SE050) && DT_HAS_COMPAT_STATUS_OKAY(nxp_se050)
+#include <zephyr/drivers/gpio.h>
+#include <drivers/secure_element/se050.h>
+#define AKIRA_PM_SE050_NODE DT_INST(0, nxp_se050)
+#if defined(CONFIG_SOC_SERIES_ESP32S3) && DT_NODE_HAS_PROP(AKIRA_PM_SE050_NODE, enable_gpios)
+/* Hold the SE050 enable pad low through deep sleep (see akira_pm_prepare_poweroff). */
+#include <hal/rtc_io_ll.h>
+#include <soc/rtc_io_periph.h>
+#include <zephyr/init.h>
+#define AKIRA_PM_SE050_HOLD 1
+#define AKIRA_PM_SE050_ENA_PIN DT_GPIO_PIN(AKIRA_PM_SE050_NODE, enable_gpios)
+#endif
+#endif
+
+#ifdef CONFIG_CHARGER
+/* Charger IC (BQ25601 on AkiraConsole Production).  Independent of the battery
+ * gauge tier below: it answers "are we on external power / charging" directly
+ * and authoritatively, which the deep-sleep policy needs even when no gauge is
+ * fitted or the gauge is not responding. */
+#include <zephyr/drivers/charger.h>
 #endif
 
 #ifdef CONFIG_INA219
@@ -46,6 +103,7 @@ LOG_MODULE_REGISTER(akira_power_manager, CONFIG_AKIRA_LOG_LEVEL);
  * Vadc_mv * CONFIG_AKIRA_BATTERY_ADC_VDIV_MUL / 1000 = Vbat_mv */
 #include <zephyr/drivers/adc.h>
 #endif
+#include "lib/mem_helper.h"
 
 #define MAX_CONTAINERS 16
 
@@ -74,6 +132,9 @@ static struct {
 #ifdef CONFIG_FUEL_GAUGE
     const struct device *fuel_gauge;
 #endif
+#ifdef CONFIG_CHARGER
+    const struct device *charger;
+#endif
 #ifdef CONFIG_INA219
     const struct device *ina219;    /* Zephyr sensor API handle */
 #endif
@@ -83,7 +144,12 @@ static struct {
     struct adc_channel_cfg adc_ch_cfg;
     int16_t adc_buf;
 #endif
-} g_pm = {0};
+} g_pm AKIRA_BULK_BSS;
+
+/* Battery monitor (see "cached battery monitor" below); declared here because
+ * power_manager_init() arms it. */
+static struct k_work_delayable g_batt_work;
+static void batt_monitor_work_fn(struct k_work *work);
 
 /* ---------- helpers ---------- */
 
@@ -115,9 +181,12 @@ int power_manager_init(void)
 
 #ifdef CONFIG_FUEL_GAUGE
     /* Bind to the first fuel gauge device on the bus (declared in DTS). */
-    /* Prefer the BQ28Z610 fitted on AkiraConsole Production.
+    /* Prefer the STC3115 fitted on AkiraConsole Production (U4 @ 0x70).
      * Falls back to any generic fuel_gauge node if present (other boards). */
-#if DT_HAS_COMPAT_STATUS_OKAY(ti_bq28z610)
+#if DT_HAS_COMPAT_STATUS_OKAY(st_stc3115)
+    /* AkiraConsole Production fits an STC3115 at 0x70 (U4). */
+    g_pm.fuel_gauge = DEVICE_DT_GET_ANY(st_stc3115);
+#elif DT_HAS_COMPAT_STATUS_OKAY(ti_bq28z610)
     g_pm.fuel_gauge = DEVICE_DT_GET_ANY(ti_bq28z610);
 #else
     g_pm.fuel_gauge = DEVICE_DT_GET_ANY(zephyr_fuel_gauge);
@@ -126,7 +195,36 @@ int power_manager_init(void)
         LOG_WRN("Fuel gauge device not ready — battery readout unavailable");
         g_pm.fuel_gauge = NULL;
     } else {
-        LOG_INF("Fuel gauge: %s", g_pm.fuel_gauge->name);
+        /* Probe SOC immediately — this log is at APPLICATION level and always
+         * visible in the terminal, unlike the POST_KERNEL driver init messages. */
+        union fuel_gauge_prop_val soc_val = {0};
+        int probe_ret = fuel_gauge_get_prop(g_pm.fuel_gauge,
+                                            FUEL_GAUGE_RELATIVE_STATE_OF_CHARGE,
+                                            &soc_val);
+        if (probe_ret == 0) {
+            LOG_INF("Fuel gauge: %s — SoC=%u%%",
+                    g_pm.fuel_gauge->name,
+                    (unsigned)soc_val.relative_state_of_charge);
+        } else {
+            LOG_WRN("Fuel gauge: %s found but not responding (err=%d) — "
+                    "check battery connector J9",
+                    g_pm.fuel_gauge->name, probe_ret);
+            /* Keep g_pm.fuel_gauge set so periodic retries can recover. */
+        }
+    }
+#endif
+
+#ifdef CONFIG_CHARGER
+#if DT_HAS_COMPAT_STATUS_OKAY(ti_bq25601)
+    g_pm.charger = DEVICE_DT_GET_ANY(ti_bq25601);
+#else
+    g_pm.charger = NULL;
+#endif
+    if (g_pm.charger && !device_is_ready(g_pm.charger)) {
+        LOG_WRN("Charger present in DT but not ready — charge state unavailable");
+        g_pm.charger = NULL;
+    } else if (g_pm.charger) {
+        LOG_INF("Charger: %s", g_pm.charger->name);
     }
 #endif
 
@@ -173,6 +271,10 @@ int power_manager_init(void)
 #endif
 
     g_pm.initialized = true;
+
+    k_work_init_delayable(&g_batt_work, batt_monitor_work_fn);
+    k_work_schedule(&g_batt_work, K_MSEC(200));
+
     LOG_INF("Power manager initialized (mode=ACTIVE)");
     return 0;
 }
@@ -200,20 +302,22 @@ int akira_pm_set_mode(akira_power_mode_t mode)
         /* Allow Zephyr PM to gate the CPU when idle. */
 #ifdef CONFIG_PM
         pm_state_force(0u, &(struct pm_state_info){PM_STATE_RUNTIME_IDLE, 0, 0});
-#else
-        LOG_WRN("PM not enabled (CONFIG_PM=n) — idle mode is a no-op");
-#endif
         break;
+#else
+        LOG_WRN("PM not enabled (CONFIG_PM=n) — idle mode unsupported");
+        return -ENOTSUP;
+#endif
 
     case POWER_MODE_LIGHT_SLEEP:
         /* Suspend-to-idle: RAM retained, fast wake.
          * On ESP32 this maps to light sleep via the SoC PM backend. */
 #ifdef CONFIG_PM
         pm_state_force(0u, &(struct pm_state_info){PM_STATE_SUSPEND_TO_IDLE, 0, 0});
-#else
-        LOG_WRN("PM not enabled (CONFIG_PM=n) — light sleep is a no-op");
-#endif
         break;
+#else
+        LOG_WRN("PM not enabled (CONFIG_PM=n) — light sleep unsupported");
+        return -ENOTSUP;
+#endif
 
     case POWER_MODE_DEEP_SLEEP:
         /* Standby / deep sleep: only RTC + configured wake sources preserved. */
@@ -223,10 +327,18 @@ int akira_pm_set_mode(akira_power_mode_t mode)
         }
 #ifdef CONFIG_PM
         pm_state_force(0u, &(struct pm_state_info){PM_STATE_STANDBY, 0, 0});
-#else
-        LOG_WRN("PM not enabled (CONFIG_PM=n) — deep sleep is a no-op");
-#endif
         break;
+#elif defined(CONFIG_SOC_ESP32S3)
+        /* sys_poweroff() does not return — reboots on wake. */
+        akira_pm_prepare_poweroff();
+        esp_sleep_enable_ext0_wakeup(0 /* GPIO_NUM_0 */, 0 /* level LOW */);
+        LOG_INF("Deep sleep — wake on GPIO0 LOW (HOME button)");
+        sys_poweroff();
+        break; /* unreachable */
+#else
+        LOG_WRN("PM not enabled (CONFIG_PM=n) — deep sleep unsupported");
+        return -ENOTSUP;
+#endif
 
     case POWER_MODE_HIBERNATE:
         /* Soft-off: only external reset / RTC alarm wakes the device. */
@@ -236,10 +348,18 @@ int akira_pm_set_mode(akira_power_mode_t mode)
         }
 #ifdef CONFIG_PM
         pm_state_force(0u, &(struct pm_state_info){PM_STATE_SOFT_OFF, 0, 0});
-#else
-        LOG_WRN("PM not enabled (CONFIG_PM=n) — hibernate is a no-op");
-#endif
         break;
+#elif defined(CONFIG_SOC_ESP32S3)
+        /* sys_poweroff() does not return — reboots on wake. */
+        akira_pm_prepare_poweroff();
+        esp_sleep_enable_ext0_wakeup(0 /* GPIO_NUM_0 */, 0 /* level LOW */);
+        LOG_INF("Hibernate — wake on GPIO0 LOW (HOME button)");
+        sys_poweroff();
+        break; /* unreachable */
+#else
+        LOG_WRN("PM not enabled (CONFIG_PM=n) — hibernate unsupported");
+        return -ENOTSUP;
+#endif
     }
 
     g_pm.current_mode = mode;
@@ -296,7 +416,7 @@ int akira_pm_get_battery_level(uint8_t *percent)
             *percent = (uint8_t)val.relative_state_of_charge;
             return 0;
         }
-        LOG_WRN("Fuel gauge SoC read failed: %d", ret);
+        LOG_DBG("Fuel gauge SoC read failed: %d", ret);
     }
 #endif
 
@@ -340,17 +460,40 @@ int akira_pm_get_battery_level(uint8_t *percent)
     return -ENODEV;
 }
 
-int akira_pm_get_battery_status(akira_battery_status_t *status)
+/**
+ * Charge state straight from the charger IC.
+ *
+ * Authoritative, and — unlike everything below — independent of whether a fuel
+ * gauge is fitted or responding.  The deep-sleep policy depends on this: we
+ * must never power the device off while it sits on a charger.
+ *
+ * @return 1 charging, 0 not charging, -ENODEV if no charger is bound.
+ */
+static int pm_charger_charging(void)
 {
-    if (!status) {
-        return -EINVAL;
+#ifdef CONFIG_CHARGER
+    if (g_pm.charger) {
+        union charger_propval val;
+        if (charger_get_prop(g_pm.charger, CHARGER_PROP_STATUS, &val) == 0) {
+            return (val.status == CHARGER_STATUS_CHARGING) ? 1 : 0;
+        }
     }
+#endif
+    return -ENODEV;
+}
 
+bool akira_pm_is_charging(void)
+{
+    return pm_charger_charging() == 1;
+}
+
+static int battery_status_read(akira_battery_status_t *status)
+{
     memset(status, 0, sizeof(*status));
 
 #ifdef CONFIG_FUEL_GAUGE
     if (g_pm.fuel_gauge) {
-        union fuel_gauge_prop_val soc, volt, curr;
+        union fuel_gauge_prop_val soc, volt, curr, temp;
         bool ok = true;
 
         ok &= (fuel_gauge_get_prop(g_pm.fuel_gauge,
@@ -365,10 +508,17 @@ int akira_pm_get_battery_status(akira_battery_status_t *status)
             /* Fuel-gauge returns µV and µA — convert to mV and mA. */
             status->voltage_mv    = (int32_t)(volt.voltage / 1000);
             status->current_ma    = (int32_t)(curr.current / 1000);
-            /* Positive current = discharge, negative = charging.
-             * BQ28Z610 reports charge current as negative. */
-            status->charging      = (status->current_ma < 0);
+            /* Zephyr fuel_gauge convention: positive = charging.  The
+             * charger IC overrides this whenever it is bound (see
+             * akira_pm_get_battery_status); the margin keeps a near-zero
+             * idle current from flickering the flag. */
+            status->charging      = (status->current_ma > 20);
             status->low_battery   = (status->level_percent < CONFIG_AKIRA_BATTERY_LOW_THRESHOLD);
+            /* Temperature is best-effort: not every fuel gauge implements
+             * it, so it doesn't gate the rest of the status read. */
+            status->temperature_c = (fuel_gauge_get_prop(g_pm.fuel_gauge,
+                    FUEL_GAUGE_TEMPERATURE, &temp) == 0)
+                ? ((int32_t)temp.temperature / 10 - 273) : INT32_MIN;
             return 0;
         }
         LOG_WRN("Fuel gauge full-status read incomplete");
@@ -391,6 +541,7 @@ int akira_pm_get_battery_status(akira_battery_status_t *status)
              * shunt orientation; INA219 Zephyr driver reports signed amps). */
             status->charging      = (status->current_ma < -10);
             status->low_battery   = (status->level_percent < CONFIG_AKIRA_BATTERY_LOW_THRESHOLD);
+            status->temperature_c = INT32_MIN; /* INA219 has no temperature sense */
             return 0;
         }
         LOG_WRN("INA219 full-status fetch failed: %d", ret);
@@ -416,6 +567,7 @@ int akira_pm_get_battery_status(akira_battery_status_t *status)
             status->current_ma    = 0;     /* ADC gives voltage only */
             status->charging      = false; /* indeterminate without current */
             status->low_battery   = (status->level_percent < CONFIG_AKIRA_BATTERY_LOW_THRESHOLD);
+            status->temperature_c = INT32_MIN; /* ADC gives voltage only */
             return 0;
         }
         LOG_WRN("ADC battery full-read failed: %d", ret);
@@ -423,6 +575,302 @@ int akira_pm_get_battery_status(akira_battery_status_t *status)
 #endif
 
     return -ENODEV;
+}
+
+int akira_pm_get_battery_status(akira_battery_status_t *status)
+{
+    if (!status) {
+        return -EINVAL;
+    }
+
+    int ret = battery_status_read(status);
+
+    /* The charger IC knows the answer directly; the per-tier code above only
+     * infers it from the sign of the pack current, which depends on a shunt
+     * orientation nobody has verified.  Prefer the IC whenever it is bound —
+     * this also gives a valid charging flag on builds with no fuel gauge at
+     * all, where battery_status_read() returns -ENODEV. */
+    int charging = pm_charger_charging();
+    if (charging >= 0) {
+        status->charging = (charging == 1);
+    }
+
+    return ret;
+}
+
+/* ---------- cached battery monitor ---------- */
+
+/*
+ * One delayable work item on the system workqueue reads the charger and the
+ * gauge, smooths the percentage for display, and tells listeners what
+ * changed.  The UI reads the cached snapshot, so it never touches I2C.
+ *
+ * Kernel objects stay in internal RAM (the timer ISR walks the work item);
+ * only the plain data goes to PSRAM.
+ */
+#define BATT_POLL_ONLINE_MS     2000   /* on a charger: track the % closely   */
+#define BATT_POLL_AWAKE_MS      5000   /* on battery, screen on                */
+#define BATT_POLL_BLANKED_MS    60000  /* on battery, screen off: save power   */
+#define BATT_SMOOTH_JUMP_PCT    5      /* bigger moves bypass the smoothing    */
+#define BATT_MAX_LISTENERS      4
+
+static struct k_spinlock g_batt_lock;
+
+static struct {
+    akira_battery_snapshot_t snap;
+    bool have_snap;
+    bool blanked;
+    bool full_snapped;   /* SOC forced to 100 % for this charge cycle */
+    bool low_fired;
+    bool crit_fired;
+    int listener_count;
+    struct {
+        akira_battery_cb_t cb;
+        void *user;
+    } listeners[BATT_MAX_LISTENERS];
+#ifdef CONFIG_AKIRA_BATTERY_SIM
+    bool sim_active;
+    uint8_t sim_pct;
+    akira_batt_state_t sim_state;
+#endif
+} g_batt AKIRA_BULK_BSS;
+
+/* Raw (unsmoothed) reading of the hardware. */
+static void batt_read(akira_battery_snapshot_t *out)
+{
+    akira_battery_status_t st;
+
+    memset(out, 0, sizeof(*out));
+    out->temperature_c = INT32_MIN;
+
+#ifdef CONFIG_AKIRA_BATTERY_SIM
+    if (g_batt.sim_active) {
+        out->valid = true;
+        out->pct = g_batt.sim_pct;
+        out->state = g_batt.sim_state;
+        out->online = (g_batt.sim_state != AKIRA_BATT_DISCHARGING);
+        out->voltage_mv = 3300 + g_batt.sim_pct * 9;
+        out->current_ma = (g_batt.sim_state == AKIRA_BATT_CHARGING) ? 480
+                        : (g_batt.sim_state == AKIRA_BATT_DISCHARGING) ? -180 : 0;
+        out->temperature_c = 27;
+        return;
+    }
+#endif
+
+    if (battery_status_read(&st) == 0) {
+        out->valid = true;
+        out->pct = st.level_percent;
+        out->voltage_mv = st.voltage_mv;
+        out->current_ma = st.current_ma;
+        out->temperature_c = st.temperature_c;
+    }
+
+#ifdef CONFIG_CHARGER
+    if (g_pm.charger) {
+        union charger_propval online, status;
+
+        if (charger_get_prop(g_pm.charger, CHARGER_PROP_ONLINE, &online) == 0 &&
+            charger_get_prop(g_pm.charger, CHARGER_PROP_STATUS, &status) == 0) {
+            out->online = (online.online != CHARGER_ONLINE_OFFLINE);
+            if (!out->online) {
+                out->state = AKIRA_BATT_DISCHARGING;
+            } else if (status.status == CHARGER_STATUS_CHARGING) {
+                out->state = AKIRA_BATT_CHARGING;
+            } else if (status.status == CHARGER_STATUS_FULL) {
+                out->state = AKIRA_BATT_FULL;
+            } else {
+                out->state = AKIRA_BATT_NOT_CHARGING;
+            }
+            return;
+        }
+    }
+#endif
+
+    /* No charger IC: infer from the pack current. */
+    if (out->valid) {
+        out->state = st.charging ? AKIRA_BATT_CHARGING : AKIRA_BATT_DISCHARGING;
+        out->online = st.charging;
+    }
+}
+
+/*
+ * Display percentage: the gauge wanders by a percent either way under a
+ * changing load, which reads as a bug on a status bar.  While charging the
+ * number may only go up, while discharging only down — unless the state
+ * changed or the gauge moved by a real step (restart, re-estimate).
+ */
+static uint8_t batt_smooth(const akira_battery_snapshot_t *prev,
+                           const akira_battery_snapshot_t *now)
+{
+    if (now->state == AKIRA_BATT_FULL) {
+        return 100;
+    }
+    if (!prev->valid || prev->state != now->state ||
+        abs((int)now->pct - (int)prev->pct) >= BATT_SMOOTH_JUMP_PCT) {
+        return now->pct;
+    }
+    if (now->state == AKIRA_BATT_CHARGING) {
+        return MAX(prev->pct, now->pct);
+    }
+    if (now->state == AKIRA_BATT_DISCHARGING) {
+        return MIN(prev->pct, now->pct);
+    }
+    return now->pct;
+}
+
+static void batt_monitor_work_fn(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    akira_battery_snapshot_t now, prev;
+    uint32_t events = 0;
+
+    batt_read(&now);
+
+    k_spinlock_key_t key = k_spin_lock(&g_batt_lock);
+    prev = g_batt.snap;
+    bool first = !g_batt.have_snap;
+    k_spin_unlock(&g_batt_lock, key);
+
+    if (now.valid) {
+        now.pct = batt_smooth(&prev, &now);
+    }
+
+    if (first) {
+        events |= AKIRA_BATT_EVT_STATE | AKIRA_BATT_EVT_LEVEL;
+    } else {
+        if (!prev.online && now.online) {
+            events |= AKIRA_BATT_EVT_PLUGGED;
+        }
+        if (prev.online && !now.online) {
+            events |= AKIRA_BATT_EVT_UNPLUGGED;
+        }
+        if (prev.state != AKIRA_BATT_FULL && now.state == AKIRA_BATT_FULL) {
+            events |= AKIRA_BATT_EVT_FULL;
+        }
+        if (prev.pct != now.pct) {
+            events |= AKIRA_BATT_EVT_LEVEL;
+        }
+        if (prev.state != now.state || prev.online != now.online ||
+            prev.valid != now.valid) {
+            events |= AKIRA_BATT_EVT_STATE;
+        }
+    }
+
+    /* One warning per discharge for each threshold; plugging in re-arms. */
+    if (now.online) {
+        g_batt.low_fired = false;
+        g_batt.crit_fired = false;
+    } else if (now.valid && now.state == AKIRA_BATT_DISCHARGING) {
+        if (!g_batt.crit_fired && now.pct <= CONFIG_AKIRA_BATTERY_CRITICAL_THRESHOLD) {
+            g_batt.crit_fired = true;
+            g_batt.low_fired = true;
+            events |= AKIRA_BATT_EVT_CRITICAL;
+        } else if (!g_batt.low_fired && now.pct <= CONFIG_AKIRA_BATTERY_LOW_THRESHOLD) {
+            g_batt.low_fired = true;
+            events |= AKIRA_BATT_EVT_LOW;
+        }
+    }
+
+#ifdef CONFIG_FUEL_GAUGE
+    /* The charger has terminated: the cell is full whatever the gauge has
+     * drifted to.  Tell the gauge once per charge cycle so the % it tracks
+     * from here on starts at 100. */
+    if (now.state == AKIRA_BATT_FULL && !g_batt.full_snapped && g_pm.fuel_gauge
+# ifdef CONFIG_AKIRA_BATTERY_SIM
+        && !g_batt.sim_active
+# endif
+    ) {
+        union fuel_gauge_prop_val v = { .relative_state_of_charge = 100 };
+
+        if (fuel_gauge_set_prop(g_pm.fuel_gauge,
+                                FUEL_GAUGE_RELATIVE_STATE_OF_CHARGE, v) == 0) {
+            LOG_INF("Charge complete — gauge set to 100%%");
+        }
+        g_batt.full_snapped = true;
+    } else if (now.state == AKIRA_BATT_DISCHARGING) {
+        g_batt.full_snapped = false;
+    }
+#endif
+
+    now.seq = prev.seq + (events ? 1 : 0);
+
+    key = k_spin_lock(&g_batt_lock);
+    g_batt.snap = now;
+    g_batt.have_snap = true;
+    int n = g_batt.listener_count;
+    k_spin_unlock(&g_batt_lock, key);
+
+    if (events & (AKIRA_BATT_EVT_PLUGGED | AKIRA_BATT_EVT_UNPLUGGED |
+                  AKIRA_BATT_EVT_FULL)) {
+        LOG_INF("Battery: %u%% %s (%s, %d mV, %d mA)", now.pct,
+                now.state == AKIRA_BATT_CHARGING ? "charging" :
+                now.state == AKIRA_BATT_FULL ? "full" :
+                now.state == AKIRA_BATT_NOT_CHARGING ? "not charging" :
+                "discharging",
+                now.online ? "external power" : "battery",
+                (int)now.voltage_mv, (int)now.current_ma);
+    }
+
+    if (events) {
+        for (int i = 0; i < n; i++) {
+            g_batt.listeners[i].cb(events, &now, g_batt.listeners[i].user);
+        }
+    }
+
+    int period = now.online ? BATT_POLL_ONLINE_MS
+               : g_batt.blanked ? BATT_POLL_BLANKED_MS : BATT_POLL_AWAKE_MS;
+    k_work_reschedule(&g_batt_work, K_MSEC(period));
+}
+
+void akira_pm_battery_snapshot(akira_battery_snapshot_t *out)
+{
+    if (!out) {
+        return;
+    }
+    k_spinlock_key_t key = k_spin_lock(&g_batt_lock);
+    *out = g_batt.snap;
+    k_spin_unlock(&g_batt_lock, key);
+}
+
+void akira_pm_battery_poll_now(void)
+{
+    if (g_pm.initialized) {
+        k_work_reschedule(&g_batt_work, K_NO_WAIT);
+    }
+}
+
+int akira_pm_battery_register_cb(akira_battery_cb_t cb, void *user)
+{
+    int ret = -ENOMEM;
+
+    if (!cb) {
+        return -EINVAL;
+    }
+    k_spinlock_key_t key = k_spin_lock(&g_batt_lock);
+    if (g_batt.listener_count < BATT_MAX_LISTENERS) {
+        g_batt.listeners[g_batt.listener_count].cb = cb;
+        g_batt.listeners[g_batt.listener_count].user = user;
+        g_batt.listener_count++;
+        ret = 0;
+    }
+    k_spin_unlock(&g_batt_lock, key);
+    return ret;
+}
+
+int akira_pm_battery_simulate(int pct, akira_batt_state_t state)
+{
+#ifdef CONFIG_AKIRA_BATTERY_SIM
+    g_batt.sim_pct = (uint8_t)CLAMP(pct, 0, 100);
+    g_batt.sim_state = state;
+    g_batt.sim_active = (pct >= 0);
+    akira_pm_battery_poll_now();
+    return 0;
+#else
+    ARG_UNUSED(pct);
+    ARG_UNUSED(state);
+    return -ENOTSUP;
+#endif
 }
 
 /* ---------- low-power auto-management ---------- */
@@ -434,6 +882,213 @@ int akira_pm_enable_low_power_mode(bool enable)
      * select the deepest allowed idle state; we just unlock it here. */
     LOG_INF("Auto low-power: %s", enable ? "on" : "off");
     return 0;
+}
+
+/* ---------- power-off preparation ---------- */
+
+static void akira_pm_gate_peripherals(bool suspending);
+
+#if defined(AKIRA_PM_SE050_HOLD)
+/* A pad hold set before deep sleep survives the wake-up reboot, and would
+ * pin the SE050 enable low forever.  Release it before any driver runs. */
+static int akira_pm_release_pad_holds(void)
+{
+    int rtcio = rtc_io_num_map[AKIRA_PM_SE050_ENA_PIN];
+
+    if (rtcio >= 0) {
+        rtcio_ll_force_hold_disable(rtcio);
+    }
+    return 0;
+}
+SYS_INIT(akira_pm_release_pad_holds, PRE_KERNEL_1, 0);
+#endif
+
+void akira_pm_prepare_poweroff(void)
+{
+    /* Everything on the 3V3 rail stays powered while the ESP32 deep-sleeps
+     * (there are no load switches on this board), so each part has to be
+     * put into its own lowest state or it keeps draining the battery. */
+    LOG_INF("Preparing peripherals for power-off");
+
+#ifdef CONFIG_AKIRA_MODULE_RF
+    (void)akira_rf_sleep_all();            /* LR2021 sleep, CC1121 SPWD */
+#endif
+    akira_pm_gate_peripherals(true);       /* IMU + BME280 power-down    */
+
+#if defined(CONFIG_AKIRA_SE050) && DT_HAS_COMPAT_STATUS_OKAY(nxp_se050)
+    {
+        const struct device *se = DEVICE_DT_GET(AKIRA_PM_SE050_NODE);
+
+        if (device_is_ready(se)) {
+            (void)se050_power_off(se);     /* ENA low: deep power-down   */
+        }
+#if defined(AKIRA_PM_SE050_HOLD)
+        /* GPIO21 floats once the digital core sleeps and R95 pulls ENA back
+         * high — latch the pad low for the whole of deep sleep. */
+        int rtcio = rtc_io_num_map[AKIRA_PM_SE050_ENA_PIN];
+
+        if (rtcio >= 0) {
+            rtcio_ll_force_hold_enable(rtcio);
+        }
+#endif
+    }
+#endif
+
+#ifdef CONFIG_AKIRA_FUSB302_VBUS
+    akira_fusb302_power_down();
+#endif
+
+    /* Backlight to LP5817 standby, then ST7789V SLEEP_IN. */
+    akira_display_hal_sleep(true);
+}
+
+int akira_pm_ship_mode(void)
+{
+#ifdef CONFIG_CHARGER_BQ25601
+    if (!g_pm.charger) {
+        return -ENODEV;
+    }
+    akira_pm_prepare_poweroff();
+
+#ifdef CONFIG_FUEL_GAUGE_STC3115
+    /* The gauge stays on VBAT; in standby it draws ~2 uA instead of ~50 uA,
+     * and its RAM backup lets it resume the same SOC at the next boot. */
+    if (g_pm.fuel_gauge) {
+        (void)stc3115_standby(g_pm.fuel_gauge);
+    }
+#endif
+
+    int ret = bq25601_ship_mode(g_pm.charger);
+
+    if (ret != 0) {
+        LOG_ERR("Ship mode failed: %d", ret);
+        return ret;
+    }
+    LOG_WRN("Ship mode armed — battery disconnects in ~10 s; USB power to restart");
+#if defined(CONFIG_SOC_ESP32S3) && !defined(CONFIG_PM)
+    /* Sleep until the BATFET opens; if USB is still attached the board
+     * stays up and HOME brings it back. */
+    esp_sleep_enable_ext0_wakeup(0 /* GPIO_NUM_0 */, 0 /* level LOW */);
+    sys_poweroff();
+#endif
+    return 0;
+#else
+    return -ENOTSUP;
+#endif
+}
+
+/* ---------- blank-state subsystem idling ---------- */
+
+/**
+ * Suspend or resume the peripherals that are pointless while the screen is off.
+ *
+ * Deliberately table-free and explicit: each device needs a different mechanism
+ * because almost nothing on this SoC implements Zephyr's PM_DEVICE.  Anything
+ * added here must be safe to call repeatedly and must never fail the blank
+ * transition — a peripheral that refuses to suspend is a warning, not an error.
+ */
+static void akira_pm_gate_peripherals(bool suspending)
+{
+#ifdef CONFIG_PM_DEVICE
+    const enum pm_device_action action =
+        suspending ? PM_DEVICE_ACTION_SUSPEND : PM_DEVICE_ACTION_RESUME;
+#endif
+    ARG_UNUSED(suspending);
+
+#if defined(CONFIG_PM_DEVICE) && DT_HAS_COMPAT_STATUS_OKAY(akira_lsm6ds3)
+    {
+        const struct device *imu = DEVICE_DT_GET_ANY(akira_lsm6ds3);
+        if (imu && device_is_ready(imu)) {
+            int ret = pm_device_action_run(imu, action);
+            /* -EALREADY simply means it is already in the target state. */
+            if (ret < 0 && ret != -EALREADY) {
+                LOG_WRN("IMU %s failed: %d", suspending ? "suspend" : "resume", ret);
+            }
+        }
+    }
+#endif
+
+#if defined(CONFIG_PM_DEVICE) && DT_HAS_COMPAT_STATUS_OKAY(bosch_bme280)
+    {
+        const struct device *env = DEVICE_DT_GET_ANY(bosch_bme280);
+        if (env && device_is_ready(env)) {
+            int ret = pm_device_action_run(env, action);
+            if (ret < 0 && ret != -EALREADY) {
+                LOG_WRN("BME280 %s failed: %d", suspending ? "suspend" : "resume", ret);
+            }
+        }
+    }
+#endif
+
+#if defined(CONFIG_AKIRA_WIFI_MANAGER) && defined(CONFIG_WIFI_ESP32)
+    /* Only meaningful while associated — the ESP32 WiFi PHY is not even started
+     * until a connection is made, so there is nothing to save otherwise.
+     *
+     * Called through esp_wifi_set_ps() rather than NET_REQUEST_WIFI_PS because
+     * Zephyr's esp32 wifi driver does not implement .set_power_save in its
+     * wifi_mgmt_ops — that request returns -ENOTSUP.
+     *
+     * MAX_MODEM lets the radio sleep between DTIM beacons, so the link stays up
+     * (push/cloud keep working) at a fraction of the idle current.  We do not
+     * take the interface down: that would drop the user's connection for a
+     * screen blank, which is not a trade the user asked for. */
+    if (wifi_manager_get_state() == WIFI_MGR_STATE_CONNECTED) {
+        esp_err_t err = esp_wifi_set_ps(suspending ? WIFI_PS_MAX_MODEM
+                                                   : WIFI_PS_MIN_MODEM);
+        if (err != ESP_OK) {
+            LOG_WRN("WiFi power-save set failed: %d", (int)err);
+        }
+    }
+#endif
+}
+
+/* Sole trigger for blank/wake; callers must not call RF/BT idle fns directly. */
+void akira_pm_notify_blank(bool entering)
+{
+    akira_pm_gate_peripherals(entering);
+
+    /* Slow the battery poll while the screen is off; take a fresh reading on
+     * wake so the first frame isn't up to a minute stale. */
+    g_batt.blanked = entering;
+    if (!entering) {
+        akira_pm_battery_poll_now();
+    }
+
+    if (entering) {
+        akira_pm_enable_low_power_mode(true);
+#ifdef CONFIG_AKIRA_MODULE_RF
+        (void)akira_rf_sleep_if_idle();
+#endif
+#if defined(CONFIG_BT)
+        /* Idle conn params now; stop advertising a while later if nobody
+         * is connected (CONFIG_AKIRA_BT_ADV_AFTER_BLANK_S). */
+        bt_manager_on_blank(true);
+#endif
+#ifdef CONFIG_AKIRA_FUSB302_VBUS
+        /* Plug-in still arrives through the BAT_INT interrupt. */
+        akira_fusb302_set_idle(true);
+#endif
+#ifdef CONFIG_AKIRA_SD_CARD
+        akira_sd_card_hotplug_pause();
+        /* Refuses on its own if a transfer or an SD-backed app is live. */
+        (void)akira_sd_card_idle_unmount();
+#endif
+    } else {
+        akira_pm_enable_low_power_mode(false);
+#ifdef CONFIG_AKIRA_MODULE_RF
+        (void)akira_rf_wake();
+#endif
+#if defined(CONFIG_BT)
+        bt_manager_on_blank(false);
+#endif
+#ifdef CONFIG_AKIRA_FUSB302_VBUS
+        akira_fusb302_set_idle(false);
+#endif
+#ifdef CONFIG_AKIRA_SD_CARD
+        akira_sd_card_idle_remount();  /* before the poll, so it sees the truth */
+        akira_sd_card_hotplug_resume();
+#endif
+    }
 }
 
 /* ---------- per-app policy ---------- */
@@ -465,12 +1120,181 @@ int akira_pm_set_policy(const char *name, akira_power_policy_t policy)
 
 akira_power_policy_t akira_pm_get_aggregate_policy(void)
 {
-    /* Most performance-demanding active policy wins. */
+    /* Enum order != demand order (DEFAULT=0 < PERFORMANCE=1), rank explicitly. */
+    static const uint8_t demand_rank[] = {
+        [POWER_POLICY_DEFAULT]     = 1,
+        [POWER_POLICY_PERFORMANCE] = 3,
+        [POWER_POLICY_BALANCED]    = 2,
+        [POWER_POLICY_LOW_POWER]   = 0,
+    };
     akira_power_policy_t agg = POWER_POLICY_LOW_POWER;
     for (int i = 0; i < g_pm.policy_count; i++) {
-        if (g_pm.container_policies[i].policy < agg) {
+        if (demand_rank[g_pm.container_policies[i].policy] > demand_rank[agg]) {
             agg = g_pm.container_policies[i].policy;
         }
     }
     return agg;
 }
+
+/* ---------- insomnia (ref-counted keep-awake) ---------- */
+
+#define AKIRA_PM_INSOMNIA_SLOTS 8
+#define AKIRA_PM_INSOMNIA_REASON_LEN 32
+
+/* Handle = (generation << 8) | slot; generation bump on enter() invalidates
+ * stale handles from a freed+reused slot (ABA-safe). */
+#define AKIRA_PM_INSOMNIA_SLOT_BITS 8
+#define AKIRA_PM_INSOMNIA_SLOT_MASK ((1 << AKIRA_PM_INSOMNIA_SLOT_BITS) - 1)
+
+static struct {
+    char        reason[AKIRA_PM_INSOMNIA_REASON_LEN];
+    int64_t     acquired_ms;
+    int64_t     deadline_ms; /* 0 = never expires */
+    uint32_t    hold_ms;     /* for renew() to re-arm deadline_ms */
+    uint32_t    generation;
+    bool        active;
+} g_insomnia[AKIRA_PM_INSOMNIA_SLOTS] AKIRA_BULK_BSS;
+
+static struct k_spinlock g_insomnia_lock; /* not a mutex: ISR/workqueue-safe */
+
+/* Slot index from handle, or -EINVAL if stale/out of range. */
+static int insomnia_slot_from_handle(int handle)
+{
+    if (handle < 0) {
+        return -EINVAL;
+    }
+    int slot = handle & AKIRA_PM_INSOMNIA_SLOT_MASK;
+    uint32_t gen = (uint32_t)handle >> AKIRA_PM_INSOMNIA_SLOT_BITS;
+    if (slot >= AKIRA_PM_INSOMNIA_SLOTS || !g_insomnia[slot].active ||
+        g_insomnia[slot].generation != gen) {
+        return -EINVAL;
+    }
+    return slot;
+}
+
+int akira_pm_insomnia_enter(const char *reason, uint32_t max_hold_ms)
+{
+    int64_t now = k_uptime_get();
+    int handle = -ENOMEM;
+
+    k_spinlock_key_t key = k_spin_lock(&g_insomnia_lock);
+    for (int i = 0; i < AKIRA_PM_INSOMNIA_SLOTS; i++) {
+        if (!g_insomnia[i].active) {
+            g_insomnia[i].active      = true;
+            g_insomnia[i].generation++; /* invalidates any old handle for this slot */
+            strncpy(g_insomnia[i].reason, reason ? reason : "?",
+                    sizeof(g_insomnia[i].reason) - 1);
+            g_insomnia[i].reason[sizeof(g_insomnia[i].reason) - 1] = '\0';
+            g_insomnia[i].acquired_ms = now;
+            g_insomnia[i].hold_ms     = max_hold_ms;
+            g_insomnia[i].deadline_ms = (max_hold_ms == 0) ? 0 : now + max_hold_ms;
+            handle = (int)((g_insomnia[i].generation << AKIRA_PM_INSOMNIA_SLOT_BITS) | (uint32_t)i);
+            break;
+        }
+    }
+    k_spin_unlock(&g_insomnia_lock, key);
+
+    if (handle < 0) {
+        LOG_WRN("Insomnia table full — '%s' rejected", reason ? reason : "?");
+    }
+    return handle;
+}
+
+int akira_pm_insomnia_exit(int handle)
+{
+    int ret = 0;
+    k_spinlock_key_t key = k_spin_lock(&g_insomnia_lock);
+    int slot = insomnia_slot_from_handle(handle);
+    if (slot >= 0) {
+        g_insomnia[slot].active = false;
+    } else {
+        ret = -EINVAL;
+    }
+    k_spin_unlock(&g_insomnia_lock, key);
+    return ret;
+}
+
+int akira_pm_insomnia_renew(int handle)
+{
+    int ret = 0;
+    k_spinlock_key_t key = k_spin_lock(&g_insomnia_lock);
+    int slot = insomnia_slot_from_handle(handle);
+    if (slot >= 0) {
+        if (g_insomnia[slot].hold_ms != 0) {
+            g_insomnia[slot].deadline_ms = k_uptime_get() + g_insomnia[slot].hold_ms;
+        }
+    } else {
+        ret = -EINVAL;
+    }
+    k_spin_unlock(&g_insomnia_lock, key);
+    return ret;
+}
+
+int akira_pm_insomnia_count(void)
+{
+    /* Collect expired holders under the lock, log them after unlock. */
+    struct {
+        const char *reason;
+        int64_t     elapsed;
+    } expired[AKIRA_PM_INSOMNIA_SLOTS];
+    int n_expired = 0;
+    int live = 0;
+    int64_t now = k_uptime_get();
+
+    k_spinlock_key_t key = k_spin_lock(&g_insomnia_lock);
+    for (int i = 0; i < AKIRA_PM_INSOMNIA_SLOTS; i++) {
+        if (!g_insomnia[i].active) {
+            continue;
+        }
+        if (g_insomnia[i].deadline_ms != 0 && now >= g_insomnia[i].deadline_ms) {
+            expired[n_expired].reason  = g_insomnia[i].reason;
+            expired[n_expired].elapsed = now - g_insomnia[i].acquired_ms;
+            n_expired++;
+            g_insomnia[i].active = false;
+        } else {
+            live++;
+        }
+    }
+    k_spin_unlock(&g_insomnia_lock, key);
+
+    for (int i = 0; i < n_expired; i++) {
+        LOG_WRN("Insomnia lock expired: '%s' held %lld ms — reaped",
+                expired[i].reason ? expired[i].reason : "?",
+                (long long)expired[i].elapsed);
+    }
+    return live;
+}
+
+int akira_pm_insomnia_dump(void)
+{
+    struct {
+        const char *reason;
+        int64_t     age;
+    } live[AKIRA_PM_INSOMNIA_SLOTS];
+    int n = 0;
+    int64_t now = k_uptime_get();
+
+    k_spinlock_key_t key = k_spin_lock(&g_insomnia_lock);
+    for (int i = 0; i < AKIRA_PM_INSOMNIA_SLOTS; i++) {
+        if (g_insomnia[i].active) {
+            live[n].reason = g_insomnia[i].reason;
+            live[n].age    = now - g_insomnia[i].acquired_ms;
+            n++;
+        }
+    }
+    k_spin_unlock(&g_insomnia_lock, key);
+
+    LOG_INF("Insomnia holders: %d", n);
+    for (int i = 0; i < n; i++) {
+        LOG_INF("  '%s' age %lld ms",
+                live[i].reason ? live[i].reason : "?", (long long)live[i].age);
+    }
+    return n;
+}
+
+/* Auto-init at APPLICATION level so the fuel gauge I2C device is ready. */
+static int power_manager_sys_init(void)
+{
+    return power_manager_init();
+}
+SYS_INIT(power_manager_sys_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);

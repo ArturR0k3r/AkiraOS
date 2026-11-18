@@ -4,9 +4,11 @@
  */
 
 #include "mesh_crypto.h"
+#include "ed25519.h"
 #include <string.h>
 #include <errno.h>
 #include <zephyr/sys/util.h>
+#include <zephyr/random/random.h>
 
 #if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
 #include <psa/crypto.h>
@@ -21,6 +23,8 @@
 
 #define MESH_ID_PRIV_KEY "mesh_id_priv"
 #define MESH_ID_PUB_KEY  "mesh_id_pub"
+#define MESH_SIGN_PRIV_KEY "mesh_sign_priv"
+#define MESH_SIGN_PUB_KEY  "mesh_sign_pub"
 
 static void bytes_to_hex(const uint8_t *in, size_t len, char *out)
 {
@@ -246,6 +250,42 @@ int mesh_crypto_identity_init(uint8_t priv_out[MESH_CRYPTO_PRIV_LEN],
     return 0;
 }
 
+int mesh_crypto_signing_identity_init(uint8_t priv_out[MESH_CRYPTO_SIGN_PRIV_LEN],
+                                      uint8_t pub_out[MESH_CRYPTO_SIGN_PUB_LEN])
+{
+    char priv_hex[2 * MESH_CRYPTO_SIGN_PRIV_LEN + 1];
+    char pub_hex[2 * MESH_CRYPTO_SIGN_PUB_LEN + 1];
+
+    int rp = akira_settings_get(MESH_SIGN_PRIV_KEY, priv_hex, sizeof(priv_hex));
+    int ru = akira_settings_get(MESH_SIGN_PUB_KEY, pub_hex, sizeof(pub_hex));
+    if (rp == 0 && ru == 0 &&
+        hex_to_bytes(priv_hex, MESH_CRYPTO_SIGN_PRIV_LEN, priv_out) &&
+        hex_to_bytes(pub_hex, MESH_CRYPTO_SIGN_PUB_LEN, pub_out)) {
+        memset(priv_hex, 0, sizeof(priv_hex));
+        return 0;
+    }
+
+    /* No PSA support for the twisted-Edwards curve on this target (see
+     * ed25519.h) — seed from the same CSPRNG used for the AES-CTR nonce
+     * elsewhere in this file, not PSA. */
+    sys_csrand_get(priv_out, MESH_CRYPTO_SIGN_PRIV_LEN);
+    if (ed25519_keygen(priv_out, pub_out) != 0) {
+        memset(priv_out, 0, MESH_CRYPTO_SIGN_PRIV_LEN);
+        memset(priv_hex, 0, sizeof(priv_hex));
+        return -EIO;
+    }
+
+    bytes_to_hex(priv_out, MESH_CRYPTO_SIGN_PRIV_LEN, priv_hex);
+    bytes_to_hex(pub_out, MESH_CRYPTO_SIGN_PUB_LEN, pub_hex);
+    int sp = akira_settings_set(MESH_SIGN_PRIV_KEY, priv_hex, 1 /* encrypted */);
+    int su = akira_settings_set(MESH_SIGN_PUB_KEY, pub_hex, 0 /* not secret */);
+    memset(priv_hex, 0, sizeof(priv_hex));
+    if (sp != 0 || su != 0) {
+        return -EIO;
+    }
+    return 0;
+}
+
 #else /* !CONFIG_AKIRA_MESH_E2E_CRYPTO */
 
 int mesh_crypto_p256_keygen(uint8_t priv_out[MESH_CRYPTO_PRIV_LEN],
@@ -296,6 +336,13 @@ bool mesh_crypto_const_time_eq(const uint8_t *a, const uint8_t *b, size_t len)
 
 int mesh_crypto_identity_init(uint8_t priv_out[MESH_CRYPTO_PRIV_LEN],
                               uint8_t pub_out[MESH_CRYPTO_PUB_LEN])
+{
+    (void)priv_out; (void)pub_out;
+    return -ENOTSUP;
+}
+
+int mesh_crypto_signing_identity_init(uint8_t priv_out[MESH_CRYPTO_SIGN_PRIV_LEN],
+                                      uint8_t pub_out[MESH_CRYPTO_SIGN_PUB_LEN])
 {
     (void)priv_out; (void)pub_out;
     return -ENOTSUP;

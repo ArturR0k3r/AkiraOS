@@ -104,6 +104,18 @@ int wifi_manager_scan(void);
 int wifi_manager_get_scan_results(wifi_mgr_scan_result_t *out, size_t max, size_t *count_out);
 
 /**
+ * @brief Read the WiFi credentials currently saved in NVS, if any.
+ *
+ * Settings acts as a cache of the last saved connection — this lets callers
+ * (e.g. the settings UI) check whether a given SSID matches the last saved
+ * one and offer to reuse the saved PSK instead of asking the user to retype it.
+ *
+ * @return 0 on success, -ENOENT if no credentials are saved,
+ *         -EINVAL if ssid_out or psk_out is NULL.
+ */
+int wifi_manager_get_saved_credentials(char *ssid_out, size_t ssid_sz, char *psk_out, size_t psk_sz);
+
+/**
  * @brief Poll current connection stats.
  * @return 0 on success, -ENOTCONN if not in CONNECTED state.
  */

@@ -5,6 +5,7 @@
 
 #include "sd_manager.h"
 #include <runtime/app_manager/app_manager.h>
+#include <console_shell/akira_os_shell.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/fs/fs.h>
@@ -15,6 +16,10 @@
 #include <storage/sd_card.h>
 #include <storage/fs_manager.h>
 #endif
+#if defined(CONFIG_AKIRA_USB_MSC)
+#include <storage/usb_msc.h>
+#endif
+#include "lib/mem_helper.h"
 
 LOG_MODULE_REGISTER(sd_manager, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -27,7 +32,7 @@ static void *g_event_user = NULL;
 static K_MUTEX_DEFINE(g_sd_mutex);
 
 /* FAT FS mount structure */
-static FATFS g_fat_fs;
+static FATFS g_fat_fs AKIRA_BULK_BSS;
 static struct fs_mount_t g_mount = {
     .type = FS_FATFS,
     .fs_data = &g_fat_fs,
@@ -46,30 +51,68 @@ static void notify_state_change(sd_state_t new_state)
     }
 }
 
+#if defined(CONFIG_AKIRA_OS_SHELL)
+#define SD_NOTIFY_SHELL() akira_os_shell_notify_app_changed()
+#else
+#define SD_NOTIFY_SHELL() do { } while (0)
+#endif
+
 #if defined(CONFIG_AKIRA_SD_CARD) && defined(CONFIG_AKIRA_SD_HOTPLUG)
 static void sd_manager_hotplug_cb(bool present, void *user_data)
 {
     ARG_UNUSED(user_data);
-    if (present)
-    {
+    if (present) {
         fs_manager_reinit_sd();
         notify_state_change(SD_STATE_MOUNTED);
-    }
-    else
-    {
+        app_manager_register_sd_apps();
+    } else {
+        app_manager_unregister_sd_apps();
         notify_state_change(SD_STATE_UNMOUNTED);
     }
+    SD_NOTIFY_SHELL();
 }
 #endif
+
+#if defined(CONFIG_AKIRA_USB_MSC)
+/* MSC took/released the SD card — the registry and screen never hear about
+ * this otherwise, since it isn't a physical hotplug event. */
+static void sd_manager_msc_cb(bool owns_sd, void *user_data)
+{
+    ARG_UNUSED(user_data);
+    if (owns_sd) {
+        app_manager_unregister_sd_apps();
+        notify_state_change(SD_STATE_UNMOUNTED);
+    } else {
+        app_manager_register_sd_apps();
+        notify_state_change(SD_STATE_MOUNTED);
+    }
+    SD_NOTIFY_SHELL();
+}
+#endif
+
+static void sd_state_log_cb(sd_state_t state, void *user_data)
+{
+    ARG_UNUSED(user_data);
+    static const char *const names[] = {"UNMOUNTED", "MOUNTED", "ERROR"};
+    LOG_INF("SD state → %s", names[state]);
+}
 
 int sd_manager_init(void)
 {
 #if defined(CONFIG_AKIRA_SD_CARD) && defined(CONFIG_AKIRA_SD_HOTPLUG)
-    akira_sd_card_register_hotplug_cb(sd_manager_hotplug_cb, NULL);
+    akira_sd_card_register_hotplug_cb(sd_manager_hotplug_cb, NULL); /* slot 0 */
+#endif
+#if defined(CONFIG_AKIRA_USB_MSC)
+    akira_usb_msc_register_state_cb(sd_manager_msc_cb, NULL);
+#endif
+    sd_manager_register_callback(sd_state_log_cb, NULL);
 
-    if (akira_sd_card_is_present())
-    {
+#if defined(CONFIG_AKIRA_SD_CARD)
+    /* If card was present at boot, register apps now */
+    if (akira_sd_card_is_present()) {
+        LOG_INF("SD card detected at boot");
         notify_state_change(SD_STATE_MOUNTED);
+        app_manager_register_sd_apps();
     }
 #endif
 
@@ -198,6 +241,9 @@ int sd_manager_scan_apps(char names[][32], int max_count)
             return ret;
         }
     }
+
+    /* Decompress any .akpkg archives into plain .wasm/.aot first. */
+    app_manager_extract_sd_akpkgs(SD_APPS_DIR);
 
     struct fs_dir_t dir;
     fs_dir_t_init(&dir);

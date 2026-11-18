@@ -9,7 +9,7 @@ LOG_MODULE_REGISTER(akira_net_stream, CONFIG_AKIRA_LOG_LEVEL);
 
 /**
  * @file net_stream.c
- * @brief TCP/UDP stream engine with shared-memory ring buffers.
+ * @brief TCP/UDP/TLS stream engine with shared-memory ring buffers.
  *
  * Threads and who may do what:
  *   - Poll thread: the only thread that sends, receives, accepts, touches a
@@ -17,15 +17,18 @@ LOG_MODULE_REGISTER(akira_net_stream, CONFIG_AKIRA_LOG_LEVEL);
  *     rings and fills RX rings with non-blocking socket calls, so one stalled
  *     peer never holds up the others.
  *   - Connect worker (system workqueue, one k_work_delayable): one connect at
- *     a time system-wide. DNS is the only step that blocks it (bounded by
- *     CONFIG_NET_SOCKETS_DNS_TIMEOUT); the TCP connect is started
- *     non-blocking and re-checked every 50 ms, so the workqueue — which also
- *     feeds the watchdog and runs app cleanup — keeps running in between. It
- *     never waits for the stream table either: if the lock is not free it
- *     tries again later. While it connects a stream it owns that socket.
- *   - Callers (app natives): validate ownership and flip state under g_mutex,
- *     never wait on the network. Their only socket calls are socket()/bind()/
- *     listen(), which do not block.
+ *     a time system-wide (the system owner's requests first). DNS (bounded by
+ *     CONFIG_NET_SOCKETS_DNS_TIMEOUT) and the TLS handshake (bounded by
+ *     CONFIG_NET_SOCKETS_CONNECT_TIMEOUT) are the only steps that block it;
+ *     a TCP connect (and the TLS reachability probe) is started non-blocking
+ *     and re-checked every 50 ms, so the workqueue — which also feeds the
+ *     watchdog and runs app cleanup — keeps running in between. It never
+ *     waits for the stream table either: if the lock is not free it tries
+ *     again later. While it connects a stream it owns that socket.
+ *   - Callers (app natives, and the system owner: console shell/catalogue):
+ *     validate ownership and flip state under g_mutex, never wait on the
+ *     network. Their only socket calls are socket()/bind()/listen(), which
+ *     do not block.
  *
  * Memory safety against the app: ring capacity is fixed at bind time, the
  * host keeps its own copy of the index it produces/consumes, every offset is
@@ -56,6 +59,19 @@ LOG_MODULE_REGISTER(akira_net_stream, CONFIG_AKIRA_LOG_LEVEL);
 #include "mem_helper.h"
 #include <runtime/akira_runtime.h> /* AKIRA_MAX_WASM_INSTANCES */
 
+#ifdef CONFIG_AKIRA_WDT
+#include <drivers/wdt/akira_wdt.h>
+#endif
+
+#ifdef CONFIG_AKIRA_WASM_NET_TLS
+#include <zephyr/net/tls_credentials.h>
+#include "ca_certificate.h"
+
+#define NET_TLS_CA_SEC_TAG_GTS_R4   1
+#define NET_TLS_CA_SEC_TAG_ISRG_X2  2
+#define NET_TLS_CA_SEC_TAG_GTS_R1   3
+#endif
+
 /* =========================================================================
  * Configuration defaults (overridden by Kconfig)
  * ======================================================================= */
@@ -78,7 +94,12 @@ LOG_MODULE_REGISTER(akira_net_stream, CONFIG_AKIRA_LOG_LEVEL);
 
 #define NET_MAX_STREAMS     CONFIG_AKIRA_NET_MAX_STREAMS
 #define NET_EVT_DEPTH       CONFIG_AKIRA_NET_EVENT_QUEUE_DEPTH
-#define NET_OWNERS          AKIRA_MAX_WASM_INSTANCES
+/* Event rings: one per app slot plus one for NET_OWNER_SYSTEM (index 0). */
+#define NET_OWNER_COUNT     (AKIRA_MAX_WASM_INSTANCES + 1)
+
+/* The last free slot is kept for the system owner (catalogue, shell), so
+ * apps can never lock the console out of the network. */
+#define NET_SYSTEM_RESERVE  ((NET_MAX_STREAMS > 1) ? 1 : 0)
 
 /* With more than one app slot, one app can never take every stream: one is
  * always left for another app. */
@@ -98,7 +119,8 @@ LOG_MODULE_REGISTER(akira_net_stream, CONFIG_AKIRA_LOG_LEVEL);
 
 #define NET_POLL_TICK_MS        10    /* poll thread iteration                */
 #define NET_CONNECT_POLL_MS     50    /* connect worker re-check interval     */
-#define NET_TCP_CONNECT_MS      10000 /* TCP connect deadline                 */
+#define NET_TCP_CONNECT_MS      10000 /* plain TCP connect deadline           */
+#define NET_TLS_PROBE_MS        6000  /* TLS: TCP reachability probe deadline */
 #define NET_CLOSE_WAIT_MS       200   /* close() waits this long for the reap */
 #define NET_TX_BUDGET           8     /* messages per stream per iteration    */
 #define NET_CALLER_LOCK_MS      1000  /* natives: -EBUSY after this           */
@@ -143,7 +165,7 @@ struct net_stream_ctx {
 	bool         conn_active;  /* the connect worker owns fd right now           */
 	bool         tx_wait_out;  /* send hit EAGAIN / was partial: wait POLLOUT    */
 	bool         drop_fd;      /* connect failed: reaper closes fd, keeps slot   */
-	int8_t       owner;        /* app slot                                       */
+	int8_t       owner;        /* app slot, or NET_OWNER_SYSTEM                  */
 	uint8_t      type;         /* NET_TYPE_*                                     */
 	net_state_t  state;
 	int          fd;           /* zsock fd, -1 if none                           */
@@ -183,7 +205,7 @@ struct net_evt_ring {
  * ======================================================================= */
 
 static struct net_stream_ctx AKIRA_BULK_BSS g_streams[NET_MAX_STREAMS];
-static struct net_evt_ring AKIRA_BULK_BSS g_evt[NET_OWNERS];
+static struct net_evt_ring AKIRA_BULK_BSS g_evt[NET_OWNER_COUNT];
 static struct k_spinlock g_evt_lock;
 
 static K_MUTEX_DEFINE(g_mutex);     /* stream table + ring memory access */
@@ -208,6 +230,7 @@ static K_SEM_DEFINE(g_poll_wake, 0, 1);
 enum {
 	CP_START = 0,     /* resolve + start connecting                      */
 	CP_TCP_WAIT,      /* non-blocking TCP connect in progress on job.fd  */
+	CP_PROBE_WAIT,    /* TLS: non-blocking probe connect on job.probe_fd */
 	CP_FINISH,        /* done; the outcome still has to be recorded      */
 };
 
@@ -218,6 +241,7 @@ static struct {
 	int                h;
 	uint32_t           gen;
 	int                fd;
+	int                probe_fd;   /* TLS reachability probe, worker-owned */
 	int                result;
 	uint16_t           port;
 	int64_t            deadline;
@@ -255,7 +279,13 @@ static bool net_log_allowed(void)
 
 static inline bool owner_valid(int owner)
 {
-	return owner >= 0 && owner < NET_OWNERS;
+	return owner >= NET_OWNER_SYSTEM && owner < AKIRA_MAX_WASM_INSTANCES;
+}
+
+/* Event ring of a valid @p owner (NET_OWNER_SYSTEM is index 0). */
+static inline struct net_evt_ring *owner_ring(int owner)
+{
+	return &g_evt[owner + 1];
 }
 
 static inline int ctx_handle(const struct net_stream_ctx *c)
@@ -303,9 +333,32 @@ static int owner_count_locked(int owner)
 	return n;
 }
 
+static int free_count_locked(void)
+{
+	int n = 0;
+
+	for (int i = 0; i < NET_MAX_STREAMS; i++) {
+		if (!g_streams[i].used) {
+			n++;
+		}
+	}
+	return n;
+}
+
+/* Apps are held to NET_STREAMS_PER_APP and never get the last free slot
+ * (NET_SYSTEM_RESERVE); the system owner may use any free slot. */
+static bool owner_at_cap_locked(int owner)
+{
+	if (owner == NET_OWNER_SYSTEM) {
+		return false;
+	}
+	return owner_count_locked(owner) >= NET_STREAMS_PER_APP ||
+	       free_count_locked() <= NET_SYSTEM_RESERVE;
+}
+
 static int slot_alloc_locked(int owner, int type, int fd)
 {
-	if (owner_count_locked(owner) >= NET_STREAMS_PER_APP) {
+	if (owner_at_cap_locked(owner)) {
 		return -ENOSPC;
 	}
 
@@ -366,7 +419,7 @@ static void evt_post_locked(const struct net_stream_ctx *c, uint8_t type, uint16
 		return;
 	}
 
-	struct net_evt_ring *r = &g_evt[c->owner];
+	struct net_evt_ring *r = owner_ring(c->owner);
 	bool dropped = false;
 	k_spinlock_key_t key = k_spin_lock(&g_evt_lock);
 
@@ -383,14 +436,14 @@ static void evt_post_locked(const struct net_stream_ctx *c, uint8_t type, uint16
 	k_spin_unlock(&g_evt_lock, key);
 
 	if (dropped) {
-		NET_WRN("stream %d: app slot %d event queue full, event %u dropped",
+		NET_WRN("stream %d: owner %d event queue full, event %u dropped",
 			ctx_handle(c), c->owner, type);
 	}
 }
 
 static int evt_pop(int owner, struct net_event *out)
 {
-	struct net_evt_ring *r = &g_evt[owner];
+	struct net_evt_ring *r = owner_ring(owner);
 	int type = NET_EVT_NONE;
 	k_spinlock_key_t key = k_spin_lock(&g_evt_lock);
 
@@ -408,7 +461,7 @@ static int evt_pop(int owner, struct net_event *out)
  * reused). Called with g_mutex held, like every post. */
 static void evt_purge_handle(int owner, int h)
 {
-	struct net_evt_ring *r = &g_evt[owner];
+	struct net_evt_ring *r = owner_ring(owner);
 	k_spinlock_key_t key = k_spin_lock(&g_evt_lock);
 	uint8_t kept = 0;
 
@@ -426,7 +479,7 @@ static void evt_purge_handle(int owner, int h)
 
 static void evt_purge(int owner)
 {
-	struct net_evt_ring *r = &g_evt[owner];
+	struct net_evt_ring *r = owner_ring(owner);
 	k_spinlock_key_t key = k_spin_lock(&g_evt_lock);
 
 	r->head  = 0;
@@ -437,9 +490,10 @@ static void evt_purge(int owner)
 /* =========================================================================
  * Ring access
  *
- * Rings live in app memory: any alignment (byte-wise access when unaligned —
- * an unaligned 32-bit load faults on Xtensa), any content. Callers hold
- * g_mutex and have checked the ring pointer.
+ * Rings live in owner memory (WASM linear memory for apps): any alignment
+ * (byte-wise access when unaligned — an unaligned 32-bit load faults on
+ * Xtensa), any content. Callers hold g_mutex and have checked the ring
+ * pointer.
  * ======================================================================= */
 
 static uint32_t ring_ld32(const uint8_t *p)
@@ -894,8 +948,10 @@ static void net_poll_thread_fn(void *a, void *b, void *c_)
 			}
 
 			/* Only connected streams, listeners and UDP sockets are
-			 * polled. An unconnected TCP socket has nothing to read,
-			 * and one the connect worker owns is not ours to touch. */
+			 * polled. An unconnected TCP/TLS socket has nothing to
+			 * read, and one the connect worker owns is not ours to
+			 * touch (polling one it is handshaking on would block this
+			 * thread on its socket lock for the whole handshake). */
 			bool data_stream = c->state == NET_STATE_CONNECTED ||
 					   (c->state == NET_STATE_OPEN &&
 					    c->type == NET_TYPE_UDP);
@@ -986,7 +1042,8 @@ static void net_poll_thread_fn(void *a, void *b, void *c_)
  * Connect worker (system workqueue, one connect at a time)
  * ======================================================================= */
 
-/* Take the next queued connect, in request order. g_mutex held. */
+/* Take the next queued connect: the system owner's first, then request
+ * order. g_mutex held. */
 static bool job_pick_locked(void)
 {
 	struct net_stream_ctx *best = NULL;
@@ -997,7 +1054,12 @@ static bool job_pick_locked(void)
 		if (!c->used || c->closing || !c->conn_queued) {
 			continue;
 		}
-		if (!best || (int32_t)(c->conn_seq - best->conn_seq) < 0) {
+		bool c_sys = (c->owner == NET_OWNER_SYSTEM);
+
+		if (!best ||
+		    (c_sys && best->owner != NET_OWNER_SYSTEM) ||
+		    (c_sys == (best->owner == NET_OWNER_SYSTEM) &&
+		     (int32_t)(c->conn_seq - best->conn_seq) < 0)) {
 			best = c;
 		}
 	}
@@ -1011,6 +1073,7 @@ static bool job_pick_locked(void)
 		g_job.h      = ctx_handle(best);
 		g_job.gen    = best->gen;
 		g_job.fd     = best->fd;
+		g_job.probe_fd = -1;
 		g_job.result = 0;
 		g_job.port   = best->port;
 		memcpy(g_job.host, best->host, sizeof(g_job.host));
@@ -1049,8 +1112,83 @@ static int job_resolve(void)
 	return 0;
 }
 
+/* Close the TLS reachability probe, if one is open. Worker-only. */
+static void job_drop_probe(void)
+{
+	if (g_job.probe_fd >= 0) {
+		zsock_close(g_job.probe_fd); /* never in the table: ours alone */
+		g_job.probe_fd = -1;
+	}
+}
+
+#ifdef CONFIG_AKIRA_WASM_NET_TLS
+/* The stream being connected was closed/released (or its slot reused).
+ * Never waits long for the table: if it is busy, assume still live — the
+ * next run sees a cancellation either way. */
+static bool job_cancelled(void)
+{
+	if (k_mutex_lock(&g_mutex, K_MSEC(NET_WORKER_LOCK_MS)) != 0) {
+		return false;
+	}
+	bool cancelled = !ctx_live(&g_streams[g_job.h], g_job.gen);
+
+	k_mutex_unlock(&g_mutex);
+	return cancelled;
+}
+
+/* Reachability is known (the probe connected): set up TLS and connect for
+ * real. Blocks for the TCP connect (about one round trip now) plus the
+ * handshake, which Zephyr bounds by CONFIG_NET_SOCKETS_CONNECT_TIMEOUT. */
+static int job_tls_connect(void)
+{
+	job_drop_probe();
+	if (job_cancelled()) {
+		return -ECANCELED;
+	}
+
+	sec_tag_t sec_tag_list[] = { NET_TLS_CA_SEC_TAG_GTS_R4, NET_TLS_CA_SEC_TAG_ISRG_X2,
+				     NET_TLS_CA_SEC_TAG_GTS_R1 };
+	int peer_verify = TLS_PEER_VERIFY_REQUIRED;
+
+	if (zsock_setsockopt(g_job.fd, SOL_TLS, TLS_SEC_TAG_LIST,
+			     sec_tag_list, sizeof(sec_tag_list)) < 0 ||
+	    zsock_setsockopt(g_job.fd, SOL_TLS, TLS_HOSTNAME,
+			     g_job.host, strlen(g_job.host)) < 0 ||
+	    zsock_setsockopt(g_job.fd, SOL_TLS, TLS_PEER_VERIFY,
+			     &peer_verify, sizeof(peer_verify)) < 0) {
+		int err = errno;
+
+		NET_WRN("stream %d: TLS setsockopt failed: %d", g_job.h, err);
+		return -err;
+	}
+
+#ifdef CONFIG_AKIRA_WDT
+	/* The workqueue is about to block in a bounded Zephyr call; start the
+	 * watchdog window from here rather than from the last periodic feed. */
+	akira_wdt_feed();
+#endif
+	if (zsock_connect(g_job.fd, (struct sockaddr *)&g_job.addr, sizeof(g_job.addr)) < 0) {
+		return -errno;
+	}
+	return 0;
+}
+#endif /* CONFIG_AKIRA_WASM_NET_TLS */
+
+/* A non-blocking TCP connect finished (@p phase says which one). */
+static int job_tcp_done(uint8_t phase)
+{
+#ifdef CONFIG_AKIRA_WASM_NET_TLS
+	if (phase == CP_PROBE_WAIT) {
+		return job_tls_connect();
+	}
+#else
+	ARG_UNUSED(phase);
+#endif
+	return 0;
+}
+
 /* Start a non-blocking TCP connect on @p fd. @return 1 = in progress. */
-static int job_nb_connect(int fd, uint32_t timeout_ms)
+static int job_nb_connect(int fd, uint32_t timeout_ms, uint8_t phase)
 {
 	int ret = set_nonblock(fd);
 
@@ -1058,18 +1196,18 @@ static int job_nb_connect(int fd, uint32_t timeout_ms)
 		return ret;
 	}
 	if (zsock_connect(fd, (struct sockaddr *)&g_job.addr, sizeof(g_job.addr)) == 0) {
-		return 0;
+		return job_tcp_done(phase);
 	}
 	if (errno != EINPROGRESS) {
 		return -errno;
 	}
-	g_job.phase    = CP_TCP_WAIT;
+	g_job.phase    = phase;
 	g_job.deadline = k_uptime_get() + timeout_ms;
 	return 1;
 }
 
 /* Check a non-blocking connect without waiting. @return 1 = still going. */
-static int job_nb_check(int fd)
+static int job_nb_check(int fd, uint8_t phase)
 {
 	struct zsock_pollfd p = { .fd = fd, .events = ZSOCK_POLLOUT };
 	int n = zsock_poll(&p, 1, 0);
@@ -1093,7 +1231,7 @@ static int job_nb_check(int fd)
 	if (!(p.revents & ZSOCK_POLLOUT)) {
 		return (k_uptime_get() >= g_job.deadline) ? -ETIMEDOUT : 1;
 	}
-	return 0;
+	return job_tcp_done(phase);
 }
 
 /* Run the current phase. @return 1 = re-check later, 0 = connected, <0 = -errno. */
@@ -1114,12 +1252,28 @@ static int job_step(void)
 			}
 			return 0;
 		}
+#ifdef CONFIG_AKIRA_WASM_NET_TLS
+		if (g_job.type == NET_TYPE_TLS) {
+			/* Zephyr's TLS connect is a blocking TCP connect plus a
+			 * blocking handshake, each up to the connect timeout. Probe
+			 * reachability with a non-blocking plain TCP connect first,
+			 * so an unreachable host fails here, workqueue free, instead
+			 * of holding the workqueue through the TCP timeout. */
+			g_job.probe_fd = zsock_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+			if (g_job.probe_fd < 0) {
+				return -errno;
+			}
+			return job_nb_connect(g_job.probe_fd, NET_TLS_PROBE_MS, CP_PROBE_WAIT);
+		}
+#endif
 		/* If the stream was closed during DNS, the next run sees it and
 		 * gives the socket back; connecting it meanwhile is harmless. */
-		return job_nb_connect(g_job.fd, NET_TCP_CONNECT_MS);
+		return job_nb_connect(g_job.fd, NET_TCP_CONNECT_MS, CP_TCP_WAIT);
 	}
 	case CP_TCP_WAIT:
-		return job_nb_check(g_job.fd);
+		return job_nb_check(g_job.fd, CP_TCP_WAIT);
+	case CP_PROBE_WAIT:
+		return job_nb_check(g_job.probe_fd, CP_PROBE_WAIT);
 	default:
 		return -EINVAL;
 	}
@@ -1141,8 +1295,9 @@ static void job_finish_locked(int err)
 			LOG_DBG("stream %d: connected to \"%s\":%u",
 				g_job.h, g_job.host, g_job.port);
 		} else {
-			/* The poll thread closes the socket right away; the slot
-			 * stays until the owner closes the handle. */
+			/* The poll thread closes the socket (and frees its TLS
+			 * context) right away; the slot stays until the owner
+			 * closes the handle. */
 			c->state   = NET_STATE_ERROR;
 			c->drop_fd = true;
 			evt_post_locked(c, NET_EVT_ERROR, (uint16_t)(-err));
@@ -1186,6 +1341,8 @@ static void connect_work_fn(struct k_work *work)
 		return;
 	}
 
+	job_drop_probe(); /* done with it whatever the outcome */
+
 	if (k_mutex_lock(&g_mutex, K_MSEC(NET_WORKER_LOCK_MS)) != 0) {
 		g_job.phase  = CP_FINISH;
 		g_job.result = ret;
@@ -1216,19 +1373,64 @@ int net_stream_init(void)
 		return 0;
 	}
 
+#ifdef CONFIG_AKIRA_WASM_NET_TLS
+	static const struct {
+		sec_tag_t      tag;
+		const uint8_t *cert;
+		size_t         len;
+		const char    *name;
+	} cas[] = {
+		{ NET_TLS_CA_SEC_TAG_GTS_R4, net_tls_ca_cert_gts_root_r4,
+		  sizeof(net_tls_ca_cert_gts_root_r4), "GTS R4" },
+		{ NET_TLS_CA_SEC_TAG_ISRG_X2, net_tls_ca_cert_isrg_root_x2,
+		  sizeof(net_tls_ca_cert_isrg_root_x2), "ISRG X2" },
+		{ NET_TLS_CA_SEC_TAG_GTS_R1, net_tls_ca_cert_gts_root_r1,
+		  sizeof(net_tls_ca_cert_gts_root_r1), "GTS R1" },
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(cas); i++) {
+		int cret = tls_credential_add(cas[i].tag, TLS_CREDENTIAL_CA_CERTIFICATE,
+					      cas[i].cert, cas[i].len);
+
+		if (cret < 0 && cret != -EEXIST) {
+			LOG_ERR("Failed to register TLS CA credential (%s): %d",
+				cas[i].name, cret);
+			k_mutex_unlock(&g_init_lock);
+			return cret;
+		}
+	}
+#endif
+
 	memset(g_streams, 0, sizeof(g_streams));
 	for (int i = 0; i < NET_MAX_STREAMS; i++) {
 		g_streams[i].fd = -1;
 	}
 	memset(g_evt, 0, sizeof(g_evt));
 	memset(&g_job, 0, sizeof(g_job));
-	g_job.fd = -1;
+	g_job.fd       = -1;
+	g_job.probe_fd = -1;
 
+	/* Created suspended so it can be pinned: a ready thread can't be. */
 	k_thread_create(&g_poll_thread, g_poll_stack,
 			K_THREAD_STACK_SIZEOF(g_poll_stack),
 			net_poll_thread_fn, NULL, NULL, NULL,
-			CONFIG_AKIRA_WASM_APP_PRIORITY, 0, K_NO_WAIT);
+			CONFIG_AKIRA_WASM_APP_PRIORITY, 0, K_FOREVER);
 	k_thread_name_set(&g_poll_thread, "akira_net_poll");
+
+	/* Under SMP, this thread's zsock_recv()/zsock_poll() calls (and the
+	 * connect worker, on k_sys_work_q) drop straight into the WiFi blob's
+	 * send/recv path via net_if_try_queue_tx() — CONFIG_NET_TC_TX_COUNT=0
+	 * means there's no TX thread for net_tc.c's own core0 pin to apply to,
+	 * so without this, TLS traffic runs on whichever core the scheduler
+	 * picks. The WiFi blob is closed-source and, per its own Kconfig help
+	 * text, expects every WiFi-facing thread pinned to core0 like the RX
+	 * thread already is (net_tc.c). Confirmed root cause of SMP-only TLS
+	 * fetch failures. */
+#if defined(CONFIG_SCHED_CPU_MASK) && defined(CONFIG_SMP)
+	k_thread_cpu_pin(&g_poll_thread, 0);
+	k_thread_cpu_pin(&k_sys_work_q.thread, 0);
+#endif
+	k_thread_start(&g_poll_thread);
 
 	g_initialized = true;
 	k_mutex_unlock(&g_init_lock);
@@ -1240,9 +1442,15 @@ int net_stream_init(void)
 
 int net_stream_open(int owner, int type)
 {
+#ifdef CONFIG_AKIRA_WASM_NET_TLS
+	if (type != NET_TYPE_TCP && type != NET_TYPE_UDP && type != NET_TYPE_TLS) {
+		return -EINVAL;
+	}
+#else
 	if (type != NET_TYPE_TCP && type != NET_TYPE_UDP) {
 		return -EINVAL;
 	}
+#endif
 	if (!owner_valid(owner)) {
 		return -EINVAL;
 	}
@@ -1257,22 +1465,30 @@ int net_stream_open(int owner, int type)
 	if (caller_lock() != 0) {
 		return -EBUSY;
 	}
-	bool full = owner_count_locked(owner) >= NET_STREAMS_PER_APP;
+	bool full = owner_at_cap_locked(owner);
 
 	k_mutex_unlock(&g_mutex);
 	if (full) {
 		return -ENOSPC;
 	}
 
-	int sock_type = (type == NET_TYPE_TCP) ? SOCK_STREAM : SOCK_DGRAM;
-	int proto     = (type == NET_TYPE_TCP) ? IPPROTO_TCP : IPPROTO_UDP;
+	int sock_type = (type == NET_TYPE_UDP) ? SOCK_DGRAM : SOCK_STREAM;
+	int proto     = (type == NET_TYPE_UDP) ? IPPROTO_UDP : IPPROTO_TCP;
+	const char *type_name = (type == NET_TYPE_TCP) ? "TCP" :
+				(type == NET_TYPE_UDP) ? "UDP" : "TLS";
+
+#ifdef CONFIG_AKIRA_WASM_NET_TLS
+	if (type == NET_TYPE_TLS) {
+		proto = IPPROTO_TLS_1_2;
+	}
+#endif
+
 	int fd = zsock_socket(AF_INET, sock_type, proto);
 
 	if (fd < 0) {
 		int err = errno;
 
-		NET_WRN("zsock_socket(%s) failed: %d",
-			(type == NET_TYPE_TCP) ? "TCP" : "UDP", err);
+		NET_WRN("zsock_socket(%s) failed: %d", type_name, err);
 		return -err;
 	}
 
@@ -1287,13 +1503,12 @@ int net_stream_open(int owner, int type)
 
 	if (h < 0) {
 		zsock_close(fd); /* never in the table: nobody else knows it */
-		NET_WRN("app slot %d: no free stream slot (%d)", owner, h);
+		NET_WRN("owner %d: no free stream slot (%d)", owner, h);
 		return h;
 	}
 
 	k_sem_give(&g_poll_wake);
-	LOG_DBG("stream %d opened (%s fd=%d owner=%d)", h,
-		(type == NET_TYPE_TCP) ? "TCP" : "UDP", fd, owner);
+	LOG_DBG("stream %d opened (%s fd=%d owner=%d)", h, type_name, fd, owner);
 	return h;
 }
 
@@ -1574,7 +1789,8 @@ int net_stream_event_pop(int owner, struct net_event *evt)
 
 void net_stream_release_owner(int owner)
 {
-	if (!owner_valid(owner) || !g_initialized) {
+	/* App slots only: the system owner's streams are never auto-released. */
+	if (owner < 0 || owner >= AKIRA_MAX_WASM_INSTANCES || !g_initialized) {
 		return;
 	}
 

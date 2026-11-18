@@ -25,6 +25,7 @@
 #ifdef CONFIG_AKIRA_MODULE_RF
 #include "akira_rf_api.h"
 #endif
+#include <connectivity/radio_interface.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -198,24 +199,53 @@ static void rx_queue_free(void)
 }
 
 /* ---- Transport selection ------------------------------------------------
- * Purely capability-based, in preference order — no board or chip is named
- * here. The mesh acquires the first free radio matching a mask; a target with
- * none of them fails with -ENODEV.
+ * The AkiraMesh stack takes an explicit transport (CC1121 and LR2021 both
+ * register as sub-GHz radios, so it acquires them by name). Tried in
+ * preference order; akira_mesh_init() returns -ENODEV when the board has no
+ * such radio (or it is taken), and the next one is tried.
  *
- * Order rationale, in generic terms: a dedicated sub-GHz transceiver is
- * normally idle and exclusively available, so it is tried first. BLE is tried
- * last because acquiring it forces the shared BT stack into BT_MODE_MESH and
- * evicts whatever else was using it.
+ * Order rationale: LoRa on the LR2021 is the console's mesh radio, then the
+ * CC1121 sub-GHz transceiver; both are normally idle and exclusively
+ * available. BLE is tried last because acquiring it forces the shared BT stack
+ * into BT_MODE_MESH and evicts whatever else was using it.
  */
-static const uint32_t s_transport_caps[] = {
-    AKIRA_MESH_CAPS_SUBGHZ,
-#if defined(CONFIG_AKIRA_MESH_TRANSPORT_802154)
-    AKIRA_MESH_CAPS_802154,
-#endif
+static const akira_mesh_transport_t s_transports[] = {
+    AKIRA_MESH_TRANSPORT_LORA,
+    AKIRA_MESH_TRANSPORT_SUBGHZ,
 #if defined(CONFIG_AKIRA_MESH_TRANSPORT_BLE)
-    AKIRA_MESH_CAPS_BLE,
+    AKIRA_MESH_TRANSPORT_BLE,
 #endif
 };
+
+/* akira_mesh_stop() powers the mesh's radio down (ops->deinit) and releases
+ * it. If that radio is one of the RF API's chips, tell the RF API, so its
+ * per-chip init state matches the hardware (otherwise it keeps the chip marked
+ * initialised and later rf_* calls fail with -ENODEV). */
+static int mesh_stop_and_sync(void)
+{
+#ifdef CONFIG_AKIRA_MODULE_RF
+    static const char *const rf_chips[] = { "LR2021", "CC1121" };
+    radio_handle_t *mesh_radio = NULL;
+
+    for (size_t i = 0; i < ARRAY_SIZE(rf_chips) && !mesh_radio; i++) {
+        radio_handle_t *r = radio_manager_get_by_name(rf_chips[i]);
+        const char *owner = r ? radio_manager_get_owner(r) : NULL;
+
+        if (owner && strcmp(owner, "mesh") == 0) {
+            mesh_radio = r;
+        }
+    }
+
+    int ret = akira_mesh_stop();
+
+    if (ret == 0 && mesh_radio) {
+        akira_rf_note_chip_deinit(mesh_radio);
+    }
+    return ret;
+#else
+    return akira_mesh_stop();
+#endif
+}
 
 /* s_lock is only ever held by an app thread inside a native critical
  * section, so a stop never aborts a thread that holds it, and it is taken
@@ -265,12 +295,14 @@ int akira_native_mesh_init(wasm_exec_env_t exec_env, int node_id,
         return -EALREADY;
     }
 
-    /* The mesh needs exclusive ownership of a radio. Drop any rf_* claim the
-     * app made earlier in the same session — mixing rf_* and mesh_* is
-     * documented as unsupported, so this is a convenience, not a policy hole.
+    /* The mesh needs exclusive ownership of a radio. Drop any rf_* claim
+     * (the app's earlier in the same session, or the boot-time RF bring-up's)
+     * — mixing rf_* and mesh_* is documented as unsupported, so this is a
+     * convenience, not a policy hole. Ownership only, no power-down: powering
+     * the LR2021 down here makes the mesh's own init hit a BUSY/boot timeout.
      */
 #ifdef CONFIG_AKIRA_MODULE_RF
-    (void)akira_rf_deinit();
+    (void)akira_rf_release_all();
 #endif
 
     akira_mesh_config_t cfg;
@@ -292,13 +324,13 @@ int akira_native_mesh_init(wasm_exec_env_t exec_env, int node_id,
     }
 
     int ret = -ENODEV;
-    for (size_t i = 0; i < ARRAY_SIZE(s_transport_caps); i++) {
-        cfg.transport_caps = s_transport_caps[i];
+    for (size_t i = 0; i < ARRAY_SIZE(s_transports); i++) {
+        cfg.transport = s_transports[i];
         ret = akira_mesh_init(&cfg);
         if (ret == 0) {
             break;
         }
-        /* -ENODEV just means "no radio matches this mask" — keep looking.
+        /* -ENODEV just means "no such radio, or it is taken" — keep looking.
          * Any other error is a real failure and must not be papered over by
          * silently binding a different transport. */
         if (ret != -ENODEV) {
@@ -362,7 +394,7 @@ int akira_native_mesh_stop(wasm_exec_env_t exec_env)
     }
     /* Detach the callback before freeing the queue it writes into. */
     akira_mesh_register_rx_callback(NULL, NULL);
-    ret = akira_mesh_stop();
+    ret = mesh_stop_and_sync();
     rx_queue_free();
     s_session = false;
     s_owner_slot = -1;
@@ -545,12 +577,16 @@ int akira_native_mesh_distribute_app(wasm_exec_env_t exec_env, void *dest_id,
     if (!mesh_caller_owns(exec_env)) {
         return -EPERM;
     }
-    /* The host stack has no per-destination distribution yet and returns
-     * -ENOSYS; dest_id is validated above so the ABI stays stable once
-     * chunking lands. Wrapped against a stop-abort: once chunking adds a
-     * per-fragment loop it will run under the stack's radio/tables locks. */
+    /* The stack fragments the binary into MTU-sized chunks and sends them to
+     * dest_id over reliable unicast (-ENOSYS on a radio without
+     * get_max_payload()). Every chunk arms the stack's shared ACK wait and
+     * takes its radio/tables locks, so a stop must not abort the thread in
+     * there: wrapped against a stop-abort. The span is bounded by the app
+     * size limit and CONFIG_AKIRA_MESH_APP_TX_RETRIES, but a large app keeps
+     * the caller unstoppable (-EBUSY) until the transfer ends. */
     return MESH_CRITICAL(exec_env,
-                         akira_mesh_distribute_app(app_name,
+                         akira_mesh_distribute_app((const uint8_t *)dest_id,
+                                                   app_name,
                                                    (const uint8_t *)data,
                                                    (size_t)len));
 }
@@ -559,7 +595,7 @@ int akira_native_mesh_distribute_app(wasm_exec_env_t exec_env, void *dest_id,
 static void mesh_teardown_locked(void)
 {
     akira_mesh_register_rx_callback(NULL, NULL);
-    akira_mesh_stop();
+    (void)mesh_stop_and_sync();
     rx_queue_free();
     s_session = false;
     s_owner_slot = -1;

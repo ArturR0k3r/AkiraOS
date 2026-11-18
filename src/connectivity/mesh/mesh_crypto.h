@@ -35,6 +35,9 @@ extern "C" {
 #define MESH_CRYPTO_NONCE_LEN       16  /* AES-CTR initial counter block */
 #define MESH_CRYPTO_MAC_LEN         16  /* truncated HMAC tag carried on the wire */
 #define MESH_CRYPTO_OVERHEAD        (MESH_CRYPTO_NONCE_LEN + MESH_CRYPTO_MAC_LEN)
+#define MESH_CRYPTO_SIGN_PRIV_LEN   32  /* Ed25519 seed */
+#define MESH_CRYPTO_SIGN_PUB_LEN    32  /* Ed25519 public key */
+#define MESH_CRYPTO_SIGN_LEN        64  /* Ed25519 signature (R||S) */
 
 /**
  * @brief Generate a new P-256 key pair from hardware entropy via PSA.
@@ -97,6 +100,21 @@ bool mesh_crypto_const_time_eq(const uint8_t *a, const uint8_t *b, size_t len);
  */
 int mesh_crypto_identity_init(uint8_t priv_out[MESH_CRYPTO_PRIV_LEN],
                               uint8_t pub_out[MESH_CRYPTO_PUB_LEN]);
+
+/**
+ * @brief Load this node's long-term Ed25519 signing keypair from settings,
+ * generating and persisting a new one on first boot. Separate from the
+ * P-256 identity key above — different curve, used to sign/verify RREQ/RREP
+ * handshake pubkeys so a relay can't swap in its own ephemeral key (see
+ * mesh_aodv.c's RREQ/RREP handling).
+ *
+ * Storage keys: "mesh_sign_priv" (hex, encrypted-at-rest, the 32-byte seed)
+ * and "mesh_sign_pub" (hex, plaintext — not secret).
+ *
+ * @return 0 on success, -EIO on settings, RNG, or keygen failure.
+ */
+int mesh_crypto_signing_identity_init(uint8_t priv_out[MESH_CRYPTO_SIGN_PRIV_LEN],
+                                      uint8_t pub_out[MESH_CRYPTO_SIGN_PUB_LEN]);
 
 #ifdef __cplusplus
 }

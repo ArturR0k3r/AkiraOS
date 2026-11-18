@@ -206,9 +206,17 @@ static const uint8_t hid_report_desc[] = {
     0x91,
     0x02, /* Output (Data, Var, Abs) */
     0xC0, /* End Collection */
+};
 
-    /* FIDO Alliance — Report ID 4 (CTAP2 / U2F HID authenticator channel) */
-    /* Usage Page 0xF1D0 / Usage 0x01 per FIDO HID Protocol Specification */
+/**
+ * @brief FIDO2/CTAP2 authenticator report descriptor — dedicated interface
+ *
+ * No Report ID: CTAPHID requires the wire packet to be exactly 64 bytes,
+ * which would overflow the 64-byte full-speed interrupt endpoint cap if a
+ * Report ID byte were prepended (see hid_dev_1 in the board overlay).
+ * Usage Page 0xF1D0 / Usage 0x01 per FIDO HID Protocol Specification.
+ */
+static const uint8_t fido_report_desc[] = {
     0x06,
     0xD0,
     0xF1, /* Usage Page (FIDO Alliance 0xF1D0) */
@@ -216,8 +224,6 @@ static const uint8_t hid_report_desc[] = {
     0x01, /* Usage (U2FHID Authenticator Device) */
     0xA1,
     0x01, /* Collection (Application) */
-    0x85,
-    0x04, /* Report ID (4) */
     /* IN: device → host */
     0x09,
     0x20, /* Usage (Input Report Data) */
@@ -345,9 +351,8 @@ static const uint8_t hid_gamepad_report_desc[] = {
 #define USB_HID_RAW_REPORT_SIZE 64 /* Report ID (1) + 63-byte payload */
 #define USB_HID_RAW_PAYLOAD_SIZE 63
 #define USB_HID_RAW_REPORT_ID 3
-#define USB_HID_FIDO_REPORT_SIZE 65 /* Report ID (1) + 64-byte payload */
+#define USB_HID_FIDO_REPORT_SIZE 64 /* No Report ID — dedicated interface */
 #define USB_HID_FIDO_PAYLOAD_SIZE 64
-#define USB_HID_FIDO_REPORT_ID 4
 #define USB_HID_GAMEPAD_REPORT_SIZE 17 /* Report ID (1) + 16-byte hid_gamepad_report_t */
 #define USB_HID_GAMEPAD_REPORT_ID 1 /* sole report in hid_gamepad_report_desc */
 #define USB_HID_PROTOCOL_BOOT 0
@@ -363,15 +368,18 @@ static const uint8_t hid_gamepad_report_desc[] = {
 static struct
 {
     const struct device *hid_dev;       /* HID device from device tree */
+    const struct device *fido_dev;      /* Dedicated FIDO HID device (no Report ID) */
     bool initialized;                   /* Transport initialized */
-    bool interface_ready;               /* USB interface ready for reports */
+    bool interface_ready;               /* hid_dev_0 (keyboard/mouse/raw) ready */
+    bool fido_interface_ready;          /* hid_dev_1 (FIDO) ready */
     bool enabled;                       /* Transport enabled */
     uint8_t protocol;                   /* Current protocol (boot/report) */
     uint8_t idle_rate;                  /* Current idle rate */
     struct k_mutex mutex;               /* Thread safety */
-    struct k_sem report_sem;            /* Report completion semaphore */
+    struct k_sem report_sem;            /* Report completion semaphore (hid_dev_0) */
+    struct k_sem fido_report_sem;       /* Report completion semaphore (hid_dev_1) */
     usb_hid_raw_handler_t raw_handler;  /* Raw OUT report handler (Report ID 3) */
-    usb_hid_fido_handler_t fido_handler; /* FIDO OUT report handler (Report ID 4) */
+    usb_hid_fido_handler_t fido_handler; /* FIDO OUT report handler */
 } usb_hid_ctx = {
     .initialized = false,
     .interface_ready = false,
@@ -451,15 +459,27 @@ static int usb_hid_get_report(const struct device *dev,
         memset(buf, 0, USB_HID_RAW_REPORT_SIZE);
         return USB_HID_RAW_REPORT_SIZE;
     }
-    else if (id == USB_HID_FIDO_REPORT_ID)
-    {
-        if (len < USB_HID_FIDO_REPORT_SIZE)
-            return -ENOBUFS;
-        memset(buf, 0, USB_HID_FIDO_REPORT_SIZE);
-        return USB_HID_FIDO_REPORT_SIZE;
-    }
 
     return -ENOTSUP;
+}
+
+/**
+ * @brief Get HID report — dedicated FIDO device (no Report ID, single report)
+ */
+static int usb_hid_fido_get_report(const struct device *dev,
+                                   const uint8_t type, const uint8_t id,
+                                   const uint16_t len, uint8_t *const buf)
+{
+    ARG_UNUSED(dev);
+    ARG_UNUSED(id);
+
+    if (type != HID_REPORT_TYPE_INPUT)
+        return -ENOTSUP;
+
+    if (len < USB_HID_FIDO_REPORT_SIZE)
+        return -ENOBUFS;
+    memset(buf, 0, USB_HID_FIDO_REPORT_SIZE);
+    return USB_HID_FIDO_REPORT_SIZE;
 }
 
 /**
@@ -504,24 +524,32 @@ static int usb_hid_set_report(const struct device *dev,
         }
     }
 
-    /* FIDO Alliance HID report ID 4 */
-    if (id == USB_HID_FIDO_REPORT_ID)
+    return 0;
+}
+
+/**
+ * @brief Set HID report — dedicated FIDO device (no Report ID, single report)
+ */
+static int usb_hid_fido_set_report(const struct device *dev,
+                                   const uint8_t type, const uint8_t id,
+                                   const uint16_t len, const uint8_t *const buf)
+{
+    ARG_UNUSED(dev);
+    ARG_UNUSED(id);
+
+    if (type != HID_REPORT_TYPE_OUTPUT)
     {
-        usb_hid_fido_handler_t handler;
-        k_mutex_lock(&usb_hid_ctx.mutex, K_FOREVER);
-        handler = usb_hid_ctx.fido_handler;
-        k_mutex_unlock(&usb_hid_ctx.mutex);
-        if (handler && len > 0)
-        {
-            const uint8_t *data = buf;
-            uint16_t dlen = len;
-            if (dlen > 1 && data[0] == USB_HID_FIDO_REPORT_ID)
-            {
-                data++;
-                dlen--;
-            }
-            handler(data, (uint8_t)MIN(dlen, (uint16_t)USB_HID_FIDO_PAYLOAD_SIZE));
-        }
+        return 0;
+    }
+
+    usb_hid_fido_handler_t handler;
+    k_mutex_lock(&usb_hid_ctx.mutex, K_FOREVER);
+    handler = usb_hid_ctx.fido_handler;
+    k_mutex_unlock(&usb_hid_ctx.mutex);
+    LOG_INF("FIDO SET_REPORT len=%u handler=%p", len, (void *)handler);
+    if (handler && len > 0)
+    {
+        handler(buf, (uint8_t)MIN(len, (uint16_t)USB_HID_FIDO_PAYLOAD_SIZE));
     }
 
     return 0;
@@ -614,18 +642,29 @@ static void usb_hid_output_report(const struct device *dev,
             handler(data, (uint8_t)MIN(dlen, (uint16_t)USB_HID_RAW_PAYLOAD_SIZE));
         }
     }
-    else if (report_id == USB_HID_FIDO_REPORT_ID)
+}
+
+/**
+ * @brief Output report callback — dedicated FIDO device (no Report ID)
+ */
+static void usb_hid_fido_output_report(const struct device *dev,
+                                       const uint16_t len, const uint8_t *const buf)
+{
+    ARG_UNUSED(dev);
+
+    if (len == 0 || buf == NULL)
     {
-        usb_hid_fido_handler_t handler;
-        k_mutex_lock(&usb_hid_ctx.mutex, K_FOREVER);
-        handler = usb_hid_ctx.fido_handler;
-        k_mutex_unlock(&usb_hid_ctx.mutex);
-        if (handler)
-        {
-            const uint8_t *data = buf + 1;
-            uint16_t dlen = len - 1;
-            handler(data, (uint8_t)MIN(dlen, (uint16_t)USB_HID_FIDO_PAYLOAD_SIZE));
-        }
+        return;
+    }
+
+    usb_hid_fido_handler_t handler;
+    k_mutex_lock(&usb_hid_ctx.mutex, K_FOREVER);
+    handler = usb_hid_ctx.fido_handler;
+    k_mutex_unlock(&usb_hid_ctx.mutex);
+    LOG_INF("FIDO OUTPUT_REPORT len=%u handler=%p", len, (void *)handler);
+    if (handler)
+    {
+        handler(buf, (uint8_t)MIN(len, (uint16_t)USB_HID_FIDO_PAYLOAD_SIZE));
     }
 }
 
@@ -644,6 +683,36 @@ static void usb_hid_input_report_done(const struct device *dev,
     k_sem_give(&usb_hid_ctx.report_sem);
 }
 
+/**
+ * @brief Input report done callback — dedicated FIDO device
+ */
+static void usb_hid_fido_input_report_done(const struct device *dev,
+                                           const uint8_t *const report)
+{
+    ARG_UNUSED(dev);
+    ARG_UNUSED(report);
+
+    k_sem_give(&usb_hid_ctx.fido_report_sem);
+}
+
+/**
+ * @brief Interface ready callback — dedicated FIDO device
+ */
+static void usb_hid_fido_iface_ready(const struct device *dev, const bool ready)
+{
+    ARG_UNUSED(dev);
+
+    LOG_INF("FIDO HID interface %s", ready ? "ready" : "not ready");
+
+    k_mutex_lock(&usb_hid_ctx.mutex, K_FOREVER);
+    usb_hid_ctx.fido_interface_ready = ready;
+    if (ready)
+    {
+        usb_hid_ctx.enabled = true;
+    }
+    k_mutex_unlock(&usb_hid_ctx.mutex);
+}
+
 /* HID device operations structure */
 static const struct hid_device_ops usb_hid_ops = {
     .iface_ready = usb_hid_iface_ready,
@@ -654,6 +723,17 @@ static const struct hid_device_ops usb_hid_ops = {
     .get_idle = usb_hid_get_idle,
     .set_protocol = usb_hid_set_protocol,
     .input_report_done = usb_hid_input_report_done,
+};
+
+/* HID device operations structure — dedicated FIDO device */
+static const struct hid_device_ops usb_hid_fido_ops = {
+    .iface_ready = usb_hid_fido_iface_ready,
+    .get_report = usb_hid_fido_get_report,
+    .set_report = usb_hid_fido_set_report,
+    .output_report = usb_hid_fido_output_report,
+    .set_idle = usb_hid_set_idle,
+    .get_idle = usb_hid_get_idle,
+    .input_report_done = usb_hid_fido_input_report_done,
 };
 
 /*===========================================================================*/
@@ -725,6 +805,13 @@ static int usb_hid_transport_init_fn(hid_device_type_t device_types)
         return ret;
     }
 
+    ret = k_sem_init(&usb_hid_ctx.fido_report_sem, 1, 1);
+    if (ret)
+    {
+        LOG_ERR("Failed to initialize FIDO semaphore: %d", ret);
+        return ret;
+    }
+
     /* USB manager needs to initialized to get context */
     ret = usb_manager_is_initialized();
     if (!ret)
@@ -766,8 +853,31 @@ static int usb_hid_transport_init_fn(hid_device_type_t device_types)
         return ret;
     }
 
-    /* Register ALL classes  */
-    ret = usbd_register_all_classes(usbd_ctx, USBD_SPEED_FS, 1, NULL);
+    /* Dedicated FIDO HID device — separate interface, no Report ID, so its
+     * 64-byte CTAPHID packets fit the full-speed interrupt endpoint cap. */
+    usb_hid_ctx.fido_dev = DEVICE_DT_GET(DT_NODELABEL(hid_dev_1));
+    if (!device_is_ready(usb_hid_ctx.fido_dev))
+    {
+        LOG_ERR("FIDO HID device not ready");
+        return -ENODEV;
+    }
+
+    ret = hid_device_register(usb_hid_ctx.fido_dev,
+                              fido_report_desc,
+                              sizeof(fido_report_desc),
+                              &usb_hid_fido_ops);
+    if (ret)
+    {
+        LOG_ERR("Failed to register FIDO HID device: %d", ret);
+        return ret;
+    }
+
+    /* Register HID's classes through the mode system (not
+     * usbd_register_all_classes()) so usb_manager's mode tracks HID as
+     * already active — otherwise the first usb_manager_activate(USB_MODE_HID)
+     * in usb_hid_transport_enable() re-registers these same classes and
+     * fails with -EBUSY (Zephyr refuses double-registration). */
+    ret = usb_manager_register_initial_classes(USB_MODE_HID);
     if (ret)
     {
         LOG_ERR("Failed to register USB classes: %d", ret);
@@ -820,6 +930,13 @@ static int usb_hid_transport_enable(void)
         return ret;
     }
 
+    ret = usb_manager_activate(USB_MODE_HID);
+    if (ret != 0)
+    {
+        LOG_ERR("Failed to activate USB HID mode: %d", ret);
+        return ret;
+    }
+
     k_mutex_lock(&usb_hid_ctx.mutex, K_FOREVER);
     usb_hid_ctx.enabled = true;
     k_mutex_unlock(&usb_hid_ctx.mutex);
@@ -843,13 +960,21 @@ static int usb_hid_transport_disable(void)
 
     LOG_INF("Disabling USB HID transport");
 
-    /* interface_ready is the host's state, set only by its iface_ready
-     * callback; the device stays enumerated, so clearing it here left USB
-     * HID dead after a disable/enable (or an app's transport switch) until
-     * the cable was replugged. */
+    /* Don't clear interface_ready/fido_interface_ready here: those track
+     * the actual USB wire state, which iface_ready() callbacks update in
+     * response to real host enumeration events. A soft disable/enable
+     * cycle (e.g. an app switching HID device types) doesn't drop the USB
+     * link, so the host never resends SET_CONFIGURATION and the ready
+     * callbacks would never refire to restore them — leaving reports
+     * permanently blocked despite a live connection. `enabled` alone is
+     * sufficient to gate is_connected() while disabled. */
     k_mutex_lock(&usb_hid_ctx.mutex, K_FOREVER);
     usb_hid_ctx.enabled = false;
     k_mutex_unlock(&usb_hid_ctx.mutex);
+
+    /* Not actionable here — there's nothing to roll back to at disable
+     * time. usb_manager_activate() logs its own failure internally. */
+    (void)usb_manager_activate(USB_MODE_IDLE);
 
     LOG_INF("USB HID transport disabled");
 
@@ -864,6 +989,14 @@ static int usb_hid_transport_disable(void)
 static bool usb_hid_transport_is_connected(void)
 {
     return usb_hid_ctx.enabled && usb_hid_ctx.interface_ready;
+}
+
+/**
+ * @brief Check if the dedicated FIDO interface is connected
+ */
+static bool usb_hid_fido_is_connected(void)
+{
+    return usb_hid_ctx.enabled && usb_hid_ctx.fido_interface_ready;
 }
 
 /**
@@ -1242,7 +1375,7 @@ int usb_hid_raw_send(const uint8_t *payload)
 }
 
 /**
- * @brief Register a handler for incoming FIDO OUT reports (Report ID 4).
+ * @brief Register a handler for incoming FIDO OUT reports.
  *
  * The callback is invoked from the USB interrupt context, so it must be
  * ISR-safe (no blocking, no heavy work — use a work queue if needed).
@@ -1257,7 +1390,7 @@ void usb_hid_fido_set_handler(usb_hid_fido_handler_t handler)
 }
 
 /**
- * @brief Send a FIDO IN report (Report ID 4) to the host.
+ * @brief Send a FIDO IN report to the host via the dedicated FIDO interface.
  *
  * @param payload  64-byte payload buffer (USB_HID_FIDO_PAYLOAD_SIZE bytes).
  * @return 0 on success, negative on error.
@@ -1268,29 +1401,34 @@ int usb_hid_fido_send(const uint8_t *payload)
     {
         return -EINVAL;
     }
-    if (!usb_hid_transport_is_connected())
+    if (!usb_hid_fido_is_connected())
     {
+        LOG_WRN("FIDO send: transport not connected");
         return -ENOTCONN;
     }
 
     static uint8_t __aligned(4) report_buf[USB_HID_FIDO_REPORT_SIZE];
 
-    int ret = k_sem_take(&usb_hid_ctx.report_sem, K_MSEC(100));
+    int ret = k_sem_take(&usb_hid_ctx.fido_report_sem, K_MSEC(100));
     if (ret)
     {
+        LOG_WRN("FIDO send: report_sem busy");
         return -EBUSY;
     }
 
-    report_buf[0] = USB_HID_FIDO_REPORT_ID;
-    memcpy(&report_buf[1], payload, USB_HID_FIDO_PAYLOAD_SIZE);
+    memcpy(report_buf, payload, USB_HID_FIDO_PAYLOAD_SIZE);
 
-    ret = hid_device_submit_report(usb_hid_ctx.hid_dev,
+    ret = hid_device_submit_report(usb_hid_ctx.fido_dev,
                                    USB_HID_FIDO_REPORT_SIZE,
                                    report_buf);
     if (ret)
     {
-        k_sem_give(&usb_hid_ctx.report_sem);
+        k_sem_give(&usb_hid_ctx.fido_report_sem);
         LOG_ERR("Failed to send FIDO report: %d", ret);
+    }
+    else
+    {
+        LOG_INF("FIDO report submitted OK");
     }
     return ret;
 }

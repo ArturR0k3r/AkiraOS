@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "../../settings/settings.h"
+#include "lib/mem_helper.h"
 
 LOG_MODULE_REGISTER(wifi_manager, CONFIG_AKIRA_LOG_LEVEL);
 
@@ -42,8 +43,16 @@ static struct {
     wifi_mgr_scan_result_t scan_results[WIFI_MGR_MAX_SCAN_RESULTS];
     size_t              scan_count;
     bool                scanning;
-    struct k_work_delayable connect_timeout_work;
-} mgr;
+} mgr AKIRA_BULK_BSS;
+
+/* Kept out of the PSRAM-placed mgr: a delayable work's timeout node is walked
+ * by the system timer ISR, so it must stay in internal RAM. */
+static struct k_work_delayable connect_timeout_work;
+
+/* Pre-1.7 console firmware stored SSID and PSK under separate keys. Still read
+ * them so units provisioned that way keep their network after an update. */
+#define WIFI_LEGACY_SSID_KEY "system/wifi/ssid"
+#define WIFI_LEGACY_PSK_KEY  "system/wifi/psk"
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -81,6 +90,35 @@ static void connect_timeout_handler(struct k_work *work)
     fire_event(WIFI_MGR_EVT_CONNECT_FAILED);
 }
 
+/* SSID+PSK are stored as one tab-delimited value so the single NVS write is
+ * atomic — separate writes leave a window where a power loss between them
+ * strands a new SSID paired with the old PSK (or vice versa), silently
+ * breaking connect on next boot until re-provisioned. Falls back to the
+ * legacy separate keys for units provisioned before the combined format. */
+static int load_saved_credentials(char *ssid, size_t ssid_sz, char *psk, size_t psk_sz)
+{
+    char combined[MAX_VALUE_LEN * 2 + 2];
+
+    if (akira_settings_get(AKIRA_SETTINGS_WIFI_CREDS_KEY, combined, sizeof(combined)) == 0) {
+        char *tab = strchr(combined, '\t');
+        if (!tab) {
+            LOG_ERR("Malformed combined WiFi credentials");
+            return -EINVAL;
+        }
+        *tab = '\0';
+        strncpy(ssid, combined, ssid_sz - 1);
+        ssid[ssid_sz - 1] = '\0';
+        strncpy(psk, tab + 1, psk_sz - 1);
+        psk[psk_sz - 1] = '\0';
+        return 0;
+    }
+    if (akira_settings_get(WIFI_LEGACY_SSID_KEY, ssid, ssid_sz) != 0 ||
+        akira_settings_get(WIFI_LEGACY_PSK_KEY, psk, psk_sz) != 0) {
+        return -ENOENT;
+    }
+    return 0;
+}
+
 /* ── net_mgmt callbacks ──────────────────────────────────────────────────── */
 
 static void wifi_event_handler(struct net_mgmt_event_callback *cb,
@@ -98,7 +136,7 @@ static void wifi_event_handler(struct net_mgmt_event_callback *cb,
         if (status && status->conn_status != WIFI_STATUS_CONN_SUCCESS) {
             LOG_WRN("WiFi connect failed (status=%d)", status->conn_status);
             mgr.state = WIFI_MGR_STATE_IDLE;
-            k_work_cancel_delayable(&mgr.connect_timeout_work);
+            k_work_cancel_delayable(&connect_timeout_work);
             k_mutex_unlock(&mgr.lock);
             fire_event(WIFI_MGR_EVT_CONNECT_FAILED);
             return;
@@ -114,7 +152,7 @@ static void wifi_event_handler(struct net_mgmt_event_callback *cb,
             LOG_INF("WiFi disconnected");
             mgr.state = WIFI_MGR_STATE_IDLE;
             mgr.connect_time_ms = 0;
-            k_work_cancel_delayable(&mgr.connect_timeout_work);
+            k_work_cancel_delayable(&connect_timeout_work);
             k_mutex_unlock(&mgr.lock);
             fire_event(WIFI_MGR_EVT_DISCONNECTED);
             return;
@@ -122,7 +160,7 @@ static void wifi_event_handler(struct net_mgmt_event_callback *cb,
         if (mgr.state == WIFI_MGR_STATE_CONNECTING) {
             LOG_WRN("WiFi connect failed (disconnected while connecting)");
             mgr.state = WIFI_MGR_STATE_IDLE;
-            k_work_cancel_delayable(&mgr.connect_timeout_work);
+            k_work_cancel_delayable(&connect_timeout_work);
             k_mutex_unlock(&mgr.lock);
             fire_event(WIFI_MGR_EVT_CONNECT_FAILED);
             return;
@@ -222,7 +260,7 @@ static void ipv4_event_handler(struct net_mgmt_event_callback *cb,
     if (mgr.state == WIFI_MGR_STATE_CONNECTING) {
         mgr.state = WIFI_MGR_STATE_CONNECTED;
         mgr.connect_time_ms = k_uptime_get();
-        k_work_cancel_delayable(&mgr.connect_timeout_work);
+        k_work_cancel_delayable(&connect_timeout_work);
         LOG_INF("WiFi connected with IP");
         k_mutex_unlock(&mgr.lock);
         add_mdns_dns_server();
@@ -254,29 +292,12 @@ int wifi_manager_connect(void)
 
     char ssid[MAX_VALUE_LEN];
     char psk[MAX_VALUE_LEN];
-
-    /* SSID+PSK are stored as one tab-delimited value so the single NVS write
-     * is atomic — separate writes leave a window where a power loss between
-     * them strands a new SSID paired with the old PSK (or vice versa),
-     * silently breaking connect on next boot until re-provisioned. */
-    char combined[MAX_VALUE_LEN * 2 + 2];
-    if (akira_settings_get(AKIRA_SETTINGS_WIFI_CREDS_KEY, combined, sizeof(combined)) != 0) {
+    int cred_ret = load_saved_credentials(ssid, sizeof(ssid), psk, sizeof(psk));
+    if (cred_ret) {
         k_mutex_unlock(&mgr.lock);
-        LOG_ERR("No WiFi credentials in NVS");
-        return -ENOENT;
+        LOG_ERR("No WiFi credentials in NVS: %d", cred_ret);
+        return cred_ret;
     }
-
-    char *tab = strchr(combined, '\t');
-    if (!tab) {
-        k_mutex_unlock(&mgr.lock);
-        LOG_ERR("Malformed combined WiFi credentials");
-        return -EINVAL;
-    }
-    *tab = '\0';
-    strncpy(ssid, combined, sizeof(ssid) - 1);
-    ssid[sizeof(ssid) - 1] = '\0';
-    strncpy(psk, tab + 1, sizeof(psk) - 1);
-    psk[sizeof(psk) - 1] = '\0';
 
     struct wifi_connect_req_params params = {
         .ssid        = (uint8_t *)ssid,
@@ -298,7 +319,7 @@ int wifi_manager_connect(void)
 
     mgr.state = WIFI_MGR_STATE_CONNECTING;
     LOG_INF("WiFi connecting to '%s'", ssid);
-    k_work_schedule(&mgr.connect_timeout_work,
+    k_work_schedule(&connect_timeout_work,
                      K_MSEC(CONFIG_AKIRA_WIFI_MANAGER_CONNECT_TIMEOUT_MS));
 
     k_mutex_unlock(&mgr.lock);
@@ -354,8 +375,21 @@ int wifi_manager_update_credentials(const char *ssid, const char *psk)
         return ret;
     }
 
+    /* The combined key now wins; drop any legacy separate-key copy so a stale
+     * PSK does not linger in NVS. Best effort: absent keys are fine. */
+    (void)akira_settings_delete(WIFI_LEGACY_SSID_KEY);
+    (void)akira_settings_delete(WIFI_LEGACY_PSK_KEY);
+
     LOG_INF("WiFi credentials updated (ssid='%s')", ssid);
     return 0;
+}
+
+int wifi_manager_get_saved_credentials(char *ssid_out, size_t ssid_sz, char *psk_out, size_t psk_sz)
+{
+    if (!ssid_out || !psk_out || ssid_sz == 0 || psk_sz == 0) {
+        return -EINVAL;
+    }
+    return load_saved_credentials(ssid_out, ssid_sz, psk_out, psk_sz);
 }
 
 int wifi_manager_scan(void)
@@ -601,7 +635,7 @@ static int wifi_manager_init(void)
     memset(&mgr, 0, sizeof(mgr));
     k_mutex_init(&mgr.lock);
     mgr.state = WIFI_MGR_STATE_IDLE;
-    k_work_init_delayable(&mgr.connect_timeout_work, connect_timeout_handler);
+    k_work_init_delayable(&connect_timeout_work, connect_timeout_handler);
 
     net_mgmt_init_event_callback(&mgr.wifi_cb, wifi_event_handler,
                                  NET_EVENT_WIFI_CONNECT_RESULT |

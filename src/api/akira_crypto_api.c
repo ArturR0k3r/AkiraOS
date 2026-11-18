@@ -5,6 +5,7 @@
 
 #define LOG_MODULE_NAME akira_crypto_api
 #include <zephyr/logging/log.h>
+#include <crystal/akira_seal.h>
 LOG_MODULE_REGISTER(akira_crypto_api, CONFIG_AKIRA_LOG_LEVEL);
 
 /**
@@ -486,6 +487,26 @@ int akira_native_crypto_ed25519_sign(wasm_exec_env_t exec_env,
 	return (ret == 0) ? 0 : -EIO;
 }
 
+#ifdef CONFIG_AKIRA_CRYPTO_ED25519_SELFTEST
+/* Known-answer test of the vendored SHA-512 + Ed25519 in src/api/ed25519.c
+ * (the AkiraMesh handshake signs with it; the natives above use the in-tree
+ * src/lib/crypto/ed25519 code). Costs seconds of CPU on every boot. */
+#include <zephyr/init.h>
+#include "ed25519.h"
+
+static int ed25519_boot_self_test(void)
+{
+	int ret = ed25519_self_test();
+	if (ret != 0) {
+		LOG_ERR("ed25519_self_test FAILED: %d", ret);
+	} else {
+		LOG_INF("ed25519_self_test PASSED (RFC 8032 test vector 1)");
+	}
+	return 0;
+}
+SYS_INIT(ed25519_boot_self_test, APPLICATION, 90);
+#endif /* CONFIG_AKIRA_CRYPTO_ED25519_SELFTEST */
+
 #else /* !CONFIG_AKIRA_WASM_CRYPTO_ED25519 */
 
 int akira_native_crypto_ed25519_keygen(wasm_exec_env_t exec_env,
@@ -506,6 +527,247 @@ int akira_native_crypto_ed25519_sign(wasm_exec_env_t exec_env,
 }
 
 #endif /* CONFIG_AKIRA_WASM_CRYPTO_ED25519 */
+
+/* ── p256_keygen / p256_sign (U2F) ────────────────────────────────────────
+ * Unlike Ed25519, mbedTLS has secp256r1/P-256 (a Weierstrass curve), and
+ * PSA_WANT_ECC_SECP_R1_256 / PSA_WANT_ALG_ECDSA are wired want-symbols, so
+ * this goes through PSA rather than a hand-rolled implementation.
+ *
+ * Same rules as the operations above: full-length pointer checks, keys only
+ * in stack buffers (zeroized), results copied out once, and every PSA call
+ * inside a bounded native critical section (PSA holds its own global lock
+ * and the key slot must be destroyed).
+ */
+
+#if defined(CONFIG_AKIRA_WASM_CRYPTO_ECDSA_P256)
+#include <psa/crypto.h>
+
+#define P256_PRIV_LEN 32u
+#define P256_PUB_LEN  65u   /* uncompressed 0x04 || X || Y */
+#define P256_SIG_LEN  64u   /* raw r || s */
+
+int akira_native_crypto_p256_keygen(wasm_exec_env_t exec_env,
+                                     void *priv_ptr, void *pub_ptr)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EPERM);
+
+	wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+	WASM_ADDR_CHECK(inst, priv_ptr, P256_PRIV_LEN);
+	WASM_ADDR_CHECK(inst, pub_ptr,  P256_PUB_LEN);
+
+	uint8_t priv[P256_PRIV_LEN];
+	uint8_t pub[P256_PUB_LEN];
+	size_t priv_len = 0, pub_len = 0;
+	psa_status_t st;
+
+	CRYPTO_CRITICAL_BEGIN(exec_env);
+	st = psa_crypto_init();
+	if (st == PSA_SUCCESS) {
+		psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+		mbedtls_svc_key_id_t key_id;
+
+		psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
+		psa_set_key_bits(&attr, 256);
+		psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_EXPORT);
+		psa_set_key_algorithm(&attr, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
+
+		st = psa_generate_key(&attr, &key_id);
+		if (st == PSA_SUCCESS) {
+			st = psa_export_key(key_id, priv, sizeof(priv), &priv_len);
+			if (st == PSA_SUCCESS) {
+				st = psa_export_public_key(key_id, pub, sizeof(pub), &pub_len);
+			}
+			psa_destroy_key(key_id);
+		}
+	}
+	bool ok = (st == PSA_SUCCESS && priv_len == P256_PRIV_LEN &&
+		   pub_len == P256_PUB_LEN);
+	if (ok) {
+		memcpy(priv_ptr, priv, sizeof(priv));
+		memcpy(pub_ptr, pub, sizeof(pub));
+	}
+	mbedtls_platform_zeroize(priv, sizeof(priv));
+	CRYPTO_CRITICAL_END(exec_env);
+
+	if (!ok) {
+		LOG_WRN("p256_keygen failed: %d", (int)st);
+		return -EIO;
+	}
+	return 0;
+}
+
+int akira_native_crypto_p256_sign(wasm_exec_env_t exec_env,
+                                   void *priv_ptr,
+                                   void *msg_ptr, uint32_t msg_len,
+                                   void *sig_ptr)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EPERM);
+
+	if (msg_len == 0 || msg_len > CONFIG_AKIRA_WASM_CRYPTO_MAX_INPUT) {
+		return -EINVAL;
+	}
+
+	wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+	WASM_ADDR_CHECK(inst, priv_ptr, P256_PRIV_LEN);
+	WASM_ADDR_CHECK(inst, msg_ptr,  msg_len);
+	WASM_ADDR_CHECK(inst, sig_ptr,  P256_SIG_LEN);
+
+	uint8_t priv[P256_PRIV_LEN];
+	uint8_t sig[P256_SIG_LEN];
+	size_t sig_len = 0;
+	psa_status_t st;
+
+	/* Signed into a host buffer and copied out, so the signature may
+	 * overlap the message or the key in app memory. */
+	CRYPTO_CRITICAL_BEGIN(exec_env);
+	memcpy(priv, priv_ptr, sizeof(priv));
+	st = psa_crypto_init();
+	if (st == PSA_SUCCESS) {
+		psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+		mbedtls_svc_key_id_t key_id;
+
+		psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
+		psa_set_key_bits(&attr, 256);
+		psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_SIGN_MESSAGE);
+		psa_set_key_algorithm(&attr, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
+
+		st = psa_import_key(&attr, priv, sizeof(priv), &key_id);
+		if (st == PSA_SUCCESS) {
+			st = psa_sign_message(key_id, PSA_ALG_ECDSA(PSA_ALG_SHA_256),
+					      (const uint8_t *)msg_ptr, msg_len,
+					      sig, sizeof(sig), &sig_len);
+			psa_destroy_key(key_id);
+		}
+	}
+	bool ok = (st == PSA_SUCCESS && sig_len == P256_SIG_LEN);
+	if (ok) {
+		memcpy(sig_ptr, sig, sizeof(sig));
+	}
+	mbedtls_platform_zeroize(priv, sizeof(priv));
+	CRYPTO_CRITICAL_END(exec_env);
+
+	if (!ok) {
+		LOG_WRN("p256_sign failed: %d", (int)st);
+		return -EIO;
+	}
+	return 0;
+}
+
+#else /* !CONFIG_AKIRA_WASM_CRYPTO_ECDSA_P256 */
+
+int akira_native_crypto_p256_keygen(wasm_exec_env_t exec_env,
+                                     void *priv_ptr, void *pub_ptr)
+{
+	(void)exec_env; (void)priv_ptr; (void)pub_ptr;
+	return -ENOTSUP;
+}
+
+int akira_native_crypto_p256_sign(wasm_exec_env_t exec_env,
+                                   void *priv_ptr,
+                                   void *msg_ptr, uint32_t msg_len,
+                                   void *sig_ptr)
+{
+	(void)exec_env; (void)priv_ptr; (void)msg_ptr;
+	(void)msg_len; (void)sig_ptr;
+	return -ENOTSUP;
+}
+
+#endif /* CONFIG_AKIRA_WASM_CRYPTO_ECDSA_P256 */
+
+/* ── SE050 hardware-backed P-256 (non-exportable keys) — U2F offload ────────
+ * Each call is a few APDUs over the SE050's I2C link (bus lock, bounded by
+ * the driver's own timeouts): run as a native critical section. Signing
+ * with a vault key asks the Seal first, after the arguments are checked. */
+#ifdef CONFIG_AKIRA_SE050_U2F
+#include <drivers/secure_element/se050.h>
+
+#define SE050_U2F_MAX_SLOT   255
+
+int akira_native_crypto_p256_keygen_se050(wasm_exec_env_t exec_env,
+                                          uint32_t slot, void *pub_ptr)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EPERM);
+
+	if (slot > SE050_U2F_MAX_SLOT) {
+		return -EINVAL;
+	}
+	wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+	WASM_ADDR_CHECK(inst, pub_ptr, SE050_P256_PUB_LEN);
+
+	const struct device *se = se050_get_device();
+	if (!se) {
+		return -ENODEV;
+	}
+
+	uint32_t objid = (uint32_t)CONFIG_AKIRA_SE050_U2F_KEY_OBJID + slot;
+	uint8_t pub[SE050_P256_PUB_LEN];
+
+	CRYPTO_CRITICAL_BEGIN(exec_env);
+	int ret = se050_ecc_gen_key(se, objid);
+	if (ret >= 0) {
+		ret = se050_ecc_get_pub(se, objid, pub);
+	}
+	if (ret >= 0) {
+		memcpy(pub_ptr, pub, sizeof(pub));
+	}
+	CRYPTO_CRITICAL_END(exec_env);
+
+	return ret;
+}
+
+int akira_native_crypto_p256_sign_se050(wasm_exec_env_t exec_env,
+                                        uint32_t slot,
+                                        void *hash_ptr, void *sig_ptr)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_CRYPTO, -EPERM);
+
+	if (slot > SE050_U2F_MAX_SLOT) {
+		return -EINVAL;
+	}
+	wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
+	WASM_ADDR_CHECK(inst, hash_ptr, SHA256_LEN);
+	WASM_ADDR_CHECK(inst, sig_ptr,  SE050_P256_SIG_LEN);
+
+	AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_VAULT_SIGN, NULL, -EACCES);
+
+	const struct device *se = se050_get_device();
+	if (!se) {
+		return -ENODEV;
+	}
+
+	uint32_t objid = (uint32_t)CONFIG_AKIRA_SE050_U2F_KEY_OBJID + slot;
+	uint8_t hash[SHA256_LEN];
+	uint8_t sig[SE050_P256_SIG_LEN];
+
+	CRYPTO_CRITICAL_BEGIN(exec_env);
+	memcpy(hash, hash_ptr, sizeof(hash));
+	int ret = se050_ecc_sign(se, objid, hash, sig);
+	if (ret >= 0) {
+		memcpy(sig_ptr, sig, sizeof(sig));
+	}
+	CRYPTO_CRITICAL_END(exec_env);
+
+	return ret;
+}
+
+#else /* !CONFIG_AKIRA_SE050_U2F */
+
+int akira_native_crypto_p256_keygen_se050(wasm_exec_env_t exec_env,
+                                          uint32_t slot, void *pub_ptr)
+{
+	(void)exec_env; (void)slot; (void)pub_ptr;
+	return -ENOTSUP;
+}
+
+int akira_native_crypto_p256_sign_se050(wasm_exec_env_t exec_env,
+                                        uint32_t slot,
+                                        void *hash_ptr, void *sig_ptr)
+{
+	(void)exec_env; (void)slot; (void)hash_ptr; (void)sig_ptr;
+	return -ENOTSUP;
+}
+
+#endif /* CONFIG_AKIRA_SE050_U2F */
 
 #endif /* CONFIG_AKIRA_WASM_CRYPTO */
 
@@ -528,6 +790,16 @@ static const NativeSymbol akira_crypto_natives[] = {
     {"crypto_ed25519_sign",      (void *)akira_native_crypto_ed25519_sign,      "(**~*)i",   NULL},
     /* key(32B), nonce(16B), in+in_len (validated pair), out (same len as in) */
     {"crypto_aes256_ctr",        (void *)akira_native_crypto_aes256_ctr,        "(***~*)i",  NULL},
+    /* P-256 (U2F) — priv_ptr(32B), pub_ptr(65B) fixed-size, validated inside */
+    {"crypto_p256_keygen",       (void *)akira_native_crypto_p256_keygen,       "(**)i",     NULL},
+    /* priv_ptr(32B), msg_ptr+msg_len pair (auto-validated), sig_ptr(64B raw r||s) */
+    {"crypto_p256_sign",         (void *)akira_native_crypto_p256_sign,         "(**~*)i",   NULL},
+#ifdef CONFIG_AKIRA_SE050_U2F
+    /* SE050 hardware-backed P-256 (non-exportable) — slot(i), pub_ptr(65B) */
+    {"crypto_p256_keygen_se050", (void *)akira_native_crypto_p256_keygen_se050, "(i*)i",     NULL},
+    /* slot(i), hash_ptr(32B), sig_ptr(64B raw r||s) */
+    {"crypto_p256_sign_se050",   (void *)akira_native_crypto_p256_sign_se050,   "(i**)i",    NULL},
+#endif
 };
 
 AKIRA_NATIVE_API_DEFINE(akira_crypto_api, "env", akira_crypto_natives);

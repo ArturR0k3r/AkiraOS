@@ -47,13 +47,6 @@ spim2_default:
         output-low;
     };
     
-    // CC1101 CS - GPIO23
-    cc1101_cs: cc1101_cs {
-        gpio-hog;
-        gpios = <23 GPIO_ACTIVE_LOW>;
-        output-high;
-    };
-    
     // nRF24L01 Chip Enable pins
     nrf24_ce1: nrf24_ce1 {
         gpio-hog;

@@ -12,6 +12,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
+#include <lib/mem_helper.h>
 #include <string.h>
 #include <errno.h>
 
@@ -19,13 +20,14 @@ LOG_MODULE_REGISTER(radio_manager, CONFIG_AKIRA_LOG_LEVEL);
 
 /* Maximum number of radios that can be registered */
 #define MAX_RADIOS CONFIG_AKIRA_RADIO_MAX_RADIOS
-/* Radio registry */
+/* Radio registry. Mutex-protected, only touched from thread context
+ * (register/acquire/release calls), never from an ISR — safe in PSRAM. */
 static struct {
     radio_handle_t *radios[MAX_RADIOS];  /* NULL = empty slot */
     const char     *owners[MAX_RADIOS];  /* NULL = unacquired; aligned with radios[] */
     struct k_mutex  lock;
     bool            initialized;
-} radio_registry;
+} radio_registry AKIRA_BULK_BSS;
 
 /* String conversion tables */
 static const char *radio_type_strings[] = {

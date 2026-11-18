@@ -103,7 +103,6 @@ extern "C" {
  * Elevated privilege — requires explicit user consent.
  * Manifest string: "wifi.inject" */
 #define AKIRA_CAP_WIFI_INJECT   (1ULL << 34)
-
 /* MQTT publish/subscribe + Home Assistant discovery.
  * Manifest string: "mqtt" */
 #define AKIRA_CAP_MQTT          (1ULL << 35)
@@ -127,11 +126,16 @@ extern "C" {
  * Manifest string: "sync" */
 #define AKIRA_CAP_SYNC          (1ULL << 39)
 
-/* Highest CORE capability bit currently defined (AKIRA_CAP_SYNC = bit 39).
+/* NFC tag read/write/field-presence via nfc_manager (AkiraConsole).
+ * Bit 38 on the pre-1.7 console firmware; 1.7 assigned 38 to "mesh".
+ * Manifest string: "nfc" */
+#define AKIRA_CAP_NFC           (1ULL << 40)
+
+/* Highest CORE capability bit currently defined (AKIRA_CAP_NFC = bit 40).
  * Core bit numbers are frozen; new core capabilities take the next free bit up
  * to AKIRA_CAP_CORE_LAST_BIT and need a registry entry in security.c. Product
  * capabilities live in bits 48-63 (AKIRA_CAPABILITY_DEFINE). */
-#define AKIRA_CAP_MAX_BIT       39
+#define AKIRA_CAP_MAX_BIT       40
 
 /* Union of the CORE capability bits defined in this header.
  * Use akira_capability_known_mask() for the set the runtime grants: it also

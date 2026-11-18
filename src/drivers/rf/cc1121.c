@@ -21,12 +21,14 @@
 
 #include "cc1121.h"
 #include "connectivity/radio_interface.h"
+#include "rf_framework.h"
 #include <zephyr/logging/log.h>
 #include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
+#include <lib/mem_helper.h>
 #include <errno.h>
 #include <string.h>
 
@@ -87,6 +89,13 @@ LOG_MODULE_REGISTER(akira_cc1121, LOG_LEVEL_INF);
 #define CC1121_PA_CFG1     0x2C  /* FIRST_IPL / SECOND_IPL / RAMP_SHAPE */
 #define CC1121_PA_CFG0     0x2D  /* Power ramp shape / ASK config */
 #define CC1121_PKT_LEN      0x2E  /* Packet length (max in variable mode) */
+
+/* 128B FIFO minus 1 length byte minus 2 RX APPEND_STATUS bytes. Applied on
+ * TX too (not just RX) so a sender never emits a frame the receiving side's
+ * FIFO can't hold — a 127B TX chunk starves 2 bytes of RX APPEND_STATUS
+ * headroom and drives the receiver into RXFIFO_ERROR on every max-size
+ * packet. */
+#define CC1121_MAX_PAYLOAD  125
 
 /* Extended register addresses (used with CC1121_EXT_ADDR prefix) */
 #define CC1121_EXT_IF_MIX_CFG   0x00
@@ -197,13 +206,8 @@ static const struct spi_dt_spec g_spi = SPI_DT_SPEC_GET(
     SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB | SPI_WORD_SET(8),
     0);
 
-/* 128B FIFO minus 1 length byte minus 2 RX APPEND_STATUS bytes. Applied on
- * TX too (not just RX) so a sender never emits a frame the receiving side's
- * FIFO can't hold — a 127B TX chunk starves 2 bytes of RX APPEND_STATUS
- * headroom and drives the receiver into RXFIFO_ERROR on every max-size
- * packet. */
-#define CC1121_MAX_PAYLOAD  125
-
+/* No GPIO/IRQ callback in this driver (polling-only) — thread-context only,
+ * safe in PSRAM. */
 static struct {
     bool initialized;
     struct gpio_dt_spec reset;
@@ -212,9 +216,10 @@ static struct {
     uint32_t frequency_hz;
     uint32_t xosc_hz;
     int8_t tx_power_dbm;
+    int16_t last_rx_rssi;
     radio_event_cb_t event_cb;
     void *event_user_data;
-} g_cc1121;
+} g_cc1121 AKIRA_BULK_BSS;
 
 /* =========================================================================
  * Low-level SPI helpers
@@ -527,6 +532,14 @@ static int cc1121_init(void)
     int ret;
 
     if (g_cc1121.initialized) {
+        /* Already brought up once (e.g. parked in SPWD power-down at boot).
+         * Guarantee the caller gets a ready chip: the SIDLE strobe's CSn edge
+         * wakes the crystal, then wait_for_idle() settles it into IDLE. */
+        if (g_cc1121.current_mode == RADIO_MODE_SLEEP) {
+            cc1121_strobe(CC1121_SIDLE);
+            wait_for_idle();
+            g_cc1121.current_mode = RADIO_MODE_STANDBY;
+        }
         return 0;
     }
 
@@ -536,15 +549,20 @@ static int cc1121_init(void)
         return -ENODEV;
     }
 
-    /* --- RESET GPIO (optional) ------------------------------------------- */
+    /* --- RESET GPIO (optional, shared with LR2021) ----------------------- */
     if (DT_NODE_HAS_PROP(CC1121_NODE, reset_gpios)) {
         g_cc1121.reset = (struct gpio_dt_spec)GPIO_DT_SPEC_GET(CC1121_NODE, reset_gpios);
         if (gpio_is_ready_dt(&g_cc1121.reset)) {
             gpio_pin_configure_dt(&g_cc1121.reset, GPIO_OUTPUT_INACTIVE);
-            gpio_pin_set_dt(&g_cc1121.reset, 1);
-            k_msleep(5);
-            gpio_pin_set_dt(&g_cc1121.reset, 0);
-            k_msleep(5);
+            /* RF_RST is shared with LR2021 — only pulse it if no sibling has
+             * already claimed it, otherwise we would reset a configured LR2021.
+             * The SRES software strobe below resets this chip either way. */
+            if (rf_framework_claim_shared_reset()) {
+                gpio_pin_set_dt(&g_cc1121.reset, 1);
+                k_msleep(5);
+                gpio_pin_set_dt(&g_cc1121.reset, 0);
+                k_msleep(5);
+            }
         }
     }
 
@@ -1154,6 +1172,12 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
             /* rx_buf[payload_len+1..rx_bytes-1] = status. Skip the length byte. */
             memcpy(buffer, rx_buf + 1, payload_len);
 
+            /* Status byte 1 (Table 23, cc112x datasheet): appended RSSI, same
+             * 8-bit/1dB-LSB value as EXT_RSSI1 in cc1121_get_rssi() — same
+             * calibrated offset applies (see that function's comment). */
+            int8_t rssi_raw = (int8_t)rx_buf[rx_bytes - 2];
+            g_cc1121.last_rx_rssi = (int16_t)rssi_raw - 84;
+
             LOG_DBG("RX done: %d bytes", (int)payload_len);
 
             /* RXOFF_MODE=RX already returned the chip to RX and the burst
@@ -1165,7 +1189,7 @@ static int cc1121_rx(uint8_t *buffer, size_t max_len, uint32_t timeout_ms)
                     .type = RADIO_EVENT_RX_DONE,
                     .data = buffer,
                     .len = payload_len,
-                    .rssi = 0,
+                    .rssi = g_cc1121.last_rx_rssi,
                     .user_data = g_cc1121.event_user_data,
                 };
                 g_cc1121.event_cb(&ev, g_cc1121.event_user_data);
@@ -1213,6 +1237,11 @@ static int cc1121_get_rssi(int16_t *rssi)
     LOG_INF("RSSI raw: RSSI1=0x%02X RSSI0=0x%02X", rssi1, rssi0);
 
     cc1121_strobe(CC1121_SIDLE);
+    /* Chip is now idle regardless of what it was doing before this call —
+     * without updating current_mode, recv()'s current_mode!=RX cold-re-arm
+     * check is fooled into skipping SRX after this, leaving the chip idle
+     * while the driver still believes it's listening. */
+    g_cc1121.current_mode = RADIO_MODE_STANDBY;
 
     /* Build signed 12-bit value */
     int16_t raw = ((int16_t)(int8_t)rssi1) << 4;
@@ -1434,6 +1463,12 @@ static int cc1121_ops_recv(radio_handle_t *h, uint8_t *b, size_t l, uint32_t t) 
 static int cc1121_ops_set_frequency(radio_handle_t *h, uint32_t hz) { ARG_UNUSED(h); return cc1121_set_frequency(hz); }
 static int cc1121_ops_set_power(radio_handle_t *h, int8_t dbm)      { ARG_UNUSED(h); return cc1121_set_power(dbm); }
 static int cc1121_ops_get_rssi(radio_handle_t *h, int16_t *r)       { ARG_UNUSED(h); return cc1121_get_rssi(r); }
+static int cc1121_ops_get_last_rx_rssi(radio_handle_t *h, int16_t *r) {
+    ARG_UNUSED(h);
+    if (!r) return -EINVAL;
+    *r = g_cc1121.last_rx_rssi;
+    return 0;
+}
 static int cc1121_ops_set_mode(radio_handle_t *h, radio_mode_t m)   { ARG_UNUSED(h); return cc1121_set_mode(m); }
 static int cc1121_ops_set_modulation(radio_handle_t *h, radio_modulation_t m) { ARG_UNUSED(h); return cc1121_set_modulation(m); }
 static int cc1121_ops_set_bitrate(radio_handle_t *h, uint32_t bps)  { ARG_UNUSED(h); return cc1121_set_bitrate(bps); }
@@ -1449,17 +1484,18 @@ static const radio_ops_t cc1121_ops = {
     .init               = cc1121_ops_init,
     .deinit             = cc1121_ops_deinit,
     .send               = cc1121_ops_send,
+    .get_max_payload    = cc1121_ops_get_max_payload,
     .recv               = cc1121_ops_recv,
     .set_event_callback = cc1121_set_event_callback,
     .set_frequency      = cc1121_ops_set_frequency,
     .set_power          = cc1121_ops_set_power,
     .get_rssi           = cc1121_ops_get_rssi,
+    .get_last_rx_rssi   = cc1121_ops_get_last_rx_rssi,
     .set_mode           = cc1121_ops_set_mode,
     .set_modulation     = cc1121_ops_set_modulation,
     .set_bitrate        = cc1121_ops_set_bitrate,
     .raw_capture        = cc1121_ops_raw_capture,
     .raw_replay         = cc1121_ops_raw_replay,
-    .get_max_payload    = cc1121_ops_get_max_payload,
 };
 
 static radio_handle_t cc1121_handle = {

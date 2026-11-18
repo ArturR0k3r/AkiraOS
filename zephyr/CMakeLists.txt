@@ -99,6 +99,11 @@ if(DEFINED AKIRA_OS_BUILD_LIBRARIES AND NOT AKIRA_OS_BUILD_LIBRARIES)
     return()
 endif()
 
+# Allow multiple symbol definitions — used to override the closed-source
+# ieee80211_raw_frame_sanity_check from libnet80211.a (the ESP-IDF binary
+# blob) with our own version that allows deauth management frames.
+zephyr_ld_options(-Wl,--allow-multiple-definition)
+
 # ===== WAMR (wasm-micro-runtime west project) =====
 if(CONFIG_AKIRA_WASM_RUNTIME AND NOT EXISTS "${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake")
     message(FATAL_ERROR
@@ -368,6 +373,10 @@ if(CONFIG_AKIRA_MODULE_RF)
         zephyr_library_sources(${AKIRA_OS_DIR}/src/api/akira_rf_api.c)
 endif()
 
+if(CONFIG_WIFI)
+        zephyr_library_sources(${AKIRA_OS_DIR}/src/api/akira_wifi_api.c)
+endif()
+
 if(CONFIG_AKIRA_WASM_PYTHON)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/api/akira_python_api.c)
 endif()
@@ -394,6 +403,10 @@ endif()
 
 if(CONFIG_AKIRA_WASM_ADC)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/api/akira_adc_api.c)
+endif()
+
+if(CONFIG_AKIRA_WASM_NFC)
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/api/akira_nfc_api.c)
 endif()
 
 if(CONFIG_AKIRA_WDT)
@@ -431,6 +444,11 @@ if(CONFIG_AKIRA_WASM_HID)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/api/akira_hid_api.c)
 endif()
 
+# Native button input API (AkiraConsole; not on the v1.x release line).
+if(CONFIG_AKIRA_INPUT_API)
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/api/akira_input_api.c)
+endif()
+
 if(CONFIG_AKIRA_SYSTEM_API)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/api/akira_system_api.c)
 endif()
@@ -440,10 +458,13 @@ if(CONFIG_AKIRA_WASM_LIFECYCLE)
 endif()
 
 if(CONFIG_AKIRA_WASM_IPC)
-    zephyr_library_sources(
-        ${AKIRA_OS_DIR}/src/api/akira_ipc_api.c
-        ${AKIRA_OS_DIR}/src/runtime/akira_ipc.c
-    )
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/api/akira_ipc_api.c)
+endif()
+
+# akira_ipc core is also used internally by the native OS shell (lifecycle
+# pub/sub), independent of whether it's exported to WASM apps.
+if(CONFIG_AKIRA_WASM_IPC OR CONFIG_AKIRA_OS_SHELL)
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/runtime/akira_ipc.c)
 endif()
 
 # Track B — new WASM native APIs
@@ -453,6 +474,13 @@ endif()
 
 if(CONFIG_AKIRA_WASM_CRYPTO)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/api/akira_crypto_api.c)
+endif()
+
+# The console's standalone Ed25519 (ed25519_keygen/sign/verify) backs AkiraMesh
+# identities and the optional boot self-test; the WASM crypto_ed25519_* natives
+# use src/lib/crypto/ed25519 (CONFIG_AKIRA_ED25519) instead.
+if(CONFIG_AKIRA_MESH_E2E_CRYPTO OR (CONFIG_AKIRA_WASM_CRYPTO AND CONFIG_AKIRA_CRYPTO_ED25519_SELFTEST))
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/api/ed25519.c)
 endif()
 
 if(CONFIG_AKIRA_WASM_RTC)
@@ -553,20 +581,16 @@ endif()
 
 # RF Framework and Drivers (conditional on module gating)
 if(CONFIG_AKIRA_MODULE_RF)
-    if(CONFIG_AKIRA_LR1121)
-        zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/rf/lr1121.c)
-    endif()
-
-    if(CONFIG_AKIRA_CC1101)
-        zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/rf/cc1101.c)
-    endif()
-
-    if(CONFIG_AKIRA_CC1121)
-        zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/rf/cc1121.c)
+    if(CONFIG_AKIRA_RF_FRAMEWORK)
+        zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/rf/rf_framework.c)
     endif()
 
     if(CONFIG_AKIRA_LR2021)
         zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/rf/lr2021.c)
+    endif()
+
+    if(CONFIG_AKIRA_CC1121)
+        zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/rf/cc1121.c)
     endif()
 
     if(CONFIG_AKIRA_NRF24L01)
@@ -586,6 +610,10 @@ if(CONFIG_AKIRA_ILI9341_DRIVER)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/display/akira_ili9341.c)
 endif()
 
+if(CONFIG_AKIRA_LP5817)
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/display/lp5817.c)
+endif()
+
 if(CONFIG_CHARGER_BQ25601)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/charger/bq25601.c)
 endif()
@@ -594,19 +622,31 @@ if(CONFIG_FUEL_GAUGE_BQ28Z610)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/power/bq28z610.c)
 endif()
 
-if(CONFIG_AKIRA_ST25DV)
-    zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/nfc/st25dv.c)
+if(CONFIG_FUEL_GAUGE_STC3115)
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/power/stc3115.c)
 endif()
 
-if(CONFIG_AKIRA_SE050)
-    zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/secure_element/se050.c
-                                ${AKIRA_OS_DIR}/src/drivers/secure_element/se050_transport.c)
+if(CONFIG_AKIRA_NFC_MANAGER)
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/connectivity/nfc/nfc_manager.c)
+endif()
+
+if(CONFIG_AKIRA_ST25DV)
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/nfc/st25dv.c)
 endif()
 
 if(CONFIG_AKIRA_ATECC608B)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/secure_element/atecc608b.c)
     zephyr_library_sources_ifdef(CONFIG_AKIRA_ATECC608B_SHELL
         ${AKIRA_OS_DIR}/src/drivers/secure_element/atecc608b_shell.c)
+endif()
+
+if(CONFIG_AKIRA_SE050)
+    zephyr_library_sources(
+        ${AKIRA_OS_DIR}/src/drivers/secure_element/se050.c
+        ${AKIRA_OS_DIR}/src/drivers/secure_element/se050_transport.c)
+    if(CONFIG_AKIRA_SE050_SETTINGS_KEY)
+        zephyr_library_sources(${AKIRA_OS_DIR}/src/settings/se050_settings.c)
+    endif()
 endif()
 
 if(CONFIG_AKIRA_PWM_DIAL)
@@ -691,6 +731,7 @@ endif()
 # Date/time shell command — always include when Zephyr shell is enabled
 if(CONFIG_SHELL)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/shell/shell_date.c)
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/shell/shell_power.c)
 endif()
 
 # Bluetooth manager — needed by both HID mode and BLE app API mode
@@ -702,16 +743,18 @@ if(CONFIG_AKIRA_BT_HID)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/connectivity/bluetooth/bt_hid.c)
 endif()
 
+if(CONFIG_AKIRA_BT_COMPANION)
+    zephyr_library_sources(
+        ${AKIRA_OS_DIR}/src/connectivity/bluetooth/companion_service.c
+        ${AKIRA_OS_DIR}/src/connectivity/bluetooth/companion_fs_util.c)
+endif()
+
 if(CONFIG_AKIRA_BT_ECHO)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/connectivity/bluetooth/bt_echo.c)
 endif()
 
 if(CONFIG_AKIRA_WASM_BLE)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/connectivity/bluetooth/ble_app_service.c)
-endif()
-
-if(CONFIG_AKIRA_BT_COMPANION)
-    zephyr_library_sources(${AKIRA_OS_DIR}/src/connectivity/bluetooth/companion_service.c)
 endif()
 
 if(CONFIG_AKIRA_USB)
@@ -784,13 +827,14 @@ if(CONFIG_AKIRA_RADIO_MANAGER)
         ${AKIRA_OS_DIR}/src/connectivity/radio/radio_manager.c
     )
 
-    # WiFi radio backend
-    if(CONFIG_WIFI)
+    # WiFi radio backend (AkiraMesh over Wi-Fi SoftAP)
+    if(CONFIG_AKIRA_RADIO_WIFI_MESH)
         zephyr_library_sources(${AKIRA_OS_DIR}/src/connectivity/radio/radio_wifi.c)
     endif()
 
-    # BLE radio backend
-    if(CONFIG_BT)
+    # BLE radio backend (AkiraMesh over BLE extended advertising + scanning;
+    # self-registers, so boards without those roles simply have no BLE radio)
+    if(CONFIG_BT AND CONFIG_BT_OBSERVER AND CONFIG_BT_EXT_ADV)
         zephyr_library_sources(${AKIRA_OS_DIR}/src/connectivity/radio/radio_ble.c)
     endif()
 
@@ -849,6 +893,11 @@ if(CONFIG_AKIRA_MESH)
         ${AKIRA_OS_DIR}/src/connectivity/mesh/mesh_routing.c
         ${AKIRA_OS_DIR}/src/connectivity/mesh/mesh_crypto.c
         ${AKIRA_OS_DIR}/src/connectivity/mesh/mesh_session.c
+        ${AKIRA_OS_DIR}/src/connectivity/mesh/mesh_mac.c
+        ${AKIRA_OS_DIR}/src/connectivity/mesh/mesh_router.c
+        ${AKIRA_OS_DIR}/src/connectivity/mesh/routers/mesh_aodv.c
+        ${AKIRA_OS_DIR}/src/connectivity/mesh/mesh_transport.c
+        ${AKIRA_OS_DIR}/src/connectivity/mesh/mesh_app_dist.c
     )
 endif()
 
@@ -869,10 +918,16 @@ if(CONFIG_AKIRA_SD_CARD)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/storage/sd_card.c)
 endif()
 
+# USB Mass Storage ownership shim for the SD card
+if(CONFIG_AKIRA_USB_MSC)
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/storage/usb_msc.c)
+endif()
+
 # FUSB302 VBUS sense (USB trust-prompt trigger)
 if(CONFIG_AKIRA_FUSB302_VBUS)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/usbc/fusb302_vbus.c)
 endif()
+
 
 # Storage drivers for app sources
 if(CONFIG_AKIRA_APP_SOURCE_SD)
@@ -897,22 +952,51 @@ if(CONFIG_AKIRA_OS_SHELL AND NOT EXISTS ${AKIRA_OS_DIR}/src/console_shell/akira_
 endif()
 if(CONFIG_AKIRA_OS_SHELL)
     zephyr_library_sources(
+        ${AKIRA_OS_DIR}/src/console_shell/ui/akira_logo.c
+        ${AKIRA_OS_DIR}/src/console_shell/ui/akira_logo_data.c
+        ${AKIRA_OS_DIR}/src/console_shell/ui/akira_ui.c
+        ${AKIRA_OS_DIR}/src/console_shell/ui/anim.c
+        ${AKIRA_OS_DIR}/src/console_shell/ui/list_screen.c
+        ${AKIRA_OS_DIR}/src/console_shell/ui/overlay.c
+        ${AKIRA_OS_DIR}/src/console_shell/ui/screen.c
         ${AKIRA_OS_DIR}/src/console_shell/akira_os_shell.c
+        ${AKIRA_OS_DIR}/src/console_shell/status_model.c
+        ${AKIRA_OS_DIR}/src/console_shell/wait_screen.c
         ${AKIRA_OS_DIR}/src/console_shell/display_ownership.c
         ${AKIRA_OS_DIR}/src/console_shell/home_screen.c
-        ${AKIRA_OS_DIR}/src/console_shell/shell_theme.c
         ${AKIRA_OS_DIR}/src/console_shell/sd_install_screen.c
-        ${AKIRA_OS_DIR}/src/console_shell/install_progress_screen.c
+        ${AKIRA_OS_DIR}/src/console_shell/catalog_net.c
+        ${AKIRA_OS_DIR}/src/console_shell/catalogue_parser.c
         ${AKIRA_OS_DIR}/src/console_shell/settings_screen.c
-        ${AKIRA_OS_DIR}/src/console_shell/settings/wifi_screen.c
         ${AKIRA_OS_DIR}/src/console_shell/settings/display_screen.c
-        ${AKIRA_OS_DIR}/src/console_shell/settings/ble_screen.c
         ${AKIRA_OS_DIR}/src/console_shell/settings/power_screen.c
         ${AKIRA_OS_DIR}/src/console_shell/settings/ota_screen.c
         ${AKIRA_OS_DIR}/src/console_shell/settings/datetime_screen.c
         ${AKIRA_OS_DIR}/src/console_shell/settings/apps_screen.c
         ${AKIRA_OS_DIR}/src/console_shell/settings/devmode_screen.c
     )
+    if(CONFIG_AKIRA_OS_SHELL_BOOT_SPLASH)
+        zephyr_library_sources(${AKIRA_OS_DIR}/src/console_shell/boot_screen.c)
+    endif()
+    # Akira (the crystal) and the Seal: OS service + shell screens.
+    if(CONFIG_AKIRA_CRYSTAL)
+        zephyr_library_sources(
+            ${AKIRA_OS_DIR}/src/crystal/akira_crystal.c
+            ${AKIRA_OS_DIR}/src/crystal/akira_seal.c
+            ${AKIRA_OS_DIR}/src/crystal/akira_seal_api.c
+            ${AKIRA_OS_DIR}/src/crystal/akira_crystal_cmds.c
+            ${AKIRA_OS_DIR}/src/console_shell/ui/crystal_render.c
+            ${AKIRA_OS_DIR}/src/console_shell/seal_screen.c
+            ${AKIRA_OS_DIR}/src/console_shell/akira_screen.c
+        )
+    endif()
+    # WiFi settings screen and AkiraPlay (app store) depend on the WiFi manager.
+    if(CONFIG_AKIRA_WIFI_MANAGER)
+        zephyr_library_sources(
+            ${AKIRA_OS_DIR}/src/console_shell/settings/wifi_screen.c
+            ${AKIRA_OS_DIR}/src/console_shell/akiraplay_screen.c
+        )
+    endif()
     target_include_directories(akira_os INTERFACE ${AKIRA_OS_DIR}/src/console_shell)
 endif()
 

@@ -49,7 +49,7 @@ static int cmd_rf_freq(const struct shell *sh, size_t argc, char **argv)
         return -EINVAL;
     }
 
-    uint32_t freq = (uint32_t)atol(argv[1]);
+    uint32_t freq = (uint32_t)strtoul(argv[1], NULL, 10);
     shell_print(sh, "Setting frequency to %u Hz...", freq);
 
     int ret = akira_rf_set_frequency(freq);
@@ -81,6 +81,28 @@ static int cmd_rf_power(const struct shell *sh, size_t argc, char **argv)
     }
 
     shell_print(sh, "TX power set successfully");
+    return 0;
+}
+
+/* Shell command: rf bitrate <bps> */
+static int cmd_rf_bitrate(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: rf bitrate <bps>");
+        shell_print(sh, "  Example: rf bitrate 9600");
+        return -EINVAL;
+    }
+
+    uint32_t bps = (uint32_t)strtoul(argv[1], NULL, 10);
+    shell_print(sh, "Setting bitrate to %u bps...", bps);
+
+    int ret = akira_rf_set_bitrate(bps);
+    if (ret < 0) {
+        shell_error(sh, "Failed to set bitrate: %d", ret);
+        return ret;
+    }
+
+    shell_print(sh, "Bitrate set successfully");
     return 0;
 }
 
@@ -377,11 +399,11 @@ static int cmd_rf_test_nohandle(const struct shell *sh, size_t argc, char **argv
     return 0;
 }
 
-/* rf mod <fsk|ook|lora> */
+/* rf mod <fsk|ook|lora|ble> */
 static int cmd_rf_mod(const struct shell *sh, size_t argc, char **argv)
 {
     if (argc < 2) {
-        shell_error(sh, "Usage: rf mod <fsk|ook|lora>");
+        shell_error(sh, "Usage: rf mod <fsk|ook|lora|ble|flrc>");
         return -EINVAL;
     }
     radio_modulation_t mod;
@@ -391,8 +413,12 @@ static int cmd_rf_mod(const struct shell *sh, size_t argc, char **argv)
         mod = RADIO_MOD_OOK;
     } else if (strcmp(argv[1], "lora") == 0) {
         mod = RADIO_MOD_LORA;
+    } else if (strcmp(argv[1], "ble") == 0) {
+        mod = RADIO_MOD_BLE_PHY;
+    } else if (strcmp(argv[1], "flrc") == 0) {
+        mod = RADIO_MOD_FLRC;
     } else {
-        shell_error(sh, "Unknown modulation '%s' (fsk|ook|lora)", argv[1]);
+        shell_error(sh, "Unknown modulation '%s' (fsk|ook|lora|ble|flrc)", argv[1]);
         return -EINVAL;
     }
     int ret = akira_rf_set_modulation(mod);
@@ -454,6 +480,54 @@ static int cmd_rf_lora_cr(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+/* rf lora hop disable
+ * rf lora hop enable <period_symbols> <freq_hz1> [freq_hz2 ... up to 40] */
+#define RF_LORA_HOP_MAX_FREQS 40
+static int cmd_rf_lora_hop(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        shell_error(sh, "Usage: rf lora hop <enable <period_symbols> <freq_hz...> | disable>");
+        return -EINVAL;
+    }
+
+    if (strcmp(argv[1], "disable") == 0) {
+        int ret = akira_rf_set_lora_hopping(false, 0, NULL, 0);
+        if (ret < 0) {
+            shell_error(sh, "Failed to disable hopping: %d", ret);
+            return ret;
+        }
+        shell_print(sh, "LoRa hopping disabled");
+        return 0;
+    }
+
+    if (strcmp(argv[1], "enable") == 0) {
+        if (argc < 4) {
+            shell_error(sh, "Usage: rf lora hop enable <period_symbols> <freq_hz1> [freq_hz2...]");
+            return -EINVAL;
+        }
+        uint8_t num_freqs = (uint8_t)(argc - 3);
+        if (num_freqs > RF_LORA_HOP_MAX_FREQS) {
+            shell_error(sh, "Too many freqs (max %u)", RF_LORA_HOP_MAX_FREQS);
+            return -EINVAL;
+        }
+        uint16_t period = (uint16_t)atoi(argv[2]);
+        uint32_t freqs[RF_LORA_HOP_MAX_FREQS];
+        for (uint8_t i = 0; i < num_freqs; i++) {
+            freqs[i] = (uint32_t)atol(argv[3 + i]);
+        }
+        int ret = akira_rf_set_lora_hopping(true, period, freqs, num_freqs);
+        if (ret < 0) {
+            shell_error(sh, "Failed to enable hopping: %d", ret);
+            return ret;
+        }
+        shell_print(sh, "LoRa hopping enabled: %u freqs, period %u symbols", num_freqs, period);
+        return 0;
+    }
+
+    shell_error(sh, "Unknown subcommand '%s' (enable|disable)", argv[1]);
+    return -EINVAL;
+}
+
 /* Shared raw capture buffer: capture fills it, replay re-sends it. */
 /* 4 KB shell-only RF capture scratch — PSRAM on boards that have it. The radio
  * raw_capture op already accepts caller-provided buffers of any origin (it is
@@ -499,6 +573,8 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf_test,
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf_lora,
     SHELL_CMD_ARG(sf, NULL, "Set LoRa spreading factor (5..12)", cmd_rf_lora_sf, 2, 0),
     SHELL_CMD_ARG(cr, NULL, "Set LoRa coding rate 4/N (5..8)", cmd_rf_lora_cr, 2, 0),
+    SHELL_CMD_ARG(hop, NULL, "Intra-packet freq hopping: enable <period> <freqs...> | disable",
+                  cmd_rf_lora_hop, 2, RF_LORA_HOP_MAX_FREQS + 1),
     SHELL_SUBCMD_SET_END
 );
 
@@ -509,9 +585,10 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_rf,
     SHELL_CMD_ARG(select,  NULL,         "Select active chip",      cmd_rf_select, 2, 0),
     SHELL_CMD_ARG(freq,    NULL,         "Set frequency (Hz)",      cmd_rf_freq,   2, 0),
     SHELL_CMD_ARG(power,   NULL,         "Set TX power (dBm)",      cmd_rf_power,  2, 0),
-    SHELL_CMD_ARG(mod,     NULL,         "Set modulation (fsk|ook|lora)", cmd_rf_mod,  2, 0),
+    SHELL_CMD_ARG(mod,     NULL,         "Set modulation (fsk|ook|lora|ble|flrc)", cmd_rf_mod,  2, 0),
     SHELL_CMD_ARG(bw,      NULL,         "Set bandwidth Hz (FSK or LoRa)", cmd_rf_bw, 2, 0),
-    SHELL_CMD(lora, &sub_rf_lora,        "LoRa parameters (sf|cr)", NULL),
+    SHELL_CMD_ARG(bitrate, NULL,         "Set FSK bitrate (bps)", cmd_rf_bitrate, 2, 0),
+    SHELL_CMD(lora, &sub_rf_lora,        "LoRa parameters (sf|cr|hop)", NULL),
     SHELL_CMD_ARG(send,    NULL,         "Send data",               cmd_rf_send,   2, 0),
     SHELL_CMD_ARG(sweep,   NULL,         "Send multiple packets",   cmd_rf_sweep,  2, 2),
     SHELL_CMD_ARG(recv,    NULL,         "Receive data",            cmd_rf_recv,   1, 1),

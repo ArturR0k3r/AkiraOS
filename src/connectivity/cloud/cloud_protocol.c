@@ -6,6 +6,7 @@
 #include "cloud_protocol.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include "lib/mem_helper.h"
 #include <string.h>
 
 LOG_MODULE_REGISTER(cloud_proto, CONFIG_AKIRA_LOG_LEVEL);
@@ -81,10 +82,11 @@ int cloud_msg_parse(const uint8_t *buffer, size_t buffer_len, cloud_message_t *m
         return -EMSGSIZE;
     }
 
-    /* Allocate and copy payload */
+    /* Allocate and copy payload. PSRAM-first: held for the message's
+     * lifetime and read once by the caller, not touched in a hot loop. */
     if (msg->header.payload_len > 0)
     {
-        msg->payload = k_malloc(msg->header.payload_len);
+        msg->payload = akira_malloc_buffer(msg->header.payload_len);
         if (!msg->payload)
         {
             LOG_ERR("Failed to allocate payload");
@@ -104,7 +106,7 @@ void cloud_msg_free(cloud_message_t *msg)
 {
     if (msg && msg->payload)
     {
-        k_free(msg->payload);
+        akira_free_buffer(msg->payload);
         msg->payload = NULL;
         msg->header.payload_len = 0;
     }

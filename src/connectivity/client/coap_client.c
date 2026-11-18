@@ -10,6 +10,7 @@
 #include <zephyr/net/coap.h>
 #include <zephyr/net/coap_client.h>
 #include <zephyr/random/random.h>
+#include "lib/mem_helper.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -62,9 +63,9 @@ static struct observe_entry observers[COAP_MAX_OBSERVERS];
 static uint16_t message_id = 0;
 
 /* DTLS PSK credentials */
-static uint8_t psk_key[64];
+static uint8_t psk_key[64] __attribute__((section(".ext_ram.bss")));
 static size_t psk_key_len = 0;
-static char psk_identity[64];
+static char psk_identity[64] __attribute__((section(".ext_ram.bss")));
 
 /*===========================================================================*/
 /* Private Functions                                                         */
@@ -468,8 +469,9 @@ static int send_coap_request(int sock, const coap_request_t *request,
     const uint8_t *payload = coap_packet_get_payload(&resp_pkt, &payload_len);
     if (payload && payload_len > 0)
     {
-        /* Allocate and copy payload */
-        uint8_t *payload_copy = k_malloc(payload_len);
+        /* Allocate and copy payload. PSRAM-first: held for the response's
+         * lifetime and read once by the caller, not touched in a hot loop. */
+        uint8_t *payload_copy = akira_malloc_buffer(payload_len);
         if (payload_copy)
         {
             memcpy(payload_copy, payload, payload_len);
@@ -1060,7 +1062,7 @@ void coap_client_free_response(coap_response_t *response)
 {
     if (response && response->payload)
     {
-        k_free((void *)response->payload);
+        akira_free_buffer((void *)response->payload);
         response->payload = NULL;
         response->payload_len = 0;
     }

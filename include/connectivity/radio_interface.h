@@ -52,6 +52,7 @@ typedef enum {
 #define RADIO_CAP_AUTO_ACK      BIT(9)  /* Automatic acknowledgments */
 #define RADIO_CAP_CSMA_CA       BIT(10) /* CSMA/CA collision avoidance */
 #define RADIO_CAP_RAW_MODE      BIT(11) /* Raw frame access */
+#define RADIO_CAP_LORA_HOPPING  BIT(12) /* SetLoraHopping intra-packet freq hop */
 
 /* Modulation capabilities */
 #define RADIO_CAP_MOD_FSK       BIT(16) /* FSK / GFSK */
@@ -174,7 +175,12 @@ typedef struct {
     
     /* Transmit packet */
     int (*send)(struct radio_handle *handle, const uint8_t *data, size_t len);
-    
+
+    /* Max single-frame TX payload for the radio's current modulation/config
+     * (re-query after set_modulation). NULL => radio has no known MTU for
+     * transports that need one (e.g. mesh app-chunk distribution). */
+    int (*get_max_payload)(struct radio_handle *handle, size_t *max_len);
+
     /* Receive packet (synchronous).
      * For radios that keep RX continuously armed (see rx_wait), this is a
      * NON-blocking read: it arms continuous RX on first call and returns any
@@ -212,6 +218,10 @@ typedef struct {
     int (*set_frequency)(struct radio_handle *handle, uint32_t freq_hz);
     int (*set_power)(struct radio_handle *handle, int8_t dbm);
     int (*get_rssi)(struct radio_handle *handle, int16_t *rssi);
+    /* RSSI of the last successfully received packet (not the live channel
+     * reading get_rssi() returns) — for "signal strength to this specific
+     * peer" use cases. NULL on radios that don't expose it. */
+    int (*get_last_rx_rssi)(struct radio_handle *handle, int16_t *rssi);
     int (*set_mode)(struct radio_handle *handle, radio_mode_t mode);
 
     /* Modulation — gated by RADIO_CAP_MOD_* */
@@ -220,6 +230,21 @@ typedef struct {
     int (*set_spreading_factor)(struct radio_handle *handle, uint8_t sf);
     int (*set_bandwidth)(struct radio_handle *handle, uint32_t bw_hz);
     int (*set_coding_rate)(struct radio_handle *handle, uint8_t cr);
+
+    /* Current LoRa PHY params, for callers that need to estimate time-on-air
+     * (e.g. an ACK timeout that scales with SF/BW instead of a fixed
+     * constant). cr is the driver's raw CR field (denominator = cr+4).
+     * NULL, or -ENOTSUP if modulation isn't LoRa, on radios without LoRa. */
+    int (*get_lora_params)(struct radio_handle *handle, uint8_t *sf,
+                           uint32_t *bw_hz, uint8_t *cr);
+
+    /* Intra-packet LoRa frequency hopping (Semtech SetLoraHopping) — gated by
+     * RADIO_CAP_LORA_HOPPING. enable=false disables (other params ignored).
+     * hop_period_syms: LoRa symbols per hop (0..8191). freqs: up to 40
+     * entries. NULL on radios without native hopping support. */
+    int (*set_lora_hopping)(struct radio_handle *handle, bool enable,
+                            uint16_t hop_period_syms, const uint32_t *freqs,
+                            uint8_t num_freqs);
 
     /* Raw OOK capture/replay — gated by RADIO_CAP_RAW_MODE.
      * raw_capture: stream the hard-sliced OOK bitstream from the RX FIFO into
@@ -231,11 +256,6 @@ typedef struct {
                        uint32_t timeout_ms);
     int (*raw_replay)(struct radio_handle *handle, const uint8_t *buf,
                       size_t len, uint32_t sample_rate_hz, uint32_t repeat);
-
-    /* Max single-frame payload for the radio's *current* config (varies with
-     * modulation/spreading factor/etc). NULL => caller keeps whatever fixed
-     * bound it already assumed. */
-    int (*get_max_payload)(struct radio_handle *handle, size_t *max_payload);
 } radio_ops_t;
 
 /* Radio handle structure */
@@ -490,6 +510,11 @@ static inline int radio_get_rssi(radio_handle_t *h, int16_t *rssi)
     return (h && h->ops && h->ops->get_rssi) ? h->ops->get_rssi(h, rssi) : -ENOSYS;
 }
 
+static inline int radio_get_last_rx_rssi(radio_handle_t *h, int16_t *rssi)
+{
+    return (h && h->ops && h->ops->get_last_rx_rssi) ? h->ops->get_last_rx_rssi(h, rssi) : -ENOSYS;
+}
+
 static inline int radio_set_mode(radio_handle_t *h, radio_mode_t mode)
 {
     return (h && h->ops && h->ops->set_mode) ? h->ops->set_mode(h, mode) : -ENOSYS;
@@ -518,6 +543,14 @@ static inline int radio_set_bandwidth(radio_handle_t *h, uint32_t bw_hz)
 static inline int radio_set_coding_rate(radio_handle_t *h, uint8_t cr)
 {
     return (h && h->ops && h->ops->set_coding_rate) ? h->ops->set_coding_rate(h, cr) : -ENOSYS;
+}
+
+static inline int radio_set_lora_hopping(radio_handle_t *h, bool enable,
+                                         uint16_t hop_period_syms,
+                                         const uint32_t *freqs, uint8_t num_freqs)
+{
+    return (h && h->ops && h->ops->set_lora_hopping) ?
+           h->ops->set_lora_hopping(h, enable, hop_period_syms, freqs, num_freqs) : -ENOSYS;
 }
 
 #ifdef __cplusplus

@@ -23,6 +23,9 @@
 #endif
 #ifdef CONFIG_BT
 #include <connectivity/bluetooth/bt_manager.h>
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+#include <connectivity/bluetooth/companion_service.h>
+#endif
 #endif
 #include <connectivity/hid/hid_manager.h>
 #ifdef CONFIG_AKIRA_BT_HID
@@ -30,6 +33,13 @@
 #endif
 #ifdef CONFIG_AKIRA_APP_MANAGER
 #include <runtime/app_manager/app_manager.h>
+#endif
+#ifdef CONFIG_AKIRA_SD_CARD
+#include <connectivity/storage/sd_manager.h>
+#include <connectivity/storage/usb_storage.h>
+#endif
+#ifdef CONFIG_AKIRA_INPUT_API
+#include <api/akira_input_api.h>
 #endif
 #ifdef CONFIG_AKIRA_HTTP_SERVER
 #include "http_server.h"
@@ -50,13 +60,16 @@
 #ifdef CONFIG_AKIRA_HID_APP_HANDLER
 #include <connectivity/hid/hid_app_handler.h>
 #endif
+#ifdef CONFIG_AKIRA_MODULE_RF
+#include <api/akira_rf_api.h>
+#endif
 
 LOG_MODULE_REGISTER(akira_os, CONFIG_AKIRA_LOG_LEVEL);
 
 int akira_start(void)
 {
     LOG_INF("=====================================================)");
-    LOG_INF("AkiraOS booting (v1.6.x)");
+    LOG_INF("AkiraOS booting (v" AKIRA_VERSION_STRING ")");
     LOG_INF("Platform: %s", akira_get_platform_name());
     LOG_INF("Build: %s %s", __DATE__, __TIME__);
     LOG_INF("=====================================================)");
@@ -68,9 +81,10 @@ int akira_start(void)
         return -ENODEV;
     }
 
-    /* Display test - runs AFTER HAL initialization */
-#ifdef CONFIG_DISPLAY
-    akira_display_clear(0xFFFF);
+    /* Display test - runs AFTER HAL initialization.  Not with the OS shell:
+     * its thread is already playing the boot splash on this framebuffer. */
+#if defined(CONFIG_DISPLAY) && !defined(CONFIG_AKIRA_OS_SHELL)
+    akira_display_clear(0x0021);
     /* Display boot info on screen */
     char buf[64];
     int y_pos = 20;
@@ -83,7 +97,7 @@ int akira_start(void)
     akira_display_text(5, y_pos, "AkiraOS booting", text_color);
     y_pos += line_height;
 
-    akira_display_text(5, y_pos, "AkiraOS v1.6.x", text_color);
+    akira_display_text(5, y_pos, "AkiraOS v" AKIRA_VERSION_STRING, text_color);
     y_pos += line_height;
 
     snprintf(buf, sizeof(buf), "Platform: %s", akira_get_platform_name());
@@ -170,6 +184,24 @@ int akira_start(void)
 
 
 #ifdef CONFIG_BT
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+    if (bt_manager_boot_mode_is_companion())
+    {
+        /* Companion service owns the radio in this mode. Ensure it is up (the
+         * SYS_INIT hook may already have started it) and do NOT run the default
+         * HID bring-up, which would re-init BT and start HID advertising. */
+        if (companion_svc_is_ready() || companion_svc_init() == 0)
+        {
+            LOG_INF("BT boot mode: companion");
+        }
+        else
+        {
+            LOG_WRN("Companion start failed; falling back to default BT");
+            bt_manager_init(NULL);
+        }
+    }
+    else
+#endif
     if(bt_manager_init(NULL) < 0)
     {
         LOG_WRN("Bluetooth manager init failed");
@@ -183,13 +215,20 @@ int akira_start(void)
     /* Filesystem auto-initialized via SYS_INIT (see fs_manager.c) */
 
 #ifdef CONFIG_AKIRA_MODULE_RF
-    /* RF module enabled - framework will auto-init on first API call */
     LOG_INF("RF module enabled");
+    /* Bring up every configured sub-GHz chip so `rf` commands and apps can find
+     * them, then park each in its lowest-power state. No default active radio,
+     * RX daemon stays idle, and NO deep-sleep keep-awake lock is taken — the
+     * device can deep-sleep until something actually uses a radio. */
+    if (akira_rf_boot_init() < 0) {
+        LOG_ERR("RF boot init failed");
+    }
 #endif
 
 #if defined(CONFIG_AKIRA_OTA) && defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
-    /* OTA serves HTTP uploads, WASM ota_* natives and device-management
-     * clients (include/akira_ota.h); release builds turn HTTP off. */
+    /* Starts the OTA worker thread: every transport needs it (HTTP uploads,
+     * companion ota.begin, WASM ota_* natives and device-management clients,
+     * include/akira_ota.h); release builds turn HTTP off. */
     if (ota_manager_init() < 0)
     {
         LOG_ERR("OTA manager init failed");
@@ -261,6 +300,30 @@ int akira_start(void)
     app_manager_init();
 #endif
 
+#ifdef CONFIG_AKIRA_SD_CARD
+    sd_manager_init();
+#endif
+
+#ifdef CONFIG_AKIRA_APP_SOURCE_USB
+    usb_storage_init();
+#endif
+
+#ifdef CONFIG_AKIRA_INPUT_API
+    akira_input_init();
+#endif
+
+#ifdef CONFIG_AKIRA_BOOT_SHELL
+    {
+        int r = app_manager_start(CONFIG_AKIRA_BOOT_SHELL_NAME);
+        if (r < 0) {
+            LOG_WRN("Boot shell '%s' not found (%d) — install via OTA/UART",
+                    CONFIG_AKIRA_BOOT_SHELL_NAME, r);
+        } else {
+            LOG_INF("Boot shell '%s' started", CONFIG_AKIRA_BOOT_SHELL_NAME);
+        }
+    }
+#endif
+
 #ifdef CONFIG_AKIRA_SELFTEST
     /* Self-test (native_sim): install a dummy WASM and optional manifest */
     static const uint8_t dummy_wasm[] = {0x00, 'a', 's', 'm', 0x01, 0x00, 0x00, 0x00};
@@ -287,10 +350,11 @@ int akira_start(void)
     LOG_INF("AkiraOS init complete");
     boot_evt.type = AKIRA_HOOK_BOOT_READY;
     akira_hooks_emit(&boot_evt);
-    /* Idle loop */
-    while (1)
-    {
-#ifdef CONFIG_DISPLAY
+    k_sleep(K_MSEC(1000));  // Brief pause before entering main loop
+
+#if defined(CONFIG_DISPLAY) && !defined(CONFIG_AKIRA_OS_SHELL)
+    /* Idle loop — main() owns the display and animates a status screen. */
+    while (1) {
         extern akira_managed_app_t g_apps[AKIRA_MAX_WASM_INSTANCES];
         static uint32_t frame = 0;
         static bool idle_screen_shown = false;
@@ -309,8 +373,32 @@ int akira_start(void)
             }
         }
 
-        if (!app_running)
+#if defined(CONFIG_AKIRA_BOOT_SHELL) && defined(CONFIG_AKIRA_BOOT_SHELL_RESTART)
         {
+            /* Keep the debounce timer fresh while any app is running so the
+             * 1.5 s window only starts counting AFTER the last app stops.
+             * Without this, s_last_shell_ms stays at 0 and the restart fires
+             * immediately after app_switch() exits the shell — racing with the
+             * deferred app_switch work and stealing the only WASM slot. */
+            static int64_t s_last_shell_ms;
+            int64_t now_ms = k_uptime_get();
+            if (app_running) {
+                s_last_shell_ms = now_ms;  /* reset: app still alive */
+            } else if (now_ms - s_last_shell_ms >= 1500) {
+                s_last_shell_ms = now_ms;
+                LOG_INF("No app running — restarting '%s'", CONFIG_AKIRA_BOOT_SHELL_NAME);
+                int sr = app_manager_start(CONFIG_AKIRA_BOOT_SHELL_NAME);
+                if (sr < 0) {
+                    LOG_WRN("Shell restart failed (%d)", sr);
+                } else {
+                    k_sleep(K_MSEC(200));
+                    app_running = true;
+                }
+            }
+        }
+#endif /* CONFIG_AKIRA_BOOT_SHELL && CONFIG_AKIRA_BOOT_SHELL_RESTART */
+
+        if (!app_running) {
             /* No app running - show system info animation */
             idle_screen_shown = true;
             akira_display_clear(bg_color);
@@ -349,11 +437,19 @@ int akira_start(void)
             idle_screen_shown = false;
             frame = 0;
         }
-#endif
+
         k_sleep(K_MSEC(100));
         // may be add show to display all installed apps and add posibility to run them from there? or just show some system info and status?
         // and if display available show some nice animation or something?
     }
+#else
+    /* Nothing for main() to do — the OS shell thread (or a headless build) owns
+     * the device from here.  Block forever rather than spinning at 10 Hz: a
+     * timed k_sleep() wakes the CPU and reprograms the tick 10x/s for the life
+     * of the device, which is pure battery drain.  K_FOREVER keeps main's stack
+     * reserved (other code holds pointers into its frame) while never running. */
+    k_sleep(K_FOREVER);
+#endif
 
     return 0;
 }

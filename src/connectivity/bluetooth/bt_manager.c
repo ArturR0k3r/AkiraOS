@@ -30,11 +30,42 @@
 #include <zephyr/bluetooth/services/bas.h>
 #endif
 
+#if defined(CONFIG_AKIRA_POWER_MANAGER)
+#include <drivers/power/power_manager.h>
+#endif
+
+#include "lib/mem_helper.h"
+
 #if defined(CONFIG_AKIRA_WASM_BLE)
 #include "ble_app_service.h"
 #endif
 
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+#include "companion_service.h"
+#endif
+
+#if defined(CONFIG_AKIRA_SETTINGS)
+#include "../../settings/settings.h"
+#endif
+
+#if defined(CONFIG_SHELL)
+#include <zephyr/shell/shell.h>
+#include <zephyr/sys/reboot.h>
+#endif
+
 LOG_MODULE_REGISTER(bt_manager, CONFIG_AKIRA_LOG_LEVEL);
+
+bool bt_manager_boot_mode_is_companion(void)
+{
+#if defined(CONFIG_AKIRA_BT_COMPANION) && defined(CONFIG_AKIRA_SETTINGS)
+    char v[16] = "";
+    if (akira_settings_get(AKIRA_BT_MODE_KEY, v, sizeof(v)) == 0 &&
+        strcmp(v, "companion") == 0) {
+        return true;
+    }
+#endif
+    return false;
+}
 
 /*===========================================================================*/
 /* Internal State                                                            */
@@ -43,7 +74,7 @@ LOG_MODULE_REGISTER(bt_manager, CONFIG_AKIRA_LOG_LEVEL);
 static struct
 {
     bool initialized;
-    bool hid_active; /**< true when HID was started at boot via SYS_INIT */
+    bool hid_active;   /**< true when HID was started at boot via SYS_INIT */
     bt_config_t config;
     bt_state_t state;
     bt_stats_t stats;
@@ -53,6 +84,18 @@ static struct
     struct bt_conn *current_conn;
     struct k_work_delayable reconnect_work;
     struct k_work_delayable adv_slow_work; /**< switches advertising to slow interval after 30 s */
+    struct k_work_delayable adv_blank_work; /**< stops advertising N s after the screen blanks */
+    bool blanked;            /**< screen currently blanked (set by bt_manager_on_blank) */
+
+    /* Snapshot of the advertising payload currently in use, so the slow-interval
+     * switch and a post-blank restart reuse the SAME mode-correct ad/sd instead
+     * of falling back to the default HID/BAS advert. */
+    bool    adv_custom;      /**< last advert used the custom-UUID layout */
+    bool    adv_has_uuid;    /**< custom advert carried a 128-bit service UUID */
+    uint8_t adv_uuid128[16]; /**< that UUID (LE), valid when adv_has_uuid */
+#if defined(CONFIG_BT_BAS) && defined(CONFIG_AKIRA_POWER_MANAGER)
+    struct k_work_delayable bas_update_work; /**< refreshes the GATT Battery Service */
+#endif
 #endif
 
     bt_event_callback_t event_cb;
@@ -60,6 +103,17 @@ static struct
 
     struct k_mutex mutex;
 } bt_mgr;
+
+#if BT_AVAILABLE
+/* Depth chosen to match the existing GATT event queue's precedent
+ * (CONFIG_AKIRA_BLE_EVENT_QUEUE_DEPTH in ble_app_service.c); scan reports
+ * are lower-value than GATT events so a fixed constant is fine here. */
+#define BLE_SCAN_QUEUE_DEPTH 16
+/* Ring buffer in PSRAM: ble_scan_report is plain data and the only producer
+ * is the scan callback, which the host runs on the BT RX thread. */
+AKIRA_BULK_MSGQ_DEFINE(g_scan_evt_q, sizeof(struct ble_scan_report),
+                       BLE_SCAN_QUEUE_DEPTH, 4);
+#endif
 
 /*===========================================================================*/
 /* Internal Functions                                                        */
@@ -77,7 +131,7 @@ static void notify_event(bt_event_t event, void *data)
 
 /**
  * @brief Delayed work handler for reconnect advertising
- *
+ * 
  * This work item restarts advertising after a configurable delay,
  * giving the phone time to clean up the previous connection.
  */
@@ -91,6 +145,9 @@ static void reconnect_work_handler(struct k_work *work)
     }
 }
 
+/* Forward declaration — ad[] is defined later in this file after the callbacks. */
+static const struct bt_data ad[];
+
 static void connected_cb(struct bt_conn *conn, uint8_t err)
 {
     if (err)
@@ -103,6 +160,14 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
     bt_mgr.current_conn = bt_conn_ref(conn);
     bt_mgr.state = BT_STATE_CONNECTED;
     bt_mgr.stats.connections++;
+    k_work_cancel_delayable(&bt_mgr.adv_slow_work);
+    /* A host connected: cancel the post-blank advertising stop (a connection
+     * keeps the device awake and alive) and start syncing the GATT battery
+     * level, which only matters while someone is subscribed to it. */
+    k_work_cancel_delayable(&bt_mgr.adv_blank_work);
+#if defined(CONFIG_BT_BAS) && defined(CONFIG_AKIRA_POWER_MANAGER)
+    k_work_schedule(&bt_mgr.bas_update_work, K_NO_WAIT);
+#endif
 
     char addr[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
@@ -114,8 +179,7 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
         akira_hooks_emit(&e);
     }
 #if defined(CONFIG_AKIRA_WASM_BLE)
-    if (bt_mgr.mode == BT_MODE_BLE_APP)
-    {
+    if (bt_mgr.mode == BT_MODE_BLE_APP) {
         ble_app_push_conn_event(BLE_EVT_CONNECTED);
     }
 #endif
@@ -137,14 +201,18 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
     bt_mgr.state = BT_STATE_READY;
     bt_mgr.stats.disconnections++;
 
+#if defined(CONFIG_BT_BAS) && defined(CONFIG_AKIRA_POWER_MANAGER)
+    /* Nothing subscribed any more — stop refreshing the GATT battery level. */
+    k_work_cancel_delayable(&bt_mgr.bas_update_work);
+#endif
+
     notify_event(BT_EVENT_DISCONNECTED, NULL);
     {
         struct akira_hook_event e = { .type = AKIRA_HOOK_BT_DISCONNECTED };
         akira_hooks_emit(&e);
     }
 #if defined(CONFIG_AKIRA_WASM_BLE)
-    if (bt_mgr.mode == BT_MODE_BLE_APP)
-    {
+    if (bt_mgr.mode == BT_MODE_BLE_APP) {
         ble_app_push_conn_event(BLE_EVT_DISCONNECTED);
     }
 #endif
@@ -170,6 +238,14 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
         /* No delay configured - start advertising immediately */
         bt_manager_start_advertising();
 #endif
+    }
+
+    /* If the host dropped while the screen was already blanked, the restart
+     * above would otherwise advertise forever — re-arm the grace-period stop. */
+    if (bt_mgr.blanked)
+    {
+        k_work_schedule(&bt_mgr.adv_blank_work,
+                        K_SECONDS(CONFIG_AKIRA_BT_ADV_AFTER_BLANK_S));
     }
 
 #if defined(CONFIG_AKIRA_BT_ECHO)
@@ -199,22 +275,12 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
         }
         else if (err == BT_SECURITY_ERR_AUTH_REQUIREMENT)
         {
-            if (bt_mgr.mode == BT_MODE_HID || bt_mgr.mode == BT_MODE_COMPANION)
-            {
-                /* HID: Windows "Remove device" wiped its LTK but device kept the
-                 * stale bond. Windows reconnects fresh with MITM=1 → AUTH_REQUIREMENT.
-                 * Companion: BONDABLE=y here too (CMD_CHAR requires an encrypted
-                 * link), so the same wipe-and-retry applies.
-                 * Wipe our stale bond and force just-works re-pair. */
-                LOG_INF("Stale bond for %s — wiping and re-pairing", addr);
-                bt_unpair(BT_ID_DEFAULT, bt_conn_get_dst(conn));
-                bt_conn_set_security(conn, BT_SECURITY_L2 | BT_SECURITY_FORCE_PAIR);
-            }
-            else
-            {
-                /* BONDABLE=n, no LTK to store — stay at L1. */
-                LOG_WRN("Peer %s requires MITM (NoInputNoOutput) — staying at L1", addr);
-            }
+            /* The peer forgot us (Windows "Remove device", iOS "Forget This Device")
+             * but we kept the bond, and Zephyr refuses to overwrite an existing
+             * bond with a just-works pairing. Wipe it and force a fresh pair. */
+            LOG_INF("Stale bond for %s — wiping and re-pairing", addr);
+            bt_unpair(BT_ID_DEFAULT, bt_conn_get_dst(conn));
+            bt_conn_set_security(conn, BT_SECURITY_L2 | BT_SECURITY_FORCE_PAIR);
         }
         return;
     }
@@ -260,7 +326,7 @@ static const struct bt_conn_auth_cb auth_callbacks = {
 
 static struct bt_conn_auth_info_cb auth_info_callbacks = {
     .pairing_complete = auth_pairing_complete,
-    .pairing_failed = auth_pairing_failed,
+    .pairing_failed   = auth_pairing_failed,
 };
 #endif /* CONFIG_BT_SMP || CONFIG_BT_CLASSIC */
 
@@ -286,10 +352,10 @@ static const struct bt_data ad[] = {
                                      0x000000000001)),
 #if CONFIG_AKIRA_HID_MODE_KB_MOUSE
     BT_DATA_BYTES(BT_DATA_GAP_APPEARANCE,
-                  BT_BYTES_LIST_LE16(0x03C1)), /* Keyboard */
+                BT_BYTES_LIST_LE16(0x03C1)), /* Keyboard */
 #elif CONFIG_AKIRA_HID_MODE_GAMEPAD
     BT_DATA_BYTES(BT_DATA_GAP_APPEARANCE,
-                  BT_BYTES_LIST_LE16(0x03C4)), /* Gamepad */
+                BT_BYTES_LIST_LE16(0x03C3)), /* Joystick */
 #endif
 #ifdef CONFIG_AKIRA_BT_HID
     BT_DATA_BYTES(BT_DATA_UUID16_ALL,
@@ -298,8 +364,81 @@ static const struct bt_data ad[] = {
 #endif
 };
 
+/**
+ * @brief Modes where bt_manager owns a connectable, discoverable advert that
+ *        is safe to stop/restart around a screen blank or a slow-interval
+ *        switch.
+ *
+ * MESH advertises its own service UUID (managed by the mesh subsystem), and
+ * SCAN/SPAM run user-started radio activity — the generic restart would
+ * clobber their payload, so they are excluded.
+ */
+static bool bt_mode_is_service_adv(void)
+{
+    switch (bt_mgr.mode)
+    {
+    case BT_MODE_NONE:      /* plain connectable advert */
+    case BT_MODE_HID:       /* HID/BAS advert */
+    case BT_MODE_BLE_APP:   /* WASM BLE app custom-UUID advert */
+    case BT_MODE_COMPANION: /* companion custom-UUID advert */
+        return true;
+    default:
+        return false;
+    }
+}
+
+/**
+ * @brief Start advertising using the payload recorded for the current mode.
+ *
+ * @param fast true → fast pairing interval, false → low-power slow interval.
+ *
+ * Reuses the adv_custom/adv_uuid128 snapshot so the companion and WASM-app
+ * service UUIDs survive a restart (the slow-interval switch and post-blank
+ * resume both go through here). Mirrors the 31-byte legacy-payload layout
+ * documented in bt_manager_start_advertising_custom(): flags + 128-bit UUID in
+ * the advertisement, name in the scan response, name clamped to fit.
+ */
+static int bt_adv_start_variant(bool fast)
+{
+    struct bt_le_adv_param param = BT_LE_ADV_PARAM_INIT(
+        BT_LE_ADV_OPT_CONN,
+        fast ? BT_GAP_ADV_FAST_INT_MIN_2 : BT_GAP_ADV_SLOW_INT_MIN,
+        fast ? BT_GAP_ADV_FAST_INT_MAX_2 : BT_GAP_ADV_SLOW_INT_MAX,
+        NULL);
+
+    if (bt_mgr.adv_custom)
+    {
+        static const uint8_t ad_flags = (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR);
+        struct bt_data custom_ad[2];
+        uint8_t ad_count = 0;
+
+        custom_ad[ad_count++] = (struct bt_data)BT_DATA(BT_DATA_FLAGS, &ad_flags, 1);
+        if (bt_mgr.adv_has_uuid)
+        {
+            custom_ad[ad_count++] = (struct bt_data)BT_DATA(
+                BT_DATA_UUID128_ALL, bt_mgr.adv_uuid128, 16);
+        }
+
+        size_t name_len = strlen(bt_mgr.config.device_name);
+        if (name_len > 29U)
+        {
+            name_len = 29U;
+        }
+        struct bt_data sd[] = {
+            BT_DATA(BT_DATA_NAME_COMPLETE, bt_mgr.config.device_name, name_len),
+        };
+        return bt_le_adv_start(&param, custom_ad, ad_count, sd, ARRAY_SIZE(sd));
+    }
+
+    struct bt_data sd[] = {
+        BT_DATA(BT_DATA_NAME_COMPLETE, bt_mgr.config.device_name,
+                strlen(bt_mgr.config.device_name)),
+    };
+    return bt_le_adv_start(&param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+}
+
 /* Fires 30 s after advertising starts — switches to slow interval to save
- * power while remaining discoverable. Fast interval kept for the first 30 s
+ * power while remaining discoverable.  Fast interval kept for the first 30 s
  * so pairing from a phone is snappy out of the box. */
 static void adv_slow_work_handler(struct k_work *work)
 {
@@ -308,30 +447,75 @@ static void adv_slow_work_handler(struct k_work *work)
     {
         return;
     }
+    if (!bt_mode_is_service_adv())
+    {
+        /* MESH keeps its own service UUID; SCAN/SPAM manage their own radio
+         * use. Leave their advert as-is. */
+        return;
+    }
     LOG_INF("BLE: switching to low-power advertising interval");
 
-    static const struct bt_le_adv_param slow = BT_LE_ADV_PARAM_INIT(
-        BT_LE_ADV_OPT_CONN,
-        BT_GAP_ADV_SLOW_INT_MIN,
-        BT_GAP_ADV_SLOW_INT_MAX,
-        NULL);
-
-    struct bt_data sd = BT_DATA(BT_DATA_NAME_COMPLETE,
-                                bt_mgr.config.device_name,
-                                strlen(bt_mgr.config.device_name));
+    /* Reuse the current mode's advertising data — previously this always
+     * rebuilt the default HID/BAS advert, which dropped the companion / WASM
+     * app service UUID after 30 s so the phone could no longer filter for it. */
     bt_le_adv_stop();
-    int err = bt_le_adv_start(&slow, ad, ARRAY_SIZE(ad), &sd, 1);
+    int err = bt_adv_start_variant(false /* slow */);
     if (err && err != -EALREADY)
     {
         LOG_WRN("BLE slow-adv restart failed (%d)", err);
     }
 }
 
-/* Depth chosen to match the existing GATT event queue's precedent
- * (CONFIG_AKIRA_BLE_EVENT_QUEUE_DEPTH in ble_app_service.c); scan reports
- * are lower-value than GATT events so a fixed constant is fine here. */
-#define BLE_SCAN_QUEUE_DEPTH 16
-K_MSGQ_DEFINE(g_scan_evt_q, sizeof(struct ble_scan_report), BLE_SCAN_QUEUE_DEPTH, 4);
+/* Fires AKIRA_BT_ADV_AFTER_BLANK_S after the screen blanks with nothing
+ * connected — stops advertising entirely to save the radio. A connection
+ * arriving in the meantime cancels this from connected_cb(). */
+static void adv_blank_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    if (bt_mgr.state == BT_STATE_CONNECTED)
+    {
+        return;
+    }
+    if (!bt_mode_is_service_adv())
+    {
+        /* Never silence an active scan/spam/mesh advert on a screen blank. */
+        return;
+    }
+    LOG_INF("BLE: stopping advertising (screen blanked, no connection)");
+    bt_manager_stop_advertising();
+}
+
+#if defined(CONFIG_BT_BAS) && defined(CONFIG_AKIRA_POWER_MANAGER)
+#define BAS_UPDATE_INTERVAL_S 60
+
+/* Keeps the GATT Battery Service in step with the real gauge.  Runs at a lazy
+ * 60 s and only writes on change: bt_bas_set_battery_level() notifies every
+ * subscribed peer, so a per-second update would spend radio energy to tell the
+ * host something it already knows.  On -ENODEV (no gauge fitted, or the gauge
+ * is not responding) the seeded value is left alone — better a stale 100 %,
+ * which HOGP requires to be valid, than a fabricated reading. */
+static void bas_update_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    uint8_t pct = 0;
+    if (akira_pm_get_battery_level(&pct) == 0)
+    {
+        if (pct != bt_bas_get_battery_level())
+        {
+            bt_bas_set_battery_level(pct);
+        }
+    }
+
+    /* Keep refreshing only while a host is connected — bt_bas_set_battery_level
+     * notifies subscribers, so there is no point spending wake-ups on it with
+     * nobody listening. Started on connect, cancelled on disconnect. */
+    if (bt_mgr.state == BT_STATE_CONNECTED)
+    {
+        k_work_schedule(&bt_mgr.bas_update_work, K_SECONDS(BAS_UPDATE_INTERVAL_S));
+    }
+}
+#endif /* CONFIG_BT_BAS && CONFIG_AKIRA_POWER_MANAGER */
 
 #endif /* BT_AVAILABLE */
 
@@ -359,8 +543,8 @@ int bt_manager_init(const bt_config_t *config)
     else
     {
         bt_mgr.config.device_name = CONFIG_BT_DEVICE_NAME;
-        bt_mgr.config.vendor_id = 0x1234;
-        bt_mgr.config.product_id = 0x5678;
+        bt_mgr.config.vendor_id = 0x303A; /* Espressif VID */
+        bt_mgr.config.product_id = 0x8363; /* PenEngineering S.R.L - AkiraConsole */
         bt_mgr.config.services = BT_SERVICE_ALL;
         bt_mgr.config.auto_advertise = true;
         bt_mgr.config.pairable = true;
@@ -369,14 +553,17 @@ int bt_manager_init(const bt_config_t *config)
     bt_mgr.state = BT_STATE_INITIALIZING;
 
 #if BT_AVAILABLE
-    /* Initialize delayed work for reconnection */
     k_work_init_delayable(&bt_mgr.reconnect_work, reconnect_work_handler);
     k_work_init_delayable(&bt_mgr.adv_slow_work, adv_slow_work_handler);
+    k_work_init_delayable(&bt_mgr.adv_blank_work, adv_blank_work_handler);
+#if defined(CONFIG_BT_BAS) && defined(CONFIG_AKIRA_POWER_MANAGER)
+    k_work_init_delayable(&bt_mgr.bas_update_work, bas_update_work_handler);
+#endif
 
 #if defined(CONFIG_AKIRA_BT_ECHO)
     bt_echo_init();
 #endif
-
+    
     int err = bt_enable(NULL);
     if (err)
     {
@@ -393,7 +580,11 @@ int bt_manager_init(const bt_config_t *config)
     }
 
 #ifdef CONFIG_BT_BAS
-    /* HOGP mandates Battery Service; report 100% so iOS completes HID enumeration */
+    /* HOGP mandates Battery Service and the value must be valid before HID
+     * enumeration completes, so seed 100 % here — but do not leave it there.
+     * bas_update_work replaces it with the real reading and keeps it current;
+     * it runs only while a host is connected (started from connected_cb()),
+     * so there is nothing to schedule here. */
     bt_bas_set_battery_level(100);
 #endif
 
@@ -455,18 +646,14 @@ int bt_manager_start_advertising(void)
         return -EBUSY;
     }
 
-    struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
-        BT_LE_ADV_OPT_CONN,
-        BT_GAP_ADV_FAST_INT_MIN_2,
-        BT_GAP_ADV_FAST_INT_MAX_2,
-        NULL);
+    /* Default HID/BAS advert. Record it so a slow-interval switch or post-blank
+     * restart reuses the same layout.
+     * Fast intervals for first 30 s so pairing is snappy; adv_slow_work switches
+     * to 1000-1200 ms after that to save power. */
+    bt_mgr.adv_custom = false;
+    bt_mgr.adv_has_uuid = false;
 
-    struct bt_data sd[] = {
-        BT_DATA(BT_DATA_NAME_COMPLETE, bt_mgr.config.device_name,
-                strlen(bt_mgr.config.device_name)),
-    };
-
-    int err = bt_le_adv_start(&adv_param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
+    int err = bt_adv_start_variant(true /* fast */);
     if (err == -EALREADY)
     {
         LOG_INF("BT already advertising!");
@@ -584,6 +771,91 @@ int bt_manager_conn_params_active(void)
 #endif
 }
 
+void bt_manager_on_blank(bool blanked)
+{
+#if BT_AVAILABLE
+    bt_mgr.blanked = blanked;
+
+    if (!bt_mgr.initialized)
+    {
+        return;
+    }
+
+    if (blanked)
+    {
+        if (bt_mgr.state == BT_STATE_CONNECTED)
+        {
+            /* A connected host keeps the link up (and the device awake); just
+             * relax the connection parameters to trim radio energy. */
+            bt_manager_conn_params_idle();
+        }
+        else
+        {
+            /* Nothing connected: keep advertising for a grace period so a phone
+             * can still find the device right after the screen blanks, then the
+             * delayed work stops advertising entirely. */
+            k_work_schedule(&bt_mgr.adv_blank_work,
+                            K_SECONDS(CONFIG_AKIRA_BT_ADV_AFTER_BLANK_S));
+        }
+    }
+    else
+    {
+        /* Waking: never leave the stop pending. */
+        k_work_cancel_delayable(&bt_mgr.adv_blank_work);
+
+        if (bt_mgr.state == BT_STATE_CONNECTED)
+        {
+            bt_manager_conn_params_active();
+        }
+        else if (bt_mgr.state != BT_STATE_ADVERTISING && bt_mode_is_service_adv())
+        {
+            /* Advertising was stopped while blanked — restart it in the current
+             * mode's normal way, honouring the fast-for-30-s-then-slow scheme. */
+            int err = bt_adv_start_variant(true /* fast */);
+            if (err && err != -EALREADY)
+            {
+                LOG_WRN("BLE adv restart on wake failed (%d)", err);
+            }
+            else
+            {
+                bt_mgr.state = BT_STATE_ADVERTISING;
+                k_work_schedule(&bt_mgr.adv_slow_work, K_SECONDS(30));
+                LOG_INF("BLE advertising restarted on wake (fast -> slow in 30 s)");
+            }
+        }
+    }
+#else
+    ARG_UNUSED(blanked);
+#endif
+}
+
+bool bt_manager_keeps_awake(void)
+{
+#if BT_AVAILABLE
+    /* A connected host must keep the device awake regardless of mode. */
+    if (bt_mgr.state == BT_STATE_CONNECTED || bt_mgr.current_conn)
+    {
+        return true;
+    }
+
+    /* User-started radio activity that a deep sleep would tear down. Everything
+     * else — HID idle, companion with nothing connected, a WASM BLE app merely
+     * advertising, or plain advertising — must NOT block deep sleep (this is the
+     * companion-mode "always awake" regression this function replaces). */
+    switch (bt_mgr.mode)
+    {
+    case BT_MODE_BLE_SCAN: /* observer actively scanning              */
+    case BT_MODE_BLE_SPAM: /* rotating-advertiser flood running       */
+    case BT_MODE_MESH:     /* mesh relay/proxy network participation  */
+        return true;
+    default:
+        return false;
+    }
+#else
+    return false;
+#endif
+}
+
 int bt_manager_register_callback(bt_event_callback_t callback, void *user_data)
 {
     bt_mgr.event_cb = callback;
@@ -627,127 +899,7 @@ int bt_manager_get_address(char *buffer, size_t len)
 }
 
 /*===========================================================================*/
-/* Mode Switch                                                               */
-/*===========================================================================*/
-
-int bt_manager_set_mode(bt_manager_mode_t mode)
-{
-    k_mutex_lock(&bt_mgr.mutex, K_FOREVER);
-
-    if (mode != BT_MODE_NONE && bt_mgr.mode != BT_MODE_NONE && bt_mgr.mode != mode)
-    {
-        /* HID and BLE_APP can coexist: HID uses BLE HID profile,
-         * BLE_APP adds custom GATT services on the same stack. */
-        if ((bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_BLE_APP) ||
-            (bt_mgr.mode == BT_MODE_BLE_APP && mode == BT_MODE_HID))
-        {
-            LOG_INF("BT: HID and BLE_APP sharing stack, switching to mode %d", mode);
-        }
-        else
-        {
-            k_mutex_unlock(&bt_mgr.mutex);
-            LOG_ERR("BT mode conflict: active=%d requested=%d", bt_mgr.mode, mode);
-            return -EBUSY;
-        }
-    }
-
-    /* When HID was started at boot, releasing to NONE restores it */
-    if (mode == BT_MODE_NONE && bt_mgr.hid_active)
-    {
-        bt_mgr.mode = BT_MODE_HID;
-    }
-    else
-    {
-        bt_mgr.mode = mode;
-    }
-    k_mutex_unlock(&bt_mgr.mutex);
-
-    /* Lazy init when transitioning out of NONE and not yet initialized */
-    if (mode != BT_MODE_NONE && !bt_mgr.initialized)
-    {
-        bt_config_t lazy_cfg = {
-            .device_name = CONFIG_BT_DEVICE_NAME,
-            .auto_advertise = false,
-            .pairable = true,
-        };
-        return bt_manager_init(&lazy_cfg);
-    }
-
-    LOG_INF("BT mode set to %d", mode);
-    return 0;
-}
-
-bt_manager_mode_t bt_manager_get_mode(void)
-{
-    return bt_mgr.mode;
-}
-
-/*===========================================================================*/
-/* Custom Advertising (BLE_APP mode)                                        */
-/*===========================================================================*/
-
-int bt_manager_start_advertising_custom(const uint8_t svc_uuid128[16])
-{
-#if BT_AVAILABLE
-    if (!bt_mgr.initialized)
-    {
-        return -EINVAL;
-    }
-    if (bt_mgr.state == BT_STATE_CONNECTED)
-    {
-        return -EBUSY;
-    }
-
-    struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
-        BT_LE_ADV_OPT_CONN,
-        BT_GAP_ADV_FAST_INT_MIN_2,
-        BT_GAP_ADV_FAST_INT_MAX_2,
-        NULL);
-
-    /* Flags only in advert payload — keeps it minimal */
-    struct bt_data custom_ad[] = {
-        BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-    };
-
-    /* Scan response: name + optional 128-bit service UUID */
-    struct bt_data sd[2];
-    uint8_t sd_count = 0;
-
-    sd[sd_count++] = (struct bt_data)BT_DATA(
-        BT_DATA_NAME_COMPLETE,
-        bt_mgr.config.device_name,
-        strlen(bt_mgr.config.device_name));
-
-    if (svc_uuid128)
-    {
-        sd[sd_count++] = (struct bt_data)BT_DATA(
-            BT_DATA_UUID128_ALL, svc_uuid128, 16);
-    }
-
-    int err = bt_le_adv_start(&adv_param, custom_ad, ARRAY_SIZE(custom_ad),
-                              sd, sd_count);
-    if (err == -EALREADY)
-    {
-        LOG_INF("BT already advertising");
-        return 0;
-    }
-    else if (err)
-    {
-        LOG_ERR("Custom advertising start failed: %d", err);
-        return err;
-    }
-
-    bt_mgr.state = BT_STATE_ADVERTISING;
-    LOG_INF("BLE app advertising started");
-    return 0;
-#else
-    bt_mgr.state = BT_STATE_ADVERTISING;
-    return 0;
-#endif
-}
-
-/*===========================================================================*/
-/* BLE Observer (scan) mode                                                 */
+/* BLE Observer (Scan) mode                                                  */
 /*===========================================================================*/
 /* Requires CONFIG_BT_OBSERVER (Zephyr's scanning role) — not implied by
  * CONFIG_BT alone, so boards that never enable it get a clean -ENOTSUP
@@ -880,8 +1032,9 @@ int bt_manager_scan_pop(struct ble_scan_report *out) { (void)out; return -ENOTSU
  * type byte 0x07 (proximity pairing), minimal AirPods-shape payload. */
 static const uint8_t spam_apple_payload[] = {
     0x4C, 0x00, 0x07, 0x19, 0x01, 0x0E, 0x20, 0x75,
-    0x00, 0x0A, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x45, 0x12, 0x00, 0x00, 0x00, 0x00,
+    0xAA, 0x30, 0x01, 0x00, 0x00, 0x45, 0x12, 0x12,
+    0x44, 0x00, 0x00, 0x00, 0x00, 0x05, 0x12, 0x1E,
+    0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
 /* Google Fast Pair — service UUID 0xFE2C with a placeholder model ID.
@@ -908,7 +1061,7 @@ static void spam_work_handler(struct k_work *work)
     /* USE_NRPA: fresh non-resolvable random MAC per advertisement. Targets
      * dedup pairing popups by advertiser MAC, so a fixed identity address
      * would fire the popup once then go silent; NRPA keeps it "spammy" and
-     * avoids leaking the device's real identity MAC to nearby scanners. */
+     * avoids leaking the console's real identity MAC to nearby scanners. */
     struct bt_le_adv_param adv_param = BT_LE_ADV_PARAM_INIT(
         BT_LE_ADV_OPT_USE_NRPA,
         BT_GAP_ADV_FAST_INT_MIN_2,
@@ -963,6 +1116,15 @@ int bt_manager_spam_start(int preset)
         return -EINVAL;
     }
 
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+    /* Companion normally owns the radio from boot. Spamming is a deliberate,
+     * operator-initiated action, so tear the companion link down rather than
+     * refusing — restored on spam_stop() below. */
+    if (bt_mgr.mode == BT_MODE_COMPANION) {
+        companion_svc_deinit();
+    }
+#endif
+
     int ret = bt_manager_set_mode(BT_MODE_BLE_SPAM);
 
     if (ret < 0) {
@@ -988,6 +1150,13 @@ int bt_manager_spam_stop(void)
     k_work_cancel_delayable_sync(&spam_work, &sync);
     bt_le_adv_stop();
     bt_manager_set_mode(BT_MODE_NONE);
+
+#if defined(CONFIG_AKIRA_BT_COMPANION)
+    if (bt_manager_boot_mode_is_companion()) {
+        companion_svc_init();
+    }
+#endif
+
     LOG_INF("BLE spam stopped (%u packets sent)", spam_packet_count);
     return 0;
 }
@@ -1002,13 +1171,167 @@ int bt_manager_spam_stop(void) { return -ENOTSUP; }
 uint32_t bt_manager_spam_packet_count(void) { return 0; }
 #endif /* BT_AVAILABLE */
 
+/*===========================================================================*/
+/* Mode Switch                                                               */
+/*===========================================================================*/
+
+int bt_manager_set_mode(bt_manager_mode_t mode)
+{
+    k_mutex_lock(&bt_mgr.mutex, K_FOREVER);
+
+    if (mode != BT_MODE_NONE && bt_mgr.mode != BT_MODE_NONE && bt_mgr.mode != mode) {
+        if ((bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_BLE_APP) ||
+            (bt_mgr.mode == BT_MODE_BLE_APP && mode == BT_MODE_HID) ||
+            (bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_BLE_SCAN) ||
+            (bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_BLE_SPAM) ||
+            (mode == BT_MODE_MESH && bt_mgr.mode != BT_MODE_BLE_SCAN) ||
+            (bt_mgr.mode == BT_MODE_MESH && mode != BT_MODE_BLE_SCAN)) {
+            LOG_INF("BT: mode %d sharing stack with mode %d", bt_mgr.mode, mode);
+        } else if ((bt_mgr.mode == BT_MODE_HID && mode == BT_MODE_COMPANION) ||
+                   (bt_mgr.mode == BT_MODE_COMPANION && mode == BT_MODE_HID)) {
+            /* HID and Companion are exclusive but may be swapped at boot before
+             * any connection exists. Drop the current advertising so the new
+             * mode can start its own. */
+            LOG_INF("BT: switching BLE mode %d -> %d (takeover)", bt_mgr.mode, mode);
+            bt_manager_stop_advertising();
+        } else {
+            k_mutex_unlock(&bt_mgr.mutex);
+            LOG_ERR("BT mode conflict: active=%d requested=%d", bt_mgr.mode, mode);
+            return -EBUSY;
+        }
+    }
+
+    /* When HID was started at boot, releasing to NONE restores it */
+    if (mode == BT_MODE_NONE && bt_mgr.hid_active) {
+        bt_mgr.mode = BT_MODE_HID;
+    } else {
+        bt_mgr.mode = mode;
+    }
+    k_mutex_unlock(&bt_mgr.mutex);
+
+    /* Lazy init when transitioning out of NONE and not yet initialized */
+    if (mode != BT_MODE_NONE && !bt_mgr.initialized) {
+        bt_config_t lazy_cfg = {
+            .device_name    = CONFIG_BT_DEVICE_NAME,
+            .auto_advertise = false,
+            .pairable       = true,
+        };
+        return bt_manager_init(&lazy_cfg);
+    }
+
+    LOG_INF("BT mode set to %d", mode);
+    return 0;
+}
+
+bt_manager_mode_t bt_manager_get_mode(void)
+{
+    return bt_mgr.mode;
+}
+
+/*===========================================================================*/
+/* Custom Advertising (BLE_APP mode)                                        */
+/*===========================================================================*/
+
+int bt_manager_start_advertising_custom(const uint8_t svc_uuid128[16])
+{
+#if BT_AVAILABLE
+    if (!bt_mgr.initialized) {
+        return -EINVAL;
+    }
+    if (bt_mgr.state == BT_STATE_CONNECTED) {
+        return -EBUSY;
+    }
+
+    /* Record the custom-UUID advert so the slow-interval switch and a post-blank
+     * restart reuse it (see bt_adv_start_variant()).
+     *
+     * AD payload: flags + the 128-bit service UUID = 3 + 18 = 21 B, inside the
+     * 31 B legacy limit.  The UUID belongs in the advertisement rather than the
+     * scan response so a central can filter on the service without issuing a
+     * scan request — that is how both the companion app and WASM BLE apps find
+     * the device.  (Putting the name AND the UUID in the scan response is 32 B,
+     * one over the limit, so bt_le_adv_start() would reject the whole thing
+     * with "Too big advertising data" and the device would advertise nothing.) */
+    bt_mgr.adv_custom = true;
+    bt_mgr.adv_has_uuid = (svc_uuid128 != NULL);
+    if (svc_uuid128) {
+        memcpy(bt_mgr.adv_uuid128, svc_uuid128, sizeof(bt_mgr.adv_uuid128));
+    }
+
+    int err = bt_adv_start_variant(true /* fast */);
+    if (err == -EALREADY) {
+        LOG_INF("BT already advertising");
+        return 0;
+    } else if (err) {
+        LOG_ERR("Custom advertising start failed: %d", err);
+        return err;
+    }
+
+    bt_mgr.state = BT_STATE_ADVERTISING;
+    k_work_schedule(&bt_mgr.adv_slow_work, K_SECONDS(30));
+    LOG_INF("BLE app advertising started (fast -> slow in 30 s)");
+    return 0;
+#else
+    bt_mgr.state = BT_STATE_ADVERTISING;
+    return 0;
+#endif
+}
+
 #ifdef CONFIG_AKIRA_BT_HID
-/* HID mode: eagerly initialise at boot so HID profile is ready immediately */
+/* HID mode: eagerly initialise at boot so HID profile is ready immediately.
+ * When the persisted boot mode selects the Companion service, HID must NOT
+ * claim the radio here — otherwise the later companion SYS_INIT (prio 90) is
+ * rejected with -EBUSY and the companion service never advertises. The BT stack
+ * is then lazily initialised by the companion path (bt_manager_set_mode). */
 static int bt_manager_sys_init(void)
 {
+    if (bt_manager_boot_mode_is_companion()) {
+        LOG_INF("BT boot mode = companion; HID auto-init skipped");
+        return 0;
+    }
     bt_mgr.mode = BT_MODE_HID;
     bt_mgr.hid_active = true;
     return bt_manager_init(NULL);
 }
 SYS_INIT(bt_manager_sys_init, APPLICATION, CONFIG_AKIRA_BT_INIT_PRIORITY);
+#endif
+
+#if defined(CONFIG_SHELL) && defined(CONFIG_AKIRA_BT_COMPANION) && defined(CONFIG_AKIRA_SETTINGS)
+/* `btmode [hid|companion]` — HID and the Companion service are mutually
+ * exclusive on a single BLE connection, and switching cleanly means claiming
+ * the radio from boot, so the setter persists the choice and cold-reboots. */
+static int cmd_btmode(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 2) {
+        char v[16] = "";
+        int have = akira_settings_get(AKIRA_BT_MODE_KEY, v, sizeof(v));
+        bt_manager_mode_t m = bt_manager_get_mode();
+        shell_print(sh, "boot mode : %s", have == 0 && v[0] ? v : "hid (default)");
+        shell_print(sh, "active    : %s",
+                    m == BT_MODE_COMPANION ? "companion" :
+                    m == BT_MODE_HID       ? "hid" :
+                    m == BT_MODE_BLE_APP   ? "ble_app" :
+                    m == BT_MODE_MESH      ? "mesh" : "none");
+        shell_print(sh, "usage: btmode <hid|companion>  (persists + reboots)");
+        return 0;
+    }
+
+    const char *mode = argv[1];
+    if (strcmp(mode, "hid") != 0 && strcmp(mode, "companion") != 0) {
+        shell_error(sh, "invalid mode '%s' (use: hid | companion)", mode);
+        return -EINVAL;
+    }
+
+    int rc = akira_settings_set(AKIRA_BT_MODE_KEY, mode, 0);
+    if (rc) {
+        shell_error(sh, "failed to persist mode: %d", rc);
+        return rc;
+    }
+    shell_print(sh, "BLE mode set to '%s' — rebooting to apply...", mode);
+    k_sleep(K_MSEC(300));
+    sys_reboot(SYS_REBOOT_COLD);
+    return 0;
+}
+SHELL_CMD_REGISTER(btmode, NULL,
+                   "Get/set boot BLE mode: btmode <hid|companion>", cmd_btmode);
 #endif

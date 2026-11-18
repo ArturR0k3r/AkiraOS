@@ -14,7 +14,9 @@
 #include <stddef.h>
 
 
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <wasm_export.h>
+#endif
 
 /*
  * Core memory API functions (no security checks).

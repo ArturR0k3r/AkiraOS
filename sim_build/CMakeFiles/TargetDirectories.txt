@@ -1,0 +1,3 @@
+/home/artur_ubuntu/Akira/AkiraOS/sim_build/CMakeFiles/akira_sim.dir
+/home/artur_ubuntu/Akira/AkiraOS/sim_build/CMakeFiles/edit_cache.dir
+/home/artur_ubuntu/Akira/AkiraOS/sim_build/CMakeFiles/rebuild_cache.dir

@@ -31,10 +31,10 @@
 	// MISO = GPIO13 (SPI2.MISO)
 	//
 	// CS lines are NOT listed here; they are controlled via cs-gpios in &spi2:
-	//   CS0 (LR_CS)  — TCA6408 P4 (I2C GPIO expander)
+	//   CS0 (LR_CS)  — TCA6408 P6 (I2C GPIO expander)
 	//   CS1 (TFT_CS) — GPIO10 (direct)
 	//   CS2 (SD_CS)  — GPIO14 (direct)
-	//   CS3 (CC_CS)  — TCA6408 P1 (I2C GPIO expander)
+	//   CS3 (CC_CS)  — TCA6408 P3 (I2C GPIO expander)
 	// -------------------------------------------------------------------------
 	spim2_default: spim2_default {
 		group1 {
@@ -82,11 +82,11 @@
 	// Devices on bus (7-bit addresses):
 	//   0x21  TCA6408ARSV — GPIO expander (WRITE=0x42, READ=0x43)
 	//   0x22  FUSB302BMPX — USB-C PD controller
-	//   0x55  BQ28Z610DRZ — fuel gauge / protection IC
 	//   0x6A  LSM6DS3     — 6-axis IMU (SDO/SA0 → GND)
 	//   0x6B  BQ25601RTW  — Li-Ion charger
-	//   0x53  ST25DV64K   — NFC dynamic tag (user memory)
-	//   0x57  ST25DV64K   — NFC dynamic tag (system memory)
+	//   0x2D  LP5817      — backlight LED driver (0x34 = broadcast addr)
+	//   0x48  SE050       — secure element 
+	//   0x70  STC3115     — fuel gauge
 	//   0x77  BME280      — env sensor (CSB → HIGH)
 	// Pull-up resistors R26 (4.7k) and R27 (4.7k) on PCB.
 	// -------------------------------------------------------------------------

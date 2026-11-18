@@ -638,7 +638,8 @@ BT_GATT_SERVICE_DEFINE(hids_svc,
                         BT_GATT_DESCRIPTOR(BT_UUID_HIDS_REPORT_REF,
                                         BT_GATT_PERM_READ_ENCRYPT, read_report_ref, NULL,
                                           (void *)gp_report_ref),
-                        BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+                        BT_GATT_CCC(gp_ccc_changed, BT_GATT_PERM_READ_ENCRYPT |
+                                                    BT_GATT_PERM_WRITE_ENCRYPT),
 #endif /* CONFIG_AKIRA_HID_GAMEPAD */
 
 #if CONFIG_AKIRA_HID_MOUSE

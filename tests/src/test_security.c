@@ -105,6 +105,30 @@ ZTEST(security, test_cap_str_high_bits)
 	zassert_not_equal(inject, mqtt, "caps must be distinct");
 }
 
+ZTEST(security, test_cap_str_known_ble_scan)
+{
+    uint64_t mask = akira_capability_str_to_mask("ble.scan");
+
+    zassert_equal(mask, AKIRA_CAP_BLE_SCAN,
+                  "ble.scan mask wrong: 0x%016llx", (unsigned long long)mask);
+}
+
+ZTEST(security, test_cap_str_known_ble_spam)
+{
+    uint64_t mask = akira_capability_str_to_mask("ble.spam");
+
+    zassert_equal(mask, AKIRA_CAP_BLE_SPAM,
+                  "ble.spam mask wrong: 0x%016llx", (unsigned long long)mask);
+}
+
+ZTEST(security, test_cap_mask_to_str_ble_scan)
+{
+    const char *s = akira_capability_mask_to_str(AKIRA_CAP_BLE_SCAN);
+
+    zassert_true(strcmp(s, "ble.scan") == 0,
+                 "expected \"ble.scan\", got \"%s\"", s);
+}
+
 ZTEST(security, test_cap_native_check_always_permits)
 {
     /*
@@ -211,7 +235,9 @@ ZTEST(security_registry, test_wildcard_all_excludes_unassigned_bits)
 
     zassert_equal(all & AKIRA_CAP_ALL_KNOWN, AKIRA_CAP_ALL_KNOWN, "\"*\" must include every core cap");
     zassert_true(all & BIT64(48), "\"*\" must include registered product caps");
-    zassert_equal(all & GENMASK64(47, 40), 0ULL, "\"*\" must not grant unassigned bits 40-47");
+    /* Bit 40 is "nfc" (AkiraConsole); 41-47 are unassigned. */
+    zassert_equal(all & GENMASK64(47, AKIRA_CAP_MAX_BIT + 1), 0ULL,
+                  "\"*\" must not grant unassigned core bits");
     zassert_equal(all, akira_capability_known_mask(), "\"*\" must equal the known mask");
 }
 

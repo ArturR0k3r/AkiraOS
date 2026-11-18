@@ -14,6 +14,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <zephyr/kernel.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -74,6 +76,25 @@ void *akira_malloc_app_buffer(size_t size);
  * normal BSS — the Kconfig defaults for those boards must be small enough
  * to fit in internal DRAM.
  *
+ * NEVER use this (or any PSRAM section) for a thread stack.  PSRAM sits on
+ * SPI0 alongside the flash, so a flash write/erase — the LittleFS garbage
+ * collector inside lfs_file_open, for one — disables the SPI0 cache and the
+ * CPU can no longer read its own stack frames: hard fault or dead freeze.
+ * The Zephyr port makes this worse than it sounds under CONFIG_SMP, because
+ * spi_flash_disable_interrupts_caches_and_other_cpu() only locks interrupts
+ * on the calling core and never stalls the other one, so any thread on the
+ * other core is exposed too, not just the one doing the flash access.  See
+ * the thread-pool comment in src/runtime/akira_runtime.c.
+ *
+ * Give the variable no initializer, not even `= {0}`: .ext_ram.bss lives in a
+ * NOLOAD output section, so an explicit initializer only turns the section
+ * PROGBITS (which then collides with the next uninitialized variable placed
+ * there) without ever being loaded.  The PSRAM init memsets the region.
+ *
+ * Note the placement: with an inline `struct { ... }` type the attribute has
+ * to follow the declarator (`} g_table AKIRA_BULK_BSS;`) or GCC binds it to
+ * the type and drops it ("'section' attribute does not apply to types").
+ *
  * Example:
  *   static my_big_struct_t AKIRA_BULK_BSS g_table[CONFIG_MY_TABLE_SIZE];
  */
@@ -82,6 +103,20 @@ void *akira_malloc_app_buffer(size_t size);
 #else
 #define AKIRA_BULK_BSS  /**< no-op on non-PSRAM targets */
 #endif
+
+/**
+ * @brief K_MSGQ_DEFINE with its ring buffer in PSRAM
+ *
+ * Statically initialized exactly like K_MSGQ_DEFINE, so there is no
+ * k_msgq_init() ordering to get right — only the backing buffer moves.
+ * Safe for any queue whose messages are plain data (no DMA target).
+ */
+#define AKIRA_BULK_MSGQ_DEFINE(q_name, q_msg_size, q_max_msgs, q_align)	\
+	static char AKIRA_BULK_BSS __aligned(q_align)			\
+		_k_fifo_buf_##q_name[(q_max_msgs) * (q_msg_size)];	\
+	STRUCT_SECTION_ITERABLE(k_msgq, q_name) =			\
+		Z_MSGQ_INITIALIZER(q_name, _k_fifo_buf_##q_name,	\
+				   (q_msg_size), (q_max_msgs))
 /** @} */
 
 /**

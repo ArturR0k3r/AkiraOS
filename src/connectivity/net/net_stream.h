@@ -8,11 +8,12 @@
 
 /**
  * @file net_stream.h
- * @brief Stream-based TCP/UDP network API for WASM apps.
+ * @brief Stream-based TCP/UDP/TLS network API for WASM apps and the system.
  *
- * Data path uses a **shared-memory ring buffer** living in WASM linear memory:
- *   - TX ring: WASM writes packets, the poll thread drains them.
- *   - RX ring: the poll thread fills it from the socket, WASM reads from it.
+ * Data path uses a **shared-memory ring buffer** living in the owner's memory
+ * (WASM linear memory for apps):
+ *   - TX ring: the owner writes packets, the poll thread drains them.
+ *   - RX ring: the poll thread fills it from the socket, the owner reads it.
  *
  * Only net_tx_flush() / net_event_pop() require a WASM→host context switch.
  * Bulk data never does — it flows through the ring without any syscall per packet.
@@ -28,17 +29,19 @@
  *
  * Indices are monotonically increasing; actual byte offset = idx % capacity.
  *
- * The header lives in memory the app can write at any time, so the host
+ * The header lives in memory the owner can write at any time, so the host
  * never trusts it: the capacity is fixed at bind time (total_size - 16) and
  * kept host-side, the host keeps its own copy of the index it produces/
  * consumes (TX read_idx, RX write_idx) and only publishes it to the header,
  * and every access is reduced modulo the stored capacity. A header that
  * claims more bytes than the ring can hold just stalls that ring.
  *
- * Ownership: every stream belongs to the app slot that opened it (or that
- * owns the listening stream it was accepted on). Calls on a handle another
- * slot holds fail with -ENOENT, each slot has its own event queue, and
- * net_stream_release_owner() closes everything a slot held when the app ends.
+ * Ownership: every stream belongs to the owner that opened it (or that owns
+ * the listening stream it was accepted on) — an app slot (0..N-1) or
+ * NET_OWNER_SYSTEM (the console shell / app catalogue). Calls on a handle
+ * another owner holds fail with -ENOENT, each owner has its own event queue,
+ * and net_stream_release_owner() closes everything an app slot held when the
+ * app ends.
  * @stability experimental
  * @since 1.4
  */
@@ -59,6 +62,11 @@ extern "C" {
 #define NET_TYPE_TCP  0
 /** @brief Socket type: UDP datagram */
 #define NET_TYPE_UDP  1
+/** @brief Socket type: TLS stream over TCP (requires CONFIG_AKIRA_WASM_NET_TLS) */
+#define NET_TYPE_TLS  2
+
+/** @brief Owner id of streams opened by the system (console shell, catalogue). */
+#define NET_OWNER_SYSTEM  (-1)
 
 /** @brief Size of the ring buffer header in bytes (must be kept in sync with WASM SDK) */
 #define NET_RING_HDR_SIZE  16
@@ -106,13 +114,14 @@ struct net_event {
 };
 
 /* =========================================================================
- * Public API (called from akira_net_api.c)
+ * Public API (called from akira_net_api.c and system code)
  *
- * @p owner is the calling app's slot (0..AKIRA_MAX_WASM_INSTANCES-1).
+ * @p owner is the calling app's slot (0..AKIRA_MAX_WASM_INSTANCES-1), or
+ * NET_OWNER_SYSTEM for firmware code (console shell, app catalogue).
  *
  * None of these wait on the network: socket I/O and close are done by the
- * poll thread, DNS and connect by the connect worker on the system
- * workqueue. The only waits are bounded: a stream-table lock (-EBUSY if it
+ * poll thread, DNS, connect and the TLS handshake by the connect worker on
+ * the system workqueue. The only waits are bounded: a stream-table lock (-EBUSY if it
  * cannot be had within a second) and net_stream_close(), which waits up to
  * 200 ms for the socket to be closed.
  * ======================================================================= */
@@ -129,10 +138,11 @@ int net_stream_init(void);
 /**
  * @brief Open a new socket and allocate a stream slot owned by @p owner.
  *
- * When more than one app can run, one app may hold all slots but one.
+ * When more than one app can run, one app may hold all slots but one. Apps
+ * never get the last free slot: it is kept for NET_OWNER_SYSTEM.
  *
- * @param owner App slot.
- * @param type  NET_TYPE_TCP or NET_TYPE_UDP.
+ * @param owner App slot, or NET_OWNER_SYSTEM.
+ * @param type  NET_TYPE_TCP, NET_TYPE_UDP, or NET_TYPE_TLS.
  * @return Stream handle (>=0) on success; negative errno on failure.
  */
 int net_stream_open(int owner, int type);
@@ -141,11 +151,13 @@ int net_stream_open(int owner, int type);
  * @brief Queue an async connect to @p host : @p port.
  *
  * DNS and connect run on the system workqueue, one connect at a time
- * system-wide, in request order. DNS is bounded by
- * CONFIG_NET_SOCKETS_DNS_TIMEOUT; the TCP connect is non-blocking and
- * re-checked every 50 ms for up to 10 s, so the workqueue (which also feeds
- * the watchdog) is never held for long. On completion NET_EVT_CONNECTED or
- * NET_EVT_ERROR is posted to the owner's event queue.
+ * system-wide (NET_OWNER_SYSTEM's requests first, then request order). DNS is
+ * bounded by CONFIG_NET_SOCKETS_DNS_TIMEOUT; the TCP connect is non-blocking
+ * and re-checked every 50 ms for up to 10 s, so the workqueue (which also
+ * feeds the watchdog) is never held for long. For TLS a non-blocking TCP
+ * probe checks reachability first, then the handshake blocks the workqueue
+ * for at most CONFIG_NET_SOCKETS_CONNECT_TIMEOUT. On completion
+ * NET_EVT_CONNECTED or NET_EVT_ERROR is posted to the owner's event queue.
  *
  * For UDP, connect sets the default peer (no handshake).
  *
@@ -239,7 +251,7 @@ int net_stream_tx_flush(int owner, int handle);
 /**
  * @brief Pop the next event from @p owner's event queue (non-blocking).
  *
- * @param owner  App slot.
+ * @param owner  App slot, or NET_OWNER_SYSTEM.
  * @param evt    Output: populated with the event data.
  * @return NET_EVT_* type (>0) if an event was available, NET_EVT_NONE if the
  *         queue is empty, -EINVAL on bad arguments.
@@ -256,7 +268,7 @@ int net_stream_event_pop(int owner, struct net_event *evt);
  * the system workqueue and the app's own thread. Idempotent; a no-op for a
  * slot that owns nothing.
  *
- * @param owner App slot; other values are ignored.
+ * @param owner App slot; other values (including NET_OWNER_SYSTEM) are ignored.
  */
 void net_stream_release_owner(int owner);
 

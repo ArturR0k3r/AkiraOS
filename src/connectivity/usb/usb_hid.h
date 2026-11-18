@@ -29,15 +29,19 @@ extern "C"
 #define USB_HID_RAW_REPORT_ID 3
 
 /*===========================================================================*/
-/* FIDO/U2F HID (Report ID 4) constants                                     */
+/* FIDO/U2F HID constants                                                   */
 /*===========================================================================*/
 
-/** Report ID for the FIDO Alliance HID channel (CTAP2/U2F) */
+/** Internal channel tag used by hid_manager/usb_hid_transport_send_raw to
+ *  route to the FIDO channel. Not a wire Report ID — the FIDO interface has
+ *  no Report ID (see hid_dev_1 in the board overlay); CTAPHID requires
+ *  exactly 64-byte packets, which a Report ID byte would overflow on
+ *  full-speed USB. */
 #define USB_HID_FIDO_REPORT_ID      4
 /** Payload bytes in each FIDO report (FIDO HID spec: 64 bytes) */
 #define USB_HID_FIDO_PAYLOAD_SIZE   64
-/** Total bytes submitted to hid_device_submit_report (ID + payload) */
-#define USB_HID_FIDO_REPORT_SIZE    65
+/** Total bytes submitted to hid_device_submit_report (no Report ID byte) */
+#define USB_HID_FIDO_REPORT_SIZE    64
 
     /*===========================================================================*/
     /* Handler types                                                            */

@@ -5,6 +5,7 @@
 
 #define LOG_MODULE_NAME akira_ble_api
 #include <zephyr/logging/log.h>
+#include <crystal/akira_seal.h>
 LOG_MODULE_REGISTER(akira_ble_api, CONFIG_AKIRA_LOG_LEVEL);
 
 /**
@@ -80,6 +81,8 @@ static atomic_t g_ble_owner;
 
 static bool g_mode_set;        /* we put the stack in BT_MODE_BLE_APP        */
 static bool g_adv_started;     /* the advert running is the owner's          */
+static bool g_scan_started;    /* the owner started the BT_MODE_BLE_SCAN scan */
+static bool g_spam_started;    /* the owner started BT_MODE_BLE_SPAM          */
 static bool g_bondable_off;    /* ble_init() turned bonding off              */
 static bool g_name_changed;    /* g_saved_name holds the name to restore     */
 static int64_t g_last_name_ms;
@@ -192,6 +195,19 @@ static bool uuid_str_ok(const char *s)
  */
 static void ble_teardown(void)
 {
+	/* Stop a scan or advertisement spam only if the owner started it and it
+	 * is still the active mode: bt_manager_scan_stop()/spam_stop() drop the
+	 * stack to BT_MODE_NONE and stop advertising, which must never knock out
+	 * another mode (companion, HID, mesh, a shell scan). */
+	if (g_spam_started && bt_manager_get_mode() == BT_MODE_BLE_SPAM) {
+		bt_manager_spam_stop();
+	}
+	g_spam_started = false;
+	if (g_scan_started && bt_manager_get_mode() == BT_MODE_BLE_SCAN) {
+		bt_manager_scan_stop();
+	}
+	g_scan_started = false;
+
 	if (g_adv_started) {
 		bt_manager_stop_advertising();
 		g_adv_started = false;
@@ -646,6 +662,159 @@ int akira_native_ble_event_pop(wasm_exec_env_t exec_env,
 }
 
 /* ------------------------------------------------------------------ */
+/* Passive BLE scan and advertisement spam (console features)           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Both run in their own BT mode (BT_MODE_BLE_SCAN / BT_MODE_BLE_SPAM) and,
+ * like the GATT layer, belong to the app that owns the app BLE layer: the
+ * starter claims it, only the owner stops them or reads scan reports, and
+ * ble_teardown() stops whichever of them the owner left running.
+ */
+
+int akira_native_ble_scan_start(wasm_exec_env_t exec_env, int32_t active)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE_SCAN, -EPERM);
+
+	int ret = ble_claim(exec_env);
+
+	if (ret < 0) {
+		return ret;
+	}
+	if (akira_runtime_stop_requested(exec_env)) {
+		return -ECANCELED;
+	}
+
+	/* Mode switch (and lazy BT start), HCI commands: system locks. */
+	akira_native_critical_enter(exec_env);
+	ret = bt_manager_scan_start(active != 0);
+	akira_native_critical_exit(exec_env);
+
+	if (ret == 0) {
+		g_scan_started = true;
+	}
+	return ret;
+}
+
+int akira_native_ble_scan_stop(wasm_exec_env_t exec_env)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE_SCAN, -EPERM);
+
+	int ret = ble_owned(exec_env);
+
+	if (ret == -ENOENT) {
+		return 0; /* nothing set up: never stop another mode's scan */
+	}
+	if (ret < 0) {
+		return ret;
+	}
+	if (!g_scan_started) {
+		return 0;
+	}
+
+	akira_native_critical_enter(exec_env);
+	if (bt_manager_get_mode() == BT_MODE_BLE_SCAN) {
+		ret = bt_manager_scan_stop();
+	}
+	akira_native_critical_exit(exec_env);
+	g_scan_started = false;
+	return ret;
+}
+
+int akira_native_ble_scan_pop(wasm_exec_env_t exec_env,
+			      uint32_t buf_ptr, uint32_t len)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE_SCAN, -EPERM);
+
+	if (len < sizeof(struct ble_scan_report)) {
+		return -EINVAL;
+	}
+
+	uint8_t *buf = (uint8_t *)wasm_ptr_to_native(exec_env, buf_ptr, len);
+
+	if (!buf) {
+		return -EFAULT;
+	}
+
+	/* Only the owner reads the reports of the scan it started. */
+	int ret = ble_owned(exec_env);
+
+	if (ret == -ENOENT) {
+		return 0;
+	}
+	if (ret < 0) {
+		return ret;
+	}
+
+	struct ble_scan_report rep;
+
+	ret = bt_manager_scan_pop(&rep);
+	if (ret <= 0) {
+		return ret; /* 0 = empty, <0 = errno */
+	}
+
+	memcpy(buf, &rep, sizeof(rep));
+	return 1;
+}
+
+int akira_native_ble_spam_start(wasm_exec_env_t exec_env, int32_t preset)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE_SPAM, -EPERM);
+	AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_BLE_SPAM, NULL, -EACCES);
+
+	int ret = ble_claim(exec_env);
+
+	if (ret < 0) {
+		return ret;
+	}
+	if (akira_runtime_stop_requested(exec_env)) {
+		return -ECANCELED;
+	}
+
+	akira_native_critical_enter(exec_env);
+	ret = bt_manager_spam_start((int)preset);
+	akira_native_critical_exit(exec_env);
+
+	if (ret == 0) {
+		g_spam_started = true;
+	}
+	return ret;
+}
+
+int akira_native_ble_spam_stop(wasm_exec_env_t exec_env)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE_SPAM, -EPERM);
+
+	int ret = ble_owned(exec_env);
+
+	if (ret == -ENOENT) {
+		return 0;
+	}
+	if (ret < 0) {
+		return ret;
+	}
+	if (!g_spam_started) {
+		return 0;
+	}
+
+	/* Cancels the spam work synchronously and stops the advert. */
+	akira_native_critical_enter(exec_env);
+	if (bt_manager_get_mode() == BT_MODE_BLE_SPAM) {
+		ret = bt_manager_spam_stop();
+	}
+	akira_native_critical_exit(exec_env);
+	g_spam_started = false;
+	return ret;
+}
+
+int akira_native_ble_spam_packet_count(wasm_exec_env_t exec_env)
+{
+	AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_BLE_SPAM, -EPERM);
+
+	return (int)bt_manager_spam_packet_count();
+}
+
+/* ------------------------------------------------------------------ */
 /* App teardown                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -700,6 +869,15 @@ int akira_native_ble_char_read(wasm_exec_env_t e, int32_t h,
 { (void)e; (void)h; (void)p; (void)l; return -ENOTSUP; }
 int akira_native_ble_event_pop(wasm_exec_env_t e, uint32_t p, uint32_t l)
 { (void)e; (void)p; (void)l; return -ENOTSUP; }
+int akira_native_ble_scan_start(wasm_exec_env_t e, int32_t a)
+{ (void)e; (void)a; return -ENOTSUP; }
+int akira_native_ble_scan_stop(wasm_exec_env_t e) { (void)e; return -ENOTSUP; }
+int akira_native_ble_scan_pop(wasm_exec_env_t e, uint32_t p, uint32_t l)
+{ (void)e; (void)p; (void)l; return -ENOTSUP; }
+int akira_native_ble_spam_start(wasm_exec_env_t e, int32_t p)
+{ (void)e; (void)p; return -ENOTSUP; }
+int akira_native_ble_spam_stop(wasm_exec_env_t e) { (void)e; return -ENOTSUP; }
+int akira_native_ble_spam_packet_count(wasm_exec_env_t e) { (void)e; return -ENOTSUP; }
 
 #endif /* CONFIG_AKIRA_WASM_BLE */
 
@@ -724,6 +902,13 @@ static const NativeSymbol akira_ble_natives[] = {
     {"ble_char_write", (void *)akira_native_ble_char_write, "(iii)i", NULL},
     {"ble_char_read", (void *)akira_native_ble_char_read, "(iii)i", NULL},
     {"ble_event_pop", (void *)akira_native_ble_event_pop, "(ii)i", NULL},
+    /* Passive scan + advertisement spam (console features; spam is Seal-gated) */
+    {"ble_scan_start", (void *)akira_native_ble_scan_start, "(i)i", NULL},
+    {"ble_scan_stop", (void *)akira_native_ble_scan_stop, "()i", NULL},
+    {"ble_scan_pop", (void *)akira_native_ble_scan_pop, "(ii)i", NULL},
+    {"ble_spam_start", (void *)akira_native_ble_spam_start, "(i)i", NULL},
+    {"ble_spam_stop", (void *)akira_native_ble_spam_stop, "()i", NULL},
+    {"ble_spam_packet_count", (void *)akira_native_ble_spam_packet_count, "()i", NULL},
 };
 
 AKIRA_NATIVE_API_DEFINE(akira_ble_api, "env", akira_ble_natives);

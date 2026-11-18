@@ -33,13 +33,31 @@ LOG_MODULE_REGISTER(akira_date, CONFIG_AKIRA_LOG_LEVEL);
 
 #ifdef CONFIG_AKIRA_SETTINGS
 #include <settings/settings.h>
-#include <settings/system_settings.h>
-#define TIME_BASE_KEY  AKIRA_SETTINGS_TIME_BASE_KEY
+#define TIME_BASE_KEY   "system/time_base"
+#define TZ_OFFSET_KEY   "system/tz_offset"
 #endif
 
-/* Offset such that: real_epoch = s_time_base + uptime_s */
-static int64_t s_time_base = 0;
-static bool    s_clock_set = false;
+/* Monotonic seconds since boot, used as the clock's running base.
+ *
+ * We deliberately use k_uptime_get() rather than the ESP RTC counter
+ * (esp_rtc_get_time_us): the RTC helper periodically wipes its accumulator to 0
+ * when the slow-clock calibration momentarily reads 0 during WiFi/BT
+ * recalibration, which makes the wall clock jump to a garbage value. The shell
+ * keeps the device awake as a live clock (it no longer auto-deep-sleeps), so
+ * uptime is monotonic and reliable for the whole session.
+ *
+ * Trade-off: a manual reboot / power-off / deep-sleep resets uptime, so the
+ * clock restores to the last `date set` value (from NVS) and should be re-synced
+ * (date set / NTP). A battery on J8 keeps the RTC domain alive across power-off. */
+static int64_t monotonic_s(void)
+{
+    return (int64_t)(k_uptime_get() / 1000);
+}
+
+/* Offset such that: real_epoch = s_time_base + monotonic_s() */
+static int64_t s_time_base    = 0;
+static bool    s_clock_set    = false;
+static int32_t s_tz_offset_s  = 0; /* UTC offset in seconds, default UTC */
 
 /* ------------------------------------------------------------------ */
 /* Public API (declared in include/lib/akira_time.h)                  */
@@ -47,12 +65,12 @@ static bool    s_clock_set = false;
 
 int64_t akira_time_get_epoch(void)
 {
-    return s_time_base + (int64_t)(k_uptime_get() / 1000);
+    return s_time_base + monotonic_s();
 }
 
 void akira_time_set_epoch(int64_t epoch_s)
 {
-    s_time_base = epoch_s - (int64_t)(k_uptime_get() / 1000);
+    s_time_base = epoch_s - monotonic_s();
     s_clock_set = true;
 
 #ifdef CONFIG_AKIRA_SETTINGS
@@ -66,6 +84,21 @@ void akira_time_set_epoch(int64_t epoch_s)
 bool akira_time_is_set(void)
 {
     return s_clock_set;
+}
+
+int32_t akira_time_get_tz_offset_s(void)
+{
+    return s_tz_offset_s;
+}
+
+void akira_time_set_tz_offset_s(int32_t offset_s)
+{
+    s_tz_offset_s = offset_s;
+#ifdef CONFIG_AKIRA_SETTINGS
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%d", (int)offset_s);
+    akira_settings_set(TZ_OFFSET_KEY, buf, 0);
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -82,6 +115,13 @@ static int shell_date_init(void)
             s_clock_set = true;
             LOG_INF("Clock restored: base=%lld", (long long)s_time_base);
         }
+    }
+    /* Restore UTC offset */
+    char tz_buf[12] = {0};
+    if (akira_settings_get(TZ_OFFSET_KEY, tz_buf, sizeof(tz_buf)) == 0) {
+        s_tz_offset_s = (int32_t)strtol(tz_buf, NULL, 10);
+        LOG_INF("TZ offset restored: %d s (UTC%+d)",
+                (int)s_tz_offset_s, (int)(s_tz_offset_s / 3600));
     }
     return 0;
 }

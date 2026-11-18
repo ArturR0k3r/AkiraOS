@@ -3,7 +3,7 @@
  * @brief AkiraMesh Protocol - Hardware-Agnostic Mesh Networking
  *
  * Custom lightweight mesh protocol supporting:
- * - Multi-transport (BLE Mesh, 802.15.4, WiFi ESP-NOW)
+ * - Multi-transport (BLE Mesh, 802.15.4, WiFi)
  * - Multi-hop routing with AODV-based route discovery
  * - WASM app distribution across mesh
  * - State synchronization between nodes
@@ -31,11 +31,15 @@ extern "C" {
 #define AKIRA_MESH_NODE_ID_LEN    8
 #define AKIRA_MESH_APP_NAME_LEN   32
 
-/* Transport selection is purely capability-based — the mesh acquires the first
- * free radio whose capabilities match the configured mask. */
-#define AKIRA_MESH_CAPS_SUBGHZ (RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_BAND_SUBGHZ)
-#define AKIRA_MESH_CAPS_802154 (RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_CSMA_CA)
-#define AKIRA_MESH_CAPS_BLE    (RADIO_CAP_TX | RADIO_CAP_RX | RADIO_CAP_MOD_BLE_PHY)
+/* Explicit transport selection. CC1121 and LR2021 both register as
+ * RADIO_TYPE_SUBGHZ, so capability-mask matching can't tell them apart —
+ * SUBGHZ/LORA are acquired by name ("CC1121"/"LR2021"), BLE by radio type. */
+typedef enum {
+    AKIRA_MESH_TRANSPORT_SUBGHZ = 0, /* CC1121 (FSK/OOK) */
+    AKIRA_MESH_TRANSPORT_LORA,       /* LR2021 (LoRa) */
+    AKIRA_MESH_TRANSPORT_BLE,        /* radio_ble.c */
+    AKIRA_MESH_TRANSPORT_WIFI,       /* radio_wifi.c, UDP over one SoftAP segment */
+} akira_mesh_transport_t;
 
 /* Node role */
 typedef enum {
@@ -54,6 +58,23 @@ typedef enum {
     AKIRA_MESH_MSG_ACK,            /* End-to-end delivery ACK */
     AKIRA_MESH_MSG_APP_CHUNK,      /* WASM app chunk */
     AKIRA_MESH_MSG_STATE_SYNC,     /* State synchronization */
+    AKIRA_MESH_MSG_APP_START,      /* WASM app transfer header (name/size/count) */
+    AKIRA_MESH_MSG_APP_STATUS_REQ, /* Query receiver's reassembly progress for an app_id */
+    AKIRA_MESH_MSG_APP_STATUS_RESP,/* Reply: received-chunk bitmap, for resume */
+    AKIRA_MESH_MSG_STREAM_DATA,        /* Selective-repeat ARQ bulk-data frame */
+    AKIRA_MESH_MSG_STREAM_STATUS_REQ,  /* Query received-bitmap for a stream window */
+    AKIRA_MESH_MSG_STREAM_STATUS_RESP, /* Reply: bitmap of received indices */
+    /* Ed25519 sig+pubkey for a RREQ/RREP sent moments earlier, as a
+     * separate frame so the base RREQ/RREP stays small enough for every
+     * radio (see CONFIG_AKIRA_MESH_RREQ_RREP_SIGNING). Correlated to its
+     * base frame by (src_id, orig_seq/dest_seq), not by arrival order. */
+    AKIRA_MESH_MSG_ROUTE_REQ_SIG,
+    AKIRA_MESH_MSG_ROUTE_REPLY_SIG,
+    /* Fire-and-forget unicast — E2E encrypted like DATA, but the sender
+     * never waits for an ACK and the receiver never sends one. Fails fast
+     * (-EHOSTUNREACH/-ENOTCONN) instead of queuing when no route/session
+     * exists yet, unlike DATA's queue-and-retry-on-discovery. */
+    AKIRA_MESH_MSG_DATA_UNRELIABLE,
 } akira_mesh_msg_type_t;
 
 /* Mesh configuration */
@@ -61,7 +82,7 @@ typedef struct {
     uint8_t node_id[AKIRA_MESH_NODE_ID_LEN];  /* Unique node ID */
     char node_name[AKIRA_MESH_APP_NAME_LEN];  /* Human-readable name */
     akira_mesh_role_t role;                   /* Node role */
-    uint32_t transport_caps;                  /* Caps mask for radio acquisition */
+    akira_mesh_transport_t transport;         /* Radio backend to use */
     uint8_t max_hops;                         /* Maximum hop count */
     uint32_t beacon_interval_ms;              /* Beacon transmission interval */
 } akira_mesh_config_t;
@@ -86,6 +107,17 @@ typedef struct {
     uint32_t routes_active;
     uint32_t apps_distributed;
 } akira_mesh_stats_t;
+
+/* Mesh app-distribution RX (reassembly) progress */
+typedef struct {
+    bool     active;
+    uint32_t app_id;
+    char     app_name[AKIRA_MESH_APP_NAME_LEN];
+    uint32_t total_len;
+    uint16_t chunk_count;
+    uint16_t received_count;
+    uint32_t age_ms;          /* time since last accepted START/chunk */
+} akira_mesh_app_rx_status_t;
 
 /* Message reception callback */
 typedef void (*akira_mesh_rx_cb_t)(const uint8_t *src_id, const uint8_t *data,
@@ -116,6 +148,16 @@ int akira_mesh_start(void);
 int akira_mesh_stop(void);
 
 /**
+ * @brief Set the mesh radio's TX power
+ *
+ * @param dbm Requested power in dBm — clamped to the radio's supported
+ *            range by its driver.
+ * @return 0 on success, -ENODEV if mesh isn't initialized, negative errno
+ *         from the radio driver otherwise.
+ */
+int akira_mesh_set_tx_power(int8_t dbm);
+
+/**
  * @brief Send data to specific node
  *
  * Performs route discovery if needed and sends data via mesh.
@@ -126,6 +168,34 @@ int akira_mesh_stop(void);
  * @return 0 on success, negative errno on failure
  */
 int akira_mesh_send(const uint8_t *dest_id, const uint8_t *data, size_t len);
+
+/**
+ * @brief Fire-and-forget unicast send — no ACK wait, no retry, no queueing
+ * on a cold destination. Still E2E encrypted. Use when losing an occasional
+ * message is fine and you'd rather fail fast than pay akira_mesh_send()'s
+ * retry/tick latency.
+ *
+ * @param dest_id Destination node ID
+ * @param data Data to send
+ * @param len Data length
+ * @return 0 on success (queued for TX, not delivery-confirmed), -EHOSTUNREACH
+ *         if no route exists yet, -ENOTCONN if no E2E session exists yet,
+ *         negative errno otherwise.
+ */
+int akira_mesh_send_unreliable(const uint8_t *dest_id, const uint8_t *data, size_t len);
+
+/**
+ * @brief Send data to a node using selective-repeat ARQ (windowed burst +
+ * periodic batch status, not per-frame ack). Higher throughput than
+ * akira_mesh_send() on larger payloads over a lossy link; akira_mesh_send()
+ * remains the right choice for small/latency-sensitive single messages.
+ *
+ * @param dest_id Destination node ID
+ * @param data Data to send
+ * @param len Data length
+ * @return 0 on success, negative errno on failure
+ */
+int akira_mesh_send_stream(const uint8_t *dest_id, const uint8_t *data, size_t len);
 
 /**
  * @brief Broadcast data to all nodes
@@ -155,6 +225,14 @@ int akira_mesh_get_nodes(akira_mesh_node_info_t *nodes, size_t max_nodes);
 int akira_mesh_get_stats(akira_mesh_stats_t *stats);
 
 /**
+ * @brief Get current app-distribution reassembly progress (RX side)
+ *
+ * @param out Pointer to status structure
+ * @return 0 on success, negative errno on failure
+ */
+int akira_mesh_get_app_rx_status(akira_mesh_app_rx_status_t *out);
+
+/**
  * @brief Register receive callback
  *
  * @param callback Callback function
@@ -164,16 +242,48 @@ int akira_mesh_get_stats(akira_mesh_stats_t *stats);
 int akira_mesh_register_rx_callback(akira_mesh_rx_cb_t callback, void *user_data);
 
 /**
- * @brief Distribute WASM app across mesh
+ * @brief Distribute a WASM app to one mesh node
  *
- * Chunks app file and distributes to all nodes in mesh.
+ * Fragments the binary into MTU-sized chunks and sends them to @p dest_id
+ * over the existing reliable unicast transport (per-chunk ACK + AODV route
+ * discovery). Requires a radio that implements get_max_payload(); returns
+ * -ENOSYS otherwise. Call once per destination node.
  *
+ * @param dest_id Destination node ID
  * @param app_name Application name
  * @param app_data Application binary data
  * @param app_len Application length
  * @return 0 on success, negative errno on failure
  */
-int akira_mesh_distribute_app(const char *app_name, const uint8_t *app_data, size_t app_len);
+int akira_mesh_distribute_app(const uint8_t *dest_id, const char *app_name,
+                              const uint8_t *app_data, size_t app_len);
+
+/**
+ * @brief Test-only: silently drop every frame from peer_id at the earliest
+ * RX point, before any layer (routing, transport, app) sees it — simulates
+ * peer_id being out of radio range. For benchtop rigs where boards can't be
+ * physically separated enough to naturally force multi-hop; block the
+ * direct link between two nodes so AODV has to route through a third.
+ *
+ * @return 0 on success (including if already dropped), -ENOMEM if the
+ * blocklist is full, -EINVAL on null peer_id.
+ */
+int akira_mesh_debug_link_drop(const uint8_t *peer_id);
+
+/**
+ * @brief Undo akira_mesh_debug_link_drop() for peer_id.
+ * @return 0 on success, -ENOENT if peer_id wasn't dropped.
+ */
+int akira_mesh_debug_link_restore(const uint8_t *peer_id);
+
+/**
+ * @brief Test-only: query the link-drop blocklist. Exposed so mesh_aodv.c
+ * can filter RREQ/RREP on relay_id (the immediate-hop field, rewritten by
+ * every relay) instead of the frame's true, hop-invariant src_id — checking
+ * src_id there would also block a legitimately-relayed copy, defeating the
+ * whole simulation.
+ */
+bool akira_mesh_debug_link_is_dropped(const uint8_t *peer_id);
 
 #ifdef __cplusplus
 }

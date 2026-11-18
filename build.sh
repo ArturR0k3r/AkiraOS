@@ -274,6 +274,26 @@ clean_build() {
     fi
 }
 
+# OTA signing default: without -k, a board that takes OTA updates
+# (CONFIG_AKIRA_OTA=y in its snippet .conf) is signed with the local OTA key,
+# and its MCUboot only boots images that verify against it. Without the key
+# file the build stays unsigned.
+OTA_SIGNING_KEY="${AKIRA_OTA_KEY:-$HOME/.config/akira/ota-signing.pem}"
+
+use_default_ota_signing_key() {
+    [[ -z "$SIGN_KEY" && -f "$OTA_SIGNING_KEY" && "$BOARD" != "native_sim" ]] || return 0
+    local zephyr_board="${BOARD_MAP[$BOARD]}" conf
+    for conf in "$SCRIPT_DIR"/snippets/akira-board/boards/*.conf \
+                "$SCRIPT_DIR"/snippets/akira-reference/boards/*.conf; do
+        grep -q "^# BOARD_ZEPHYR: ${zephyr_board}\$" "$conf" 2>/dev/null || continue
+        if grep -q '^CONFIG_AKIRA_OTA=y' "$conf"; then
+            SIGN_KEY="$(realpath "$OTA_SIGNING_KEY")"
+            print_info "No -k given: signing with the local OTA key $SIGN_KEY"
+            return 0
+        fi
+    done
+}
+
 # Print the MCUboot -D options that make the bootloader verify images signed
 # with key $1 (BOOT_SIGNATURE_TYPE_* + BOOT_SIGNATURE_KEY_FILE).
 mcuboot_signature_options() {
@@ -467,6 +487,14 @@ build_application() {
         print_info "Release build (akira-release snippet): development-only settings are errors"
     fi
 
+    # Opt-in debug Kconfig fragment (e.g. boards/<board>.jtag.conf) — mirrors
+    # build_mcuboot()'s own overlay/conf lookup. Absent for every normal build.
+    local debug_conf="$SCRIPT_DIR/boards/${BOARD}.jtag.conf"
+    if [[ -f "$debug_conf" ]]; then
+        extra_cmake+=" -DEXTRA_CONF_FILE=$debug_conf"
+        print_info "Debug conf: $debug_conf"
+    fi
+
     if west build --pristine -b "$zephyr_board" AkiraOS -d "$build_dir" -- $extra_cmake; then
         print_success "AkiraOS build complete!"
         print_info "Binary: $build_dir/zephyr/zephyr.bin"
@@ -558,8 +586,43 @@ flash_esp32() {
         erase_flash
     fi
     
-    # Flash bootloader
-    if [[ "$FLASH_TARGET" == "b" || "$FLASH_TARGET" == "all" ]]; then
+    # Flash bootloader and/or application.
+    # Both are written in a SINGLE esptool invocation when flashing "all" to
+    # avoid the chip booting into MCUboot between two separate connections
+    # (which causes "Wrong boot mode detected" on the second connect).
+    if [[ "$FLASH_TARGET" == "all" ]]; then
+        local bootloader_bin="$mcuboot_dir/zephyr/zephyr.bin"
+        local app_bin="$build_dir/zephyr/zephyr.signed.bin"
+        if [[ ! -f "$app_bin" ]]; then
+            app_bin="$build_dir/zephyr/zephyr.bin"
+        fi
+
+        if [[ ! -f "$bootloader_bin" ]]; then
+            print_error "MCUboot binary not found: $bootloader_bin"
+            print_info "Build bootloader first: ./build.sh -b $BOARD -bl o"
+            exit 1
+        fi
+        if [[ ! -f "$app_bin" ]]; then
+            print_error "Application binary not found in $build_dir/zephyr/"
+            print_info "Build application first: ./build.sh -b $BOARD"
+            exit 1
+        fi
+
+        local bootloader_offset="0x0"
+        if [[ "$chip" == "esp32" ]]; then
+            bootloader_offset="0x1000"
+        fi
+
+        print_step "Flashing MCUboot ($bootloader_offset) + AkiraOS (0x20000) in one pass"
+        esptool --chip "$chip" --port "$PORT" --baud "$BAUD" \
+            write_flash "$bootloader_offset" "$bootloader_bin" \
+                        0x20000              "$app_bin"
+        print_success "MCUboot + AkiraOS flashed!"
+        return
+    fi
+
+    # Flash bootloader only
+    if [[ "$FLASH_TARGET" == "b" ]]; then
         local bootloader_bin="$mcuboot_dir/zephyr/zephyr.bin"
         
         if [[ ! -f "$bootloader_bin" ]]; then
@@ -579,8 +642,8 @@ flash_esp32() {
         print_success "MCUboot flashed!"
     fi
     
-    # Flash application
-    if [[ "$FLASH_TARGET" == "a" || "$FLASH_TARGET" == "all" ]]; then
+    # Flash application only
+    if [[ "$FLASH_TARGET" == "a" ]]; then
         # Try signed binary first, fall back to unsigned
         local app_bin="$build_dir/zephyr/zephyr.signed.bin"
         if [[ ! -f "$app_bin" ]]; then
@@ -969,6 +1032,7 @@ main() {
     
     # Validate board
     validate_board
+    use_default_ota_signing_key
     check_tools
     
     echo -e "${BOLD}Configuration:${NC}"

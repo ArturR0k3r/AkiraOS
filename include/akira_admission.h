@@ -69,6 +69,8 @@ enum akira_app_source {
     AKIRA_APP_SOURCE_FIRMWARE,
     /** A fleet / device-management client (e.g. AkiraPlatform). */
     AKIRA_APP_SOURCE_FLEET,
+    /** Received over AkiraMesh (AkiraConsole mesh app distribution). */
+    AKIRA_APP_SOURCE_MESH,
 };
 
 /** Evaluation point. */

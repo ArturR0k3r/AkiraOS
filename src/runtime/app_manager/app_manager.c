@@ -12,6 +12,7 @@
 #include <lib/akpkg.h>
 #include "../security/app_signing.h"
 #include "../storage/fs_manager.h"
+#include "../storage/sd_card.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include "../../akira.h"
@@ -23,11 +24,15 @@
 #include <zephyr/fs/fs.h>
 #include <zephyr/sys/crc.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <stdio.h>
 
 #ifdef CONFIG_AKIRA_WASM_IPC
 #include <runtime/akira_ipc.h>
+#endif
+#if defined(CONFIG_AKIRA_CRYSTAL)
+#include <crystal/akira_seal.h>
 #endif
 
 #include "app_events.h"
@@ -94,7 +99,7 @@ typedef struct
 
 /* ===== Static State ===== */
 
-static app_entry_t g_registry[CONFIG_AKIRA_APP_MAX_INSTALLED];
+static app_entry_t AKIRA_BULK_BSS g_registry[CONFIG_AKIRA_APP_MAX_INSTALLED];
 static uint8_t g_app_count = 0;
 static bool g_initialized = false;
 static K_MUTEX_DEFINE(g_registry_mutex);
@@ -178,6 +183,8 @@ static int save_app_binary(const char *name, const void *binary, size_t size);
 static int delete_app_binary(const char *name);
 static void set_app_state(app_entry_t *app, app_state_t new_state);
 static void restart_work_handler(struct k_work *work);
+
+#define SD_APPS_DIR "/SD:/apps"
 static int ensure_dirs_exist(void);
 static void app_manager_on_runtime_exit(int slot, int exit_code);
 
@@ -588,6 +595,168 @@ int app_manager_install(const char *name, const void *binary, size_t size,
     return install_admitted(name, binary, size, manifest, source, NULL);
 }
 
+int app_manager_register_installed(const char *name, const char *tmp_path, size_t size,
+                                   app_source_t source, bool use_sd)
+{
+    if (!g_initialized)
+    {
+        return -ENODEV;
+    }
+
+    if (!name || !name[0] || !tmp_path || size == 0)
+    {
+        return -EINVAL;
+    }
+
+    if (size > CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024)
+    {
+        LOG_ERR("App too large: %zu > %dKB", size, CONFIG_AKIRA_APP_MAX_SIZE_KB);
+        return -EFBIG;
+    }
+
+    /* Peek the magic bytes already written to tmp_path — validates the
+     * binary and picks the .wasm/.aot extension, same as save_app_binary()
+     * does from an in-memory buffer, just read back from disk instead. */
+    uint8_t magic[MAX_WASM_MAGIC];
+    ssize_t peeked = fs_manager_read_file(tmp_path, magic, sizeof(magic));
+    if (peeked < 4 || !is_valid_wasm_or_aot(magic, (size_t)peeked))
+    {
+        LOG_ERR("Invalid WASM/AOT magic at %s", tmp_path);
+        return -EINVAL;
+    }
+    const char *ext = binary_ext(magic, (size_t)peeked);
+
+    char app_name[APP_NAME_MAX_LEN];
+    strncpy(app_name, name, APP_NAME_MAX_LEN - 1);
+    app_name[APP_NAME_MAX_LEN - 1] = '\0';
+
+    /* Same INSTALL admission and ABI gate as every other install path. The
+     * binary is only on disk, so read it back once (PSRAM-preferred) for the
+     * hashes; the admission record then binds these bytes. */
+    struct akira_admission_result adm;
+    struct akira_admission_record rec;
+    uint8_t *bin = akira_malloc_buffer(size);
+
+    if (!bin)
+    {
+        LOG_ERR("No memory to admit %s (%zu B)", app_name, size);
+        return -ENOMEM;
+    }
+    ssize_t got = fs_manager_read_file(tmp_path, bin, size);
+    int ret = got == (ssize_t)size
+                  ? admit_install(app_name, bin, size, source, NULL, &adm, &rec)
+                  : (got < 0 ? (int)got : -EIO);
+    akira_free_buffer(bin);
+    if (ret < 0)
+    {
+        LOG_ERR("Refusing %s: %d", app_name, ret);
+        return ret;
+    }
+
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
+
+    app_entry_t *existing = find_app_by_name(app_name);
+    bool was_new = false;
+    if (existing && existing->container_id >= 0)
+    {
+        /* As in install_admitted(): zero container_id under the lock, then
+         * stop and destroy without it (the app thread's exit callback takes
+         * g_registry_mutex). */
+        int old_cid = existing->container_id;
+        bool was_running = existing->state == APP_STATE_RUNNING;
+
+        existing->container_id = -1;
+        k_mutex_unlock(&g_registry_mutex);
+        if (was_running)
+        {
+            akira_runtime_stop(old_cid);
+        }
+        akira_runtime_destroy(old_cid);
+        k_mutex_lock(&g_registry_mutex, K_FOREVER);
+        existing = find_app_by_name(app_name); /* may have changed meanwhile */
+    }
+    if (!existing)
+    {
+        existing = find_free_slot();
+        if (!existing)
+        {
+            LOG_ERR("No free slots, max %d apps", CONFIG_AKIRA_APP_MAX_INSTALLED);
+            k_mutex_unlock(&g_registry_mutex);
+            return -ENOMEM;
+        }
+        existing->id = (uint8_t)(existing - g_registry) + 1;
+        was_new = true;
+    }
+
+    strncpy(existing->name, app_name, APP_NAME_MAX_LEN);
+
+    char final_path[APP_PATH_MAX_LEN];
+    if (use_sd)
+    {
+        snprintf(final_path, sizeof(final_path), "%s/%s%s", SD_APPS_DIR, app_name, ext);
+    }
+    else
+    {
+        snprintf(final_path, sizeof(final_path), "%s/%03d_%s%s", APPS_DIR, existing->id,
+                 app_name, ext);
+    }
+
+    ret = fs_manager_rename(tmp_path, final_path);
+    if (ret < 0)
+    {
+        LOG_ERR("Failed to move %s -> %s: %d", tmp_path, final_path, ret);
+        /* g_app_count is only bumped on success below, so nothing to undo
+         * here. Only free the slot if we newly claimed one — a failed
+         * re-registration of an EXISTING app must leave its entry intact
+         * (its old on-disk binary is still there). */
+        if (was_new)
+        {
+            existing->name[0] = '\0';
+        }
+        k_mutex_unlock(&g_registry_mutex);
+        return ret;
+    }
+
+    if (was_new)
+    {
+        g_app_count++;
+    }
+
+    /* Bind the admission verdict to these bytes (flash installs; SD entries
+     * are in-memory only and load without a record, like SD-XIP apps). */
+    if (!use_sd && record_save(existing->id, app_name, &rec) < 0)
+    {
+        LOG_ERR("Failed to save admission record for %s", app_name);
+    }
+
+    /* use_sd overrides the caller's source: path lookup and registry
+     * persistence key off ->source == APP_SOURCE_SD, not install origin. */
+    existing->source = use_sd ? APP_SOURCE_SD : source;
+    existing->size = size;
+    existing->container_id = -1;
+    existing->crash_count = 0;
+    existing->install_time = k_uptime_get_32() / 1000;
+    existing->is_preloaded = false;
+    strncpy(existing->version, "0.0.0", APP_VERSION_MAX_LEN);
+    existing->heap_kb = CONFIG_AKIRA_APP_DEFAULT_HEAP_KB;
+    existing->stack_kb = CONFIG_AKIRA_APP_DEFAULT_STACK_KB;
+    existing->permissions = APP_PERM_NONE;
+    existing->restart.enabled = false;
+    existing->restart.max_retries = CONFIG_AKIRA_APP_MAX_RETRIES;
+    existing->restart.delay_ms = CONFIG_AKIRA_APP_RESTART_DELAY_MS;
+
+    set_app_state(existing, APP_STATE_INSTALLED);
+    registry_save();
+
+    k_mutex_unlock(&g_registry_mutex);
+
+    LOG_INF("Registered app: %s (ID: %d, size: %zu, path: %s, %s)", app_name, existing->id,
+            size, final_path, adm.attested ? "attested" : "unattested");
+    akira_hooks_emit_app(AKIRA_HOOK_APP_INSTALLED, app_name, existing->id, -1,
+                         existing->version, 0);
+    return existing->id;
+}
+
 int app_manager_install_from_path(const char *path)
 {
     if (!path)
@@ -812,14 +981,26 @@ int app_manager_start(const char *name)
     /* Load app binary if not loaded */
     if (app->container_id < 0)
     {
-        /* Read binary from storage (flash or RAM fallback)
-         * Try .aot first (faster), fall back to .wasm */
         char path[APP_PATH_MAX_LEN];
-        snprintf(path, sizeof(path), "%s/%03d_%s.aot",
-                 APPS_DIR, app->id, app->name);
-        if (!fs_manager_exists(path)) {
-            snprintf(path, sizeof(path), "%s/%03d_%s.wasm",
+        if (app->source == APP_SOURCE_SD) {
+            /* SD app — read directly from card, try .aot first */
+            snprintf(path, sizeof(path), "%s/%s.aot", SD_APPS_DIR, app->name);
+            if (!fs_manager_exists(path)) {
+                snprintf(path, sizeof(path), "%s/%s.wasm", SD_APPS_DIR, app->name);
+            }
+            if (!fs_manager_exists(path)) {
+                k_mutex_unlock(&g_registry_mutex);
+                LOG_ERR("SD app not found (card removed?): %s", app->name);
+                return -ENOENT;
+            }
+        } else {
+            /* Flash app — read from persistent storage */
+            snprintf(path, sizeof(path), "%s/%03d_%s.aot",
                      APPS_DIR, app->id, app->name);
+            if (!fs_manager_exists(path)) {
+                snprintf(path, sizeof(path), "%s/%03d_%s.wasm",
+                         APPS_DIR, app->id, app->name);
+            }
         }
 
         /* Use PSRAM-preferred allocator — app binaries can be 100+ KB */
@@ -1113,6 +1294,34 @@ int app_manager_restart(const char *name)
 }
 
 /* ===== Query ===== */
+
+uint32_t app_manager_identity(const char *name)
+{
+    uint32_t id = 0;
+
+    if (!g_initialized || !name)
+    {
+        return 0;
+    }
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
+    app_entry_t *app = find_app_by_name(name);
+
+    if (app)
+    {
+        size_t nl = 0, vl = 0;
+
+        while (nl < APP_NAME_MAX_LEN && app->name[nl]) nl++;
+        while (vl < APP_VERSION_MAX_LEN && app->version[vl]) vl++;
+        id = crc32_ieee((const uint8_t *)app->name, nl);
+        id = crc32_ieee_update(id, (const uint8_t *)app->version, vl);
+        id = crc32_ieee_update(id, (const uint8_t *)&app->size, sizeof(app->size));
+        id = crc32_ieee_update(id, (const uint8_t *)&app->install_time,
+                               sizeof(app->install_time));
+        id = id ? id : 1; /* 0 means "not installed" */
+    }
+    k_mutex_unlock(&g_registry_mutex);
+    return id;
+}
 
 int app_manager_list(app_info_t *out_list, int max_count)
 {
@@ -1617,6 +1826,8 @@ const char *app_source_to_str(app_source_t source)
         return "SD";
     case APP_SOURCE_FIRMWARE:
         return "FIRMWARE";
+    case APP_SOURCE_MESH:
+        return "MESH";
     default:
         return "UNKNOWN";
     }
@@ -1725,7 +1936,7 @@ static int registry_load_from(uint8_t *buffer)
 
 static int registry_save(void)
 {
-    /* Build registry buffer */
+    /* Build registry buffer (heap: see REGISTRY_BUF_SIZE) */
     uint8_t *buffer = akira_malloc_buffer(REGISTRY_BUF_SIZE);
     size_t offset = 0;
 
@@ -1735,29 +1946,31 @@ static int registry_save(void)
         return -ENOMEM;
     }
 
-    /* Write header with crc=0 placeholder; will be patched after entries are written */
-    registry_header_t header = {
-        .magic = REGISTRY_MAGIC,
-        .version = REGISTRY_VERSION,
-        .app_count = g_app_count,
-        .reserved = 0,
-        .crc = 0,
-    };
-
-    memcpy(buffer, &header, sizeof(header));
-    offset += sizeof(header);
-
-    /* Write entries (only valid ones) */
+    /* Entries first, header (with the persisted count) patched in after.
+     * SD-source apps are in-memory only and never persisted. */
+    uint8_t saved_count = 0;
+    offset += sizeof(registry_header_t);
     for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++)
     {
-        if (g_registry[i].name[0] != '\0')
+        if (g_registry[i].name[0] != '\0' &&
+            g_registry[i].source != APP_SOURCE_SD)
         {
             memcpy(buffer + offset, &g_registry[i], sizeof(app_entry_t));
             offset += sizeof(app_entry_t);
+            saved_count++;
         }
     }
 
-    /* Patch CRC over the entire serialized payload (header crc field = 0) */
+    /* Header with crc=0 placeholder, then the CRC over the entire serialized
+     * payload (header crc field = 0) is patched in. */
+    registry_header_t header = {
+        .magic = REGISTRY_MAGIC,
+        .version = REGISTRY_VERSION,
+        .app_count = saved_count,
+        .reserved = 0,
+        .crc = 0,
+    };
+    memcpy(buffer, &header, sizeof(header));
     uint32_t crc = crc32_ieee(buffer, offset);
     ((registry_header_t *)buffer)->crc = crc;
 
@@ -1817,12 +2030,6 @@ static int validate_wasm(const void *binary, size_t size)
 
 static int save_app_binary(const char *name, const void *binary, size_t size)
 {
-    /* CRITICAL DEBUG LOGS */
-    // LOG_INF("=== SAVE_APP_BINARY DEBUG ===");
-    // LOG_INF("name: %s", name ? name : "NULL");
-    // LOG_INF("binary ptr: %p", binary);
-    // LOG_INF("size: %zu", size);
-    
     if (!name) {
         LOG_ERR("INVALID: name is NULL");
         return -EINVAL;
@@ -1898,6 +2105,33 @@ static int delete_app_binary(const char *name)
     return 0;
 }
 
+int app_manager_read_binary(const char *name, void *buf, size_t buf_size)
+{
+    app_entry_t *app = find_app_by_name(name);
+    if (!app) {
+        return -ENOENT;
+    }
+
+    /* Path convention differs by source (see app_manager_start): SD apps are
+     * read straight off the card by bare name, flash apps are id-prefixed
+     * in APPS_DIR. */
+    char path[APP_PATH_MAX_LEN];
+    static const char *exts[] = {".wasm", ".aot"};
+    for (int i = 0; i < 2; i++) {
+        if (app->source == APP_SOURCE_SD) {
+            snprintf(path, sizeof(path), "%s/%s%s", SD_APPS_DIR, name, exts[i]);
+        } else {
+            snprintf(path, sizeof(path), "%s/%03d_%s%s", APPS_DIR, app->id, name, exts[i]);
+        }
+        size_t want = MIN((size_t)app->size, buf_size);
+        ssize_t got = fs_manager_read_file(path, buf, want);
+        if (got >= 0) {
+            return (int)got;
+        }
+    }
+    return -ENOENT;
+}
+
 static void set_app_state(app_entry_t *app, app_state_t new_state)
 {
     if (!app || app->state == new_state)
@@ -1910,6 +2144,13 @@ static void set_app_state(app_entry_t *app, app_state_t new_state)
 
     LOG_INF("App %s: %s -> %s", app->name,
             app_state_to_str(old_state), app_state_to_str(new_state));
+
+#if defined(CONFIG_AKIRA_CRYSTAL)
+    if (old_state == APP_STATE_RUNNING && new_state != APP_STATE_RUNNING)
+    {
+        akira_seal_app_stopped(app->name); /* THIS TIME grants end with the run */
+    }
+#endif
 
     /* Notify callback */
     if (g_state_cb)
@@ -2054,6 +2295,12 @@ int app_manager_run_from_sd(const char *name_or_path)
         return -EINVAL;
     }
 
+    /* Marks the SD card busy for the load-only window below — the app has
+     * no further SD dependency once akira_runtime_install_with_manifest()
+     * returns (it fully parses the binary into WAMR's own memory), so this
+     * must be cleared before that call, not held for the app's lifetime. */
+    akira_sd_card_set_transfer_active(true);
+
     char path[APP_PATH_MAX_LEN];
     char name[APP_NAME_MAX_LEN];
 
@@ -2089,6 +2336,7 @@ int app_manager_run_from_sd(const char *name_or_path)
 
     if (!fs_manager_exists(path)) {
         LOG_ERR("SD XIP: app not found on SD: %s", path);
+        akira_sd_card_set_transfer_active(false);
         return -ENOENT;
     }
 
@@ -2097,11 +2345,13 @@ int app_manager_run_from_sd(const char *name_or_path)
     if (find_app_by_name(name) != NULL) {
         k_mutex_unlock(&g_registry_mutex);
         LOG_WRN("SD XIP: '%s' is installed — use 'app start %s'", name, name);
+        akira_sd_card_set_transfer_active(false);
         return -EEXIST;
     }
     if (find_transient_by_name(name) != NULL) {
         k_mutex_unlock(&g_registry_mutex);
         LOG_WRN("SD XIP: '%s' is already running from SD", name);
+        akira_sd_card_set_transfer_active(false);
         return -EBUSY;
     }
     k_mutex_unlock(&g_registry_mutex);
@@ -2110,16 +2360,19 @@ int app_manager_run_from_sd(const char *name_or_path)
     ssize_t size = fs_manager_get_size(path);
     if (size < 0) {
         LOG_ERR("SD XIP: failed to get size of %s: %zd", path, size);
+        akira_sd_card_set_transfer_active(false);
         return (int)size;
     }
     if (size > (ssize_t)(CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024)) {
         LOG_ERR("SD XIP: binary too large (%zd bytes)", size);
+        akira_sd_card_set_transfer_active(false);
         return -EFBIG;
     }
 
     uint8_t *buffer = akira_malloc_buffer((size_t)size);
     if (!buffer) {
         LOG_ERR("SD XIP: failed to allocate %zd bytes", size);
+        akira_sd_card_set_transfer_active(false);
         return -ENOMEM;
     }
 
@@ -2127,8 +2380,10 @@ int app_manager_run_from_sd(const char *name_or_path)
     if (bytes_read != size) {
         akira_free_buffer(buffer);
         LOG_ERR("SD XIP: read mismatch %zd != %zd", bytes_read, size);
+        akira_sd_card_set_transfer_active(false);
         return bytes_read < 0 ? (int)bytes_read : -EIO;
     }
+    akira_sd_card_set_transfer_active(false);
 
     /* ---- Optional sidecar JSON manifest ---- */
     char *json = akira_malloc_buffer(512);
@@ -2155,12 +2410,14 @@ int app_manager_run_from_sd(const char *name_or_path)
         }
     }
 
-    /* ---- Load into WAMR ---- */
-    int container_id = akira_runtime_install_with_manifest(
+    /* ---- Load into WAMR ----
+     * _owned() hands `buffer` off directly as WAMR's durable binary copy
+     * instead of making a second PSRAM copy internally — it is consumed on
+     * every outcome, so it must not be freed here. */
+    int container_id = akira_runtime_install_with_manifest_owned(
         name, buffer, (size_t)size,
         json_len > 0 ? json : NULL,
         json_len > 0 ? (size_t)json_len : 0);
-    akira_free_buffer(buffer);
     akira_free_buffer(json);
 
     if (container_id < 0) {
@@ -2206,6 +2463,10 @@ int app_manager_run_from_sd(const char *name_or_path)
 #endif /* CONFIG_AKIRA_SD_XIP */
 
 /* ===== .akpkg install ===== */
+
+/* Upper bound on a package manifest accepted for parsing. Generous on
+ * purpose: it is a sanity check against a malformed tar header, not a budget. */
+#define AKPKG_MANIFEST_MAX_BYTES 65536u
 
 int app_manager_install_akpkg(char *name, size_t name_size,
                               const uint8_t *pkg, size_t pkg_len,
@@ -2276,15 +2537,24 @@ int app_manager_install_akpkg(char *name, size_t name_size,
     app_manifest_t manifest;
     bool has_manifest = false;
 
-    if (pkgc.manifest_size >= 4096u) {
-        LOG_ERR("akpkg manifest too large: %zu bytes", pkgc.manifest_size);
+    /* The ceiling only guards against a corrupt tar entry claiming an absurd
+     * size: app_manifest_parse() scans by explicit length and the copy comes
+     * from the PSRAM-backed allocator. It was 4096, which turned away real
+     * manifests (a 5689-byte one hit it). Above the ceiling the package is
+     * refused rather than installed with default metadata. */
+    if (pkgc.manifest_size >= AKPKG_MANIFEST_MAX_BYTES) {
+        LOG_ERR("akpkg manifest too large: %zu bytes (limit %u)", pkgc.manifest_size,
+                (unsigned)AKPKG_MANIFEST_MAX_BYTES);
         akira_free_buffer(tar_buf);
         return -EFBIG;
     }
     if (pkgc.manifest_size > 0) {
         /* app_manifest_parse requires a null-terminated string. */
         char *json_copy = akira_malloc_buffer(pkgc.manifest_size + 1u);
-        if (json_copy) {
+        if (!json_copy) {
+            LOG_WRN("akpkg: cannot allocate %zu B for manifest — "
+                    "installing with defaults", pkgc.manifest_size + 1u);
+        } else {
             memcpy(json_copy, pkgc.manifest, pkgc.manifest_size);
             json_copy[pkgc.manifest_size] = '\0';
             if (app_manifest_parse(json_copy, pkgc.manifest_size, &manifest) == 0) {
@@ -2292,9 +2562,13 @@ int app_manager_install_akpkg(char *name, size_t name_size,
                 /* Manifest name always takes precedence over the caller-supplied name.
                  * Write back into the caller's buffer so they see the final name. */
                 if (manifest.name[0]) {
+                    LOG_INF("akpkg: manifest name '%s' overrides '%s'",
+                            manifest.name, name);
                     strncpy(name, manifest.name, name_size - 1);
                     name[name_size - 1] = '\0';
                 }
+            } else {
+                LOG_WRN("akpkg: manifest parse failed — installing with defaults");
             }
             akira_free_buffer(json_copy);
         }
@@ -2352,6 +2626,7 @@ int app_manager_install_akpkg(char *name, size_t name_size,
 #include <akira_apps.h>
 
 BUILD_ASSERT((int)AKIRA_APP_SOURCE_FLEET == (int)APP_SOURCE_FLEET &&
+             (int)AKIRA_APP_SOURCE_MESH == (int)APP_SOURCE_MESH &&
              (int)AKIRA_APP_SOURCE_FIRMWARE == (int)APP_SOURCE_FIRMWARE,
              "enum akira_app_source must match app_source_t");
 BUILD_ASSERT((int)AKIRA_APP_STATE_FAILED == (int)APP_STATE_FAILED,
@@ -2564,4 +2839,292 @@ int akira_apps_send_command(const char *name, const void *cmd, size_t cmd_len,
 #else
     return -ENOTSUP;
 #endif
+}
+
+/* ===== SD .akpkg extraction ===== */
+
+#define MAX_SD_AKPKGS   16
+#define AKPKG_MAX_ISIZE (4u * 1024u * 1024u)
+
+int app_manager_extract_sd_akpkgs(const char *dir)
+{
+    if (!dir) {
+        return -EINVAL;
+    }
+
+    /* Phase 1: collect .akpkg filenames before touching the directory.
+     * Writing/deleting files while an fs_dir_t is open mid-readdir is unsafe
+     * on FAT, so we snapshot the names first, then close the handle. */
+    struct fs_dir_t d;
+    fs_dir_t_init(&d);
+    int ret = fs_opendir(&d, dir);
+    if (ret < 0) {
+        return ret; /* dir absent (no card / no apps dir) — nothing to do */
+    }
+
+    /* Heap-allocate the filename scratch list (PSRAM-preferred) rather than a
+     * static buffer — DRAM BSS is tight on this target. */
+    char (*names)[64] = akira_malloc_buffer(MAX_SD_AKPKGS * 64);
+    if (!names) {
+        fs_closedir(&d);
+        return -ENOMEM;
+    }
+
+    int n = 0;
+    struct fs_dirent entry;
+    while (n < MAX_SD_AKPKGS &&
+           fs_readdir(&d, &entry) == 0 && entry.name[0] != '\0') {
+        int nl = (int)strlen(entry.name);
+        if (entry.type == FS_DIR_ENTRY_FILE &&
+            nl >= 7 && strcasecmp(&entry.name[nl - 6], ".akpkg") == 0) {
+            strncpy(names[n], entry.name, sizeof(names[0]) - 1);
+            names[n][sizeof(names[0]) - 1] = '\0';
+            n++;
+        }
+    }
+    fs_closedir(&d);
+
+    /* Phase 2: decompress each archive and write its contents back to the card
+     * as plain <base>.wasm/.aot + <base>.json, then delete the archive. */
+    int extracted = 0;
+    for (int i = 0; i < n; i++) {
+        char pkg_path[APP_PATH_MAX_LEN];
+        snprintf(pkg_path, sizeof(pkg_path), "%s/%s", dir, names[i]);
+
+        /* base name = filename minus the ".akpkg" suffix */
+        char base[64];
+        strncpy(base, names[i], sizeof(base) - 1);
+        base[sizeof(base) - 1] = '\0';
+        base[strlen(base) - 6] = '\0';
+
+        ssize_t pkg_size = fs_manager_get_size(pkg_path);
+        if (pkg_size <= 0 || (size_t)pkg_size > AKPKG_MAX_ISIZE) {
+            LOG_WRN("akpkg-sd: bad size for %s (%zd)", pkg_path, pkg_size);
+            continue;
+        }
+
+        uint8_t *pkg = akira_malloc_buffer((size_t)pkg_size);
+        if (!pkg) {
+            LOG_ERR("akpkg-sd: alloc %zd failed", pkg_size);
+            continue;
+        }
+        if (fs_manager_read_file(pkg_path, pkg, (size_t)pkg_size) != pkg_size) {
+            LOG_ERR("akpkg-sd: read failed %s", pkg_path);
+            akira_free_buffer(pkg);
+            continue;
+        }
+        if (!akpkg_is_gzip(pkg, (size_t)pkg_size)) {
+            LOG_WRN("akpkg-sd: %s not gzip, skipping", pkg_path);
+            akira_free_buffer(pkg);
+            continue;
+        }
+
+        /* Decompressed size from the gzip ISIZE trailer (last 4 bytes, LE). */
+        size_t isize = (size_t)pkg[pkg_size - 4]
+                     | ((size_t)pkg[pkg_size - 3] << 8)
+                     | ((size_t)pkg[pkg_size - 2] << 16)
+                     | ((size_t)pkg[pkg_size - 1] << 24);
+        if (isize == 0 || isize > AKPKG_MAX_ISIZE) {
+            LOG_WRN("akpkg-sd: implausible ISIZE %zu for %s", isize, pkg_path);
+            akira_free_buffer(pkg);
+            continue;
+        }
+
+        uint8_t *tar = akira_malloc_buffer(isize);
+        if (!tar) {
+            LOG_ERR("akpkg-sd: alloc tar %zu failed", isize);
+            akira_free_buffer(pkg);
+            continue;
+        }
+        ssize_t tar_len = akpkg_inflate(pkg, (size_t)pkg_size, tar, isize);
+        akira_free_buffer(pkg);
+        if (tar_len < 0) {
+            LOG_ERR("akpkg-sd: inflate failed %s (%zd)", pkg_path, tar_len);
+            akira_free_buffer(tar);
+            continue;
+        }
+
+        const uint8_t *bin_ptr; size_t bin_size;
+        const char    *mf_ptr;  size_t mf_size;
+        if (akpkg_tar_extract(tar, (size_t)tar_len,
+                              &bin_ptr, &bin_size, &mf_ptr, &mf_size,
+                              NULL, NULL, NULL, NULL) != 0) {
+            LOG_ERR("akpkg-sd: tar extract failed %s", pkg_path);
+            akira_free_buffer(tar);
+            continue;
+        }
+
+        /* Binary inside the archive may be .wasm or .aot — pick by magic. */
+        const char *ext = is_aot_binary(bin_ptr, bin_size) ? ".aot" : ".wasm";
+        char bin_path[APP_PATH_MAX_LEN];
+        char json_path[APP_PATH_MAX_LEN];
+        snprintf(bin_path, sizeof(bin_path), "%s/%s%s", dir, base, ext);
+        snprintf(json_path, sizeof(json_path), "%s/%s.json", dir, base);
+
+        ssize_t w1 = fs_manager_write_file(bin_path, bin_ptr, bin_size);
+        ssize_t w2 = fs_manager_write_file(json_path, mf_ptr, mf_size);
+        akira_free_buffer(tar);
+
+        if (w1 != (ssize_t)bin_size || w2 != (ssize_t)mf_size) {
+            LOG_ERR("akpkg-sd: write failed %s (bin %zd, json %zd)", base, w1, w2);
+            continue; /* leave archive in place for retry on next scan */
+        }
+
+        /* Success — remove the archive so it isn't re-extracted. */
+        if (fs_manager_delete_file(pkg_path) < 0) {
+            LOG_WRN("akpkg-sd: extracted %s but failed to delete archive", base);
+        }
+        LOG_INF("akpkg-sd: extracted %s -> %s%s + .json", names[i], base, ext);
+        extracted++;
+    }
+
+    akira_free_buffer(names);
+
+    if (extracted) {
+        LOG_INF("akpkg-sd: %d archive(s) extracted in %s", extracted, dir);
+    }
+    return extracted;
+}
+
+/* ===== SD Registry ===== */
+
+int app_manager_register_sd_apps(void)
+{
+    if (!g_initialized) {
+        return -EINVAL;
+    }
+
+    /* Extract any .akpkg archives on the card first so their .wasm/.aot
+     * contents are visible to the scan below. */
+    app_manager_extract_sd_akpkgs(SD_APPS_DIR);
+
+    struct fs_dir_t dir;
+    fs_dir_t_init(&dir);
+
+    int ret = fs_opendir(&dir, SD_APPS_DIR);
+    if (ret < 0) {
+        LOG_WRN("SD apps dir not accessible: %d", ret);
+        return ret;
+    }
+
+    int registered = 0;
+    struct fs_dirent entry;
+
+    while (fs_readdir(&dir, &entry) == 0 && entry.name[0] != '\0') {
+        LOG_INF("SD entry: name=%s type=%d size=%zu", entry.name, entry.type, entry.size);
+        int nl = (int)strlen(entry.name);
+        bool is_wasm = (nl >= 6 && strcasecmp(&entry.name[nl - 5], ".wasm") == 0);
+        bool is_aot  = (nl >= 5 && strcasecmp(&entry.name[nl - 4], ".aot")  == 0);
+        if (entry.type != FS_DIR_ENTRY_FILE || (!is_wasm && !is_aot)) {
+            continue;
+        }
+
+        /* Strip extension to get name */
+        char name[APP_NAME_MAX_LEN];
+        strncpy(name, entry.name, sizeof(name) - 1);
+        name[sizeof(name) - 1] = '\0';
+        char *ext = strrchr(name, '.');
+        if (ext) { *ext = '\0'; }
+
+        k_mutex_lock(&g_registry_mutex, K_FOREVER);
+
+        /* Skip if already in registry (flash-installed or already registered) */
+        if (find_app_by_name(name) != NULL) {
+            k_mutex_unlock(&g_registry_mutex);
+            continue;
+        }
+
+        app_entry_t *slot = find_free_slot();
+        if (!slot) {
+            k_mutex_unlock(&g_registry_mutex);
+            LOG_WRN("SD register: registry full, skipping %s", name);
+            break;
+        }
+
+        memset(slot, 0, sizeof(*slot));
+        strncpy(slot->name, name, APP_NAME_MAX_LEN - 1);
+        slot->source       = APP_SOURCE_SD;
+        slot->state        = APP_STATE_INSTALLED;
+        slot->size         = (uint32_t)entry.size;
+        slot->container_id = -1;
+        slot->id           = 0; /* not persisted — no flash ID needed */
+        g_app_count++;
+        registered++;
+
+        k_mutex_unlock(&g_registry_mutex);
+        LOG_INF("SD app registered: %s (%u bytes)", name, (unsigned)entry.size);
+    }
+
+    fs_closedir(&dir);
+    LOG_INF("SD register: %d app(s) added", registered);
+    return registered;
+}
+
+int app_manager_resync_sd_apps(void)
+{
+    if (!g_initialized) {
+        return -EINVAL;
+    }
+
+    /* Drop idle SD entries whose binary is gone, then pick up new files
+     * (register also unpacks any .akpkg). Running apps are left alone. */
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++) {
+        if (g_registry[i].name[0] == '\0' ||
+            g_registry[i].source != APP_SOURCE_SD ||
+            g_registry[i].container_id >= 0) {
+            continue;
+        }
+        char path[96];
+        struct fs_dirent st;
+        snprintf(path, sizeof(path), "%s/%s.wasm", SD_APPS_DIR, g_registry[i].name);
+        bool gone = fs_stat(path, &st) != 0;
+        snprintf(path, sizeof(path), "%s/%s.aot", SD_APPS_DIR, g_registry[i].name);
+        gone = gone && fs_stat(path, &st) != 0;
+        if (gone) {
+            LOG_INF("SD app removed: %s", g_registry[i].name);
+            memset(&g_registry[i], 0, sizeof(g_registry[i]));
+            g_app_count--;
+        }
+    }
+    k_mutex_unlock(&g_registry_mutex);
+
+    return app_manager_register_sd_apps();
+}
+
+int app_manager_unregister_sd_apps(void)
+{
+    if (!g_initialized) {
+        return -EINVAL;
+    }
+
+    int removed = 0;
+
+    k_mutex_lock(&g_registry_mutex, K_FOREVER);
+
+    for (int i = 0; i < CONFIG_AKIRA_APP_MAX_INSTALLED; i++) {
+        if (g_registry[i].name[0] == '\0' ||
+            g_registry[i].source != APP_SOURCE_SD) {
+            continue;
+        }
+
+        /* Stop and destroy if running */
+        if (g_registry[i].container_id >= 0) {
+            int cid = g_registry[i].container_id;
+            g_registry[i].container_id = -1;
+            k_mutex_unlock(&g_registry_mutex);
+            akira_runtime_stop(cid);
+            akira_runtime_destroy(cid);
+            k_mutex_lock(&g_registry_mutex, K_FOREVER);
+        }
+
+        LOG_INF("SD app unregistered: %s", g_registry[i].name);
+        memset(&g_registry[i], 0, sizeof(g_registry[i]));
+        g_app_count--;
+        removed++;
+    }
+
+    k_mutex_unlock(&g_registry_mutex);
+    LOG_INF("SD unregister: %d app(s) removed", removed);
+    return removed;
 }

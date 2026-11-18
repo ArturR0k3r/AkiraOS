@@ -8,7 +8,9 @@
 #include <zephyr/dt-bindings/i2c/i2c.h>
 #include <zephyr/dt-bindings/mipi_dbi/mipi_dbi.h>
 #include <zephyr/dt-bindings/pwm/pwm.h>
-#include <espressif/partitions_0x0_amp.dtsi>
+/* 16 MB partition table: 1984 KB per image slot, sized to end exactly where
+ * the overlay's user partitions begin. Replaces the stock 4 MB table. */
+#include "akiraconsole_prod_partitions_16M.dtsi"
 #include "akiraconsole_prod-pinctrl.dtsi"
 
 / {
@@ -35,66 +37,78 @@
 	// =========================================================================
 	// Buttons — direct ESP32-S3 GPIO connections
 	//
-	// D-pad + face: active-high, 100Ω series + 10k pull-up on PCB;
-	//   GPIO input configured with pull-down for noise immunity.
-	// BTN.OK (SW10 / GPIO0): active-low pull-up — also the BOOT mode trigger.
+	// VERIFIED AGAINST THE SCHEMATIC (HWAkiraConsole.kicad_pcb):
+	// EVERY button is ACTIVE LOW.  Each net has a 10k pull-up to +3.3V
+	// (R28/R29/R32/R33/R43/R44/R45/R46/R49), a 100R series resistor and a
+	// 100n debounce cap; the tactile switch (GT-TC126B) shorts the net to GND
+	// when pressed.
 	//
-	// zephyr,code maps to AKIRA_BTN_* (akira_input.h):
-	//   INPUT_KEY_0=OK  2=UP 3=DOWN 4=LEFT 5=RIGHT 6=A 7=B 8=X 9=Y
+	// These were previously declared GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH, which
+	// both fought the external pull-up and inverted the sense — so every
+	// button read as permanently pressed, flooding the input queue
+	// ("Event dropped, queue full") and making the OS shell navigate itself.
+	// B (SW3) and X (SW4) were missed by that pass and kept the inverted
+	// sense: they read as held while idle and released while pressed, which
+	// in the retro cores meant SELECT/START (GB, NES) and START/Pause (SMS)
+	// were permanently asserted.  R45/R46 are their 10k pull-ups; both
+	// switches short to GND exactly like the other seven.
+	//
+	// zephyr,code maps to AKIRA_BTN_* (src/api/akira_input_api.h):
+	//   1=HOME/OK 2=UP 3=DOWN 4=LEFT 5=RIGHT 6=A 7=Y 8=B 9=X
 	// =========================================================================
 	gpio_keys {
 		compatible = "gpio-keys";
 
 		btn_ok: btn_ok {
 			gpios = <&gpio0 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
-			label = "BTN OK (BOOT / SW10)";
-			zephyr,code = <INPUT_KEY_0>;
+			label = "BTN OK (BOOT / SW7)";
+			zephyr,code = <1>; /* AKIRA_BTN_HOME = 1; INPUT_KEY_0 = 11, wrong value */
 		};
 		btn_up: btn_up {
-			gpios = <&gpio0 4 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 4 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BTN Up (SW5)";
 			zephyr,code = <2>;
 		};
 		btn_down: btn_down {
-			gpios = <&gpio0 5 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 5 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BTN Down (SW6)";
 			zephyr,code = <3>;
 		};
 		btn_left: btn_left {
-			gpios = <&gpio0 6 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
-			label = "BTN Left (SW7)";
+			gpios = <&gpio0 6 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "BTN Left (SW10)";
 			zephyr,code = <4>;
 		};
 		btn_right: btn_right {
-			gpios = <&gpio0 7 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 7 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BTN Right (SW8)";
 			zephyr,code = <5>;
 		};
 		btn_a: btn_a {
-			gpios = <&gpio0 16 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 15 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BTN A (SW2)";
 			zephyr,code = <6>;
 		};
 		btn_b: btn_b {
-			gpios = <&gpio0 15 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
+			gpios = <&gpio0 16 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
 			label = "BTN B (SW3)";
-			zephyr,code = <7>;
-		};
-		btn_x: btn_x {
-			gpios = <&gpio0 17 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>;
-			label = "BTN X (SW4)";
 			zephyr,code = <8>;
 		};
-		btn_y: btn_y {
-			gpios = <&gpio1 9 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>; // GPIO41
-			label = "BTN Y (SW1)";
+		btn_x: btn_x {
+			gpios = <&gpio0 17 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "BTN X (SW4)";
 			zephyr,code = <9>;
+		};
+		btn_y: btn_y {
+			gpios = <&gpio1 9 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>; // GPIO41
+			label = "BTN Y (SW1)";
+			zephyr,code = <7>;   /* AKIRA_BTN_Y */
 		};
 	};
 
 	// =========================================================================
 	// LEDs
-	// D9 — LED.ACT (green, LTST-S270KGKT), GPIO42, 270Ω series resistor.
+	// D9 — LED.ACT (green, LTST-S270KGKT), GPIO46, 270Ω series resistor.
 	// D8 — power indicator (yellow, LTST-S270KSKT) driven by power rail, no GPIO.
 	// D10 — charge indicator (yellow, LTST-S270KSKT) driven by BQ25601 STAT pin.
 	// =========================================================================
@@ -179,18 +193,22 @@
 		st7789v_prod: st7789v@1 {
 			compatible         = "sitronix,st7789v";
 			reg                = <1>;           // SPI2 cs-gpios[1] = GPIO10
-				mipi-max-frequency = <10000000>;    // 10 MHz — safe for 40-pin FFC; raise after display confirmed working
+			mipi-max-frequency = <80000000>;    /* 80 MHz — GP-SPI's clock-source ceiling (APB, divider bypass); ST7789V rated to 16 MHz but runs clean here */
 				ready-time-ms      = <120>;         // extra margin after reset
 				width              = <320>;
 				height             = <240>;
 				x-offset           = <0>;
 				y-offset           = <0>;
-				// inversion-off omitted → driver sends INVON (required for IPS panel)
+				// Measured on hardware: sending INVON produced a colour-negative
+				// image, so this panel wants INVOFF.
+				inversion-off;
 			vcom          = <0x19>;
 			gctrl         = <0x35>;
 			vrhs          = <0x12>;
 			vdvs          = <0x20>;
-			mdac          = <0x68>;
+			// 0x60 = MX|MV (landscape). D3 (BGR) deliberately CLEAR: the Zephyr
+			// driver reports PIXEL_FORMAT_RGB_565, so BGR here swapped red/blue.
+			mdac          = <0x60>;
 			gamma         = <0x01>;
 			colmod        = <0x55>;
 			lcm           = <0x2c>;
@@ -199,7 +217,10 @@
 			pwctrl1-param = [a4 a1];
 			pvgam-param   = [D0 04 0D 11 13 2B 3F 54 4C 18 0D 0B 1F 23];
 			nvgam-param   = [D0 04 0C 11 13 2C 3F 44 51 2F 1F 1F 20 23];
-			ram-param     = [00 F0];
+			// RAMCTRL param2 bit3 = ENDIAN. Set (F0 -> F8) so the panel reads
+			// pixels little-endian, matching the native uint16_t framebuffer.
+			// Avoids byte-swapping 153600 B on every frame in software.
+			ram-param     = [00 F8];
 			rgb-param     = [CD 08 14];
 			mipi-mode     = "MIPI_DBI_MODE_SPI_4WIRE";
 			status        = "okay";
@@ -275,7 +296,7 @@
 		#gpio-cells   = <2>;
 		ngpios        = <8>;
 		int-gpios     = <&gpio1 15 GPIO_ACTIVE_LOW>; // IO_INT = GPIO47 (gpio1 pin 15)
-		status        = "disabled"; // enabled in overlay for app build only
+		status        = "okay"; // enabled in overlay for app build only
 	};
 
 	// -------------------------------------------------------------------------
@@ -300,19 +321,40 @@
 	// 7-bit addr 0x55 (8-bit WRITE=0xAA, READ=0xAB)
 	// Sense resistor: 1mΩ (R16, 0603 PA0603FRP7W0R001L).
 	// Single-cell: VC1 tied to VC2. Dual back-to-back NFETs AO3400A (Q4/Q5).
-	// Battery connector J8 (B3B-PH-SM4-TB): pin1=PACK, pin2=BAT, pin3=GND.
+	// Battery connector J9 (53261-0371): pin1=VBAT, pin2=TS (thermistor),
+	// pin3=sense return through R16 (10 mOhm). There is no J8 on this board.
 	// -------------------------------------------------------------------------
+	// NOTE: no BQ28Z610 is fitted.  The schematic (U4) and a live I2C scan
+	// both show an ST STC3115AIQT fuel gauge at 0x70 instead — nothing ACKs
+	// at 0x55.  Left declared but disabled: enabling it would bind the
+	// bq28z610 driver to an address with no device.  Driving the real part
+	// needs an STC3115 driver, which does not exist yet.
 	bq28z610: bq28z610@55 {
 		compatible = "ti,bq28z610";
 		reg        = <0x55>;
-		status     = "okay";
+		status     = "disabled";
+	};
+
+	// -------------------------------------------------------------------------
+	// STC3115AIQT — Li-Ion fuel gauge (U4), I2C 0x70.  THE part actually fitted.
+	// Current sensed across R16 (10 mOhm) at J9 pin 3; ALM -> BAT_INT (GPIO3).
+	// -------------------------------------------------------------------------
+	stc3115: stc3115@70 {
+		compatible                   = "st,stc3115";
+		reg                          = <0x70>;
+		sense-resistor-milliohm      = <10>;   /* R16 */
+		design-capacity-mah          = <2000>;
+		internal-resistance-milliohm = <200>;
+		status                       = "okay";
 	};
 
 	// -------------------------------------------------------------------------
 	// FUSB302BMPX — USB-C PD controller (U8), J2 OTG port
 	// 7-bit addr 0x22 (8-bit WRITE=0x44, READ=0x45)
 	// Both VCONN pins tied to +3.3V (valid: 3.0–5.5V).
-	// INT_N → USB_INT → TCA6408 P6 → triggers IO_INT on GPIO46.
+	// INT_N → /PWR/BAT_INT → GPIO3 (shared open-drain with BQ25601 ~INT and
+	// STC3115 ALM). Serviced by fusb302_vbus.c via the bq25601 node's
+	// int-gpios. (Earlier comment said TCA6408 P6 — that was wrong.)
 	// -------------------------------------------------------------------------
 	fusb302: fusb302@22 {
 		compatible = "fcs,fusb302";
@@ -344,31 +386,24 @@
 		// Disabled here for MCUboot; enabled by app overlay.
 		compatible = "bosch,bme280";
 		reg        = <0x77>;
-		status     = "disabled"; // enabled in overlay for app build only
+		status     = "okay"; // enabled in overlay for app build only
 	};
 
 	// -------------------------------------------------------------------------
-	// ST25DV64K-IER8C3 — Dynamic NFC Tag + EEPROM (U4)
-	// User/FTM memory: 7-bit 0x53 (8-bit WRITE=0xA6, READ=0xA7)
-	// System memory:   7-bit 0x57 (8-bit WRITE=0xAE, READ=0xAF)
-	// GPO interrupt → NFC_INT → GPIO21.
-	// NOTE: NFC loop antenna NOT routed on base board (insufficient PCB space
-	// at original dimensions). Pads J6 (Conn_01x05_MountingPin) available
-	// for external antenna pigtail / coil.
+	// SE050C1HQ1/Z01SCZ — NXP EdgeLock Plug & Trust secure element (U4)
+	// Rev A.3 (schematic Rev 1.3) replaces the Rev 1.2 ST25DV64K NFC tag.
+	// I2C: 7-bit 0x48 (8-bit WRITE=0x90, READ=0x91) on the shared I2C bus.
+	// Interface: I2C only (T=1' over I2C). ISO7816 contact interface unused —
+	// RST_N tied to VSS; CLK/IO1/IO2 left unconnected. SE050 I2C-master unused.
+	// ENA (enable) → GPIO21 (the former NFC_INT line), active high, ON by
+	// default; drive LOW for deep power-down (~40 uA incl. 110k pull-up).
+	// Contactless: external NFC antenna (Ezurio 0600-00061) for U2F / tap.
 	// -------------------------------------------------------------------------
-	// ST25DV64K-IER8C3: user memory I2C address 0x53.
-	// The system configuration register space (0x57) is accessed internally
-	// by the driver via the system-reg property — no second DTS node needed.
-	// To change GPO behaviour for a different board, edit akira,gpo-sources
-	// without touching any C code.
-	st25dv: st25dv@53 {
-		compatible       = "st,st25dv64k";
-		reg              = <0x53>;
-		system-reg       = <0x57>; // system config registers (ST25DV fixed)
-		gpo-gpios        = <&gpio0 21 GPIO_ACTIVE_LOW>; // NFC_INT = GPIO21
-		// GPO_ENABLE(0x80) | GPO_FIELDRISING(0x08) | GPO_RFUSERWRITE(0x01)
-		akira,gpo-sources = <0x89>;
-		status           = "okay";
+	se050: se050@48 {
+		compatible   = "nxp,se050";
+		reg          = <0x48>;
+		enable-gpios = <&gpio0 21 GPIO_ACTIVE_HIGH>; // ENA = GPIO21
+		status       = "okay";
 	};
 };
 
@@ -381,7 +416,7 @@
 //   [1] GPIO10     — TFT_CS  — ST7789V / ILI9341 display (J7)
 //                            — Sharp LS027B7DH01 SCS (J4) when CONFIG_AKIRA_SHARP_DISPLAY=y
 //   [2] GPIO14     — SD_CS   — microSD card (Molex 503398-1892, J1)
-//   [3] TCA6408 P1 — CC_CS   — CC1121RHB Sub-GHz transceiver
+//   [3] TCA6408 P3 — CC_CS   — CC1121RHB Sub-GHz transceiver
 //
 // The Sharp Memory LCD SCS is active-HIGH (unusual). When using Sharp (J4)
 // instead of TFT (J7), the overlay overrides cs-gpios[1] to GPIO_ACTIVE_HIGH
@@ -392,6 +427,9 @@
 	pinctrl-0     = <&spim2_default>;
 	pinctrl-names = "default";
 	clock-frequency = <80000000>;
+	dma-enabled;
+	dmas          = <&dma 0>, <&dma 1>;
+	dma-names     = "rx", "tx";
 	#address-cells = <1>;
 	#size-cells    = <0>;
 
@@ -417,10 +455,10 @@
 	lr2021: lr2021@0 {
 		compatible        = "semtech,lr2021";
 		reg               = <0>;
-		spi-max-frequency = <10000000>;
+		spi-max-frequency = <1000000>;
 		cs-gpios          = <&tca6408 6 GPIO_ACTIVE_LOW>;   // LR_CS via P6
 		reset-gpios       = <&tca6408 4 GPIO_ACTIVE_LOW>;   // RF_RST via P4
-		busy-gpios        = <&tca6408 5 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>; // LR_BUSY via P5
+		busy-gpios        = <&tca6408 5 GPIO_ACTIVE_HIGH>; // LR_BUSY via P5 (TCA6408 has no internal pulls)
 		irq-gpios         = <&gpio1 16 GPIO_ACTIVE_HIGH>;   // LR_INT = GPIO48 (gpio1 pin 16)
 		irq-dio           = <5>;                            // LR_INT routed from LR2021 DIO5
 		status            = "okay";
@@ -512,6 +550,11 @@
 };
 
 // =============================================================================
+// GDMA — SPI2 DMA (display shares &spi2)
+// =============================================================================
+&dma { status = "okay"; };
+
+// =============================================================================
 // Watchdog
 // =============================================================================
 &wdt0 { status = "okay"; };
@@ -528,6 +571,10 @@
 // OTG host power: TCA6408 P0 (OTG_EN) enables TPS61023 5V boost (U9)
 // =============================================================================
 zephyr_udc0: &usb_otg { status = "okay"; };
+// Host role, same physical dwc2 core as zephyr_udc0 above — do not
+// usbh_enable() while the device-mode gadget is also enabled, they share
+// one register block (dual-role OTG, not simultaneous).
+zephyr_uhc0: &usb_otg { status = "okay"; };
 
 // =============================================================================
 // WiFi

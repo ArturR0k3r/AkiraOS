@@ -9,6 +9,7 @@
 #include <zephyr/net/socket.h>
 #include <string.h>
 #include <stdio.h>
+#include <lib/mem_helper.h> /* AKIRA_BULK_BSS — http_srv and the WS rx buffer live in PSRAM */
 #ifdef CONFIG_AKIRA_HTTP_STATIC_FILES
 #include <zephyr/fs/fs.h>
 #include <strings.h> /* strcasecmp() for case-insensitive extension match */
@@ -18,7 +19,6 @@
 #include <strings.h>           /* strcasecmp */
 #include <mbedtls/sha1.h>      /* mbedtls_sha1 (needs CONFIG_MBEDTLS_SHA1=y) */
 #include <zephyr/sys/base64.h> /* base64_encode (needs CONFIG_BASE64=y) */
-#include <lib/mem_helper.h>    /* AKIRA_BULK_BSS — PSRAM placement for the rx buffer */
 #endif
 
 LOG_MODULE_REGISTER(http_server, CONFIG_AKIRA_LOG_LEVEL);
@@ -27,7 +27,7 @@ LOG_MODULE_REGISTER(http_server, CONFIG_AKIRA_LOG_LEVEL);
 /* Configuration                                                             */
 /*===========================================================================*/
 
-#define MAX_ROUTES 16
+#define MAX_ROUTES 28
 #define MAX_WS_CLIENTS 4
 #define SERVER_THREAD_STACK_SIZE CONFIG_AKIRA_HTTP_SERVER_STACK_SIZE
 #define SERVER_THREAD_PRIORITY 7
@@ -68,7 +68,7 @@ static struct
     bool running;
 
     struct k_mutex mutex;
-} http_srv;
+} http_srv AKIRA_BULK_BSS;
 
 /* Thread */
 static K_THREAD_STACK_DEFINE(server_stack, SERVER_THREAD_STACK_SIZE);

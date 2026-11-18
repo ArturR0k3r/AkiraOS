@@ -26,6 +26,7 @@ target_include_directories(app PRIVATE
     ${AKIRA_SRC}/connectivity/ota
     ${AKIRA_SRC}/connectivity/matter
     ${AKIRA_SRC}/connectivity/mqtt
+    ${AKIRA_SRC}/console_shell
     ${AKIRA_INC}
     ${CMAKE_CURRENT_LIST_DIR}/../AkiraSDK/include
     ${CMAKE_CURRENT_LIST_DIR}/stubs
@@ -49,6 +50,9 @@ target_sources(app PRIVATE
     ${AKIRA_SRC}/lib/crypto/ed25519/curve25519.c
     ${AKIRA_SRC}/lib/crypto/ed25519/akira_ed25519.c
     ${AKIRA_SRC}/lib/crypto/ed25519/ed25519_sign.c
+    ${AKIRA_SRC}/console_shell/catalog_net.c
+    ${AKIRA_SRC}/console_shell/catalogue_parser.c
+    ${AKIRA_SRC}/connectivity/bluetooth/companion_fs_util.c
 
     # Stubs
     stubs/stub_mcuboot.c
@@ -73,6 +77,9 @@ target_sources(app PRIVATE
     src/test_admission.c
     src/test_app_resources.c
     src/test_ed25519_sign.c
+    src/test_catalog_net.c
+    src/test_catalogue_parser.c
+    src/test_companion_fs_util.c
 )
 
 # The baseline app signature provider reads CONFIG_AKIRA_APP_PUBKEY, which

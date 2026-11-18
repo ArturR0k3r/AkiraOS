@@ -27,6 +27,7 @@ LOG_MODULE_REGISTER(akira_panic, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/fs/nvs.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/logging/log_ctrl.h>
+#include <zephyr/sys/printk.h>
 #include <string.h>
 #if defined(CONFIG_AKIRA_WASM_RUNTIME)
 #include <akira_app_containment.h>
@@ -147,7 +148,13 @@ void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
         (void)nvs_write(&g_panic_nvs, PANIC_NVS_ID, &rec, sizeof(rec));
     }
 
-    LOG_ERR("FATAL error %u — rebooting", reason);
+    /* k_panic_print(), not LOG_ERR(): under CONFIG_LOG_PRINTK=y, LOG_ERR
+     * dispatches through the log core to every registered backend,
+     * including the shell log backend's line-editing code (its own
+     * spinlock) -- if whatever this fault interrupted was holding that
+     * lock, LOG_ERR() here deadlocks before ever reaching sys_reboot().
+     */
+    k_panic_print("FATAL error %u -- rebooting\n", reason);
     sys_reboot(SYS_REBOOT_COLD);
 }
 

@@ -37,6 +37,8 @@ const char *akira_app_source_name(enum akira_app_source source)
 		return "firmware";
 	case AKIRA_APP_SOURCE_FLEET:
 		return "fleet";
+	case AKIRA_APP_SOURCE_MESH:
+		return "mesh";
 	default:
 		return "unknown";
 	}

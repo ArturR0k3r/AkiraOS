@@ -47,6 +47,9 @@ extern "C" {
 /** @brief Maximum EEPROM read/write chunk (I2C buffer limited). */
 #define ST25DV_MAX_XFER_LEN  256
 
+/** @brief Maximum FTM mailbox message length (bytes). */
+#define ST25DV_MAILBOX_MAX_LEN  256
+
 /**
  * @brief Read bytes from user EEPROM.
  *
@@ -114,6 +117,52 @@ int st25dv_read_uid(const struct device *dev, uint8_t uid[8]);
  * @return 0 on success, -EACCES if password rejected, negative errno otherwise.
  */
 int st25dv_open_i2c_session(const struct device *dev, const uint8_t password[8]);
+
+/**
+ * @brief Enable or disable Fast Transfer Mode (FTM) — the mailbox that lets
+ *        an RF reader and this I2C host exchange dynamic messages.
+ *
+ * Requires an open I2C security session (see st25dv_open_i2c_session) —
+ * the FTM authorization register is write-protected like other static regs.
+ *
+ * @param dev    Driver device pointer.
+ * @param enable true to enable FTM, false to disable.
+ * @param wdg    Watchdog setting 0-7: duration = 2^(wdg-1) x 30ms, 0 = infinite.
+ *               Ignored when disabling.
+ * @return 0 on success, negative errno on failure.
+ */
+int st25dv_mailbox_enable(const struct device *dev, bool enable, uint8_t wdg);
+
+/**
+ * @brief Put a message in the FTM mailbox for an RF reader to read.
+ *
+ * @param dev Driver device pointer.
+ * @param buf Source buffer.
+ * @param len Message length, 1-256 bytes.
+ * @return 0 on success, negative errno on failure.
+ */
+int st25dv_mailbox_put_msg(const struct device *dev, const uint8_t *buf, size_t len);
+
+/**
+ * @brief Get the message an RF reader put in the FTM mailbox.
+ *
+ * @param dev     Driver device pointer.
+ * @param buf     Destination buffer.
+ * @param cap     Destination buffer capacity.
+ * @param len_out Set to the number of bytes actually read.
+ * @return 0 on success, negative errno on failure.
+ */
+int st25dv_mailbox_get_msg(const struct device *dev, uint8_t *buf, size_t cap, size_t *len_out);
+
+/**
+ * @brief Query FTM mailbox control/status bits and current message length.
+ *
+ * @param dev     Driver device pointer.
+ * @param ctrl    Set to the raw MB_CTRL_Dyn register value.
+ * @param msg_len Set to the current message length in the mailbox.
+ * @return 0 on success, negative errno on failure.
+ */
+int st25dv_mailbox_status(const struct device *dev, uint8_t *ctrl, size_t *msg_len);
 
 #ifdef __cplusplus
 }

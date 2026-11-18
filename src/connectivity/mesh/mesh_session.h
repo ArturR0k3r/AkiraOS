@@ -41,6 +41,13 @@ void mesh_session_install(struct session_table *t,
 /* Mark expired entries invalid (mirrors mesh_route_gc). */
 void mesh_session_gc(struct session_table *t, uint32_t now_ms);
 
+/* Extend expiry_ms for peer_id's entry if one exists (mirrors
+ * mesh_route_touch) — keeps a long-running exchange's session alive past
+ * its original TTL as long as traffic keeps flowing, without re-deriving
+ * key material. No-op if no session exists for peer_id. */
+void mesh_session_touch(struct session_table *t, const uint8_t *peer_id,
+                        uint32_t new_expiry_ms);
+
 #endif /* CONFIG_AKIRA_MESH_E2E_CRYPTO */
 
 #endif /* AKIRA_MESH_SESSION_H */

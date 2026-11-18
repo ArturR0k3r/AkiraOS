@@ -1,0 +1,62 @@
+/*
+ * Copyright (c) 2025 AkiraOS Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * AkiraConsole (ESP32-S3 N16R8) custom partition table.
+ * Designed for 16 MB flash; gives 2 MB to each MCUboot image slot so the
+ * firmware can grow well beyond the default 4 MB table's 1.3 MB limit.
+ *
+ * Layout (all sizes in KB unless noted):
+ *   0x000000  boot          64 KB   MCUboot
+ *   0x010000  sys           64 KB   reserved
+ *   0x020000  image-0       2 MB    slot0 (run image)
+ *   0x220000  image-1       2 MB    slot1 (OTA candidate)
+ *   0x420000  (custom)    ---        user partitions (NVS, LFS …)
+ *   0xFE0000  image-scratch 124 KB  MCUboot revert scratch
+ *   0xFFF000  coredump       4 KB
+ *
+ * NOTE: This replaces <espressif/partitions_0x0_amp.dtsi> (4 MB table).
+ * If you need >2 MB images, increase both slot sizes and shift slot1 start
+ * accordingly — keep image-scratch and coredump at the flash end.
+ */
+
+&flash0 {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		boot_partition: partition@0 {
+			label = "mcuboot";
+			reg = <0x00000000 DT_SIZE_K(64)>;
+		};
+
+		sys_partition: partition@10000 {
+			label = "sys";
+			reg = <0x00010000 DT_SIZE_K(64)>;
+		};
+
+		slot0_partition: partition@20000 {
+			label = "image-0";
+			reg = <0x00020000 DT_SIZE_K(2048)>;
+		};
+
+		slot1_partition: partition@220000 {
+			label = "image-1";
+			reg = <0x00220000 DT_SIZE_K(2048)>;
+		};
+
+		scratch_partition: partition@fe0000 {
+			label = "image-scratch";
+			reg = <0x00FE0000 DT_SIZE_K(124)>;
+		};
+
+		coredump_partition: partition@fff000 {
+			label = "coredump";
+			reg = <0x00FFF000 DT_SIZE_K(4)>;
+		};
+
+		/* User-defined partitions (NVS settings, LittleFS) are added by
+		 * akiraconsole_esp32s3_procpu.overlay starting at 0x420000. */
+	};
+};

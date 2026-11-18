@@ -1,4 +1,7 @@
 #include "security.h"
+#if defined(CONFIG_AKIRA_CRYSTAL)
+#include <crystal/akira_crystal.h>
+#endif
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/iterable_sections.h>
 #include <zephyr/sys/math_extras.h>
@@ -75,6 +78,8 @@ AKIRA_CORE_CAPABILITY(akira_cap_ble_scan,      "ble.scan",      36, AKIRA_CAP_BL
 AKIRA_CORE_CAPABILITY(akira_cap_ble_spam,      "ble.spam",      37, AKIRA_CAP_BLE_SPAM);
 AKIRA_CORE_CAPABILITY(akira_cap_mesh,          "mesh",          38, AKIRA_CAP_MESH);
 AKIRA_CORE_CAPABILITY(akira_cap_sync,          "sync",          39, AKIRA_CAP_SYNC);
+/* AkiraConsole: NFC tag read/write/field presence (nfc_manager). */
+AKIRA_CORE_CAPABILITY(akira_cap_nfc,           "nfc",           40, AKIRA_CAP_NFC);
 
 /* Core manifest strings that are not registry names: legacy spellings,
  * wildcards and composites. Each maps to exactly the mask it has always
@@ -408,6 +413,12 @@ bool akira_security_check_exec(wasm_exec_env_t exec_env, uint64_t capability)
             if (audit_it) {
                 sandbox_audit_log(AUDIT_EVENT_CAPABILITY_DENIED, namebuf, (uint32_t)(capability & 0xFFFFFFFFu));
             }
+#if defined(CONFIG_AKIRA_CRYSTAL)
+            /* A power outside the manifest: Akira shows a crack until mended.
+             * The crack list de-duplicates per (app, capability), so the
+             * rate-limited denials that reach here are enough. */
+            akira_crystal_note_denial(namebuf, capability);
+#endif
         } else {
             if (log_it) {
                 LOG_WRN("Security: capability denied for unknown app: %s (0x%016llx)", akira_capability_name(capability), (unsigned long long)capability);

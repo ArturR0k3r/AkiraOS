@@ -111,13 +111,19 @@ extern "C" {
 
 #define COMP_OP_SHELL_EXEC        "shell.exec"         /* params: {"cmd":"..."} */
 
-#define COMP_OP_FILES_LIST        "files.list"         /* params: {"path":"..."} */
-#define COMP_OP_FILES_READ        "files.read"         /* params: {"path":"..."} — data streams on DATA_DOWN */
+#define COMP_OP_FILES_LIST        "files.list"         /* params: {"path":"...","cursor":N} — paged, see "next" */
+#define COMP_OP_FILES_READ        "files.read"         /* params: {"path":"...","offset":N,"len":N<=2048} — {"n":N}, then N bytes on DATA_DOWN */
 #define COMP_OP_FILES_WRITE       "files.write"        /* params: {"path":"...","size":<bytes>} — data via DATA_UP */
 #define COMP_OP_FILES_DELETE      "files.delete"       /* params: {"path":"..."} */
 #define COMP_OP_FILES_MKDIR       "files.mkdir"        /* params: {"path":"..."} */
+#define COMP_OP_FILES_WRITE_END   "files.write.end"    /* no params — flush the staged file (temp + rename) */
+#define COMP_OP_FILES_RENAME      "files.rename"       /* params: {"from":"...","to":"..."} */
+#define COMP_OP_FS_SESSION_OPEN   "fs.session.open"    /* no params — take the SD card for file ops (idempotent, renews lease) */
+#define COMP_OP_FS_SESSION_CLOSE  "fs.session.close"   /* no params */
 
-#define COMP_OP_OTA_START         "ota.start"          /* params: {"url":"...","version":"...","signature":"<hex>"} */
+#define COMP_OP_OTA_BEGIN         "ota.begin"          /* params: {"size":<bytes>,"sha256":"<64 hex>"} — image streams on DATA_UP */
+#define COMP_OP_OTA_END           "ota.end"            /* no params — verify sha256 and stage the image for MCUboot */
+#define COMP_OP_OTA_APPLY         "ota.apply"          /* no params — reboot so MCUboot verifies and installs the staged image */
 #define COMP_OP_OTA_STATUS        "ota.status"
 
 /* --------------------------------------------------------------------------
@@ -130,6 +136,7 @@ extern "C" {
  *               COMP_XFER_APP_DATA   0x01
  *               COMP_XFER_FILE_DATA  0x02
  *               COMP_XFER_SHELL_OUT  0x03  (data down only — shell stream)
+ *               COMP_XFER_FW_DATA    0x04  (firmware image, streamed to the OTA slot)
  *   Byte 1:   Flags
  *               COMP_FLAG_LAST       0x01  set on final chunk
  *               COMP_FLAG_ERROR      0x02  set if sender aborted
@@ -140,6 +147,7 @@ extern "C" {
 #define COMP_XFER_APP_DATA   0x01
 #define COMP_XFER_FILE_DATA  0x02
 #define COMP_XFER_SHELL_OUT  0x03
+#define COMP_XFER_FW_DATA    0x04
 
 #define COMP_FLAG_LAST       0x01
 #define COMP_FLAG_ERROR      0x02

@@ -18,8 +18,10 @@ extern "C"
 {
 #endif
 
-#define USB_MOUNT_POINT "/usb"
-#define USB_APPS_DIR "/usb/apps"
+/* Trailing ':' required: matches the "/SD:" volume-ID convention FatFs's
+ * get_ldnumber() expects. */
+#define USB_MOUNT_POINT "/usb:"
+#define USB_APPS_DIR "/usb:/apps"
 
     /**
      * @brief USB storage state

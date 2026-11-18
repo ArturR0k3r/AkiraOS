@@ -76,7 +76,11 @@ BT_GATT_SERVICE_DEFINE(echo_svc,
 
 int bt_echo_send(const uint8_t *data, size_t len)
 {
-    if (data == NULL || len == 0)
+    if (!g_enabled)
+    {
+        return -EACCES;
+    }
+    if (data == NULL || len == 0 || len > UINT16_MAX)
     {
         return -EINVAL;
     }

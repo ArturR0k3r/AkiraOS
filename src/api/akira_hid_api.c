@@ -5,6 +5,7 @@
 
 #define LOG_MODULE_NAME akira_hid_api
 #include <zephyr/logging/log.h>
+#include <crystal/akira_seal.h>
 LOG_MODULE_REGISTER(akira_hid_api, CONFIG_AKIRA_LOG_LEVEL);
 
 /**
@@ -34,6 +35,7 @@ LOG_MODULE_REGISTER(akira_hid_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/kernel.h>
 #include <zephyr/sys/atomic.h>
 #include <string.h>
+#include <lib/mem_helper.h>
 
 #ifdef CONFIG_AKIRA_HID
 #include <connectivity/hid/hid_manager.h>
@@ -49,7 +51,12 @@ LOG_MODULE_REGISTER(akira_hid_api, CONFIG_AKIRA_LOG_LEVEL);
 #ifdef CONFIG_AKIRA_HID
 
 #define HID_RAW_QUEUE_DEPTH  4
-#define HID_FIDO_QUEUE_DEPTH 4
+/* CTAPHID messages reassemble across up to ~18 packets (1024-byte max
+ * payload / 59 bytes per continuation frame). Windows bursts all
+ * continuation packets within ~10ms of each other, far faster than the
+ * WASM app's poll cadence drains them — a shallow queue silently drops
+ * trailing packets and reassembly stalls forever. */
+#define HID_FIDO_QUEUE_DEPTH 20
 
 /* Largest report hid_send_raw_report() accepts. */
 #define HID_RAW_REPORT_MAX 64
@@ -57,8 +64,14 @@ LOG_MODULE_REGISTER(akira_hid_api, CONFIG_AKIRA_LOG_LEVEL);
 struct hid_raw_pkt  { uint8_t data[USB_HID_RAW_PAYLOAD_SIZE];  uint8_t len; };
 struct hid_fido_pkt { uint8_t data[USB_HID_FIDO_PAYLOAD_SIZE]; uint8_t len; };
 
-K_MSGQ_DEFINE(hid_raw_msgq,  sizeof(struct hid_raw_pkt),  HID_RAW_QUEUE_DEPTH,  4);
-K_MSGQ_DEFINE(hid_fido_msgq, sizeof(struct hid_fido_pkt), HID_FIDO_QUEUE_DEPTH, 4);
+/* Ring buffers in PSRAM.  The report callbacks below are the only producers;
+ * they may run in interrupt context, which is fine — the one window where
+ * PSRAM is unreachable (cache off, during an internal-flash write) also has
+ * interrupts disabled, so no ISR can observe it. */
+AKIRA_BULK_MSGQ_DEFINE(hid_raw_msgq,  sizeof(struct hid_raw_pkt),
+                       HID_RAW_QUEUE_DEPTH,  4);
+AKIRA_BULK_MSGQ_DEFINE(hid_fido_msgq, sizeof(struct hid_fido_pkt),
+                       HID_FIDO_QUEUE_DEPTH, 4);
 
 static void hid_raw_isr_cb(const uint8_t *data, uint8_t len)
 {
@@ -78,15 +91,19 @@ static void hid_fido_isr_cb(const uint8_t *data, uint8_t len)
     k_msgq_put(&hid_fido_msgq, &pkt, K_NO_WAIT);
 }
 
-static atomic_t hid_usb_handlers_registered;
-
 static void hid_maybe_register_usb_handlers(void)
 {
+    /* The raw/FIDO report handlers live in usb_hid.c, which is built only
+     * with CONFIG_AKIRA_USB_HID. */
+#ifdef CONFIG_AKIRA_USB_HID
+    static atomic_t hid_usb_handlers_registered;
+
     if (atomic_cas(&hid_usb_handlers_registered, 0, 1))
     {
         usb_hid_raw_set_handler(hid_raw_isr_cb);
         usb_hid_fido_set_handler(hid_fido_isr_cb);
     }
+#endif
 }
 
 /* ── Per-app bookkeeping for teardown ───────────────────────────────────── */
@@ -313,6 +330,7 @@ int akira_native_hid_is_connected(wasm_exec_env_t exec_env)
 int akira_native_hid_key_press(wasm_exec_env_t exec_env, int32_t keycode)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+    AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_HID_INJECT, NULL, -EACCES);
 
     if (keycode < 0 || keycode > 0xFF) {
         return -EINVAL;
@@ -344,6 +362,7 @@ int akira_native_hid_key_release(wasm_exec_env_t exec_env, int32_t keycode)
 int akira_native_hid_set_modifiers(wasm_exec_env_t exec_env, int32_t mod_mask)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+    AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_HID_INJECT, NULL, -EACCES);
 
     if (mod_mask < 0 || mod_mask > 0xFF) {
         return -EINVAL;
@@ -371,6 +390,7 @@ int akira_native_hid_key_release_all(wasm_exec_env_t exec_env)
 int akira_native_hid_type_string(wasm_exec_env_t exec_env, const char *str)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+    AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_HID_INJECT, NULL, -EACCES);
 
     if (!str) {
         return -EINVAL;
@@ -441,6 +461,7 @@ int akira_native_hid_type_string(wasm_exec_env_t exec_env, const char *str)
 int akira_native_hid_gamepad_press(wasm_exec_env_t exec_env, int32_t btn_mask)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+    AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_HID_INJECT, NULL, -EACCES);
 
 #ifdef CONFIG_AKIRA_HID
     hid_mark_used(exec_env);
@@ -465,6 +486,7 @@ int akira_native_hid_gamepad_set_axis(wasm_exec_env_t exec_env,
                                       int32_t axis, int32_t value)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+    AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_HID_INJECT, NULL, -EACCES);
 
     if (axis < 0 || axis >= HID_GAMEPAD_MAX_AXES) {
         return -EINVAL;
@@ -484,6 +506,7 @@ int akira_native_hid_gamepad_set_axis(wasm_exec_env_t exec_env,
 int akira_native_hid_gamepad_set_dpad(wasm_exec_env_t exec_env, int32_t direction)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+    AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_HID_INJECT, NULL, -EACCES);
 
     if (direction < 0 || direction > 8) {
         return -EINVAL;
@@ -492,6 +515,48 @@ int akira_native_hid_gamepad_set_dpad(wasm_exec_env_t exec_env, int32_t directio
 #ifdef CONFIG_AKIRA_HID
     hid_mark_used(exec_env);
     return HID_CALL(exec_env, hid_gamepad_set_dpad((uint8_t)direction));
+#else
+    return -ENOTSUP;
+#endif
+}
+
+/*
+ * Send all six axes + buttons + hat in a single BLE notify, instead of the
+ * 5 separate notifies that pressing press/release/set_axis/set_dpad individually
+ * would trigger — avoids BLE notification-queue congestion when several inputs
+ * (IMU + D-pad) change in the same frame.
+ */
+int akira_native_hid_gamepad_send_report(wasm_exec_env_t exec_env,
+                                         int32_t buttons, int32_t hat,
+                                         int32_t a0, int32_t a1, int32_t a2,
+                                         int32_t a3, int32_t a4, int32_t a5)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+    AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_HID_INJECT, NULL, -EACCES);
+
+    if (hat < 0 || hat > 8 || buttons < 0 || buttons > 0xFFFF) {
+        return -EINVAL;
+    }
+
+    const int32_t axes[] = { a0, a1, a2, a3, a4, a5 };
+
+    for (size_t i = 0; i < ARRAY_SIZE(axes); i++) {
+        if (axes[i] < -32768 || axes[i] > 32767) {
+            return -EINVAL;
+        }
+    }
+
+#ifdef CONFIG_AKIRA_HID
+    hid_gamepad_report_t rpt = {
+        .axes = { (int16_t)a0, (int16_t)a1, (int16_t)a2,
+                  (int16_t)a3, (int16_t)a4, (int16_t)a5 },
+        .buttons = (uint16_t)buttons,
+        .hat = (uint8_t)hat,
+    };
+
+    /* Held buttons/axes outlive the call: teardown resets the gamepad. */
+    hid_mark_used(exec_env);
+    return HID_CALL(exec_env, hid_gamepad_send_report(&rpt));
 #else
     return -ENOTSUP;
 #endif
@@ -513,6 +578,7 @@ int akira_native_hid_gamepad_reset(wasm_exec_env_t exec_env)
 int akira_native_hid_mouse_move(wasm_exec_env_t exec_env, int32_t dx, int32_t dy)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+    AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_HID_INJECT, NULL, -EACCES);
 
     /* Clamp to int8 range */
     int8_t cdx = (int8_t)CLAMP(dx, -127, 127);
@@ -531,6 +597,7 @@ int akira_native_hid_mouse_move(wasm_exec_env_t exec_env, int32_t dx, int32_t dy
 int akira_native_hid_mouse_btn_press(wasm_exec_env_t exec_env, int32_t button)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+    AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_HID_INJECT, NULL, -EACCES);
 
     if (button < 0 || button > 0xFF) {
         return -EINVAL;
@@ -562,6 +629,7 @@ int akira_native_hid_mouse_btn_release(wasm_exec_env_t exec_env, int32_t button)
 int akira_native_hid_mouse_scroll(wasm_exec_env_t exec_env, int32_t delta)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+    AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_HID_INJECT, NULL, -EACCES);
 
     int8_t cd = (int8_t)CLAMP(delta, -127, 127);
 
@@ -579,6 +647,7 @@ int akira_native_hid_mouse_scroll(wasm_exec_env_t exec_env, int32_t delta)
 int akira_native_hid_consumer_send(wasm_exec_env_t exec_env, int32_t usage_code)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+    AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_HID_INJECT, NULL, -EACCES);
 
     if (usage_code < 0 || usage_code > 0xFFFF) {
         return -EINVAL;
@@ -599,6 +668,7 @@ int akira_native_hid_send_raw_report(wasm_exec_env_t exec_env,
                                      uint32_t data_ptr, uint32_t len)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+    AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_HID_INJECT, NULL, -EACCES);
 
     if (report_id < 0 || report_id > 0xFF || len == 0 || len > 64) {
         return -EINVAL;
@@ -654,6 +724,7 @@ int akira_native_hid_action_register(wasm_exec_env_t exec_env,
 int akira_native_hid_action_trigger(wasm_exec_env_t exec_env, const char *name)
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
+    AKIRA_SEAL_GATE_OR_RETURN(exec_env, AKIRA_SEAL_HID_INJECT, NULL, -EACCES);
 
     if (!name) {
         return -EINVAL;
@@ -795,7 +866,11 @@ int akira_native_hid_fido_send(wasm_exec_env_t exec_env,
 {
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_HID, -EPERM);
 
-#ifdef CONFIG_AKIRA_HID
+    /* usb_hid_fido_send() lives in usb_hid.c, which CMake compiles only under
+     * CONFIG_AKIRA_USB_HID. Gate on that (not CONFIG_AKIRA_HID) so a build with
+     * HID enabled but USB HID disabled links cleanly, matching how the FIDO ISR
+     * handler is registered above. */
+#ifdef CONFIG_AKIRA_USB_HID
     if (len == 0 || len > USB_HID_FIDO_PAYLOAD_SIZE) {
         return -EINVAL;
     }
@@ -842,6 +917,7 @@ static const NativeSymbol akira_hid_natives[] = {
     {"hid_gamepad_release", (void *)akira_native_hid_gamepad_release, "(i)i", NULL},
     {"hid_gamepad_set_axis", (void *)akira_native_hid_gamepad_set_axis, "(ii)i", NULL},
     {"hid_gamepad_set_dpad", (void *)akira_native_hid_gamepad_set_dpad, "(i)i", NULL},
+    {"hid_gamepad_send_report", (void *)akira_native_hid_gamepad_send_report, "(iiiiiiii)i", NULL},
     {"hid_gamepad_reset", (void *)akira_native_hid_gamepad_reset, "()i", NULL},
     {"hid_mouse_move", (void *)akira_native_hid_mouse_move, "(ii)i", NULL},
     {"hid_mouse_btn_press", (void *)akira_native_hid_mouse_btn_press, "(i)i", NULL},

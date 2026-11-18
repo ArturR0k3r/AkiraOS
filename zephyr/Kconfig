@@ -186,6 +186,22 @@ config AKIRA_WASM_APP_PRIORITY
       rate.  Decrease (higher priority) only if an app needs real-time
       scheduling and you accept potential shell unresponsiveness.
 
+config AKIRA_DISPLAY_COMPOSITOR_STACK_SIZE
+    int "Display compositor thread stack size (bytes)"
+    default 2048
+    depends on AKIRA_WASM_RUNTIME
+    help
+      Stack for the dedicated thread that blits presented framebuffers to
+      the physical display. No WAMR/WASI call chain here (unlike the WASM
+      app thread), just display_write() — much smaller stack suffices.
+
+config AKIRA_DISPLAY_COMPOSITOR_PRIORITY
+    int "Display compositor thread scheduling priority"
+    default 14
+    depends on AKIRA_WASM_RUNTIME
+    help
+      Preemptive thread priority for the display compositor thread.
+
 config MAX_CONTAINERS
     int "Maximum number of concurrently loaded WASM containers"
     default 8
@@ -323,6 +339,44 @@ config AKIRA_ILI9341_DRIVER
       (akira,ili9341 binding).  CMakeLists.txt appends the board's
       *_ili9341.overlay and compiles src/drivers/display/akira_ili9341.c.
 
+config FUEL_GAUGE_STC3115
+    bool "STC3115 Li-Ion fuel gauge (AkiraConsole Prod)"
+    default y
+    depends on FUEL_GAUGE && I2C
+    depends on DT_HAS_ST_STC3115_ENABLED
+    help
+      STMicroelectronics STC3115 coulomb-counting fuel gauge (U4, I2C 0x70)
+      fitted on AkiraConsole Production.  Reports state of charge, battery
+      voltage, current and temperature through Zephyr's fuel_gauge API, which
+      akira_power_manager surfaces on the OS shell status bar.
+
+config AKIRA_CRYPTO_ED25519_SELFTEST
+    bool "Run the Ed25519/SHA-512 known-answer self-test at boot"
+    default y
+    depends on AKIRA_WASM_CRYPTO
+    help
+      Validates the vendored SHA-512 + Ed25519 implementation against RFC 8032
+      test vector 1 during boot (see the note in src/api/ed25519.c: mbedTLS's
+      SHA-512 is unresolved on this target, so the vendored one is used).
+
+      The implementation is static code — the result cannot change between
+      boots of the same firmware — but the test costs ~8 s of CPU on the
+      ESP32-S3 and that is paid on EVERY boot, including every wake from deep
+      sleep, during which the console appears dead.
+
+      Keep enabled for bring-up and when changing crypto code; disable on
+      battery-powered builds once a firmware image has been validated.
+
+config AKIRA_LP5817
+    bool "LP5817 I2C backlight LED driver (AkiraConsole Prod)"
+    depends on DISPLAY && I2C
+    help
+      TI LP5817 3-channel I2C LED driver (U7) sinking the panel backlight
+      strings on AkiraConsole Production Rev A.3.  The board has no PWM
+      backlight GPIO — the LP5817 at I2C 0x2D is the only way to light the
+      panel, and it powers up fully disabled.  Without this the display
+      initialises correctly but stays completely dark.
+
 # Backward-compat aliases — C code and CMakeLists.txt reference these names.
 config AKIRA_ST7789V_DRIVER
     bool
@@ -331,6 +385,15 @@ config AKIRA_ST7789V_DRIVER
 config AKIRA_SHARP_DISPLAY
     bool
     default y if LS0XX
+
+  config AKIRA_SHARP_INVERT_COLORS
+      bool "Invert Sharp display colors (black↔white)"
+      default n
+      depends on AKIRA_SHARP_DISPLAY
+      help
+        XOR every packed MONO byte before sending to the Sharp LS0XX panel,
+        swapping black and white. Applied in display_hal.c during RGB565→MONO
+        conversion — no changes to the Zephyr driver required.
 
 endmenu
 menu "PSRAM / External RAM options"
@@ -371,43 +434,41 @@ config AKIRA_MODULE_RF
     help
       Enable RF module (compile RF framework and drivers). Useful to disable on constrained boards.
 
-config AKIRA_LR1121
-    bool "Enable LR1121 LoRa driver"
+config AKIRA_RF_FRAMEWORK
+    bool "Enable unified RF framework"
     default n
-    depends on SPI && GPIO && AKIRA_RADIO_MANAGER
+    depends on AKIRA_MODULE_RF
     help
-      Enable Semtech LR1121 multi-band LoRa transceiver.
-      Supports LoRa and GFSK modulation, Sub-GHz to 2.4GHz.
-
-config AKIRA_CC1101
-    bool "Enable CC1101 Sub-GHz driver"
-    default n
-    depends on SPI && GPIO && AKIRA_RADIO_MANAGER
-    help
-      Enable TI CC1101 Sub-GHz transceiver driver.
-      Supports 300-928MHz frequency range.
+      Enable the unified RF driver framework that provides a common API for
+      multiple RF chips.  With WIFI and AKIRA_WASM_API it also builds the raw
+      802.11 management-frame paths (WiFi scan and deauth/disassoc injection)
+      exported to WASM via the RF API. Elevated and regulatory-sensitive:
+      gated additionally by the "wifi.inject" capability (bit 34).
 
 config AKIRA_LR2021
-    bool "Enable LR2021 LoRa Plus driver"
+    bool "Enable LR2021 LoRa Plus driver (AkiraConsole Production)"
     default n
     depends on SPI && GPIO && AKIRA_RADIO_MANAGER
     help
       Enable Semtech LR2021 LoRa Plus transceiver.
       Fourth-generation LoRa IP, multi-band Sub-GHz + 2.4 GHz.
       Supports LoRa, FSK, FLRC, BPSK, BLE PHY, O-QPSK modulations.
+      Used on AkiraConsole Production via TCA6408 GPIO expander.
 
 config AKIRA_CC1121
-    bool "Enable CC1121 Sub-GHz driver"
+    bool "Enable CC1121 Sub-GHz driver (AkiraConsole Production)"
     default n
-    depends on SPI && GPIO && AKIRA_RADIO_MANAGER
+    depends on SPI && GPIO && AKIRA_RADIO_MANAGER && DT_HAS_TI_CC1121_ENABLED
     help
       Enable TI CC1121RHB high-performance Sub-GHz transceiver driver.
       Covers 315/433/868/915 MHz bands, narrowband FSK/OOK.
+      Used on AkiraConsole Production via TCA6408 GPIO expander CS.
+      Requires a DT node with compatible = "ti,cc1121" and status = "okay".
 
 config AKIRA_RF_RX_DAEMON
     bool "Enable RF RX background daemon"
     default y
-    depends on AKIRA_RADIO_MANAGER
+    depends on AKIRA_RF_FRAMEWORK
     help
       Runs a background thread that polls the active RF driver and enqueues
       received packets. Callers use akira_rf_recv_pop() instead of the
@@ -438,18 +499,6 @@ config AKIRA_RF_DAEMON_PRIORITY
     default 14
     depends on AKIRA_RF_RX_DAEMON
 
-config AKIRA_RF_FRAMEWORK
-    bool "802.11 raw management-frame RF framework (scan/inject)"
-    default n
-    depends on AKIRA_WASM_API && WIFI
-    depends on AKIRA_MODULE_RF
-    help
-      Build the raw 802.11 management-frame paths (WiFi scan and deauth/
-      disassoc injection) exported to WASM via the RF API. Elevated and
-      regulatory-sensitive: gated additionally by the "wifi.inject"
-      capability (bit 34). When disabled these entry points are not
-      compiled or registered.
-
 config AKIRA_RADIO_802154_PROMISC_RX
     bool "Enable raw 802.15.4 RX capture via promiscuous mode"
     default y if NET_PROMISCUOUS_MODE
@@ -459,6 +508,18 @@ config AKIRA_RADIO_802154_PROMISC_RX
       Zephyr net promiscuous-mode queue, and reports real per-frame LQI/RSSI in
       get_stats(). Requires the 802.15.4 driver/L2 to support promiscuous
       capture. When disabled, recv() honestly returns -ENOSYS.
+config AKIRA_RF_INSOMNIA_MAX_HOLD_S
+    int "Maximum time a selected radio inhibits deep sleep (seconds)"
+    default 3600
+    range 60 86400
+    depends on AKIRA_MODULE_RF
+    help
+      Selecting a radio takes a keep-awake lock, because deep sleep on this
+      hardware is a power-off and would drop whatever the caller is listening
+      for.  This bounds how long that lock survives if the caller never calls
+      akira_rf_deinit()/akira_rf_release_all() — after it expires the device is
+      free to auto-sleep again.  Set high enough to cover a legitimate long
+      receive session.
 
 endmenu
 
@@ -494,10 +555,28 @@ config AKIRA_PWM_DIAL
       INPUT_ABS_WHEEL (0-255) into the Zephyr input subsystem.
       On AkiraConsole Production: RK10J12R0A0B (RV1) on GPIO48.
 
+config AKIRA_NFC_MANAGER
+    bool "Enable NFC tag abstraction layer"
+    default y if AKIRA_ST25DV
+    help
+      Hardware-agnostic registry for NFC tag chip drivers (mirrors
+      AKIRA_RADIO_MANAGER for radios). Drivers register a read/write/UID/
+      field-presence vtable at boot; callers go through the manager instead
+      of a chip-specific API.
+
+config AKIRA_NFC_MAX_DEVICES
+    int "Maximum number of registered NFC devices"
+    default 2
+    depends on AKIRA_NFC_MANAGER
+    help
+      Size of the NFC device registry. Must be >= total number of NFC tag
+      drivers enabled in this build.
+
 config AKIRA_ST25DV
     bool "Enable ST25DV64K NFC tag driver"
     default y if DT_HAS_ST_ST25DV64K_ENABLED
     depends on I2C
+    select AKIRA_NFC_MANAGER
     help
       Enable STMicroelectronics ST25DV64K Dynamic NFC/RFID tag driver.
       Provides I2C access to the 64 Kbit EEPROM user memory and system
@@ -505,16 +584,24 @@ config AKIRA_ST25DV
       RF operations (ISO 15693) happen autonomously when an NFC reader
       is present.
 
+      Retained for boards that populate the ST25DV. AkiraConsole Prod Rev A.3
+      replaced it with the SE050 (see AKIRA_SE050); its DT node is gone so this
+      defaults off there, but the driver stays available.
+
 config AKIRA_SE050
     bool "Enable NXP SE050 secure element driver"
     default y if DT_HAS_NXP_SE050_ENABLED
     depends on I2C
+    select AKIRA_NFC_MANAGER
     help
       Enable the NXP EdgeLock SE050 Plug & Trust secure element driver.
       Talks to the SE050 over the ISO7816 T=1' block protocol tunnelled over
       I2C. Provides on-die true random, ECC P-256 key generation / signing
       (keys never leave the chip), and secure binary object storage.
       Owns the ENA GPIO for deep-sleep power gating.
+
+      On AkiraConsole Production (Rev A.3) this is the SE050C1HQ1/Z01SCZ at
+      I2C 0x48, replacing the Rev 1.2 ST25DV64K NFC tag.
 
 config AKIRA_ATECC608B
     bool "Enable Microchip ATECC608B secure element driver"
@@ -545,16 +632,51 @@ config AKIRA_ATECC608B_INIT_PRIORITY
       Must run after the I2C driver initialises. A missing part is logged and
       does not stop the boot.
 
+if AKIRA_SE050
+
 config AKIRA_SE050_SCP03
     bool "Use GlobalPlatform SCP03 authenticated/encrypted channel"
     default n
-    depends on AKIRA_SE050
     help
       Wrap all APDU exchanges in a GlobalPlatform SCP03 secure channel
       (AES-CMAC + AES-CBC session keys). Requires the part's provisioned
       platform SCP03 static keys. Leave disabled to use a plain APDU session,
       which the SE050 permits for GetRandom, reading policy-open objects, and
       signing with objects whose policy allows unauthenticated use.
+
+config AKIRA_SE050_SETTINGS_KEY
+    bool "Back the NVS encryption key with the SE050"
+    default n
+    depends on AKIRA_SETTINGS_ENCRYPTION
+    help
+      Override akira_settings_get_encryption_key() to read the 32-byte
+      AES-256 NVS key from an SE050 binary object instead of a compile-time
+      constant. Provisioned from the SE050 TRNG on first boot if absent.
+
+config AKIRA_SE050_SETTINGS_KEY_OBJID
+    hex "SE050 object ID holding the NVS encryption key"
+    default 0x50500001
+    depends on AKIRA_SE050_SETTINGS_KEY
+    help
+      SE050 secure object identifier that stores the 32-byte NVS AES key.
+
+config AKIRA_SE050_U2F
+    bool "Expose SE050-backed (non-exportable) P-256 for U2F"
+    default n
+    depends on AKIRA_WASM_CRYPTO_ECDSA_P256
+    help
+      Add native P-256 keygen/sign that keep the private key on-die (the
+      SE050 model — keys are non-exportable), for hardware-backed U2F/FIDO.
+      The existing exportable soft-token P-256 API is left intact.
+
+config AKIRA_SE050_U2F_KEY_OBJID
+    hex "SE050 base object ID for U2F P-256 keys"
+    default 0x50500010
+    depends on AKIRA_SE050_U2F
+    help
+      Base SE050 secure object identifier for hardware-backed U2F key pairs.
+
+endif # AKIRA_SE050
 
 endmenu
 
@@ -670,6 +792,18 @@ config AKIRA_BT_HID
       Enable HID over Bluetooth Low Energy (BLE).
       Requires Bluetooth stack to be enabled.
 
+config AKIRA_BT_ADV_AFTER_BLANK_S
+    int "Keep BLE advertising this long after the screen blanks (s)"
+    default 120
+    range 0 600
+    depends on BT
+    help
+      When the screen blanks with no BLE connection, advertising continues for
+      this many seconds so a phone can still find the device, then stops to
+      save the radio. A connection arriving in the window cancels the stop, and
+      waking the screen restarts advertising. 0 stops advertising immediately
+      on blank. Used by bt_manager_on_blank().
+
 config AKIRA_BT_ECHO
     bool "Enable Bluetooth Echo service"
     default n
@@ -696,6 +830,16 @@ config AKIRA_BT_COMPANION
       the shell command 'bt mode companion'.
 
       Requires BT_MAX_CONN >= 1 and BT_GATT_DYNAMIC_DB=y.
+
+config AKIRA_BT_COMPANION_CMD_ON_SYSWORKQ
+    bool "Run companion commands on the system work queue"
+    depends on AKIRA_BT_COMPANION
+    help
+      Handle companion GATT commands on the system work queue instead of a
+      dedicated thread, saving its 8 KB stack of internal DRAM. apps.cmd can
+      then hold the system work queue for up to 3 s while it waits for the
+      app's reply. Needs a system work queue stack big enough for app
+      installs and file I/O; AkiraConsole boards enable it.
 
 config AKIRA_BT_COMPANION_STATUS_INTERVAL_MS
     int "Companion status notification interval (ms)"
@@ -734,6 +878,61 @@ config AKIRA_RADIO_MAX_RADIOS
     help
       Size of the radio registry. Must be >= total number of drivers
       that call radio_manager_register() at boot.
+
+if WIFI
+
+config AKIRA_RADIO_WIFI_MESH
+    bool "AkiraMesh Wi-Fi (SoftAP) transport"
+    default y
+    select NET_DHCPV4_SERVER
+    help
+      radio_wifi.c: AkiraMesh over Wi-Fi, with a SoftAP gateway node.  Its
+      UDP send/recv needs Zephyr's DHCPv4 server for the SoftAP side (~4.7 KB
+      of internal DRAM).  Mesh still runs over BLE and the sub-GHz radios
+      without it.
+
+config AKIRA_RADIO_WIFI_MESH_SSID
+    string "AkiraMesh WiFi transport SSID"
+    default "akiramesh"
+    depends on AKIRA_RADIO_WIFI_MESH
+    help
+      Fixed SSID the mesh gateway node's SoftAP advertises and every other
+      mesh node STA-connects to (radio_wifi.c). Same network for every
+      node in one mesh — not the board's general/cloud WiFi network.
+
+config AKIRA_RADIO_WIFI_MESH_PSK
+    string "AkiraMesh WiFi transport PSK (empty = open network)"
+    default "akiramesh123"
+    depends on AKIRA_RADIO_WIFI_MESH
+    help
+      Pre-shared key for the mesh SoftAP. Change from the default before
+      any real deployment.
+
+config AKIRA_RADIO_WIFI_MESH_PORT
+    int "AkiraMesh WiFi transport UDP port"
+    default 47500
+    range 1024 65535
+    depends on AKIRA_RADIO_WIFI_MESH
+    help
+      UDP port every mesh node binds/sends on for raw mesh frames.
+
+config AKIRA_RADIO_WIFI_MESH_MTU
+    int "AkiraMesh WiFi transport max frame payload (bytes)"
+    default 1400
+    depends on AKIRA_RADIO_WIFI_MESH
+    help
+      Reported via radio_ops.get_max_payload() — sizes mesh_state.mtu in
+      akira_mesh_init(). Kept under typical WiFi/UDP MTU minus headers.
+
+config AKIRA_RADIO_WIFI_MESH_CONNECT_TIMEOUT_MS
+    int "AkiraMesh WiFi STA connect timeout (ms)"
+    default 15000
+    depends on AKIRA_RADIO_WIFI_MESH
+    help
+      How long a non-gateway node's wifi_radio_init() blocks waiting to
+      associate with the mesh gateway's SoftAP before failing.
+
+endif # WIFI
 
 config AKIRA_MATTER
     bool "Enable Matter protocol support"
@@ -1034,7 +1233,7 @@ config AKIRA_MESH
     depends on AKIRA_RADIO_MANAGER
     help
       Enable AkiraMesh - custom lightweight mesh networking protocol.
-      Supports multi-transport (BLE Mesh, 802.15.4, ESP-NOW),
+      Supports multi-transport (BLE, 802.15.4, WiFi, SubGHz/LoRa),
       multi-hop routing, WASM app distribution, and state synchronization.
 
 if AKIRA_MESH
@@ -1067,23 +1266,25 @@ config AKIRA_MESH_TRANSPORT_802154
     help
       Enable custom protocol over 802.15.4 (higher throughput)
 
-config AKIRA_MESH_TRANSPORT_ESPNOW
-    bool "Enable ESP-NOW transport"
-    default n
-    depends on WIFI_ESP32
+config AKIRA_MESH_TRANSPORT_WIFI
+    bool "Enable WiFi transport"
+    default y if WIFI
+    depends on WIFI
     help
-      Enable ESP-NOW transport (ESP32 optimization)
+      Enable AkiraMesh over WiFi (radio_wifi.c, UDP over a single-SoftAP
+      segment) — highest throughput of the four transports, single-hop
+      range only (see AKIRA_RADIO_WIFI_MESH_* for SSID/PSK/port).
 
 config AKIRA_MESH_MAX_RETRIES
     int "End-to-end retransmit attempts (beyond initial send)"
-    default 3
+    default 10
     help
       Number of retransmissions before a reliable-delivery packet is
       declared failed. Total attempts = this value + 1 (initial send).
 
 config AKIRA_MESH_ACK_TIMEOUT_MS
     int "End-to-end ACK timeout (ms)"
-    default 500
+    default 1000
     help
       Time to wait for an end-to-end ACK before retransmitting.
 
@@ -1142,6 +1343,52 @@ config AKIRA_MESH_MAX_SESSIONS
     help
       Maximum number of peers with a simultaneously cached E2E session key.
 
+config AKIRA_MESH_RREQ_RREP_SIGNING
+    bool "Sign RREQ/RREP handshake (Ed25519 + TOFU pin)"
+    default n
+    depends on AKIRA_MESH_E2E_CRYPTO
+    help
+      Closes the unauthenticated-ECDH MITM gap: without this, a malicious
+      relay can swap in its own ephemeral pubkey on both legs of the
+      RREQ/RREP handshake and transparently decrypt/re-encrypt traffic
+      through itself. With this on, orig_identity_pub/target_prekey_pub
+      are Ed25519-signed and the signer's key is TOFU-pinned per node ID
+      (see mesh_aodv.c). Sent as a separate follow-up frame (RREQ_SIG/
+      RREP_SIG), not inline — Ed25519 sig+pubkey is a fixed 96B that the
+      base RREQ/RREP (already 109B/105B) can't absorb on every radio;
+      CC1121's 125B FIFO has no headroom for it inline. Off = route
+      discovery unauthenticated (passive-eavesdropping-safe only).
+
+config AKIRA_MESH_SIGN_PENDING_MAX
+    int "Pending RREQ/RREP entries awaiting their sig frame"
+    default 4
+    depends on AKIRA_MESH_RREQ_RREP_SIGNING
+    help
+      A RREQ/RREP is held (not processed or relayed) until its matching
+      _SIG frame arrives or AKIRA_MESH_SIGN_WAIT_MS elapses. Separate
+      small table from AKIRA_MESH_MAX_PINS — this bounds concurrent
+      in-flight discoveries, not known peers.
+
+config AKIRA_MESH_SIGN_WAIT_MS
+    int "Max wait for a RREQ/RREP's sig follow-up frame (ms)"
+    default 800
+    depends on AKIRA_MESH_RREQ_RREP_SIGNING
+    help
+      The base frame and its _SIG follow-up are sent back-to-back but
+      arrive independently over the radio — CSMA backoff/requeue can
+      reorder frames within the same priority lane — so this bounds how
+      long a hop holds an unverified RREQ/RREP before giving up on it.
+
+config AKIRA_MESH_MAX_PINS
+    int "TOFU signing-key pin table size (peers)"
+    default 8
+    depends on AKIRA_MESH_RREQ_RREP_SIGNING
+    help
+      Maximum number of peer node IDs with a pinned Ed25519 signing key
+      (trust-on-first-use, see mesh_aodv.c RREQ/RREP handling). A relay
+      that swaps in a different key for an already-pinned node ID is
+      rejected. Oldest pin evicted when full.
+
 config AKIRA_MESH_SESSION_LIFETIME_S
     int "Session-key TTL (s)"
     default 300
@@ -1154,7 +1401,7 @@ config AKIRA_MESH_SESSION_LIFETIME_S
 
 config AKIRA_MESH_RX_STACK_SIZE
     int "Mesh RX thread stack size"
-    default 2048
+    default 3072
     help
       Stack size for the mesh receive/dispatch thread.
 
@@ -1163,6 +1410,19 @@ config AKIRA_MESH_RX_PRIORITY
     default 7
     help
       Scheduling priority for the mesh receive thread.
+
+config AKIRA_MESH_TX_PRIORITY
+    int "Mesh TX thread priority"
+    default 6
+    help
+      Scheduling priority for the mesh transmit thread. Higher (lower
+      number) than AKIRA_MESH_RX_PRIORITY: TX holds radio->lock for the
+      whole send, including the TX_DONE poll — if RX runs at the same
+      priority, its idle-yield wakeup contends for that same lock every
+      cycle and each contended re-lock attempt costs a same-priority
+      context switch, stretching every poll iteration of an in-flight
+      send. Giving TX strict priority over an idle-polling RX removes
+      that tax without changing RX's own behavior.
 
 config AKIRA_MESH_RX_POLL_MS
     int "Mesh RX listen-window (ms)"
@@ -1173,6 +1433,175 @@ config AKIRA_MESH_RX_POLL_MS
       with only a brief gap afterward to let TX in. Longer = better packet
       capture but more TX latency on the shared half-duplex radio.
 
+config AKIRA_MESH_RX_IDLE_YIELD_MS
+    int "Mesh RX thread idle yield (ms)"
+    default 200
+    help
+      Sleep this long when a recv cycle finds nothing (IRQ-driven radios
+      return almost instantly either way). Without it the RX thread spins,
+      continuously re-acquiring the shared SPI bus lock and starving other
+      devices on the same bus (e.g. an SD card) of a fair turn.
+
+config AKIRA_MESH_MAC_TXQ_CRITICAL_LEN
+    int "MAC critical-lane TX queue depth"
+    default 8
+    help
+      Depth of the critical-priority TX queue (RREQ/RREP/RERR). Checked
+      first on every MAC TX thread iteration.
+
+config AKIRA_MESH_MAC_TXQ_HIGH_LEN
+    int "MAC high-lane TX queue depth"
+    default 8
+    help
+      Depth of the high-priority TX queue (ACK).
+
+config AKIRA_MESH_MAC_TXQ_MEDIUM_LEN
+    int "MAC medium-lane TX queue depth"
+    default 8
+    help
+      Depth of the medium-priority TX queue (STATUS_QUERY/STATUS_RESP/
+      STREAM_STATUS_*).
+
+config AKIRA_MESH_MAC_TXQ_LOW_LEN
+    int "MAC low-lane TX queue depth"
+    default 8
+    help
+      Depth of the low-priority TX queue (DATA/APP_CHUNK/STREAM_DATA).
+      Checked last on every MAC TX thread iteration.
+
+config AKIRA_MESH_LORA_SF
+    int "Mesh LoRa spreading factor"
+    default 7
+    help
+      Spreading factor mesh forces at LoRa bring-up, independent of the
+      chip's own power-on default — measured fastest at SF7/BW500 in the
+      airtime sweep (see AKIRA_MESH_LORA_BW_HZ).
+
+config AKIRA_MESH_LORA_BW_HZ
+    int "Mesh LoRa bandwidth (Hz)"
+    default 500000
+    help
+      Bandwidth mesh forces at LoRa bring-up. The chip's own devicetree
+      default (akira_default_lora_bw_hz) is 125000 Hz, tuned for range —
+      leaving mesh on that default cost 4x the real airtime per frame
+      before this was set explicitly. 500000 was measured fastest.
+
+config AKIRA_MESH_MAC_POLL_MS
+    int "MAC TX thread idle/backoff poll interval (ms)"
+    default 10
+    help
+      Sleep this long when all TX lanes are empty, or when the frame at
+      the head of a lane isn't eligible to send yet (CCA backoff not
+      elapsed). Bounds how long a higher-priority frame arriving mid-wait
+      has to wait before the TX thread notices it.
+
+config AKIRA_MESH_CCA_BUSY_RSSI_DBM
+    int "CCA channel-busy RSSI threshold (dBm)"
+    default -85
+    help
+      RSSI at or above this value (less negative = stronger signal) is
+      treated as "channel busy" by software CSMA/CA. Only consulted on
+      radios advertising RADIO_CAP_CCA.
+
+config AKIRA_MESH_CCA_BACKOFF_MAX_MS
+    int "CCA random backoff ceiling (ms)"
+    default 50
+    help
+      On a busy channel, the MAC TX thread waits a random
+      0..this-value delay before rechecking.
+
+config AKIRA_MESH_CCA_MAX_RETRIES
+    int "CCA busy-recheck attempts before sending anyway"
+    default 3
+    help
+      CCA reduces collisions, it does not replace the existing ACK/retry
+      reliability backstop — a frame is never dropped purely because the
+      channel still looked busy after this many rechecks.
+
+config AKIRA_MESH_LOCAL_REPAIR_TIMEOUT_MS
+    int "Local route repair wait before falling back to RERR (ms)"
+    default 2000
+    help
+      When a relay node's forward lookup misses, it queues the packet and
+      fires its own RREQ before bouncing an error back to the original
+      source. This is how long it waits for that local RREQ to resolve.
+
+config AKIRA_MESH_RREQ_MAX_RETRIES
+    int "Extra RREQ attempts per route discovery"
+    default 2
+    help
+      Total RREQ attempts for one discovery = this value + 1 (the initial
+      attempt). Each retry's wait interval doubles (exponential backoff).
+
+config AKIRA_MESH_NEIGHBOR_TIMEOUT_MS
+    int "Neighbor-table entry eviction age (ms)"
+    default 60000
+    help
+      A neighbor not heard from (no beacon) for longer than this is
+      dropped from the node table, freeing the slot for new discoveries.
+      Should exceed roughly 3x beacon_interval_ms.
+
+config AKIRA_MESH_STREAM_WINDOW
+    int "Stream-mode selective-repeat window size (frames)"
+    default 8
+    help
+      Max frames in flight at once for akira_mesh_send_stream(), matching
+      the MAC bulk-lane queue depth.
+
+config AKIRA_MESH_STREAM_TX_GAP_MS
+    int "Stream-mode inter-frame pacing gap (ms)"
+    default 20
+    help
+      Minimum delay between consecutive frames within one burst, so a
+      stream send doesn't monopolize the shared channel even without
+      waiting for a per-frame ack.
+
+config AKIRA_MESH_STREAM_STATUS_INTERVAL
+    int "Stream-mode frames between STATUS_REQ checks"
+    default 8
+    help
+      How many frames the sender transmits before asking the receiver
+      which indices in the current window actually arrived.
+
+config AKIRA_MESH_ROUTE_DISCOVERY_POLL_MS
+    int "akira_mesh_send_stream() cold-path route/session poll interval (ms)"
+    default 100
+    help
+      How often akira_mesh_send_stream() re-checks for a resolved route and
+      installed E2E session while waiting out RREQ/RREP discovery for a
+      cold destination.
+
+config AKIRA_MESH_APP_AUTO_INSTALL
+    bool "Auto-install apps received via mesh distribution"
+    default y
+    depends on AKIRA_APP_MANAGER
+    help
+      Once a mesh app transfer completes and passes CRC, install it via
+      app_manager_install() automatically. If disabled, the reassembled
+      binary is only delivered to the registered mesh RX callback.
+
+config AKIRA_MESH_APP_TX_RETRIES
+    int "Mesh app chunk send retries (on window-full)"
+    default 4
+    help
+      How many times to retry a chunk send that returned -EBUSY (the
+      pending-ACK window is full) before giving up on the whole transfer.
+
+config AKIRA_MESH_APP_TX_GAP_MS
+    int "Mesh app chunk pacing gap (ms)"
+    default 20
+    help
+      Delay between chunk sends, so the transfer doesn't overrun
+      AKIRA_MESH_MAX_PENDING_ACKS on the shared half-duplex radio.
+
+config AKIRA_MESH_APP_RX_STALE_MS
+    int "Mesh app RX reassembly stale timeout (ms)"
+    default 30000
+    help
+      If no chunk/START activity is seen for this long, an in-flight
+      reassembly is considered abandoned (sender gave up or was reset).
+      A new APP_START for the same app_id is then allowed to restart it
+      instead of being ignored as a duplicate of a still-live transfer.
 config AKIRA_WASM_MESH
     bool "Register mesh_* as WASM native symbols"
     default y
@@ -1572,11 +2001,17 @@ config AKIRA_SD_HOTPLUG
       akira_sd_hotplug_cb_t callbacks on insertion/removal.  Requires the
       board devicetree to declare a node with compatible "akira,sd-detect"
       and a detect-gpios property — see dts/bindings/gpio/akira,sd-detect.yaml.
+      On AkiraConsole Prod this is TCA6408 P7 (SD_DET, active-low), a pure
+      I2C read with no SPI or display impact.
 
 config AKIRA_SD_HOTPLUG_POLL_MS
     int "SD hotplug poll interval (ms)"
-    default 500
+    default 2000
     depends on AKIRA_SD_HOTPLUG
+    help
+      On an I2C expander each poll is a real bus read, so this rate is a
+      standing power cost for the life of the device.  2 s is imperceptible
+      for card insertion while keeping the wake rate low.
 
 config AKIRA_SD_HOTPLUG_MAX_CBS
     int "Maximum SD hotplug callbacks"
@@ -1584,6 +2019,63 @@ config AKIRA_SD_HOTPLUG_MAX_CBS
     depends on AKIRA_SD_HOTPLUG
 
 endmenu # SD Card
+
+# ---------------------------------------------------------------------------
+# USB Mass Storage
+# ---------------------------------------------------------------------------
+menu "USB Mass Storage"
+
+config AKIRA_USB_MSC
+    bool "Enable USB Mass Storage (SD card) device"
+    default n
+    depends on AKIRA_SD_CARD
+    select USBD_MSC_CLASS
+    help
+      Exposes the SD card as a single USB MSC LUN to a host PC, gated by an
+      on-device trust prompt and mutually exclusive with USB HID (keyboard,
+      gamepad, FIDO2) — only one of the two can be registered on the USB
+      device stack at a time.
+
+config AKIRA_USB_MSC_WAIT_TIMEOUT_MS
+    int "Timeout waiting for the SD card to free up before entering MSC mode"
+    default 10000
+    depends on AKIRA_USB_MSC
+    help
+      If a BLE/mesh/HTTP transfer or an SD-XIP app load is in progress when
+      the user accepts the USB trust prompt, AkiraOS waits up to this long
+      for it to finish before giving up and returning to idle.
+
+config AKIRA_USB_MSC_SHIM_INIT_PRIORITY
+    int "USB MSC ownership-shim disk SYS_INIT priority"
+    default 39
+    depends on AKIRA_USB_MSC
+    help
+      Must run after AKIRA_SD_INIT_PRIORITY (default 38) so the real "SD"
+      disk is already registered when the shim wraps it. A plain literal —
+      SYS_INIT's priority argument is token-pasted into a linker section
+      name, so it cannot be an arithmetic expression like
+      "AKIRA_SD_INIT_PRIORITY + 1".
+
+endmenu # USB Mass Storage
+
+# ---------------------------------------------------------------------------
+# USB Mass Storage host (read a flash drive plugged into AkiraOS)
+# ---------------------------------------------------------------------------
+menu "USB Mass Storage Host"
+
+config AKIRA_USB_STORAGE_HOST
+    bool "Mount a USB flash drive plugged into AkiraOS (host mode)"
+    default y if USB_HOST_STACK
+    depends on USB_HOST_STACK
+    select USBH_MASS_STORAGE_CLASS
+    help
+      Opposite direction from AKIRA_USB_MSC: here AkiraOS is the USB host
+      and a flash drive is the connected device. Enables the Bulk-Only
+      Transport + SCSI host class driver (subsys/usb/host/class/usbh_msc.c)
+      and mounts the drive's FAT filesystem at USB_MOUNT_POINT so
+      usb_storage_scan_apps()/usb_storage_install_app() work.
+
+endmenu # USB Mass Storage Host
 
 # ---------------------------------------------------------------------------
 # USB-C VBUS sense (FUSB302)
@@ -1609,6 +2101,17 @@ config AKIRA_FUSB302_VBUS_INIT_PRIORITY
       A plain literal — SYS_INIT's priority argument is token-pasted into
       a linker section name, so it cannot be an arithmetic expression.
 
+config AKIRA_FUSB302_POLL_MS
+    int "FUSB302 VBUS poll interval while awake (ms)"
+    default 1000
+    range 100 10000
+    depends on AKIRA_FUSB302_VBUS
+    help
+      How often the FUSB302 VBUSOK bit is polled while the screen is awake.
+      The INT_N falling-edge interrupt on GPIO3 catches plug-in/charger
+      events immediately, so this poll is only a slow safety net and can be
+      lazy to save power. Paused entirely while blanked (akira_fusb302_set_idle).
+
 endmenu # USB-C VBUS Sense (FUSB302)
 
 menu "App Manager"
@@ -1623,7 +2126,7 @@ config AKIRA_APP_MANAGER
 config AKIRA_APP_MAX_INSTALLED
     int "Maximum installed apps"
     default 8
-    range 4 32
+    range 4 64
     depends on AKIRA_APP_MANAGER
     help
       Maximum number of WASM apps that can be installed.
@@ -1995,6 +2498,59 @@ config AKIRA_POWER_DEEP_SLEEP
     help
       Enable deep sleep mode for maximum power savings.
 
+config AKIRA_WAIT_WAKE_HOLD_MS
+    int "Hold duration (ms) to wake from idle wait screen"
+    default 800
+    range 200 3000
+    depends on AKIRA_OS_SHELL
+    help
+      How long the HOME button must be held to exit the Phase 1 idle
+      wait screen.  Prevents accidental wakes from brief button contact.
+
+config AKIRA_IDLE_DIM_S
+    int "Dim the screen this many seconds before the idle wait screen"
+    default 10
+    range 0 60
+    depends on AKIRA_OS_SHELL
+    help
+      With no input for (display timeout - this) the backlight drops to 30%
+      of full scale (or the user's level, if lower); any key restores it.
+      Gives a cheap warning before the screen goes to the clock.  0 = off.
+
+config AKIRA_WAIT_CLOCK_S
+    int "Seconds the idle clock stays lit before the display turns off"
+    default 120
+    range 0 86400
+    depends on AKIRA_OS_SHELL
+    help
+      After this long on the dimmed wait-screen clock, the backlight driver
+      goes to standby and the panel to SLEEP_IN: no repaints until HOME is
+      held or a charger/critical-battery event briefly lights it ("peek").
+      Deep sleep still follows at akira/power/sleep_s.  0 = keep the clock
+      lit until deep sleep.
+
+config AKIRA_DEEP_SLEEP_IDLE_S
+    int "Seconds on wait screen before entering deep sleep"
+    default 1800
+    range 10 86400
+    depends on AKIRA_POWER_DEEP_SLEEP && AKIRA_OS_SHELL
+    help
+      After this many seconds on the dim wait screen with no button
+      activity, the device blanks the display and enters hardware deep
+      sleep.  Wake via HOME button press (GPIO0 level trigger).
+
+      Used as the default when the NVS key akira/power/sleep_s is unset;
+      the user can override it in Settings > Power.
+
+      Deep sleep here is sys_poweroff(), so waking is a full reboot — budget
+      several seconds to get back to the home screen.  30 minutes is the
+      default because it is long enough that you rarely pay that reboot
+      unexpectedly, while still saving hours of drain from a device left in a
+      bag.  Much shorter values make the console feel like it died.
+
+      Auto-sleep never triggers while the charger reports an active charge
+      cycle, regardless of this value.
+
 config AKIRA_BATTERY_LOW_THRESHOLD
     int "Low battery threshold (%)"
     default 15
@@ -2002,6 +2558,24 @@ config AKIRA_BATTERY_LOW_THRESHOLD
     depends on AKIRA_POWER_MANAGER
     help
       State-of-charge percentage below which low_battery is flagged.
+
+config AKIRA_BATTERY_CRITICAL_THRESHOLD
+    int "Critical battery threshold (%)"
+    default 5
+    range 1 50
+    depends on AKIRA_POWER_MANAGER
+    help
+      State-of-charge percentage at which the shell raises its second,
+      critical low-battery warning.  Must be below the low threshold.
+
+config AKIRA_BATTERY_SIM
+    bool "Battery simulation for UI testing"
+    default y if BOARD_NATIVE_SIM
+    depends on AKIRA_POWER_MANAGER
+    help
+      Adds `power sim <pct> <chg|dis|full|off>`, which overrides the battery
+      monitor's readings so the charging / low-battery UI can be exercised
+      without a cell or charger.  On by default only on native_sim.
 
 config AKIRA_BATTERY_ADC
     bool "Enable ADC battery voltage measurement"
@@ -2350,7 +2924,6 @@ config FS_FATFS_VOLUME_COUNT
 
 
 menu "WASM API Exports"
-    depends on AKIRA_WASM_RUNTIME
 
 config AKIRA_WASM_API
     bool "Enable WASM native API exports"
@@ -2501,6 +3074,44 @@ config AKIRA_NET_MAX_MSG_SIZE
       Should match or exceed the network MTU (1500 for Ethernet/WiFi).
       Used to size the temporary receive buffer on the poll thread stack.
 
+config AKIRA_WASM_NET_TLS
+    bool "Export TLS socket type to WASM (NET_TYPE_TLS)"
+    default n
+    depends on AKIRA_WASM_NET
+    select NET_SOCKETS_SOCKOPT_TLS
+    select TLS_CREDENTIALS
+    select MBEDTLS_ENABLE_HEAP
+    select MBEDTLS_HEAP_CUSTOM_SECTION
+    select MBEDTLS_SSL_TLS_C
+    select MBEDTLS_SSL_CLI_C
+    select MBEDTLS_X509_CRT_PARSE_C
+    select MBEDTLS_PEM_CERTIFICATE_FORMAT
+    select MBEDTLS_ASN1_PARSE_C
+    select MBEDTLS_SERVER_NAME_INDICATION
+    select MBEDTLS_PK_C
+    select MBEDTLS_ECP_C
+    select MBEDTLS_ECDH_C
+    select MBEDTLS_ECDSA_C
+    select MBEDTLS_ECP_DP_SECP256R1_ENABLED
+    select MBEDTLS_ECP_DP_SECP384R1_ENABLED
+    select PSA_WANT_ALG_GCM
+    select PSA_WANT_ALG_ECDH
+    select PSA_WANT_ALG_TLS12_PRF
+    select PSA_WANT_ALG_HMAC
+    select PSA_WANT_KEY_TYPE_HMAC
+    select MBEDTLS_KEY_EXCHANGE_ECDHE_RSA_ENABLED
+    select MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+    select MBEDTLS_SHA256_C
+    select MBEDTLS_SHA384
+    select PSA_WANT_ALG_SHA_384
+    select PSA_WANT_ALG_RSA_PKCS1V15_SIGN
+    select MBEDTLS_ENTROPY_C
+    select MBEDTLS_CTR_DRBG_C
+    help
+      Adds a TLS stream type on top of the TCP/UDP net API, using Zephyr's
+      native TLS socket (same pattern as AkiraPlatform's hub_ws_client.c).
+      Trust anchor is a single built-in CA baked into the firmware.
+
 config AKIRA_WASM_HID
     bool "Export HID API to WASM"
     default n
@@ -2520,6 +3131,26 @@ config AKIRA_HID_MAX_ACTIONS
       Size of the static named-action registry used by
       hid_action_register() / hid_action_trigger().
       Each entry uses ~34 bytes of SRAM.
+
+config AKIRA_INPUT_API
+    bool "Enable AkiraConsole button input native API"
+    default n
+    depends on INPUT
+    help
+      Registers an INPUT_CALLBACK_DEFINE handler that maintains an atomic
+      bitmask of currently held buttons and a 16-entry ring buffer of
+      press/release edge events from the gpio-keys DTS node.
+      Required for CONFIG_AKIRA_WASM_INPUT.
+
+config AKIRA_WASM_INPUT
+    bool "Export button Input API to WASM"
+    default n
+    depends on AKIRA_WASM_API && AKIRA_INPUT_API
+    help
+      Export input_get_buttons() and input_poll_event() to WASM applications.
+      input_get_buttons() returns a uint32 bitmask of currently held buttons
+      (bit N = 1 << zephyr,code).  input_poll_event() drains one edge event
+      from the ring buffer.  Requires "input.read" capability in the manifest.
 
 config AKIRA_SYSTEM_API
     bool "Enable privileged system-level native API"
@@ -2557,7 +3188,7 @@ config AKIRA_BOOT_SHELL_RESTART
 
 config AKIRA_OS_SHELL
     bool "Enable AkiraConsole native OS shell"
-    default n
+    default y
     depends on DISPLAY
     select AKIRA_APP_MANAGER
     help
@@ -2577,6 +3208,69 @@ config AKIRA_OS_SHELL_SCREEN_W
       Set to 400 for the Sharp LS027B7DH01 (AkiraConsole Production),
       320 for the ST7789V / ILI9341 TFT variants.
 
+config AKIRA_OS_SHELL_BOOT_SPLASH
+    bool "Animated AkiraOS boot splash"
+    default y
+    depends on AKIRA_OS_SHELL
+    help
+      Play the ~3 s AkiraOS crystal animation when the shell starts: the
+      logo grows from its core, the wordmark rises in, and the screen
+      bursts out to the launcher, whose cards fan out.  Non-blocking — it
+      runs while main() is still bringing the system up, and any key skips
+      it.  The logo assets are shared with the wait screen and System
+      Info, so this option only adds the animation code (a few KB).
+
+menuconfig AKIRA_CRYSTAL
+    bool "Akira: the crystal and the Seal"
+    default y
+    depends on AKIRA_OS_SHELL && FILE_SYSTEM && MBEDTLS_SHA256
+    help
+      Akira is the console's crystal: it grows from how the console is used.
+      Every restricted power (radio transmit, Wi-Fi injection, BLE spam,
+      keystroke injection, vault signing) and every sensitive system action
+      needs a Seal — hold A+B while a ring charges — before it runs.  Each
+      seal is signed by the SE050 (when fitted), appended to a hash-chained
+      ledger, and grows a shard on Akira in that power's colour.  Games can
+      award glints and seal records.
+
+      Enforcement lives in the native APIs, so an app cannot skip the seal.
+
+if AKIRA_CRYSTAL
+
+config AKIRA_SEAL_TIMEOUT_S
+    int "Seconds before an unanswered seal is refused"
+    default 30
+    range 10 120
+
+config AKIRA_CRYSTAL_SE050_KEY_OBJID
+    hex "SE050 object ID of the seal signing key (P-256)"
+    default 0x414B0001
+    depends on AKIRA_SE050
+
+config AKIRA_CRYSTAL_SE050_STATE_OBJID
+    hex "SE050 object ID mirroring Akira's growth (survives a flash wipe)"
+    default 0x414B0002
+    depends on AKIRA_SE050
+
+config AKIRA_CRYSTAL_DEBUG
+    bool "Test commands that fake growth (crystal grow / crack / day)"
+    default n
+    help
+      Adds shell commands that change Akira's state without a seal, for
+      screenshots and UI work.  Never enable in a release build.
+
+endif # AKIRA_CRYSTAL
+
+config AKIRA_SHELL_NET_TESTS
+    bool "TLS test commands on the console (net_tls_test, catalog_test)"
+    default n
+    depends on AKIRA_WASM_NET_TLS
+    help
+      Diagnostics that run a full TLS handshake on the console thread, so
+      they need CONFIG_SHELL_STACK_SIZE >= 8192 (software ECDHE + X.509).
+      Off by default so the console can keep a small stack; AkiraPlay is
+      the real catalogue client and runs on the OS shell thread.
+
 config AKIRA_HOME_BUTTON_GPIO
     int "GPIO pin number for the HOME / X button"
     default 17
@@ -2588,7 +3282,7 @@ config AKIRA_HOME_BUTTON_GPIO
 
 config AKIRA_HOME_BUTTON_GPIO_LONG_MS
     int "Long-press duration threshold for HOME button (ms)"
-    default 500
+    default 1000
     depends on AKIRA_OS_SHELL
     help
       How long the HOME button must be held before the OS shell intercepts
@@ -2752,6 +3446,19 @@ config AKIRA_WASM_PWM
       AKIRA_WASM_GPIO_APP_PINS allows their pad. Channels an app leaves
       running are stopped when it ends.
       Requires AKIRA_CAP_PWM capability in the app manifest.
+
+config AKIRA_WASM_NFC
+    bool "Export NFC API to WASM"
+    default y if AKIRA_NFC_MANAGER
+    depends on AKIRA_WASM_API && AKIRA_NFC_MANAGER
+    help
+      Export NFC tag read/write/UID/field-presence/mailbox functions to WASM
+      applications via nfc_manager. Chip-agnostic: works with any
+      registered NFC tag driver (currently ST25DV).
+      Provides nfc_uid(), nfc_read(addr, buf, len), nfc_write(addr, buf, len),
+      nfc_field_present(), and FTM mailbox nfc_mb_enable()/nfc_mb_put()/
+      nfc_mb_get()/nfc_mb_status().
+      Requires AKIRA_CAP_NFC capability ("nfc") in the app manifest.
 
 config AKIRA_WASM_ADC
     bool "Export ADC API to WASM"
@@ -2939,6 +3646,26 @@ config AKIRA_WASM_CRYPTO
       bytes to WASM, on mbedTLS. Capability: "crypto" (bit 28).
       Key material is zeroed in memory after each operation.
 
+config AKIRA_WASM_CRYPTO_ECDSA_P256
+    bool "Export P-256/ECDSA keygen/sign to WASM"
+    default n
+    depends on AKIRA_WASM_CRYPTO
+    select MBEDTLS_PSA_CRYPTO_C
+    select PSA_WANT_ALG_ECDSA
+    select PSA_WANT_ECC_SECP_R1_256
+    select PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_GENERATE
+    select PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_IMPORT
+    select PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_EXPORT
+    select PSA_WANT_ALG_SHA_256
+    help
+      Expose P-256 (secp256r1) key generation and ECDSA/SHA-256 signing to
+      WASM via PSA Crypto. Unlike Ed25519, this mbedTLS vendor drop DOES
+      support P-256 (it's a Weierstrass curve), so this goes through PSA
+      properly instead of a vendored implementation.
+      Capability: "crypto" (bit 28), same as AKIRA_WASM_CRYPTO.
+      Without this, crypto_p256_keygen/sign always return -ENOTSUP.
+      Needed for U2F (FIDO U2F mandates P-256, no alternative curve).
+
 config AKIRA_WASM_CRYPTO_MAX_INPUT
     int "Maximum crypto input size (bytes)"
     default 65536
@@ -3074,6 +3801,16 @@ config AKIRA_SETTINGS
     bool "Enable Akira Settings Manager"
     default y
 
+config AKIRA_SETTINGS_ON_SYSWORKQ
+    bool "Run settings requests on the system work queue"
+    depends on AKIRA_SETTINGS
+    help
+      Drain settings requests on the system work queue instead of a
+      dedicated thread, saving that thread's 2 KB stack of internal DRAM.
+      Needs a system work queue stack big enough for NVS + AES-GCM
+      (CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE); AkiraConsole boards enable it.
+      A request made from the system work queue itself runs inline.
+
 config AKIRA_SETTINGS_MAX_KEYS
     int "Maximum number of keys"
     default 100
@@ -3167,6 +3904,20 @@ config AKIRA_SETTINGS_PER_DEVICE_KEY
       (an intentional trade-off — shared-key portability across a fleet is a
       confidentiality hole). Disable only if you specifically need to move an
       encrypted settings blob between units and accept the shared-key risk.
+
+config AKIRA_SETTINGS_LEGACY_KEY_MIGRATION
+    bool "Re-encrypt settings saved under the plain compile-time key"
+    default y
+    depends on AKIRA_SETTINGS_ENCRYPTION
+    help
+      At boot, encrypted settings that the current key (per-device or from a
+      key provider) cannot open but the plain
+      CONFIG_AKIRA_SETTINGS_ENCRYPTION_KEY_HEX key can - what firmware before
+      AkiraOS 1.7 used - are re-encrypted with the current key, so an update
+      keeps Wi-Fi credentials and other secrets. The plain key is in every
+      firmware image, so this accepts nothing that someone with flash access
+      could not already store as a plaintext entry. It can be disabled once
+      every device has booted a 1.7 image.
 
 config AKIRA_SETTINGS_ENCRYPTION_HW_ACCEL
     bool "Use hardware AES acceleration"

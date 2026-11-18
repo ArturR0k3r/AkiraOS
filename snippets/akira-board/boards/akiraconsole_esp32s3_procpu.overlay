@@ -2,6 +2,7 @@
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/spi/spi.h>
 #include <zephyr/dt-bindings/mipi_dbi/mipi_dbi.h>
+#include <zephyr/dt-bindings/pwm/pwm.h>
 
 // ============================================================================
 // PSRAM Configuration - ESP32-S3 N16R8 (8MB OPI PSRAM)
@@ -14,7 +15,7 @@
 };
 
 // ============================================================================
-// SPI2 Configuration for LR1121 LoRa Transceiver and ST7789 Display
+// SPI2 Configuration for ST7789 Display
 // ============================================================================
 &pinctrl
 {
@@ -62,26 +63,12 @@
     status = "okay";
     pinctrl-0 = <&spim2_default>;
     pinctrl-names = "default";
-    clock-frequency = <1600000000>; // For display (LR1121 will override with its own max)
-    
-    // CS GPIO array: GPIO38 for LR1121, GPIO10 for ST7789, GPIO14 for SD card
-    cs-gpios = <&gpio1 6 GPIO_ACTIVE_LOW>,  // CS0: GPIO38 for LR1121
+    clock-frequency = <1600000000>; // For display
+
+    // CS GPIO array: CS0 unused, GPIO10 for ST7789, GPIO14 for SD card
+    cs-gpios = <&gpio1 6 GPIO_ACTIVE_LOW>,  // CS0: unused
                <&gpio0 10 GPIO_ACTIVE_LOW>, // CS1: GPIO10 for ST7789 display
                <&gpio0 14 GPIO_ACTIVE_LOW>; // CS2: GPIO14 for SD card (SD_CS)
-
-    // LR1121 as child of SPI2
-    lr1121_config: lr1121@0 {
-        compatible = "semtech,lr1121";
-        reg = <0>; // Chip select 0 (GPIO38)
-        status = "okay";
-        label = "LR1121";
-        spi-max-frequency = <10000000>; // 10 MHz max
-        cs-gpios = <&gpio1 6 GPIO_ACTIVE_LOW>;      // GPIO38 (on DIY version is GPIO37 but this is conf) - required by LR1121 binding
-        reset-gpios = <&gpio0 0 GPIO_ACTIVE_LOW>;   // GPIO0
-        busy-gpios = <&gpio1 4 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>; // GPIO36 (36-32=4)
-        // IRQ optional - uncomment if connected:
-        // irq-gpios = <&gpio1 3 GPIO_ACTIVE_HIGH>;  // GPIO35 (35-32=3)
-    };
 
     // ========================================================================
     // SD Card — SPI-SDHC via CS2 (GPIO14)
@@ -98,6 +85,38 @@
             disk-name = "SD";
             status = "okay";
         };
+    };
+};
+
+// ============================================================================
+// Backlight PWM — LEDC channel 0 routed to GPIO3 via the GPIO matrix.
+// Frequency: 1 kHz, 8-bit resolution → 256 duty steps.
+// ============================================================================
+&ledc0 {
+    status = "okay";
+    pinctrl-0 = <&ledc0_default>;
+    pinctrl-names = "default";
+    #address-cells = <1>;
+    #size-cells = <0>;
+
+    channel0@0 {
+        reg = <0x0>;
+        timer = <0>;
+    };
+};
+
+// Backlight LED device for PWM control
+/ {
+    backlight: backlight {
+        compatible = "pwm-leds";
+        bl_pwm: bl_pwm {
+            pwms = <&ledc0 0 PWM_HZ(10000) PWM_POLARITY_NORMAL>;
+            label = "Display Backlight";
+        };
+    };
+
+    aliases {
+        pwm-backlight0 = &backlight;
     };
 };
 
@@ -126,12 +145,6 @@
 };
 
 / {
-    // ST7789V is the default display for AkiraConsole.
-    // chosen and the MIPI DBI node are unconditional — `#if` inside a DTS
-    // root node is not reliably evaluated before label resolution.
-    // To use ILI9341 instead: set CONFIG_ILI9341=y (and drop CONFIG_ST7789V)
-    // in the board .conf; the ili9341 override block below will then replace
-    // the chosen pointer and add the ILI9341 child node.
     chosen {
         zephyr,display = &st7789v_akiraconsole;
     };
@@ -147,7 +160,7 @@
 
         st7789v_akiraconsole: st7789v@1 {
             compatible = "sitronix,st7789v";
-            mipi-max-frequency = <1600000000>;
+            mipi-max-frequency = <80000000>;
             reg = <1>;
             width = <320>;
             height = <240>;
@@ -203,8 +216,14 @@
     gpio_keys {
         compatible = "gpio-keys";
         
+        button_home: button_home {
+            gpios = <&gpio0 2 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>; // GPIO2
+            label = "Button Home";
+            zephyr,code = <10>; // AKIRA_BTN_HOME
+        };
+
         button_y: button_y {
-            gpios = <&gpio1 9 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>; // GPIO41
+            gpios = <&gpio1 9 (GPIO_PULL_DOWN | GPIO_ACTIVE_HIGH)>; // GPIO9
             label = "Button Y";
             zephyr,code = <9>; // AKIRA_BTN_Y
         };

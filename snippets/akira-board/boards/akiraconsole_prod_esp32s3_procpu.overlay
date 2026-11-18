@@ -14,6 +14,35 @@
 };
 
 // =============================================================================
+// CPU clock — battery-life A/B knob
+// =============================================================================
+// Uncomment to run the CPU at 160 MHz instead of the SoC default 240 MHz.
+// Dynamic CPU power scales roughly with clock, and much of this firmware's busy
+// time is PSRAM-bound rather than clock-bound, so the wall-clock cost is
+// expected to be well under the 1.5x the ratio suggests — measure it with
+// `power stats` before and after.
+//
+// Safe because CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC and CONFIG_XTENSA_CCOUNT_HZ
+// are derived from this property (soc/espressif/common/Kconfig.defconfig), MSPI
+// timing is tuned at boot for the actual clock, and APB stays at 80 MHz on a
+// 160 MHz PLL source — so 40 MHz DIO flash and the octal PSRAM are unaffected.
+//
+// Left disabled by default because it shifts timing for everything the console
+// talks to.  Before enabling, re-test: WASM AOT app performance, the SPI display
+// and SD card, USB HID enumeration, and the BT controller.
+//
+// Do NOT try 80 MHz: that changes the CPU clock *source* and takes APB with it,
+// which re-divides SPI2, I2C and the UART baud generator.
+//
+// Runtime scaling (DFS) is not an option here — CCOUNT_HZ is a compile-time
+// constant, so changing the clock at runtime would corrupt every k_sleep(),
+// k_busy_wait() and tick accounting in the system.
+//
+// Verified to build and to correctly derive CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC
+// and CONFIG_XTENSA_CCOUNT_HZ = 160000000; not yet validated on hardware.
+// &cpu0 { clock-frequency = <DT_FREQ_M(160)>; };
+
+// =============================================================================
 // Watchdog
 // =============================================================================
 &wdt0 { status = "okay"; };
@@ -42,6 +71,29 @@
 	/delete-property/ int-gpios;
 };
 &bme280  { status = "okay"; };  // bosch,bme280 (I2C addr 0x77)
+
+// cc1121.c driver uses GPIO_DT_SPEC_GET(CC1121_NODE, cs_gpios) — add cs-gpios to the node
+&cc1121 {
+	cs-gpios = <&tca6408 3 GPIO_ACTIVE_LOW>;  // CC_CS → TCA6408 P3
+};
+
+// Rev A.3: SE050 populated, replacing the Rev 1.2 ST25DV64K NFC tag (no
+// st25dv node on this revision). se050 node status="okay" in the base DTS —
+// no override needed here.
+
+// TS3USB221 (U21) USB data mux select. Per the KiCad-netlist-verified TCA6408
+// pin map (board DTS): P0 = USB_SEL. Drive it at boot to route the USB-C J2
+// D+/D- pair to the ESP32-S3 native USB-OTG controller (GPIO19/20) that carries
+// the WebHID interface — without this the host never sees the HID device.
+// usb_manager_enable() drives this via GPIO_DT_SPEC_GET(zephyr_user, ...).
+// VERIFY polarity on hardware: if HID still does not enumerate, flip the flag
+// here between GPIO_ACTIVE_HIGH and GPIO_ACTIVE_LOW.
+/ {
+	zephyr,user {
+		usb-mux-sel-gpios = <&tca6408 0 GPIO_ACTIVE_LOW>;  // USB_SEL → TCA6408 P0
+	};
+};
+
 #endif /* !CONFIG_MCUBOOT */
 
 // =============================================================================
@@ -74,9 +126,22 @@
 // USB Device — HID interface
 // =============================================================================
 &zephyr_udc0 {
-	status = "okay";
+	status = "okay";  // HID interface only, no CDC ACM console
 
 	hid_dev_0: hid_dev_0 {
+		compatible            = "zephyr,hid-device";
+		protocol-code         = "none";
+		in-polling-period-us  = <1000>;
+		out-polling-period-us = <1000>;
+		in-report-size        = <64>;
+		out-report-size       = <64>;
+	};
+
+	/* FIDO2/CTAP2 authenticator — dedicated interface, no Report ID.
+	 * CTAPHID requires exactly 64-byte packets; a shared Report-ID'd
+	 * interface would need 65 bytes (1 ID + 64 payload), which exceeds
+	 * the 64-byte hard cap for full-speed USB interrupt endpoints. */
+	hid_dev_1: hid_dev_1 {
 		compatible            = "zephyr,hid-device";
 		protocol-code         = "none";
 		in-polling-period-us  = <1000>;
@@ -89,12 +154,14 @@
 // =============================================================================
 // Flash partition layout — 16MB
 //
-//   0x000000–0x3FFFFF  MCUboot + slot0 + slot1 (partitions_0x0_amp.dtsi)
+//   0x000000–0x3FFFFF  MCUboot + slot0 + slot1
+//                      (boards/akiraconsole_prod/akiraconsole_prod_partitions_16M.dtsi)
 //   0x400000–0x407FFF  NVS settings 32KB   ← BT bonds, Wi-Fi credentials
 //   0x408000–0x487FFF  LittleFS 512KB       ← app filesystem
 //
-// Partitions start at 0x400000 so OTA (slot1 at 0x170000–0x2BFFFF) never
-// overwrites user data.
+// Partitions start at 0x400000 so OTA (slot1 at 0x210000–0x3FFFFF) never
+// overwrites user data. The slots are sized to end exactly at 0x400000, so
+// growing them means moving these — and orphaning existing user data.
 // =============================================================================
 &flash0 {
 	partitions {
@@ -107,9 +174,11 @@
 			reg   = <0x00400000 DT_SIZE_K(32)>;
 		};
 
-		lfs1_partition: partition@408000 {
+		/* Moved past hub_nvs and grown 512 KB -> 2560 KB so a 1 MB SNES ROM app
+		 * fits (0x48A000..0x70A000). The old 512 KB region at 0x408000 is orphaned. */
+		lfs1_partition: partition@48a000 {
 			label = "lfs_storage";
-			reg   = <0x00408000 DT_SIZE_K(512)>;
+			reg   = <0x0048A000 DT_SIZE_K(2560)>;
 		};
 
 		/* Hub credentials NVS — device_id + auth token

@@ -114,6 +114,14 @@ ssize_t fs_manager_read_file(const char *path, void *buffer, size_t max_size);
 ssize_t fs_manager_append_file(const char *path, const void *data, size_t size);
 
 /**
+ * Rename/move a file within the same storage backend
+ * @param old_path - Current file path
+ * @param new_path - New file path
+ * @return 0 on success, negative error code otherwise
+ */
+int fs_manager_rename(const char *old_path, const char *new_path);
+
+/**
  * Delete file
  * @param path - File path
  * @return 0 on success, negative error code otherwise
@@ -202,6 +210,18 @@ const char *fs_manager_get_status(void);
  * @return true if SD or flash storage available
  */
 bool fs_manager_has_persistent_storage(void);
+
+/**
+ * Check if SD card storage is available
+ * @return true if SD card is mounted and ready
+ */
+bool fs_manager_sd_available(void);
+
+/**
+ * Force SD availability state (used by USB MSC mode entry/exit)
+ * @param available new availability state
+ */
+void fs_manager_set_sd_available(bool available);
 
 /**
  * RAM file info for listing

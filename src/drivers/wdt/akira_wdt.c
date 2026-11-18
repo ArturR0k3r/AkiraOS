@@ -35,6 +35,9 @@ LOG_MODULE_REGISTER(akira_wdt, CONFIG_AKIRA_LOG_LEVEL);
  * a zephyr,watchdog-only lookup found nothing on any board. */
 #if DT_NODE_HAS_STATUS(DT_ALIAS(watchdog0), okay)
 #define AKIRA_WDT_DEV() DEVICE_DT_GET(DT_ALIAS(watchdog0))
+#elif DT_HAS_COMPAT_STATUS_OKAY(espressif_esp32_watchdog)
+/* ESP32 board without the alias: the console branch's original lookup. */
+#define AKIRA_WDT_DEV() DEVICE_DT_GET_ANY(espressif_esp32_watchdog)
 #else
 #define AKIRA_WDT_DEV() DEVICE_DT_GET_ANY(zephyr_watchdog)
 #endif

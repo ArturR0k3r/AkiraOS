@@ -21,6 +21,13 @@ LOG_MODULE_REGISTER(akira_display_api, CONFIG_AKIRA_LOG_LEVEL);
  * bounded by the panel; pixel buffers are length- and alignment-checked; the
  * calls that hold the panel's bus lock run as native critical sections; and
  * the auto-flush an app arms is disarmed when that app ends.
+ *
+ * AkiraConsole additions: the OS shell can hold the display (apps then get
+ * -EBUSY, see console_shell/display_ownership.h); flushes hand the
+ * framebuffer to the display compositor (akira_framebuffer_present*(), double
+ * buffered on boards with a PSRAM framebuffer); a 16x28 "huge" font; and an
+ * asynchronous raw write whose transfer the app's release hook finishes or
+ * drops before the app's memory is freed.
  */
 #include "akira_api.h"
 #include "display_clip.h"
@@ -32,6 +39,10 @@ LOG_MODULE_REGISTER(akira_display_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/kernel.h>
 #include <stdlib.h> /* abs() */
 #include <string.h> /* memcpy() */
+
+#if defined(CONFIG_AKIRA_OS_SHELL)
+#include <console_shell/display_ownership.h>
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Display ownership                                                     */
@@ -52,6 +63,12 @@ LOG_MODULE_REGISTER(akira_display_api, CONFIG_AKIRA_LOG_LEVEL);
 /* exec_env == NULL means a trusted first-party/native caller (the OS     */
 /* shell, boot animation, wait screen).  Those bypass the check, matching */
 /* akira_security_check_native().                                         */
+/*                                                                       */
+/* With the native console shell (CONFIG_AKIRA_OS_SHELL) there is a       */
+/* second level above this: the shell owns the display at boot, hands it  */
+/* to the running app (akira_display_release_to_wasm()) and takes it back */
+/* for HOME or a Seal prompt.  While the shell holds it every app draw    */
+/* call gets -EBUSY, and the app retries on its next frame.               */
 /* ------------------------------------------------------------------ */
 #if defined(CONFIG_AKIRA_WASM_RUNTIME)
 
@@ -62,10 +79,24 @@ extern int get_slot_for_module_inst(wasm_module_inst_t inst);
 static wasm_module_inst_t g_display_owner; /* NULL = unowned */
 static struct k_spinlock g_display_owner_lock;
 
+/* True unless the OS shell holds the display. */
+static inline bool display_owner_is_wasm(void)
+{
+#if defined(CONFIG_AKIRA_OS_SHELL)
+    return akira_display_get_owner() == DISPLAY_OWNER_WASM;
+#else
+    return true;
+#endif
+}
+
 static bool display_owner_acquire(wasm_exec_env_t exec_env)
 {
     if (!exec_env)
         return true; /* trusted native caller */
+
+    /* The shell has the display: no app may draw, nor claim it. */
+    if (!display_owner_is_wasm())
+        return false;
 
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
     if (!inst)
@@ -167,17 +198,23 @@ static bool panel_size(int *w, int *h)
 #if !AKIRA_PLATFORM_NATIVE_SIM
 #define DISP_FB_MAX_PIXELS AKIRA_FB_MAX_PIXELS
 
-/* The framebuffer, or NULL if there is none or the panel does not fit in it
- * (row offsets would then run past the array).  Looked up once:
- * akira_framebuffer_get() logs a warning on every call on boards without one,
- * and the per-pixel paths would turn that into a log flood any app can
- * trigger.  The pointer is a static array's address, so it never changes. */
+/* The framebuffer to draw into, or NULL if there is none or the panel does
+ * not fit in it (row offsets would then run past the array).  Whether there
+ * is a usable one is decided once: on boards without one the per-pixel paths
+ * would otherwise ask (and log) on every pixel, a flood any app can trigger.
+ * The pointer itself is re-read on every call: with the double-buffered
+ * framebuffer (AkiraConsole) akira_framebuffer_get() returns the buffer being
+ * drawn, which flips on every present. */
+#define DISP_FB_UNPROBED 0
+#define DISP_FB_USABLE   1
+#define DISP_FB_NONE     2
+
 static uint16_t *display_fb(int pw, int ph)
 {
-    static atomic_t probed;
-    static uint16_t *fb;
+    static atomic_t state;
+    atomic_val_t st = atomic_get(&state);
 
-    if (!atomic_get(&probed))
+    if (st == DISP_FB_UNPROBED)
     {
         uint16_t *p = akira_framebuffer_get();
 
@@ -187,10 +224,10 @@ static uint16_t *display_fb(int pw, int ph)
                     pw, ph, DISP_FB_MAX_PIXELS);
             p = NULL;
         }
-        fb = p;
-        atomic_set(&probed, 1);
+        st = p ? DISP_FB_USABLE : DISP_FB_NONE;
+        atomic_set(&state, st);
     }
-    return fb;
+    return (st == DISP_FB_USABLE) ? akira_framebuffer_get() : NULL;
 }
 #endif
 
@@ -318,8 +355,12 @@ static void text_draw(int x, int y, const char *text, uint16_t color, FontType f
     if (!text || !panel_size(&pw, &ph))
         return;
 
-    const int cw = (font == FONT_7X10) ? FONT7X10_WIDTH : FONT11X18_WIDTH;
-    const int ch = (font == FONT_7X10) ? FONT7X10_HEIGHT : FONT11X18_HEIGHT;
+    const int cw = (font == FONT_7X10)   ? FONT7X10_WIDTH
+                   : (font == FONT_HERO) ? FONT16X28_WIDTH
+                                         : FONT11X18_WIDTH;
+    const int ch = (font == FONT_7X10)   ? FONT7X10_HEIGHT
+                   : (font == FONT_HERO) ? FONT16X28_HEIGHT
+                                         : FONT11X18_HEIGHT;
     const int adv = cw + 1; /* 1 pixel between characters */
     const int tab_size = 4;
     int64_t cx = x, cy = y;
@@ -363,19 +404,65 @@ void akira_display_text_large(int x, int y, const char *text, uint16_t color)
     text_draw(x, y, text, color, FONT_11X18);
 }
 
+/* 16x28 "hero" font: the one big value per screen (clock, percentage). */
+void akira_display_text_huge(int x, int y, const char *text, uint16_t color)
+{
+    text_draw(x, y, text, color, FONT_HERO);
+}
+
+#if !AKIRA_PLATFORM_NATIVE_SIM
+/* Without a panel or a framebuffer there is nothing to present, and the HAL
+ * would log an error on every call. */
+static bool can_present(void)
+{
+    uint16_t *fb;
+    int pw, ph;
+
+    return draw_target(&fb, &pw, &ph);
+}
+#endif
+
+/* Flushes hand the framebuffer just drawn to the display compositor thread
+ * (drivers/display/display_hal.c), which blits it while the next frame is
+ * drawn into the other buffer; a present waits only while the compositor is
+ * still busy with the previous frame.  Without a framebuffer there is
+ * nothing to present. */
 void akira_display_flush(void)
 {
 #if AKIRA_PLATFORM_NATIVE_SIM
     akira_sim_show_display();
 #else
-    uint16_t *fb;
-    int pw, ph;
-
-    /* Without a panel or a framebuffer there is nothing to present, and the
-     * HAL would log an error on every call. */
-    if (!draw_target(&fb, &pw, &ph))
+    if (!can_present())
         return;
-    akira_display_hal_flush();
+    akira_framebuffer_present();
+#endif
+}
+
+void akira_display_flush_rows(int y0, int y1)
+{
+#if AKIRA_PLATFORM_NATIVE_SIM
+    ARG_UNUSED(y0);
+    ARG_UNUSED(y1);
+    akira_sim_show_display();
+#else
+    if (!can_present())
+        return;
+    akira_framebuffer_present_rows(y0, y1);
+#endif
+}
+
+void akira_display_flush_rect(int x, int y, int w, int h)
+{
+#if AKIRA_PLATFORM_NATIVE_SIM
+    ARG_UNUSED(x);
+    ARG_UNUSED(y);
+    ARG_UNUSED(w);
+    ARG_UNUSED(h);
+    akira_sim_show_display();
+#else
+    if (!can_present())
+        return;
+    akira_framebuffer_present_rect(x, y, w, h);
 #endif
 }
 
@@ -840,6 +927,11 @@ static void auto_flush_handler(struct k_work *work)
     /* Disarmed by the app's release: the framebuffer is no longer its. */
     if (atomic_get(&g_auto_flush_slot) < 0)
         return;
+    /* Armed by an app that has since lost the display to the shell: the
+     * framebuffer is the shell's now, and presenting it half-drawn would
+     * flash garbage. */
+    if (!display_owner_is_wasm())
+        return;
     akira_display_flush();
 }
 
@@ -895,6 +987,15 @@ int akira_native_display_text_large(wasm_exec_env_t exec_env, int x, int y, cons
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
     AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
     akira_display_text_large(x, y, text, (uint16_t)color);
+    schedule_auto_flush(exec_env);
+    return 0;
+}
+
+int akira_native_display_text_huge(wasm_exec_env_t exec_env, int x, int y, const char *text, uint32_t color)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
+    akira_display_text_huge(x, y, text, (uint16_t)color);
     schedule_auto_flush(exec_env);
     return 0;
 }
@@ -957,6 +1058,24 @@ int akira_native_display_get_size(wasm_exec_env_t exec_env, int32_t *w_out, int3
     memcpy(w_out, &w32, sizeof(w32));
     memcpy(h_out, &h32, sizeof(h32));
     return 0;
+}
+
+/* Pointer-free size queries (AkiraConsole SDK): 0 without display.write or
+ * without a panel, so an app can't mistake an error for a size. */
+int akira_native_display_get_width(wasm_exec_env_t exec_env)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, 0);
+    int w = 0, h = 0;
+    akira_display_get_size(&w, &h);
+    return w;
+}
+
+int akira_native_display_get_height(wasm_exec_env_t exec_env)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, 0);
+    int w = 0, h = 0;
+    akira_display_get_size(&w, &h);
+    return h;
 }
 
 /* Phase 3.5 native wrappers */
@@ -1058,6 +1177,186 @@ int akira_native_display_raw_write(wasm_exec_env_t exec_env,
     return ret;
 }
 
+/* ---------------------------------------------------------------------------
+ * Asynchronous raw write (AkiraConsole)
+ *
+ * display_raw_write_async() queues the SPI transfer on the system work queue,
+ * so the app renders its next frame while this one goes to the panel.  The
+ * app must not touch the buffer until display_raw_wait() returns.  At most
+ * one transfer is in flight.
+ *
+ * This is the one display path in which another thread reads app memory
+ * after the native has returned (a frame is up to 150 KB: copying it would
+ * defeat the call).  Ownership makes it safe: raw_async_busy holds the
+ * submitting app's slot + 1 from the claim until the worker is done, and that
+ * slot's release hook, which runs before the app's memory is freed, waits for
+ * the worker or drops the queued job.  Every wait is bounded, and a stop ends
+ * the app's own waits early.  A claim whose submitter died before queueing
+ * (only a fault can do that: claim and submit form a critical span) is
+ * detected and repaired by the next wait that times out, so neither the
+ * shell nor the next app can hang on it.  One case is left to the app: if it
+ * grows its linear memory while its own transfer is in flight, the worker
+ * reads the old memory (a garbled frame on PSRAM boards).
+ * -------------------------------------------------------------------------*/
+
+static struct
+{
+    int x, y, w, h;
+    const uint16_t *data;
+} raw_async_job;
+static atomic_t raw_async_busy;            /* owner slot + 1, 0 = idle */
+static K_SEM_DEFINE(raw_async_done, 0, 1); /* wakes waiters early     */
+
+#define RAW_WAIT_SLICE_MS 5
+#define RAW_APP_WAIT_MS   1000 /* app side: a full frame is ~120 ms   */
+#define RAW_SHELL_WAIT_MS 500  /* shell side: never freeze the UI on it */
+
+static void raw_async_fn(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    /* Window checked by the submitter; one panel's worth at most. */
+    (void)akira_display_hal_write_raw(raw_async_job.x, raw_async_job.y,
+                                      raw_async_job.w, raw_async_job.h,
+                                      raw_async_job.data);
+    atomic_clear(&raw_async_busy);
+    k_sem_give(&raw_async_done);
+}
+
+static K_WORK_DEFINE(raw_async_work, raw_async_fn);
+
+/* Clear claim @p owner if it has no transfer behind it (its submitter died
+ * before k_work_submit()).  Call only when that submitter can't be mid-way:
+ * its thread is gone, or a wait for it timed out. */
+static void raw_async_repair(atomic_val_t owner)
+{
+    if (owner != 0 && !k_work_busy_get(&raw_async_work) &&
+        atomic_cas(&raw_async_busy, owner, 0))
+    {
+        k_sem_give(&raw_async_done);
+        LOG_WRN("display: dropped a raw-write claim left by a dead app thread");
+    }
+}
+
+static inline bool raw_async_waiting_on(atomic_val_t cur, atomic_val_t owner)
+{
+    return cur != 0 && (owner == 0 || cur == owner);
+}
+
+/* Wait while a transfer of @p owner (slot + 1; 0 = anyone's) is in flight.
+ * With an exec_env this is the app's own wait, which a stop ends early.
+ * @return 0, -ECANCELED (the app is stopping) or -ETIMEDOUT. */
+static int raw_async_wait(wasm_exec_env_t exec_env, atomic_val_t owner, int timeout_ms)
+{
+    int64_t deadline = k_uptime_get() + timeout_ms;
+
+    for (;;)
+    {
+        atomic_val_t cur = atomic_get(&raw_async_busy);
+
+        if (!raw_async_waiting_on(cur, owner))
+            return 0;
+        if (exec_env && akira_runtime_stop_requested(exec_env))
+            return -ECANCELED;
+        if (k_uptime_get() >= deadline)
+        {
+            /* Still claimed after the timeout with nothing queued or
+             * running: a submitter preempted that long is a dead one. */
+            raw_async_repair(cur);
+            return raw_async_waiting_on(atomic_get(&raw_async_busy), owner) ? -ETIMEDOUT : 0;
+        }
+        (void)k_sem_take(&raw_async_done, K_MSEC(RAW_WAIT_SLICE_MS));
+    }
+}
+
+/* The window rule akira_display_hal_write_raw() applies (entirely on the
+ * panel), checked before queueing so the app gets the error. */
+static int raw_window_check(int32_t x, int32_t y, int32_t w, int32_t h)
+{
+    int pw, ph;
+
+    if (!panel_size(&pw, &ph))
+        return -ENODEV;
+    if (x < 0 || y < 0 || w <= 0 || h <= 0 ||
+        (int64_t)x + w > pw || (int64_t)y + h > ph)
+        return -EINVAL;
+    return 0;
+}
+
+/* Called by the OS shell before it draws over an app (and by the display
+ * ownership code when it takes the display back).  Bounded. */
+void akira_display_raw_async_wait(void)
+{
+    if (raw_async_wait(NULL, 0, RAW_SHELL_WAIT_MS) < 0)
+        LOG_WRN("display: async raw write still in flight after %d ms", RAW_SHELL_WAIT_MS);
+}
+
+int akira_native_display_raw_write_async(wasm_exec_env_t exec_env,
+                                         int32_t x, int32_t y, int32_t w, int32_t h,
+                                         const uint8_t *data, uint32_t data_size)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
+    int ret = check_pixels(data, data_size, w, h);
+    if (ret < 0)
+        return ret;
+    ret = raw_window_check(x, y, w, h);
+    if (ret < 0)
+        return ret;
+    AKIRA_CHECK_DISPLAY_OWNER_OR_RETURN(exec_env, -EBUSY);
+
+    int slot = akira_runtime_slot_of_exec_env(exec_env);
+    if (slot < 0)
+        return -EACCES;
+    const atomic_val_t me = (atomic_val_t)slot + 1;
+
+    /* The previous transfer must be done. */
+    ret = raw_async_wait(exec_env, 0, RAW_APP_WAIT_MS);
+    if (ret < 0)
+        return (ret == -ECANCELED) ? ret : -EBUSY;
+
+    /* Claim and queue as one span: a stop can't abort the thread between
+     * the two and leave a claim with nothing queued. */
+    akira_native_critical_enter(exec_env);
+    if (!atomic_cas(&raw_async_busy, 0, me))
+    {
+        akira_native_critical_exit(exec_env);
+        return -EBUSY;
+    }
+    /* Re-check after claiming.  The shell flips the owner and then waits for
+     * raw_async_busy == 0, so either it sees this claim or we see its flip. */
+    if (!display_owner_is_wasm())
+    {
+        atomic_clear(&raw_async_busy);
+        akira_native_critical_exit(exec_env);
+        return -EBUSY;
+    }
+    raw_async_job.x = x;
+    raw_async_job.y = y;
+    raw_async_job.w = w;
+    raw_async_job.h = h;
+    raw_async_job.data = (const uint16_t *)data;
+    if (k_work_submit(&raw_async_work) < 0)
+    {
+        atomic_clear(&raw_async_busy);
+        ret = -EIO;
+    }
+    akira_native_critical_exit(exec_env);
+    return ret;
+}
+
+int akira_native_display_raw_wait(wasm_exec_env_t exec_env)
+{
+    AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_DISPLAY_WRITE, -EPERM);
+
+    int slot = akira_runtime_slot_of_exec_env(exec_env);
+    if (slot < 0)
+        return 0; /* not an app: it cannot have queued anything */
+
+    /* Only this app's own transfer holds its buffer. */
+    int ret = raw_async_wait(exec_env, (atomic_val_t)slot + 1, RAW_APP_WAIT_MS);
+
+    return (ret == -ETIMEDOUT) ? -EBUSY : ret;
+}
+
 int akira_native_display_bitmap_transparent(wasm_exec_env_t exec_env,
                                             int32_t x, int32_t y, int32_t w, int32_t h,
                                             const uint8_t *data, uint32_t data_size, uint32_t key)
@@ -1139,12 +1438,14 @@ int akira_native_display_rounded_rect_fill(wasm_exec_env_t exec_env,
 /* ---------------------------------------------------------------------------
  * App teardown
  *
- * The pending auto-flush is the only thing a draw call leaves behind; display
- * ownership itself is dropped by the runtime (akira_display_release_owner()),
- * after this hook.  The flush reads no app memory, so cancelling without
- * waiting is enough and never blocks: a flush already running just presents
- * the framebuffer once more.  Idempotent, lock-free, safe on any thread
- * (including the system workqueue the work item runs on).
+ * A draw call leaves behind a pending auto-flush, and an async raw write a
+ * transfer that reads the app's memory; display ownership itself is dropped
+ * by the runtime (akira_display_release_owner()), after this hook.  The flush
+ * reads no app memory, so cancelling without waiting is enough: a flush
+ * already running just presents the framebuffer once more.  The transfer
+ * must be finished or dropped before the app's memory goes: waited for (at
+ * most RAW_SHELL_WAIT_MS), or, on the system workqueue the worker runs on,
+ * removed from the queue.  Idempotent, safe on any thread.
  * -------------------------------------------------------------------------*/
 
 static void display_release(int slot, const char *app_name)
@@ -1152,9 +1453,43 @@ static void display_release(int slot, const char *app_name)
     ARG_UNUSED(app_name);
     if (atomic_cas(&g_auto_flush_slot, slot, -1))
         (void)k_work_cancel_delayable(&g_auto_flush_work);
+
+    if (slot < 0)
+        return;
+
+    const atomic_val_t me = (atomic_val_t)slot + 1;
+
+    if (atomic_get(&raw_async_busy) != me)
+        return;
+
+    if (k_current_get() == k_work_queue_thread_get(&k_sys_work_q))
+    {
+        /* The worker runs on this queue, so it is not running now: drop the
+         * queued job (or the leaked claim) instead of waiting behind
+         * ourselves. */
+        if (k_work_cancel(&raw_async_work) == 0 && atomic_cas(&raw_async_busy, me, 0))
+            k_sem_give(&raw_async_done);
+        return;
+    }
+
+    /* The app's thread is gone or is this one, so no submitter of this slot
+     * is mid-claim: a claim with nothing queued is a leaked one. */
+    raw_async_repair(me);
+    if (raw_async_wait(NULL, me, RAW_SHELL_WAIT_MS) < 0)
+        LOG_ERR("display: raw write of app slot %d still running at teardown", slot);
 }
 
 AKIRA_APP_RESOURCE_DEFINE(display, 20, NULL, display_release);
+
+#else /* !CONFIG_AKIRA_WASM_RUNTIME */
+
+/* No app can have a transfer in flight.  The console shell calls this
+ * unconditionally before it draws (the header declares it only with the
+ * runtime). */
+void akira_display_raw_async_wait(void);
+void akira_display_raw_async_wait(void)
+{
+}
 
 #endif /* CONFIG_AKIRA_WASM_RUNTIME */
 
@@ -1168,10 +1503,13 @@ static const NativeSymbol akira_display_natives[] = {
     {"display_rect", (void *)akira_native_display_rect, "(iiiii)i", NULL},
     {"display_text", (void *)akira_native_display_text, "(ii$i)i", NULL},
     {"display_text_large", (void *)akira_native_display_text_large, "(ii$i)i", NULL},
+    {"display_text_huge", (void *)akira_native_display_text_huge, "(ii$i)i", NULL},
     {"display_clear", (void *)akira_native_display_clear, "(i)i", NULL},
     {"display_pixel", (void *)akira_native_display_pixel, "(iii)i", NULL},
     {"display_flush", (void *)akira_native_display_flush, "()i", NULL},
     {"display_get_size", (void *)akira_native_display_get_size, "(**)i", NULL},
+    {"display_get_width", (void *)akira_native_display_get_width, "()i", NULL},
+    {"display_get_height", (void *)akira_native_display_get_height, "()i", NULL},
     {"display_line", (void *)akira_native_display_line, "(iiiii)i", NULL},
     {"display_circle", (void *)akira_native_display_circle, "(iiii)i", NULL},
     {"display_circle_fill", (void *)akira_native_display_circle_fill, "(iiii)i", NULL},
@@ -1181,6 +1519,8 @@ static const NativeSymbol akira_display_natives[] = {
     {"display_bitmap", (void *)akira_native_display_bitmap, "(iiii*~)i", NULL},
     {"display_bitmap_transparent", (void *)akira_native_display_bitmap_transparent, "(iiii*~i)i", NULL},
     {"display_raw_write", (void *)akira_native_display_raw_write, "(iiii*~)i", NULL},
+    {"display_raw_write_async", (void *)akira_native_display_raw_write_async, "(iiii*~)i", NULL},
+    {"display_raw_wait", (void *)akira_native_display_raw_wait, "()i", NULL},
     /* Phase 4 — UI helper primitives */
     {"display_hline", (void *)akira_native_display_hline, "(iiii)i", NULL},
     {"display_vline", (void *)akira_native_display_vline, "(iiii)i", NULL},

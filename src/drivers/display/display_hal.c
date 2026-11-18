@@ -14,7 +14,20 @@
 #include <zephyr/logging/log.h>
 #include <string.h>
 #include "../platform_hal.h"
+#ifdef CONFIG_AKIRA_LP5817
+#include "lp5817.h"
+#endif
 #include "../lib/mem_helper.h"
+
+#ifdef CONFIG_PM_DEVICE
+#include <zephyr/pm/device.h>
+#endif
+
+/* Backlight level at boot, before the shell applies the saved setting. */
+#define AKIRA_BOOT_BRIGHTNESS 128
+
+/* Last non-zero brightness, restored when the panel is un-blanked. */
+static uint8_t s_last_brightness = AKIRA_BOOT_BRIGHTNESS;
 
 LOG_MODULE_REGISTER(display_hal, LOG_LEVEL_INF);
 
@@ -23,8 +36,10 @@ LOG_MODULE_REGISTER(display_hal, LOG_LEVEL_INF);
  * any display (monochrome, colour, any resolution) is handled correctly.
  * Placed in PSRAM when available (akira_malloc_buffer prefers PSRAM). */
 #if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
-static void *conv_buf; /* NULL if no conversion needed */
+static void *conv_buf;   /* NULL if no conversion needed */
+static void *shadow_buf; /* Shadow of last-sent MONO frame for dirty tracking */
 static size_t conv_buf_size;
+static size_t bytes_per_row; /* Cached: (width + 7) / 8 — valid only for MONO */
 #endif
 
 /* Display device handle */
@@ -38,12 +53,37 @@ static struct display_capabilities display_caps = {0};
 #define BACKLIGHT_NODE DT_ALIAS(pwm_backlight0)
 #define BL_PWM_NODE DT_CHILD(BACKLIGHT_NODE, bl_pwm)
 
-#if DT_NODE_EXISTS(BACKLIGHT_NODE)
+#if DT_NODE_EXISTS(BACKLIGHT_NODE) && !defined(CONFIG_AKIRA_LP5817)
 static const struct pwm_dt_spec bl_pwm = PWM_DT_SPEC_GET(BL_PWM_NODE);
 #endif
 
 /* Display reset is handled by the ST7789V driver via device tree reset-gpios.
  * Do not manually control GPIO15 (RESET) - driver manages hardware reset timing. */
+
+/* Dedicated blit thread, pinned to core0 — the opposite core from WASM app
+ * threads (pinned core1, akira_runtime.c) — so app compute for frame N+1
+ * overlaps the blit of frame N instead of serializing on one core. */
+#define COMPOSITOR_CORE_ID 0
+
+static void compositor_thread_fn(void *p1, void *p2, void *p3)
+{
+    ARG_UNUSED(p1);
+    ARG_UNUSED(p2);
+    ARG_UNUSED(p3);
+
+    for (;;)
+    {
+        const uint16_t *fb = akira_framebuffer_wait_present();
+        uint16_t x0, y0, x1, y1;
+
+        akira_framebuffer_presented_rect(&x0, &y0, &x1, &y1);
+        akira_display_hal_flush_rect(fb, x0, y0, x1, y1);
+        akira_framebuffer_present_done();
+    }
+}
+
+K_THREAD_STACK_DEFINE(compositor_stack, CONFIG_AKIRA_DISPLAY_COMPOSITOR_STACK_SIZE);
+static struct k_thread compositor_tid;
 
 /**
  * @brief Initialize the hardware display
@@ -62,12 +102,27 @@ int akira_display_hal_init(void)
         return -ENODEV;
     }
 
-    /* Force max backlight at startup. */
-#if DT_NODE_EXISTS(BACKLIGHT_NODE)
+    /* Light the panel at boot.  Half scale, not full: settings aren't loaded
+     * this early, and the OS shell applies the user's saved brightness a
+     * moment later — no reason to spend ~75 mA on the boot screen first. */
+#ifdef CONFIG_AKIRA_LP5817
+    /* AkiraConsole Prod: the panel backlight is an LP5817 I2C LED driver
+     * (U7), not a PWM GPIO.  It powers up with every register cleared, so
+     * without this the panel is completely dark no matter what is drawn. */
+    if (akira_lp5817_init() == 0)
+    {
+        akira_display_hal_set_brightness(AKIRA_BOOT_BRIGHTNESS);
+        LOG_INF("LP5817 backlight on (%u)", AKIRA_BOOT_BRIGHTNESS);
+    }
+    else
+    {
+        LOG_WRN("LP5817 backlight init failed — panel will stay dark");
+    }
+#elif DT_NODE_EXISTS(BACKLIGHT_NODE)
     if (pwm_is_ready_dt(&bl_pwm))
     {
-        akira_display_hal_set_brightness(255);
-        LOG_INF("Backlight PWM set to max (255)");
+        akira_display_hal_set_brightness(AKIRA_BOOT_BRIGHTNESS);
+        LOG_INF("Backlight PWM on (%u)", AKIRA_BOOT_BRIGHTNESS);
     }
     else
     {
@@ -77,6 +132,9 @@ int akira_display_hal_init(void)
 
     /* Get display capabilities and store them */
     display_get_capabilities(display_dev, &display_caps);
+
+    akira_framebuffer_set_geometry(display_caps.x_resolution,
+                                   display_caps.y_resolution);
 
     LOG_INF("Display ready: %dx%d fmt=%d",
             display_caps.x_resolution, display_caps.y_resolution,
@@ -88,10 +146,8 @@ int akira_display_hal_init(void)
     if (display_caps.current_pixel_format == PIXEL_FORMAT_MONO01 ||
         display_caps.current_pixel_format == PIXEL_FORMAT_MONO10)
     {
-        conv_buf_size = ((size_t)display_caps.x_resolution *
-                             display_caps.y_resolution +
-                         7U) /
-                        8U;
+        bytes_per_row = ((size_t)display_caps.x_resolution + 7U) / 8U;
+        conv_buf_size = bytes_per_row * display_caps.y_resolution;
         conv_buf = akira_malloc_buffer(conv_buf_size);
         if (conv_buf == NULL)
         {
@@ -99,7 +155,23 @@ int akira_display_hal_init(void)
             return -ENOMEM;
         }
         memset(conv_buf, 0, conv_buf_size);
-        LOG_INF("MONO conv buf: %zu B at %p", conv_buf_size, conv_buf);
+
+        /* Shadow buffer: copy of the last frame sent to the display.
+         * Dirty tracking: only write scanlines that have changed since the
+         * previous flush, reducing average SPI transfer volume significantly. */
+        shadow_buf = akira_malloc_buffer(conv_buf_size);
+        if (shadow_buf != NULL)
+        {
+            /* Initialise to all-0xFF (guaranteed different from the cleared
+             * conv_buf) so the very first flush sends the whole frame. */
+            memset(shadow_buf, 0xFF, conv_buf_size);
+            LOG_INF("MONO conv+shadow bufs: %zu B each at %p/%p",
+                    conv_buf_size, conv_buf, shadow_buf);
+        }
+        else
+        {
+            LOG_WRN("Shadow buf alloc failed — dirty tracking disabled");
+        }
     }
     /* No conversion buffer needed for RGB565 — framebuffer is already RGB565 */
 
@@ -111,10 +183,24 @@ int akira_display_hal_init(void)
      * from main.c. */
     akira_display_hal_flush();
 
+    uint16_t *fb = akira_framebuffer_get();
+#if defined(CONFIG_AKIRA_OS_SHELL_BOOT_SPLASH)
+    /* The OS shell plays an animated boot splash on this background: paint it
+     * now so the first lit frame is already the splash, not a test pattern. */
+    if (fb != NULL)
+    {
+        size_t n = (size_t)display_caps.x_resolution * display_caps.y_resolution;
+
+        for (size_t i = 0; i < n; i++)
+        {
+            fb[i] = AKIRA_BOOT_SPLASH_BG;
+        }
+        akira_display_hal_flush();
+    }
+#else
     /* Test pattern: write alternating white/black horizontal bands so the
      * display is visually testable immediately after boot.  Overwritten once
      * the first application frame arrives. */
-    uint16_t *fb = akira_framebuffer_get();
     if (fb != NULL)
     {
         uint32_t w = display_caps.x_resolution;
@@ -130,6 +216,7 @@ int akira_display_hal_init(void)
         akira_display_hal_flush();
         /* Leave test pattern visible briefly; main loop will overwrite it */
     }
+#endif
 
     /* Enable display output (ENOTSUP is acceptable: disp_en_gpios not wired,
      * DISP pin is pulled HIGH by R85 so display stays on without software control) */
@@ -140,6 +227,19 @@ int akira_display_hal_init(void)
         return ret;
     }
 
+    k_thread_create(&compositor_tid, compositor_stack,
+                    K_THREAD_STACK_SIZEOF(compositor_stack),
+                    compositor_thread_fn, NULL, NULL, NULL,
+                    CONFIG_AKIRA_DISPLAY_COMPOSITOR_PRIORITY,
+                    0, K_FOREVER);
+#if defined(CONFIG_SCHED_CPU_MASK)
+    /* Only linked in with CONFIG_SCHED_CPU_MASK; on a single-core (or
+     * unpinned) board the scheduler places the thread and the overlap this
+     * buys is simply not available. */
+    k_thread_cpu_pin(&compositor_tid, COMPOSITOR_CORE_ID);
+#endif
+    k_thread_start(&compositor_tid);
+
     return 0;
 
 #else
@@ -149,12 +249,12 @@ int akira_display_hal_init(void)
 }
 
 /**
- * @brief Flush framebuffer to physical display
+ * @brief Flush an explicit framebuffer to physical display hardware
  *
- * Transfers the contents of the Akira framebuffer to the physical display
- * hardware using Zephyr's display_write() API.
+ * Transfers the given buffer to the physical display hardware using
+ * Zephyr's display_write() API.
  */
-void akira_display_hal_flush(void)
+void akira_display_hal_flush_buf(const uint16_t *fb)
 {
 #if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
     if (display_dev == NULL)
@@ -163,83 +263,320 @@ void akira_display_hal_flush(void)
         return;
     }
 
-    uint16_t *fb = akira_framebuffer_get();
     if (fb == NULL)
     {
         LOG_ERR_RATELIMIT("Framebuffer is NULL");
         return;
     }
 
+    const uint16_t w = display_caps.x_resolution;
+    const uint16_t h = display_caps.y_resolution;
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  MONO01 / MONO10
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/* PX_WHITE(p): any non-zero RGB565 pixel → white; 0x0000 → black. */
+#define PX_WHITE(p) ((p) != 0U)
+
     if (display_caps.current_pixel_format == PIXEL_FORMAT_MONO01 ||
         display_caps.current_pixel_format == PIXEL_FORMAT_MONO10)
     {
-        /* Convert RGB565 → MONO (1 bit per pixel, LSB-first packing).
-         * MONO01: bit=0 black, bit=1 white.
-         * MONO10: bit=1 black, bit=0 white (inverted).
-         * Any non-zero RGB565 pixel is treated as "bright" → white. */
         if (conv_buf == NULL)
         {
-            LOG_ERR("Conv buffer not allocated");
+            LOG_ERR_RATELIMIT("conv_buf not allocated");
             return;
         }
-        bool invert = (display_caps.current_pixel_format == PIXEL_FORMAT_MONO10);
-        uint16_t w = display_caps.x_resolution;
-        uint16_t h = display_caps.y_resolution;
-        uint16_t bytes_per_row = (w + 7U) / 8U;
 
-        for (uint16_t y = 0; y < h; y++)
+        const bool invert = (display_caps.current_pixel_format == PIXEL_FORMAT_MONO10) ||
+                            IS_ENABLED(CONFIG_AKIRA_SHARP_INVERT_COLORS);
+        const size_t bpr = bytes_per_row;
+        const size_t full_bx = (size_t)w >> 3U;             /* complete 8-px groups   */
+        const uint8_t tail_w = (uint8_t)((uint16_t)w & 7U); /* leftover pixels [0..7] */
+
+        uint8_t *restrict mono = (uint8_t *)conv_buf;
+        uint8_t *restrict shad = (uint8_t *)shadow_buf; /* may be NULL */
+
+        /* ── 1. RGB565 → packed MONO (LSB = leftmost pixel) ─────────────── */
+        for (uint16_t y = 0U; y < h; y++)
         {
-            const uint16_t *row = &fb[y * w];
-            uint8_t *dst = &((uint8_t *)conv_buf)[y * bytes_per_row];
-            for (uint16_t bx = 0; bx < bytes_per_row; bx++)
+            const uint16_t *restrict row = &fb[(size_t)y * w];
+            uint8_t *restrict dst = &mono[(size_t)y * bpr];
+
+            for (size_t bx = 0U; bx < full_bx; bx++)
             {
-                uint8_t packed = 0;
-                uint16_t x_base = bx * 8U;
-                for (uint8_t bit = 0; bit < 8U; bit++)
+                const uint16_t *px = &row[bx * 8U];
+                const uint8_t b = (uint8_t)(((uint8_t)PX_WHITE(px[0]) << 0U) | ((uint8_t)PX_WHITE(px[1]) << 1U) |
+                                            ((uint8_t)PX_WHITE(px[2]) << 2U) | ((uint8_t)PX_WHITE(px[3]) << 3U) |
+                                            ((uint8_t)PX_WHITE(px[4]) << 4U) | ((uint8_t)PX_WHITE(px[5]) << 5U) |
+                                            ((uint8_t)PX_WHITE(px[6]) << 6U) | ((uint8_t)PX_WHITE(px[7]) << 7U));
+                dst[bx] = invert ? (uint8_t)(b ^ 0xFFU) : b;
+            }
+
+            if (tail_w != 0U)
+            {
+                /* Partial last byte — unused high bits remain 0 */
+                const uint16_t *px = &row[full_bx * 8U];
+                uint8_t b = 0U;
+                for (uint8_t bit = 0U; bit < tail_w; bit++)
                 {
-                    uint16_t x = x_base + bit;
-                    if (x >= w)
-                    {
-                        break;
-                    }
-                    bool white = (row[x] != 0x0000U) ^ invert;
-                    if (white)
-                    {
-                        packed |= (uint8_t)(1U << bit); /* LSB-first */
-                    }
+                    b |= (uint8_t)((uint8_t)PX_WHITE(px[bit]) << bit);
                 }
-                dst[bx] = packed;
+                dst[full_bx] = invert ? (uint8_t)(b ^ 0xFFU) : b;
             }
         }
 
+        /* ── 2. Dirty-rect detection → one display_write per frame ─────── */
+        if (shad != NULL)
+        {
+            const uint8_t *restrict nf = mono;
+            const uint8_t *restrict of = shad;
+
+            /*
+             * Accumulate a bounding rect over all changed bytes at
+             * byte-column granularity (8 px per column) — no bit extraction
+             * needed when handing the sub-buffer to display_write.
+             *
+             * One display_write call per frame, covering the minimum dirty
+             * bounding box.  Optimal for localised motion (game sprites,
+             * animated widgets).  For non-adjacent multi-region changes
+             * (e.g. top-left + bottom-right simultaneously), dirty spans
+             * transfer fewer raw bytes — switch strategy if that's typical.
+             */
+            /* Sharp LS0XX requires every display_write to start at x=0
+             * with the full panel width.  Partial-column writes are rejected
+             * with -EINVAL ("Width not a multiple of 400").
+             *
+             * Strategy: track dirty *rows* only, then write the full-width
+             * row slice [dy0, dy1) in a single call — x=0, width=w always.
+             */
+            uint16_t dy0 = h;
+            uint16_t dy1 = 0U;
+
+            for (uint16_t y = 0U; y < h; y++)
+            {
+                if (memcmp(&nf[(size_t)y * bpr], &of[(size_t)y * bpr], bpr) != 0)
+                {
+                    if (y < dy0) { dy0 = y; }
+                    dy1 = y + 1U;
+                }
+            }
+
+            if (dy1 == 0U)
+            {
+                return; /* frame identical — nothing to send */
+            }
+
+            const uint16_t rh = dy1 - dy0;
+
+            /* Full-width write: x=0, width=w (required by Sharp ls0xx driver) */
+            struct display_buffer_descriptor desc = {
+                .buf_size = (uint32_t)rh * (uint32_t)bpr,
+                .width    = w,
+                .height   = rh,
+                .pitch    = w,
+            };
+            int ret = display_write(display_dev, 0, dy0, &desc,
+                                    &nf[(size_t)dy0 * bpr]);
+            if (ret < 0)
+            {
+                LOG_ERR_RATELIMIT("display_write(mono y=%u h=%u) -> %d", dy0, rh, ret);
+            }
+
+            /* Commit shadow for the rows we just sent */
+            memcpy(&shad[(size_t)dy0 * bpr],
+                   &mono[(size_t)dy0 * bpr],
+                   (size_t)rh * bpr);
+        }
+        else
+        {
+            /* No shadow — unconditional full-frame write */
+            struct display_buffer_descriptor desc = {
+                .buf_size = (uint32_t)conv_buf_size,
+                .width = w,
+                .height = h,
+                .pitch = w,
+            };
+            int ret = display_write(display_dev, 0, 0, &desc, mono);
+            if (ret < 0)
+            {
+                LOG_ERR_RATELIMIT("display_write(mono full) -> %d", ret);
+            }
+        }
+    }
+    /* ══════════════════════════════════════════════════════════════════════
+     *  RGB565 / other colour formats — direct framebuffer passthrough
+     * ══════════════════════════════════════════════════════════════════════ */
+    else
+    {
         struct display_buffer_descriptor desc = {
-            .buf_size = (uint32_t)bytes_per_row * h,
+            .buf_size = (uint32_t)w * (uint32_t)h * 2U,
             .width = w,
             .height = h,
             .pitch = w,
         };
-
-        int ret = display_write(display_dev, 0, 0, &desc, conv_buf);
-        if (ret < 0)
-        {
-            LOG_ERR_RATELIMIT("Display write failed: %d", ret);
-        }
-    }
-    else
-    {
-        /* RGB565 and other colour formats — send framebuffer directly */
-        struct display_buffer_descriptor desc = {
-            .buf_size = display_caps.x_resolution * display_caps.y_resolution * 2U,
-            .width = display_caps.x_resolution,
-            .height = display_caps.y_resolution,
-            .pitch = display_caps.x_resolution,
-        };
-
         int ret = display_write(display_dev, 0, 0, &desc, fb);
         if (ret < 0)
         {
-            LOG_ERR_RATELIMIT("Display write failed: %d", ret);
+            LOG_ERR_RATELIMIT("display_write(rgb565 full) -> %d", ret);
         }
+    }
+#endif /* DT_NODE_EXISTS(DT_CHOSEN(zephyr_display)) */
+}
+
+void akira_display_hal_flush_rows(const uint16_t *fb, int y0, int y1)
+{
+#if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
+    const int w = display_caps.x_resolution;
+    const int h = display_caps.y_resolution;
+
+    if (display_dev == NULL || fb == NULL)
+    {
+        return;
+    }
+    y0 = CLAMP(y0, 0, h);
+    y1 = CLAMP(y1, y0, h);
+
+    /* Full frame, or a panel format that needs conversion: the full path
+     * (which diffs rows itself for MONO panels). */
+    if ((y0 == 0 && y1 == h) ||
+        display_caps.current_pixel_format == PIXEL_FORMAT_MONO01 ||
+        display_caps.current_pixel_format == PIXEL_FORMAT_MONO10)
+    {
+        akira_display_hal_flush_buf(fb);
+        return;
+    }
+    if (y1 == y0)
+    {
+        return;
+    }
+
+    /* Rows are packed at panel width, so the band is one contiguous window:
+     * CASET/RASET to it and stream just those rows. */
+    struct display_buffer_descriptor desc = {
+        .buf_size = (uint32_t)w * (uint32_t)(y1 - y0) * 2U,
+        .width = (uint16_t)w,
+        .height = (uint16_t)(y1 - y0),
+        .pitch = (uint16_t)w,
+    };
+    int ret = display_write(display_dev, 0, (uint16_t)y0, &desc, &fb[(size_t)y0 * w]);
+    if (ret < 0)
+    {
+        LOG_ERR_RATELIMIT("display_write(rows %d..%d) -> %d", y0, y1, ret);
+    }
+#else
+    ARG_UNUSED(fb);
+    ARG_UNUSED(y0);
+    ARG_UNUSED(y1);
+#endif
+}
+
+#if defined(CONFIG_AKIRA_PSRAM)
+/* Staging for sub-rect blits.  The ST7789V driver can't stream a strided
+ * window (with pitch > width it sends `pitch` pixels per row and the panel
+ * wraps them), so rect rows are packed here, a chunk at a time.  16 KB of
+ * PSRAM; a 150x150 animated region goes out in 3 chunks. */
+#define RECT_STAGE_PX 8192
+static uint16_t s_rect_stage[RECT_STAGE_PX] AKIRA_BULK_BSS;
+#endif
+
+void akira_display_hal_flush_rect(const uint16_t *fb, int x0, int y0, int x1, int y1)
+{
+#if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
+    const int w = display_caps.x_resolution;
+    const int h = display_caps.y_resolution;
+
+    if (display_dev == NULL || fb == NULL)
+    {
+        return;
+    }
+    x0 = CLAMP(x0, 0, w);
+    x1 = CLAMP(x1, x0, w);
+    y0 = CLAMP(y0, 0, h);
+    y1 = CLAMP(y1, y0, h);
+    if (x1 == x0 || y1 == y0)
+    {
+        return;
+    }
+
+    const int rw = x1 - x0;
+
+#if defined(CONFIG_AKIRA_PSRAM)
+    /* Full-width bands are already contiguous; MONO panels need the full
+     * conversion path, which diffs rows itself. */
+    if (rw < w && rw <= RECT_STAGE_PX &&
+        display_caps.current_pixel_format != PIXEL_FORMAT_MONO01 &&
+        display_caps.current_pixel_format != PIXEL_FORMAT_MONO10)
+    {
+        const int rows_per = RECT_STAGE_PX / rw;
+
+        for (int y = y0; y < y1; y += rows_per)
+        {
+            const int n = MIN(rows_per, y1 - y);
+
+            for (int r = 0; r < n; r++)
+            {
+                memcpy(&s_rect_stage[r * rw], &fb[(size_t)(y + r) * w + x0],
+                       (size_t)rw * sizeof(uint16_t));
+            }
+            struct display_buffer_descriptor desc = {
+                .buf_size = (uint32_t)rw * (uint32_t)n * 2U,
+                .width = (uint16_t)rw,
+                .height = (uint16_t)n,
+                .pitch = (uint16_t)rw,
+            };
+            int ret = display_write(display_dev, (uint16_t)x0, (uint16_t)y, &desc,
+                                    s_rect_stage);
+            if (ret < 0)
+            {
+                LOG_ERR_RATELIMIT("display_write(rect %d,%d %dx%d) -> %d", x0, y, rw, n, ret);
+                return;
+            }
+        }
+        return;
+    }
+#endif
+    ARG_UNUSED(rw);
+    akira_display_hal_flush_rows(fb, y0, y1);
+#else
+    ARG_UNUSED(fb);
+    ARG_UNUSED(x0);
+    ARG_UNUSED(y0);
+    ARG_UNUSED(x1);
+    ARG_UNUSED(y1);
+#endif
+}
+
+/**
+ * @brief Flush framebuffer to physical display
+ *
+ * Convenience wrapper around akira_display_hal_flush_buf() for callers
+ * with no double buffer (shell commands, boot test pattern).
+ */
+void akira_display_hal_flush(void)
+{
+    akira_display_hal_flush_buf(akira_framebuffer_get());
+}
+
+/**
+ * @brief Clear framebuffer to black and flush to display.
+ *
+ * Zeroes the entire RGB565 framebuffer and calls akira_display_hal_flush().
+ * Called by the runtime before launching each WASM app so no leftover pixels
+ * from the previous app are visible during startup.
+ * Does not require callers to include <zephyr/drivers/display.h>.
+ */
+void akira_display_hal_clear(void)
+{
+#if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
+    uint16_t *fb = akira_framebuffer_get();
+    if (fb != NULL && display_caps.x_resolution > 0 && display_caps.y_resolution > 0)
+    {
+        memset(fb, 0,
+               (size_t)display_caps.x_resolution *
+                   (size_t)display_caps.y_resolution *
+                   sizeof(uint16_t));
+        akira_display_hal_flush();
     }
 #endif
 }
@@ -275,7 +612,13 @@ int akira_display_hal_get_capabilities(struct display_capabilities *caps)
  */
 void akira_display_hal_set_brightness(uint8_t brightness)
 {
-#if DT_NODE_EXISTS(BACKLIGHT_NODE)
+    if (brightness != 0)
+    {
+        s_last_brightness = brightness;
+    }
+#ifdef CONFIG_AKIRA_LP5817
+    (void)akira_lp5817_set_brightness(brightness);
+#elif DT_NODE_EXISTS(BACKLIGHT_NODE)
     if (pwm_is_ready_dt(&bl_pwm))
     {
         uint32_t pulse = (uint32_t)bl_pwm.period * brightness / 255;
@@ -293,7 +636,6 @@ int akira_display_hal_set_rotation(uint8_t rotation)
 #if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
     if (display_dev == NULL)
     {
-        LOG_ERR("Display not initialized");
         return -ENODEV;
     }
 
@@ -343,24 +685,47 @@ void akira_display_hal_set_blank(bool blank)
     if (blank)
     {
         /* Backlight off first, then panel blank */
-#if DT_NODE_EXISTS(BACKLIGHT_NODE)
-        if (pwm_is_ready_dt(&bl_pwm))
-        {
-            pwm_set_dt(&bl_pwm, bl_pwm.period, 0); /* 0% duty = off */
-        }
-#endif
+        akira_display_hal_set_brightness(0);
         display_blanking_on(display_dev);
     }
     else
     {
         display_blanking_off(display_dev);
-#if DT_NODE_EXISTS(BACKLIGHT_NODE)
-        if (pwm_is_ready_dt(&bl_pwm))
-        {
-            pwm_set_dt(&bl_pwm, bl_pwm.period, bl_pwm.period); /* 100% */
-        }
+        akira_display_hal_set_brightness(s_last_brightness);
+    }
+#endif
+}
+
+void akira_display_hal_sleep(bool sleep)
+{
+#if DT_NODE_EXISTS(DT_CHOSEN(zephyr_display))
+    if (!display_dev)
+        return;
+    if (sleep)
+    {
+        /* Backlight first so the user never sees the panel go dark-grey,
+         * then let any in-flight blit finish before SLEEP_IN on the bus. */
+        uint8_t keep = s_last_brightness;
+
+        akira_display_hal_set_brightness(0);
+        s_last_brightness = keep;
+        akira_framebuffer_wait_idle();
+#ifdef CONFIG_PM_DEVICE
+        (void)pm_device_action_run(display_dev, PM_DEVICE_ACTION_SUSPEND);
+#else
+        display_blanking_on(display_dev);
 #endif
     }
+    else
+    {
+#ifdef CONFIG_PM_DEVICE
+        (void)pm_device_action_run(display_dev, PM_DEVICE_ACTION_RESUME);
+#else
+        display_blanking_off(display_dev);
+#endif
+    }
+#else
+    ARG_UNUSED(sleep);
 #endif
 }
 
@@ -401,6 +766,38 @@ int akira_display_hal_write_raw(int x, int y, int w, int h, const uint16_t *data
         (int64_t)x + w > (int64_t)display_caps.x_resolution ||
         (int64_t)y + h > (int64_t)display_caps.y_resolution)
         return -EINVAL;
+
+    /* MONO displays (e.g. Sharp LS0XX) require full-row writes (width ==
+     * panel width) and don't accept partial RGB565 tiles directly.
+     * Route through the framebuffer: blit RGB565 data into the correct
+     * position, then do a full-frame flush (which handles MONO conversion).
+     * The bounds check above already guarantees the rect is on-panel; the
+     * clamps below are kept as a second line of defence. */
+    if (display_caps.current_pixel_format == PIXEL_FORMAT_MONO01 ||
+        display_caps.current_pixel_format == PIXEL_FORMAT_MONO10)
+    {
+        uint16_t *fb = akira_framebuffer_get();
+        if (!fb)
+            return -ENOMEM;
+
+        int x1 = MAX(x, 0);
+        int y1 = MAX(y, 0);
+        int x2 = MIN(x + w, (int)display_caps.x_resolution);
+        int y2 = MIN(y + h, (int)display_caps.y_resolution);
+
+        for (int py = y1; py < y2; py++)
+        {
+            int span = x2 - x1;
+            if (span <= 0)
+                continue;
+            const uint16_t *src = data + (py - y) * w + (x1 - x);
+            uint16_t *dst = fb + py * display_caps.x_resolution + x1;
+            memcpy(dst, src, (size_t)span * sizeof(uint16_t));
+        }
+
+        akira_display_hal_flush();
+        return 0;
+    }
 
     struct display_buffer_descriptor desc = {
         .buf_size = (uint32_t)((uint32_t)w * (uint32_t)h * 2U),

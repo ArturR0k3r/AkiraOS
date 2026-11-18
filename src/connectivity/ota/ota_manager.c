@@ -114,7 +114,9 @@ static K_MUTEX_DEFINE(ota_buf_mutex); /* protects write_buffer + buffer_pos */
 
 /* Flash management */
 static const struct flash_area *secondary_fa = NULL;
-static uint8_t write_buffer[OTA_WRITE_BUFFER_SIZE] __aligned(4);
+/* PSRAM: esp_flash_write() bounces a non-internal source through its own
+ * internal buffer, so this never has to be in scarce internal DRAM. */
+static uint8_t write_buffer[OTA_WRITE_BUFFER_SIZE] __aligned(4) AKIRA_BULK_BSS;
 
 /* Set once this boot starts writing a new image over the secondary slot,
  * which until then holds the firmware that ran before the last swap. */
@@ -1196,6 +1198,36 @@ bool ota_is_update_in_progress(void)
             ota_status.state == OTA_STATE_RECEIVING ||
             ota_status.state == OTA_STATE_VALIDATING ||
             ota_status.state == OTA_STATE_INSTALLING);
+}
+
+int ota_get_slot_sizes(size_t *primary_size, size_t *secondary_size)
+{
+    if (!primary_size || !secondary_size)
+    {
+        return -EINVAL;
+    }
+
+#if OTA_FLASH_AVAILABLE
+    const struct flash_area *fa;
+    int ret = flash_area_open(FLASH_AREA_IMAGE_PRIMARY, &fa);
+    if (ret)
+    {
+        return ret;
+    }
+    *primary_size = fa->fa_size;
+    flash_area_close(fa);
+
+    ret = flash_area_open(FLASH_AREA_IMAGE_SECONDARY, &fa);
+    if (ret)
+    {
+        return ret;
+    }
+    *secondary_size = fa->fa_size;
+    flash_area_close(fa);
+    return 0;
+#else
+    return -ENOTSUP;
+#endif
 }
 
 /* String conversion functions */

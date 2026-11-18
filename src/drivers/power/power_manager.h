@@ -55,11 +55,12 @@ typedef enum {
  * floating-point in WASM-facing code paths.
  */
 typedef struct {
-    uint8_t  level_percent; /**< State of charge 0-100 %.                 */
-    int32_t  voltage_mv;    /**< Bus / pack voltage in millivolts.         */
-    int32_t  current_ma;    /**< Charge(+) / discharge(-) current in mA.  */
-    bool     charging;      /**< True when an external charger is active.  */
-    bool     low_battery;   /**< True when SoC < CONFIG_AKIRA_BATTERY_LOW_THRESHOLD. */
+    uint8_t  level_percent;  /**< State of charge 0-100 %.                 */
+    int32_t  voltage_mv;     /**< Bus / pack voltage in millivolts.         */
+    int32_t  current_ma;     /**< Charge(+) / discharge(-) current in mA.  */
+    bool     charging;       /**< True when an external charger is active.  */
+    bool     low_battery;    /**< True when SoC < CONFIG_AKIRA_BATTERY_LOW_THRESHOLD. */
+    int32_t  temperature_c;  /**< Battery temperature in whole degrees C, INT32_MIN if unavailable. */
 } akira_battery_status_t;
 
 /**
@@ -111,10 +112,114 @@ int akira_pm_get_battery_level(uint8_t *percent);
 int akira_pm_get_battery_status(akira_battery_status_t *status);
 
 /**
+ * @brief True while the charger IC reports an active charge cycle.
+ *
+ * Read straight from the charger (BQ25601 on AkiraConsole Production), so it
+ * works even on builds with no fuel gauge, or when the gauge is not
+ * responding.  Used to inhibit auto deep-sleep: powering the device off while
+ * it sits on a charger is never what the user wants.
+ *
+ * @return true if charging; false if not charging, or if no charger is bound.
+ */
+bool akira_pm_is_charging(void);
+
+/* ---------- cached battery monitor (UI-facing) ---------- */
+
+/** @brief Charge state as the UI should present it. */
+typedef enum {
+    AKIRA_BATT_UNKNOWN = 0,   /**< No reading yet, or no battery hardware.          */
+    AKIRA_BATT_DISCHARGING,   /**< Running from the cell.                           */
+    AKIRA_BATT_CHARGING,      /**< External power, charge cycle active.             */
+    AKIRA_BATT_FULL,          /**< External power, charge terminated.               */
+    AKIRA_BATT_NOT_CHARGING,  /**< External power, not charging (fault, temp, ...). */
+} akira_batt_state_t;
+
+/**
+ * @brief Battery snapshot maintained by a background poll.
+ *
+ * Reading it costs no I2C traffic, so UI code may call
+ * akira_pm_battery_snapshot() every frame.
+ */
+typedef struct {
+    bool     valid;          /**< pct / voltage / current come from a real gauge reading. */
+    bool     online;         /**< External power present.                                 */
+    akira_batt_state_t state;
+    uint8_t  pct;            /**< Display SoC 0-100 %, smoothed (see power_manager.c).    */
+    int32_t  voltage_mv;
+    int32_t  current_ma;     /**< Charge(+) / discharge(-).                               */
+    int32_t  temperature_c;  /**< INT32_MIN if unavailable.                               */
+    uint32_t seq;            /**< Bumps whenever anything above changes.                  */
+} akira_battery_snapshot_t;
+
+/** @name Battery listener event bits
+ * @{ */
+#define AKIRA_BATT_EVT_PLUGGED   (1U << 0) /**< External power connected.           */
+#define AKIRA_BATT_EVT_UNPLUGGED (1U << 1) /**< External power removed.             */
+#define AKIRA_BATT_EVT_FULL      (1U << 2) /**< Charger terminated: battery full.   */
+#define AKIRA_BATT_EVT_LEVEL     (1U << 3) /**< Display % changed.                  */
+#define AKIRA_BATT_EVT_LOW       (1U << 4) /**< Reached LOW threshold, discharging. */
+#define AKIRA_BATT_EVT_CRITICAL  (1U << 5) /**< Reached CRITICAL threshold.         */
+#define AKIRA_BATT_EVT_STATE     (1U << 6) /**< state / online / validity changed.  */
+/** @} */
+
+/**
+ * @brief Battery listener.  Runs on the system workqueue — keep it short
+ *        (post to your own queue, don't draw).
+ */
+typedef void (*akira_battery_cb_t)(uint32_t events,
+                                   const akira_battery_snapshot_t *snap,
+                                   void *user);
+
+/** @brief Copy the latest cached battery snapshot (no I2C). */
+void akira_pm_battery_snapshot(akira_battery_snapshot_t *out);
+
+/** @brief Re-poll the battery now (e.g. on a VBUS attach interrupt). */
+void akira_pm_battery_poll_now(void);
+
+/**
+ * @brief Register a listener for battery events.
+ * @return 0 on success, -ENOMEM if the listener table is full.
+ */
+int akira_pm_battery_register_cb(akira_battery_cb_t cb, void *user);
+
+/**
+ * @brief Override the monitor's readings for UI testing.
+ * @param pct   0-100, or negative to stop simulating.
+ * @param state Simulated charge state (online is derived from it).
+ * @return 0, or -ENOTSUP when built without CONFIG_AKIRA_BATTERY_SIM.
+ */
+int akira_pm_battery_simulate(int pct, akira_batt_state_t state);
+
+/**
+ * @brief Put every peripheral into its lowest state before the ESP32 powers
+ *        off (deep sleep, hibernate, ship mode).
+ *
+ * The board has no load switches: radios, secure element, USB-C controller,
+ * backlight driver and panel all stay on the 3V3 rail through deep sleep and
+ * must be parked individually.  Not reversible — the chip reboots on wake.
+ */
+void akira_pm_prepare_poweroff(void);
+
+/**
+ * @brief True power-off: disconnect the battery with the charger's BATFET.
+ *
+ * Draws only microamps, but this board has no ~QON button: **plugging in USB
+ * is the only way to turn it back on.**  Does not return on success.
+ * @return -ENODEV if no charger is bound, or the charger's error.
+ */
+int akira_pm_ship_mode(void);
+
+/**
  * @brief Enable or disable automatic low-power idle management.
  * @return 0 always.
  */
 int akira_pm_enable_low_power_mode(bool enable);
+
+/**
+ * @brief Notify blank/wake. Idles or wakes RF/BT; callers must not touch them directly.
+ * @param entering true = blanking, false = waking.
+ */
+void akira_pm_notify_blank(bool entering);
 
 /**
  * @brief Register a power policy for a named app / container.
@@ -124,6 +229,34 @@ int akira_pm_set_policy(const char *name, akira_power_policy_t policy);
 
 /** @brief Return the most performance-demanding policy across all registered apps. */
 akira_power_policy_t akira_pm_get_aggregate_policy(void);
+
+/* ---------- insomnia (ref-counted keep-awake, Flipper-style) ---------- */
+
+/**
+ * @brief Acquire a keep-awake lock. Deep sleep allowed only at holder count 0.
+ * @param reason Copied into a fixed buffer (truncated past 31 chars).
+ * @param max_hold_ms Auto-expiry; 0 = never. Reaped on expiry so a leak can't pin awake forever.
+ * @return Handle >= 0, or -ENOMEM if the table is full.
+ */
+int akira_pm_insomnia_enter(const char *reason, uint32_t max_hold_ms);
+
+/**
+ * @brief Release a keep-awake lock. Handle is generation-tagged (ABA-safe).
+ * @return 0, or -EINVAL if stale/bad/already-free.
+ */
+int akira_pm_insomnia_exit(int handle);
+
+/** @brief Extend a lock's expiry deadline. @return 0, or -EINVAL if stale/bad. */
+int akira_pm_insomnia_renew(int handle);
+
+/**
+ * @brief Count live holders; reaps + logs expired ones. Hot path (shell loop).
+ * @return Live holder count (deep sleep gated when > 0).
+ */
+int akira_pm_insomnia_count(void);
+
+/** @brief Log all live holders (reason + age). @return Live count. */
+int akira_pm_insomnia_dump(void);
 
 #ifdef __cplusplus
 }

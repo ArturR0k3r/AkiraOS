@@ -130,6 +130,26 @@ extern "C"
     int lsm6ds3_init(struct lsm6ds3_config *config);
 
     /**
+     * @brief Power down both accelerometer and gyroscope (ODR = 0).
+     *
+     * Used when the console blanks: the part keeps drawing a few hundred µA at
+     * its configured ODR otherwise.  Range and BDU settings are preserved, so
+     * lsm6ds3_resume() only has to restore the ODR fields.
+     *
+     * @param config Configuration structure
+     * @return 0 on success, negative errno on failure
+     */
+    int lsm6ds3_suspend(struct lsm6ds3_config *config);
+
+    /**
+     * @brief Restore the ODRs saved in @p config after lsm6ds3_suspend().
+     *
+     * @param config Configuration structure
+     * @return 0 on success, negative errno on failure
+     */
+    int lsm6ds3_resume(struct lsm6ds3_config *config);
+
+    /**
      * @brief Read accelerometer data
      *
      * @param config Configuration structure

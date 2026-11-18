@@ -99,4 +99,12 @@
 				 <TWAI_RX_GPIO6>;
 		};
 	};
+
+	/* Backlight PWM — LEDC channel 0 on GPIO3 */
+	ledc0_default: ledc0_default {
+		group1 {
+			pinmux = <LEDC_CH0_GPIO3>;
+			output-enable;
+		};
+	};
 };
