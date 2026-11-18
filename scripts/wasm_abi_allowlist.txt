@@ -4,9 +4,14 @@
 #   (usually a product-branch native, or the SDK is ahead).
 # 'fw-only:<name>'  — exported by this firmware, not declared in the SDK.
 # Regenerate with: scripts/check_wasm_abi.py --update-allowlist
+fw-only:crypto_p256_keygen_se050
+fw-only:crypto_p256_sign_se050
+fw-only:display_get_height
+fw-only:display_get_width
 fw-only:hid_fido_recv
 fw-only:hid_fido_send
 fw-only:hid_raw_recv
+fw-only:input_get_dial
 fw-only:longjmp
 fw-only:ota_check
 fw-only:ota_confirm
@@ -18,33 +23,3 @@ fw-only:rtc_set_alarm
 fw-only:rtc_set_unix_time
 fw-only:selftest_fault
 fw-only:setjmp
-sdk-only:app_run_from_sd
-sdk-only:ble_scan_pop
-sdk-only:ble_scan_start
-sdk-only:ble_scan_stop
-sdk-only:ble_spam_packet_count
-sdk-only:ble_spam_start
-sdk-only:ble_spam_stop
-sdk-only:crypto_p256_keygen
-sdk-only:crypto_p256_sign
-sdk-only:display_raw_wait
-sdk-only:display_raw_write_async
-sdk-only:display_text_huge
-sdk-only:hid_gamepad_send_report
-sdk-only:input_get_buttons
-sdk-only:input_poll_event
-sdk-only:nfc_field_present
-sdk-only:nfc_mb_enable
-sdk-only:nfc_mb_get
-sdk-only:nfc_mb_put
-sdk-only:nfc_mb_status
-sdk-only:nfc_read
-sdk-only:nfc_uid
-sdk-only:nfc_write
-sdk-only:rf_set_bitrate
-sdk-only:rf_set_sync_word
-sdk-only:rf_tx_cw_set_freq
-sdk-only:rf_tx_cw_start
-sdk-only:rf_tx_cw_stop
-sdk-only:wifi_capture_pmkid
-sdk-only:wifi_scan_clients
