@@ -11,6 +11,9 @@
 #include <zephyr/kernel.h>
 #include "akira.h"
 #include <akira_hooks.h>
+#ifdef CONFIG_AKIRA_OS_SHELL
+#include "console_shell/akira_os_shell.h"
+#endif
 #include <zephyr/logging/log.h>
 #include <drivers/platform_hal.h>
 #include <api/akira_display_api.h>
@@ -73,6 +76,20 @@ int akira_start(void)
     LOG_INF("Platform: %s", akira_get_platform_name());
     LOG_INF("Build: %s %s", __DATE__, __TIME__);
     LOG_INF("=====================================================)");
+
+#ifdef CONFIG_AKIRA_OS_SHELL
+    /* The animated boot splash runs on the OS-shell thread
+     * (AKIRA_OS_SHELL_THREAD_PRIORITY). main() defaults to priority 0, so
+     * without this it preempts the shell thread for the whole bring-up below and
+     * starves the splash: the animation stutters ("doesn't load") and the
+     * shell's stall-compensation stretches the opening by up to two seconds
+     * before the launcher appears. Bring the system up one step below the shell
+     * thread instead, so the splash gets the CPU between init steps while the
+     * init still runs in the gaps. BT/Wi-Fi/sys-workq keep their higher priority
+     * and are unaffected. main() blocks in k_sleep(K_FOREVER) once init is done,
+     * so this priority is never restored (and need not be). */
+    k_thread_priority_set(k_current_get(), AKIRA_OS_SHELL_THREAD_PRIORITY + 1);
+#endif
 
     /* Initialize hardware HAL */
     if (akira_hal_init() < 0)

@@ -27,6 +27,16 @@ extern "C" {
 #endif
 
 /**
+ * @brief Scheduling priority of the OS-shell display thread.
+ *
+ * Above WASM apps (14), below the system work queue. The animated boot splash
+ * runs on this thread, so the boot sequence (akira_start()) lowers its own
+ * thread one step below this value while bringing the system up, otherwise it
+ * would starve the splash. Keep both in sync via this macro.
+ */
+#define AKIRA_OS_SHELL_THREAD_PRIORITY 10
+
+/**
  * @brief Notify the OS shell of install progress (called from connectivity layer).
  *
  * Thread-safe: may be called from any thread (BLE transfer thread, HTTP

@@ -379,7 +379,7 @@ void akira_shell_abort_wasm_launch(void)
  * reason: mbedTLS's handshake and close_notify are stack-hungry with
  * software ECDHE (P256M off). */
 #define SHELL_THREAD_STACK_SIZE 8192
-#define SHELL_THREAD_PRIORITY 10 /* above WASM apps (14), below sys work */
+#define SHELL_THREAD_PRIORITY AKIRA_OS_SHELL_THREAD_PRIORITY /* above WASM apps (14), below sys work */
 
 static K_THREAD_STACK_DEFINE(g_shell_stack, SHELL_THREAD_STACK_SIZE);
 static struct k_thread g_shell_thread;
