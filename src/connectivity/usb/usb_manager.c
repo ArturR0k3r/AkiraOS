@@ -185,7 +185,7 @@ void usb_manager_report_vbus_state(bool present)
 static void usb_manager_msg_cb(struct usbd_context *const ctx,
                                 const struct usbd_msg *const msg)
 {
-    LOG_INF("USB message: %s (status=%d)", 
+    LOG_DBG("USB message: %s (status=%d)", 
             usbd_msg_type_string(msg->type), msg->status);
     
     k_mutex_lock(&usb_mgr_ctx.mutex, K_FOREVER);
