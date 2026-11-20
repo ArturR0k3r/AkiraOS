@@ -258,8 +258,7 @@ static void sd_draw(void)
     switch (g_state)
     {
     case SD_NOCARD:
-        draw_centred(BAND_MID - 12, "No SD card detected", C_WHITE);
-        draw_centred(BAND_MID + 2, "Insert card and reboot", C_WHITE);
+        draw_centred(BAND_MID - 5, "No SD card detected", C_WHITE);
         break;
     case SD_SCANNING:
         draw_centred(BAND_MID - 5, "Reading SD card...", C_GRAY);
