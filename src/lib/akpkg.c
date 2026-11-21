@@ -1042,7 +1042,10 @@ int akpkg_tar_extract_contents(const uint8_t *tar, size_t tar_len,
         if (all_zero)
             break;
 
-        const char *name = (const char *)(tar + pos);
+        /* The 100-byte name field need not be NUL-terminated. */
+        char name[101];
+        memcpy(name, tar + pos, 100);
+        name[100] = '\0';
         size_t fsize = tar_octal(tar + pos + 124, 12);
         char ttype = (char)tar[pos + 156];
 

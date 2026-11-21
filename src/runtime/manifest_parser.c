@@ -601,7 +601,9 @@ static int manifest_parse_wasm_binary(const uint8_t *data, size_t size,
         }
         pos += leb_len;
 
-        if (pos + section_size > size)
+        /* Compare with what is left: on 32-bit targets pos + section_size
+         * can wrap and pass, and pos += section_size then loops forever. */
+        if (section_size > size - pos)
         {
             LOG_ERR("Section extends past end of file");
             return -EINVAL;
@@ -614,7 +616,7 @@ static int manifest_parse_wasm_binary(const uint8_t *data, size_t size,
 
             uint32_t name_len;
             leb_len = read_leb128_u32(sd, sr, &name_len);
-            if (leb_len == 0 || leb_len + name_len > sr)
+            if (leb_len == 0 || name_len > sr - leb_len)
             {
                 pos += section_size;
                 continue;
@@ -665,7 +667,7 @@ static int manifest_parse_aot_binary(const uint8_t *data, size_t size,
         memcpy(&sec_size, data + pos + 4, 4);
         pos += 8; /* body starts here */
 
-        if (pos + sec_size > size)
+        if (sec_size > size - pos) /* no 32-bit wrap */
             break;
 
         if (sec_type == AOT_SECTION_TYPE_CUSTOM && sec_size > 8)
@@ -682,7 +684,7 @@ static int manifest_parse_aot_binary(const uint8_t *data, size_t size,
                 uint16_t name_len;
                 memcpy(&name_len, body + 4, 2);
 
-                if (6 + name_len <= sec_size)
+                if ((uint32_t)name_len <= sec_size - 6) /* sec_size > 8 */
                 {
                     const char *name = (const char *)(body + 6);
                     size_t manifest_name_len = strlen(AKIRA_MANIFEST_SECTION);

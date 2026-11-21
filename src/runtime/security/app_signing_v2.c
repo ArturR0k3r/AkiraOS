@@ -527,7 +527,7 @@ int app_verify_wasm_integrity(const void *binary, size_t size,
                 shift += 7;
             }
 
-            if (pos + section_size > size)
+            if (section_size > size - pos) /* pos <= size; no 32-bit wrap */
             {
                 LOG_ERR("WASM section %d extends past EOF (offset=%zu, size=%u, total=%zu)",
                         section_id, pos, section_size, size);

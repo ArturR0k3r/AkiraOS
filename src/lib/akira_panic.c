@@ -71,6 +71,8 @@ int akira_panic_init(void)
     /* Report any previous crash */
     akira_crash_record_t rec;
     if (akira_panic_has_record(&rec)) {
+        /* The record comes from flash: don't trust it to be terminated. */
+        rec.last_app[sizeof(rec.last_app) - 1] = '\0';
         LOG_ERR("=== PREVIOUS BOOT CRASH REPORT ===");
         LOG_ERR("  uptime_ms  : %" PRIu64,  rec.uptime_ms);
         LOG_ERR("  reason     : 0x%08" PRIx32, rec.reason);
