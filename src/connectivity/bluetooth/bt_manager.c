@@ -179,6 +179,17 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
 }
 
 #if defined(CONFIG_BT_SMP)
+static bool passkey_mode(bt_manager_mode_t mode)
+{
+    return IS_ENABLED(CONFIG_AKIRA_BT_SECURE_PAIRING) && mode != BT_MODE_HID;
+}
+
+/* Re-pair a stale bond at the level the current mode's services need. */
+static bt_security_t repair_level(void)
+{
+    return passkey_mode(bt_mgr.mode) ? BT_SECURITY_L4 : BT_SECURITY_L2;
+}
+
 static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
                                 enum bt_security_err err)
 {
@@ -195,7 +206,7 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
              * so the peer does not need to manually "Forget Device". */
             LOG_INF("Stale bond for %s — wiping and requesting re-pair", addr);
             bt_unpair(BT_ID_DEFAULT, bt_conn_get_dst(conn));
-            bt_conn_set_security(conn, BT_SECURITY_L2 | BT_SECURITY_FORCE_PAIR);
+            bt_conn_set_security(conn, repair_level() | BT_SECURITY_FORCE_PAIR);
         }
         else if (err == BT_SECURITY_ERR_AUTH_REQUIREMENT)
         {
@@ -208,7 +219,7 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
                  * Wipe our stale bond and force just-works re-pair. */
                 LOG_INF("Stale bond for %s — wiping and re-pairing", addr);
                 bt_unpair(BT_ID_DEFAULT, bt_conn_get_dst(conn));
-                bt_conn_set_security(conn, BT_SECURITY_L2 | BT_SECURITY_FORCE_PAIR);
+                bt_conn_set_security(conn, repair_level() | BT_SECURITY_FORCE_PAIR);
             }
             else
             {
@@ -228,10 +239,19 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
     }
 }
 
-/* Pairing auth callbacks — NoInputNoOutput IO capability (just-works).
+/* Pairing.
+ *
+ * HID mode: NoInputNoOutput (Just Works), which every HID host accepts.
  * pairing_confirm MUST be provided and call bt_conn_auth_pairing_confirm()
  * otherwise Zephyr leaves the pairing request unanswered and iOS times out
- * showing "Pairing Unsuccessful". */
+ * showing "Pairing Unsuccessful".
+ *
+ * Every other mode with CONFIG_AKIRA_BT_SECURE_PAIRING: DisplayOnly. The
+ * device shows a six-digit passkey (AKIRA_HOOK_BT_PASSKEY_DISPLAY) that the
+ * user types on the phone, giving an authenticated LE Secure Connections bond
+ * - the only kind the companion and app-transfer services accept. Just Works
+ * is refused there: it authenticates nobody, and with one bond slot it would
+ * let any passer-by evict the owner's bond. */
 static void auth_pairing_confirm(struct bt_conn *conn)
 {
     char addr[BT_ADDR_LE_STR_LEN];
@@ -240,11 +260,24 @@ static void auth_pairing_confirm(struct bt_conn *conn)
     bt_conn_auth_pairing_confirm(conn);
 }
 
+static void emit_pairing_done(bool paired)
+{
+#if defined(CONFIG_AKIRA_BT_SECURE_PAIRING)
+    struct akira_hook_event e = { .type = AKIRA_HOOK_BT_PAIRING_DONE };
+
+    e.bt.paired = paired;
+    akira_hooks_emit(&e);
+#else
+    ARG_UNUSED(paired);
+#endif
+}
+
 static void auth_pairing_complete(struct bt_conn *conn, bool bonded)
 {
     char addr[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
     LOG_INF("Pairing complete: %s bonded=%d", addr, bonded);
+    emit_pairing_done(true);
 }
 
 static void auth_pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
@@ -252,11 +285,72 @@ static void auth_pairing_failed(struct bt_conn *conn, enum bt_security_err reaso
     char addr[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
     LOG_WRN("Pairing failed: %s reason %d", addr, reason);
+    emit_pairing_done(false);
 }
 
 static const struct bt_conn_auth_cb auth_callbacks = {
     .pairing_confirm = auth_pairing_confirm,
 };
+
+#if defined(CONFIG_AKIRA_BT_SECURE_PAIRING)
+static void auth_passkey_display(struct bt_conn *conn, unsigned int passkey)
+{
+    char addr[BT_ADDR_LE_STR_LEN];
+    struct akira_hook_event e = { .type = AKIRA_HOOK_BT_PASSKEY_DISPLAY };
+
+    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+    /* The console is local; the passkey is single-use and worthless once the
+     * pairing ends. */
+    LOG_INF("Pairing with %s: enter passkey %06u on the phone", addr, passkey);
+    e.bt.passkey = passkey;
+    akira_hooks_emit(&e);
+}
+
+static void auth_cancel(struct bt_conn *conn)
+{
+    ARG_UNUSED(conn);
+    LOG_INF("Pairing cancelled");
+    emit_pairing_done(false);
+}
+
+static void auth_refuse_just_works(struct bt_conn *conn)
+{
+    char addr[BT_ADDR_LE_STR_LEN];
+    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+    LOG_WRN("Refusing unauthenticated (just-works) pairing from %s", addr);
+    bt_conn_auth_cancel(conn);
+}
+
+static const struct bt_conn_auth_cb auth_callbacks_passkey = {
+    .passkey_display = auth_passkey_display,
+    .cancel = auth_cancel,
+    .pairing_confirm = auth_refuse_just_works,
+};
+#endif
+
+/* The IO capability follows the registered callbacks, so swap them when the
+ * mode crosses the HID boundary. */
+static void apply_auth_callbacks(bt_manager_mode_t mode)
+{
+    static const struct bt_conn_auth_cb *active;
+    const struct bt_conn_auth_cb *want = &auth_callbacks;
+
+#if defined(CONFIG_AKIRA_BT_SECURE_PAIRING)
+    if (passkey_mode(mode)) {
+        want = &auth_callbacks_passkey;
+    }
+#endif
+    if (want == active) {
+        return;
+    }
+    (void)bt_conn_auth_cb_register(NULL);
+    if (bt_conn_auth_cb_register(want) == 0) {
+        active = want;
+    } else {
+        active = NULL;
+        LOG_ERR("Cannot register pairing callbacks");
+    }
+}
 
 static struct bt_conn_auth_info_cb auth_info_callbacks = {
     .pairing_complete = auth_pairing_complete,
@@ -400,7 +494,7 @@ int bt_manager_init(const bt_config_t *config)
     bt_conn_cb_register(&conn_callbacks);
 
 #if defined(CONFIG_BT_SMP) || defined(CONFIG_BT_CLASSIC)
-    bt_conn_auth_cb_register(&auth_callbacks);
+    apply_auth_callbacks(bt_mgr.mode);
     bt_conn_auth_info_cb_register(&auth_info_callbacks);
 #endif
 
@@ -660,6 +754,12 @@ int bt_manager_set_mode(bt_manager_mode_t mode)
     {
         bt_mgr.mode = mode;
     }
+#if BT_AVAILABLE && (defined(CONFIG_BT_SMP) || defined(CONFIG_BT_CLASSIC))
+    if (bt_mgr.initialized)
+    {
+        apply_auth_callbacks(bt_mgr.mode);
+    }
+#endif
     k_mutex_unlock(&bt_mgr.mutex);
 
     /* Lazy init when transitioning out of NONE and not yet initialized */

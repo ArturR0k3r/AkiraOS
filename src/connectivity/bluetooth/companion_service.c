@@ -42,7 +42,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <errno.h>
+#include <akira_apps.h>
 #include "../../lib/mem_helper.h"
 
 LOG_MODULE_REGISTER(companion_svc, CONFIG_AKIRA_LOG_LEVEL);
@@ -109,10 +111,29 @@ static struct {
     char     path[128];     /* destination path for COMP_XFER_FILE_DATA */
     char     app_name[32];  /* app name for COMP_XFER_APP_DATA */
     uint32_t expected_size; /* from apps.install.begin size param */
+    bool     complete;      /* last frame received (or transfer failed) */
+    bool     failed;        /* overflow or peer abort: discard */
 } s_xfer;
+
+/* s_xfer is touched by the BT RX thread (DATA_UP writes, disconnect) and by
+ * the command workqueue. Only the workqueue allocates, flushes and frees;
+ * the BT thread appends under the lock (never waiting for it) and defers the
+ * rest to these work items. */
+static K_MUTEX_DEFINE(s_xfer_lock);
+static struct k_work s_xfer_flush_work;   /* file transfer complete: write it */
+static struct k_work s_xfer_cleanup_work; /* peer gone: drop the transfer */
+
+/* Caller holds s_xfer_lock. */
+static void xfer_reset_locked(void)
+{
+    akira_free_buffer(s_xfer.buf);
+    memset(&s_xfer, 0, sizeof(s_xfer));
+}
 
 /* Periodic status notification timer */
 static struct k_work_delayable s_status_timer;
+/* Re-advertise after the phone disconnects. */
+static struct k_work_delayable s_readvertise_work;
 
 /* --------------------------------------------------------------------------
  * Helpers: minimal JSON tool (same approach as usb_cdc_serial.c)
@@ -144,6 +165,63 @@ static bool json_get_str(const char *json, const char *key,
             out[i++] = *p++;
         }
         out[i] = '\0';
+    }
+    return true;
+}
+
+/* Append to a JSON buffer; false (buffer unchanged past *pos) if it doesn't
+ * fit. snprintf() returns the length it wanted, so adding it blindly runs
+ * *pos past the end and the next call writes out of bounds. */
+static bool json_append(char *buf, size_t cap, int *pos, const char *fmt, ...)
+{
+    va_list ap;
+
+    if (*pos < 0 || (size_t)*pos >= cap) {
+        return false;
+    }
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + *pos, cap - (size_t)*pos, fmt, ap);
+    va_end(ap);
+    if (n < 0 || (size_t)n >= cap - (size_t)*pos) {
+        buf[*pos] = '\0';
+        return false;
+    }
+    *pos += n;
+    return true;
+}
+
+/* Companion file access. Paths must be absolute under /lfs or /SD:, with no
+ * ".." component. AkiraPlatform state (/lfs/akp) is never readable; app
+ * binaries, admission records and app data (/lfs/apps, /SD:/apps) and the
+ * staging area change only through the app manager. */
+static bool path_has_prefix(const char *path, const char *dir)
+{
+    size_t n = strlen(dir);
+
+    return strncmp(path, dir, n) == 0 && (path[n] == '\0' || path[n] == '/');
+}
+
+static bool companion_path_ok(const char *path, bool write)
+{
+    if (!path_has_prefix(path, "/lfs") && !path_has_prefix(path, "/SD:")) {
+        return false;
+    }
+    for (const char *p = path; *p; p++) {
+        if ((unsigned char)*p < 0x20 || *p == '\\') {
+            return false;
+        }
+        if (p[0] == '.' && p[1] == '.' && (p == path || p[-1] == '/') &&
+            (p[2] == '\0' || p[2] == '/')) {
+            return false;
+        }
+    }
+    if (path_has_prefix(path, "/lfs/akp")) {
+        return false;
+    }
+    if (write && (path_has_prefix(path, "/lfs/apps") || path_has_prefix(path, "/SD:/apps") ||
+                  path_has_prefix(path, "/lfs/tmp") || strcmp(path, "/lfs") == 0 ||
+                  strcmp(path, "/SD:") == 0)) {
+        return false;
     }
     return true;
 }
@@ -266,20 +344,26 @@ static void handle_apps_list(const char *op, int id, const char *params)
     }
 
     int pos = 0;
-    pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos, "[");
-    for (int i = 0; i < count && (size_t)pos < sizeof(s_list_json) - 96; i++) {
-        pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos,
-                        "%s{\"name\":\"%s\",\"state\":\"%s\","
-                        "\"version\":\"%s\",\"has_update\":%s,"
-                        "\"available_version\":\"%s\"}",
-                        i > 0 ? "," : "",
-                        list[i].name,
-                        app_state_to_str(list[i].state),
-                        list[i].version,
-                        list[i].has_update ? "true" : "false",
-                        list[i].available_version);
+    /* Keep one byte for the closing bracket. */
+    const size_t cap = sizeof(s_list_json) - 1;
+
+    (void)json_append(s_list_json, cap, &pos, "[");
+    for (int i = 0; i < count; i++) {
+        if (!json_append(s_list_json, cap, &pos,
+                         "%s{\"name\":\"%s\",\"state\":\"%s\","
+                         "\"version\":\"%s\",\"has_update\":%s,"
+                         "\"available_version\":\"%s\"}",
+                         i > 0 ? "," : "",
+                         list[i].name,
+                         app_state_to_str(list[i].state),
+                         list[i].version,
+                         list[i].has_update ? "true" : "false",
+                         list[i].available_version)) {
+            break;
+        }
     }
-    pos += snprintf(s_list_json + pos, sizeof(s_list_json) - pos, "]");
+    s_list_json[pos++] = ']';
+    s_list_json[pos] = '\0';
 
     send_resp(op, id, true, NULL);   /* ACK; array follows on DATA_DOWN */
     stream_bytes_down((const uint8_t *)s_list_json, pos);
@@ -438,6 +522,11 @@ static void handle_apps_install_begin(const char *op, int id, const char *params
         send_resp(op, id, false, "missing name or size");
         return;
     }
+    /* The name becomes the staging file name below. */
+    if (!akira_app_name_valid(name)) {
+        send_resp(op, id, false, "invalid name");
+        return;
+    }
 
     uint32_t size = (uint32_t)strtoul(size_s, NULL, 10);
     uint32_t max  = (uint32_t)CONFIG_AKIRA_BT_COMPANION_MAX_TRANSFER_KB * 1024U;
@@ -447,14 +536,15 @@ static void handle_apps_install_begin(const char *op, int id, const char *params
         return;
     }
 
+    k_mutex_lock(&s_xfer_lock, K_FOREVER);
     if (s_xfer.active) {
         /* Abort previous incomplete transfer */
-        akira_free_buffer(s_xfer.buf);
-        memset(&s_xfer, 0, sizeof(s_xfer));
+        xfer_reset_locked();
     }
 
     s_xfer.buf = akira_malloc_buffer(size);
     if (!s_xfer.buf) {
+        k_mutex_unlock(&s_xfer_lock);
         LOG_ERR("OOM for app staging buffer (%u bytes)", size);
         send_resp(op, id, false, "out of memory");
         return;
@@ -466,6 +556,7 @@ static void handle_apps_install_begin(const char *op, int id, const char *params
     s_xfer.expected_size = size;
     s_xfer.active        = true;
     strncpy(s_xfer.app_name, name, sizeof(s_xfer.app_name) - 1);
+    k_mutex_unlock(&s_xfer_lock);
 
     LOG_INF("BLE install begin: app=%s size=%u", name, size);
     send_resp(op, id, true, NULL);
@@ -475,7 +566,9 @@ static void handle_apps_install_end(const char *op, int id, const char *params)
 {
     ARG_UNUSED(params);
 
+    k_mutex_lock(&s_xfer_lock, K_FOREVER);
     if (!s_xfer.active || s_xfer.type != COMP_XFER_APP_DATA) {
+        k_mutex_unlock(&s_xfer_lock);
         send_resp(op, id, false, "no active transfer");
         return;
     }
@@ -521,8 +614,8 @@ static void handle_apps_install_end(const char *op, int id, const char *params)
     }
 
 cleanup:
-    akira_free_buffer(s_xfer.buf);
-    memset(&s_xfer, 0, sizeof(s_xfer));
+    xfer_reset_locked();
+    k_mutex_unlock(&s_xfer_lock);
 }
 
 static void handle_settings_get(const char *op, int id, const char *params)
@@ -534,8 +627,11 @@ static void handle_settings_get(const char *op, int id, const char *params)
         return;
     }
     char val[64] = "";
-    int rc = akira_settings_get(key, val, sizeof(val));
-    if (rc) {
+    /* Encrypted entries (Wi-Fi PSK, passwords, keys) never leave the device. */
+    int rc = akira_settings_get_exportable(key, val, sizeof(val));
+    if (rc == -EACCES) {
+        send_resp(op, id, false, "encrypted");
+    } else if (rc) {
         send_resp(op, id, false, "not found");
     } else {
         char body[CHAR_BUF_SIZE];
@@ -573,15 +669,20 @@ static void handle_settings_list(const char *op, int id, const char *params)
     };
 
     char buf[CHAR_BUF_SIZE];
-    int pos = snprintf(buf, sizeof(buf), "[");
+    int pos = 0;
     bool first = true;
-    while ((size_t)pos < sizeof(buf) - 96 && akira_settings_list(&iter) == 0) {
-        pos += snprintf(buf + pos, sizeof(buf) - pos,
-                        "%s{\"key\":\"%s\",\"value\":\"%s\"}",
-                        first ? "" : ",", iter.key, iter.value);
+
+    (void)json_append(buf, sizeof(buf) - 1, &pos, "[");
+    while (akira_settings_list(&iter) == 0) {
+        if (!json_append(buf, sizeof(buf) - 1, &pos,
+                         "%s{\"key\":\"%s\",\"value\":\"%s\"}",
+                         first ? "" : ",", iter.key, iter.value)) {
+            break;
+        }
         first = false;
     }
-    snprintf(buf + pos, sizeof(buf) - pos, "]");
+    buf[pos++] = ']';
+    buf[pos] = '\0';
 
     send_resp(op, id, true, buf);
 }
@@ -604,6 +705,11 @@ static void akira_shell_exec(const char *cmd, char *out, size_t out_len)
 
 static void handle_shell_exec(const char *op, int id, const char *params)
 {
+#if !defined(CONFIG_AKIRA_BT_COMPANION_SHELL)
+    ARG_UNUSED(params);
+    send_resp(op, id, false, "shell disabled");
+    return;
+#endif
     char cmd[128] = "";
     json_get_str(params, "cmd", cmd, sizeof(cmd));
     if (!cmd[0]) {
@@ -623,6 +729,10 @@ static void handle_files_list(const char *op, int id, const char *params)
 {
     char path[128] = "/lfs";
     json_get_str(params, "path", path, sizeof(path));
+    if (!companion_path_ok(path, false)) {
+        send_resp(op, id, false, "path not allowed");
+        return;
+    }
 
     struct fs_dir_t dir;
     fs_dir_t_init(&dir);
@@ -634,23 +744,26 @@ static void handle_files_list(const char *op, int id, const char *params)
     }
 
     char buf[CHAR_BUF_SIZE];
-    int pos = snprintf(buf, sizeof(buf), "[");
+    int pos = 0;
+
+    (void)json_append(buf, sizeof(buf) - 1, &pos, "[");
 
     struct fs_dirent entry;
     bool first = true;
     while ((rc = fs_readdir(&dir, &entry)) == 0 && entry.name[0]) {
-        if ((size_t)pos >= sizeof(buf) - 60) {
-            break; /* truncate — client must paginate or list subdirs */
+        /* Truncate when full — client must paginate or list subdirs. */
+        if (!json_append(buf, sizeof(buf) - 1, &pos,
+                         "%s{\"name\":\"%s\",\"type\":\"%s\",\"size\":%zu}",
+                         first ? "" : ",",
+                         entry.name,
+                         entry.type == FS_DIR_ENTRY_DIR ? "dir" : "file",
+                         entry.size)) {
+            break;
         }
-        pos += snprintf(buf + pos, sizeof(buf) - pos,
-                        "%s{\"name\":\"%s\",\"type\":\"%s\",\"size\":%zu}",
-                        first ? "" : ",",
-                        entry.name,
-                        entry.type == FS_DIR_ENTRY_DIR ? "dir" : "file",
-                        entry.size);
         first = false;
     }
-    snprintf(buf + pos, sizeof(buf) - pos, "]");
+    buf[pos++] = ']';
+    buf[pos] = '\0';
     fs_closedir(&dir);
 
     send_resp(op, id, true, buf);
@@ -662,6 +775,10 @@ static void handle_files_read(const char *op, int id, const char *params)
     json_get_str(params, "path", path, sizeof(path));
     if (!path[0]) {
         send_resp(op, id, false, "missing path");
+        return;
+    }
+    if (!companion_path_ok(path, false)) {
+        send_resp(op, id, false, "path not allowed");
         return;
     }
 
@@ -697,7 +814,7 @@ static void handle_files_read(const char *op, int id, const char *params)
         frame[1] = flags;
         frame[2] = (uint8_t)(got & 0xFF);
         frame[3] = (uint8_t)((got >> 8) & 0xFF);
-        int nr = bt_gatt_notify(s_conn, &companion_attrs[10], /* data_dn val */
+        int nr = bt_gatt_notify(s_conn, &companion_attrs[9], /* data_dn val */
                                 frame, (uint16_t)(4 + got));
         if (nr) {
             error = true;
@@ -712,7 +829,7 @@ static void handle_files_read(const char *op, int id, const char *params)
         frame[1] = COMP_FLAG_LAST | COMP_FLAG_ERROR;
         frame[2] = 0;
         frame[3] = 0;
-        bt_gatt_notify(s_conn, &companion_attrs[10], frame, 4);
+        bt_gatt_notify(s_conn, &companion_attrs[9], frame, 4);
     }
 
     fs_close(&f);
@@ -729,6 +846,10 @@ static void handle_files_write(const char *op, int id, const char *params)
         send_resp(op, id, false, "missing path or size");
         return;
     }
+    if (!companion_path_ok(path, true)) {
+        send_resp(op, id, false, "path not allowed");
+        return;
+    }
 
     uint32_t size = (uint32_t)strtoul(size_s, NULL, 10);
     uint32_t max  = (uint32_t)CONFIG_AKIRA_BT_COMPANION_MAX_TRANSFER_KB * 1024U;
@@ -738,13 +859,14 @@ static void handle_files_write(const char *op, int id, const char *params)
         return;
     }
 
+    k_mutex_lock(&s_xfer_lock, K_FOREVER);
     if (s_xfer.active) {
-        akira_free_buffer(s_xfer.buf);
-        memset(&s_xfer, 0, sizeof(s_xfer));
+        xfer_reset_locked();
     }
 
     s_xfer.buf = akira_malloc_buffer(size);
     if (!s_xfer.buf) {
+        k_mutex_unlock(&s_xfer_lock);
         send_resp(op, id, false, "out of memory");
         return;
     }
@@ -755,6 +877,7 @@ static void handle_files_write(const char *op, int id, const char *params)
     s_xfer.expected_size = size;
     s_xfer.active        = true;
     strncpy(s_xfer.path, path, sizeof(s_xfer.path) - 1);
+    k_mutex_unlock(&s_xfer_lock);
 
     send_resp(op, id, true, NULL);
 }
@@ -767,6 +890,10 @@ static void handle_files_delete(const char *op, int id, const char *params)
         send_resp(op, id, false, "missing path");
         return;
     }
+    if (!companion_path_ok(path, true)) {
+        send_resp(op, id, false, "path not allowed");
+        return;
+    }
     int rc = fs_unlink(path);
     send_resp(op, id, rc == 0, rc == 0 ? NULL : "delete failed");
 }
@@ -777,6 +904,10 @@ static void handle_files_mkdir(const char *op, int id, const char *params)
     json_get_str(params, "path", path, sizeof(path));
     if (!path[0]) {
         send_resp(op, id, false, "missing path");
+        return;
+    }
+    if (!companion_path_ok(path, true)) {
+        send_resp(op, id, false, "path not allowed");
         return;
     }
     int rc = fs_mkdir(path);
@@ -893,13 +1024,28 @@ static void cmd_work_handler(struct k_work *work)
  * GATT Attribute read/write callbacks
  * -------------------------------------------------------------------------- */
 
+/* GATT already enforces COMP_PERM_WRITE; check again here so a table edit
+ * can never silently reopen the service. */
+static bool peer_authenticated(struct bt_conn *conn)
+{
+#if defined(CONFIG_AKIRA_BT_SECURE_PAIRING)
+    return conn && bt_conn_get_security(conn) >= BT_SECURITY_L4;
+#else
+    ARG_UNUSED(conn);
+    return true;
+#endif
+}
+
 static ssize_t cmd_write(struct bt_conn *conn,
                           const struct bt_gatt_attr *attr,
                           const void *buf, uint16_t len,
                           uint16_t offset, uint8_t flags)
 {
-    ARG_UNUSED(conn); ARG_UNUSED(attr); ARG_UNUSED(offset); ARG_UNUSED(flags);
+    ARG_UNUSED(attr); ARG_UNUSED(offset); ARG_UNUSED(flags);
 
+    if (!peer_authenticated(conn)) {
+        return BT_GATT_ERR(BT_ATT_ERR_AUTHENTICATION);
+    }
     if (len == 0 || len > CHAR_BUF_SIZE) {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
     }
@@ -918,8 +1064,11 @@ static ssize_t data_up_write(struct bt_conn *conn,
                               const void *buf, uint16_t len,
                               uint16_t offset, uint8_t flags)
 {
-    ARG_UNUSED(conn); ARG_UNUSED(attr); ARG_UNUSED(offset); ARG_UNUSED(flags);
+    ARG_UNUSED(attr); ARG_UNUSED(offset); ARG_UNUSED(flags);
 
+    if (!peer_authenticated(conn)) {
+        return BT_GATT_ERR(BT_ATT_ERR_AUTHENTICATION);
+    }
     if (len < 4) {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
     }
@@ -933,17 +1082,28 @@ static ssize_t data_up_write(struct bt_conn *conn,
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
     }
 
-    if (!s_xfer.active) {
-        return BT_GATT_ERR(BT_ATT_ERR_WRITE_NOT_PERMITTED);
+    /* Never block the BT RX thread: the workqueue may hold the lock while it
+     * writes a finished transfer to flash. */
+    if (k_mutex_lock(&s_xfer_lock, K_NO_WAIT) != 0) {
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+    }
+
+    ssize_t ret = (ssize_t)len;
+
+    if (!s_xfer.active || s_xfer.complete) {
+        ret = BT_GATT_ERR(BT_ATT_ERR_WRITE_NOT_PERMITTED);
+        goto out;
     }
 
     /* Copy payload into staging buffer */
-    if (s_xfer.received + plen > s_xfer.capacity) {
+    if (plen > s_xfer.capacity - s_xfer.received) {
         LOG_ERR("Transfer overflow: received %u + %u > capacity %u",
                 s_xfer.received, plen, s_xfer.capacity);
-        akira_free_buffer(s_xfer.buf);
-        memset(&s_xfer, 0, sizeof(s_xfer));
-        return BT_GATT_ERR(BT_ATT_ERR_WRITE_NOT_PERMITTED);
+        s_xfer.complete = true; /* stop accepting; workqueue frees it */
+        s_xfer.failed = true;
+        k_work_submit_to_queue(&s_cmd_workq, &s_xfer_cleanup_work);
+        ret = BT_GATT_ERR(BT_ATT_ERR_WRITE_NOT_PERMITTED);
+        goto out;
     }
 
     memcpy(s_xfer.buf + s_xfer.received, frame + 4, plen);
@@ -951,34 +1111,59 @@ static ssize_t data_up_write(struct bt_conn *conn,
 
     if (xflags & COMP_FLAG_ERROR) {
         LOG_WRN("Transfer aborted by peer");
-        akira_free_buffer(s_xfer.buf);
-        memset(&s_xfer, 0, sizeof(s_xfer));
-        return (ssize_t)len;
+        s_xfer.complete = true;
+        s_xfer.failed = true;
+        k_work_submit_to_queue(&s_cmd_workq, &s_xfer_cleanup_work);
+        goto out;
     }
 
     if (xflags & COMP_FLAG_LAST) {
-        /* Transfer complete — for file writes, flush to filesystem now */
+        s_xfer.complete = true;
+        /* File writes are flushed by the workqueue (not on the BT thread).
+         * For COMP_XFER_APP_DATA the transfer stays staged until
+         * apps.install.end, which cleans up itself. */
         if (s_xfer.type == COMP_XFER_FILE_DATA) {
-            struct fs_file_t f;
-            fs_file_t_init(&f);
-            int rc = fs_open(&f, s_xfer.path,
-                             FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
-            if (rc == 0) {
-                rc = (int)fs_write(&f, s_xfer.buf, s_xfer.received);
-                fs_close(&f);
-            }
-            LOG_INF("BLE file write %s: %s (%u bytes)",
-                    s_xfer.path,
-                    rc >= 0 ? "OK" : "FAIL",
-                    s_xfer.received);
-            akira_free_buffer(s_xfer.buf);
-            memset(&s_xfer, 0, sizeof(s_xfer));
+            k_work_submit_to_queue(&s_cmd_workq, &s_xfer_flush_work);
         }
-        /* For COMP_XFER_APP_DATA, leave s_xfer active — apps.install.end
-         * uses s_xfer.buf/received and cleans up itself. */
     }
 
-    return (ssize_t)len;
+out:
+    k_mutex_unlock(&s_xfer_lock);
+    return ret;
+}
+
+static void xfer_flush_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    k_mutex_lock(&s_xfer_lock, K_FOREVER);
+    if (s_xfer.active && s_xfer.complete && !s_xfer.failed &&
+        s_xfer.type == COMP_XFER_FILE_DATA) {
+        struct fs_file_t f;
+        fs_file_t_init(&f);
+        int rc = fs_open(&f, s_xfer.path, FS_O_CREATE | FS_O_WRITE | FS_O_TRUNC);
+        if (rc == 0) {
+            rc = (int)fs_write(&f, s_xfer.buf, s_xfer.received);
+            fs_close(&f);
+        }
+        LOG_INF("BLE file write %s: %s (%u bytes)", s_xfer.path,
+                rc >= 0 ? "OK" : "FAIL", s_xfer.received);
+        xfer_reset_locked();
+    }
+    k_mutex_unlock(&s_xfer_lock);
+}
+
+static void xfer_cleanup_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    k_mutex_lock(&s_xfer_lock, K_FOREVER);
+    /* After a disconnect drop anything staged; otherwise only a transfer
+     * that failed (an app transfer that completed waits for install.end). */
+    if (s_xfer.active && (s_xfer.failed || !s_conn)) {
+        xfer_reset_locked();
+    }
+    k_mutex_unlock(&s_xfer_lock);
 }
 
 static ssize_t status_read(struct bt_conn *conn,
@@ -1032,17 +1217,26 @@ static void status_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
  * 13  — STATUS CCC
  */
 
+/* Every companion operation (apps, files, settings, reboot) needs an
+ * authenticated LE Secure Connections bond: passkey pairing, the device
+ * showing the passkey (bt_manager.c). That also satisfies iOS, which asks for
+ * MITM protection on any pairing it starts; the former open characteristics
+ * worked around Just Works failing that and let anyone in range in. */
+#if defined(CONFIG_AKIRA_BT_SECURE_PAIRING)
+#define COMP_PERM_WRITE (BT_GATT_PERM_WRITE_AUTHEN | BT_GATT_PERM_WRITE_LESC)
+#define COMP_PERM_READ  (BT_GATT_PERM_READ_AUTHEN | BT_GATT_PERM_READ_LESC)
+#else
+#define COMP_PERM_WRITE BT_GATT_PERM_WRITE
+#define COMP_PERM_READ  BT_GATT_PERM_READ
+#endif
+
 BT_GATT_SERVICE_DEFINE(companion_svc_def,
     BT_GATT_PRIMARY_SERVICE(&svc_uuid),
 
-    /* CMD_CHAR: WRITE (carries shell/fs/app/OTA commands). No encryption
-     * requirement — iOS CoreBluetooth sets AuthReq.MITM=1 on any pairing it
-     * triggers for an encrypted characteristic, and our NoInputNoOutput IO
-     * capability can only do Just Works, which can never satisfy MITM. That
-     * made every phone connection loop on AUTH_REQUIREMENT and disconnect. */
+    /* CMD_CHAR: WRITE (carries fs/app/settings commands). */
     BT_GATT_CHARACTERISTIC(&cmd_uuid.uuid,
                             BT_GATT_CHRC_WRITE,
-                            BT_GATT_PERM_WRITE,
+                            COMP_PERM_WRITE,
                             NULL, cmd_write, s_cmd_buf),
 
     /* RESP_CHAR: NOTIFY */
@@ -1051,13 +1245,12 @@ BT_GATT_SERVICE_DEFINE(companion_svc_def,
                             BT_GATT_PERM_NONE,
                             NULL, NULL, s_resp_buf),
     BT_GATT_CCC(resp_ccc_changed,
-                BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+                BT_GATT_PERM_READ | COMP_PERM_WRITE),
 
-    /* DATA_UP: WRITE_WITHOUT_RSP (file upload). No encryption requirement —
-     * see CMD_CHAR above. */
+    /* DATA_UP: WRITE_WITHOUT_RSP (file upload). */
     BT_GATT_CHARACTERISTIC(&data_up_uuid.uuid,
                             BT_GATT_CHRC_WRITE_WITHOUT_RESP,
-                            BT_GATT_PERM_WRITE,
+                            COMP_PERM_WRITE,
                             NULL, data_up_write, NULL),
 
     /* DATA_DOWN: NOTIFY */
@@ -1066,15 +1259,15 @@ BT_GATT_SERVICE_DEFINE(companion_svc_def,
                             BT_GATT_PERM_NONE,
                             NULL, NULL, s_data_dn_buf),
     BT_GATT_CCC(data_dn_ccc_changed,
-                BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+                BT_GATT_PERM_READ | COMP_PERM_WRITE),
 
     /* STATUS: READ + NOTIFY */
     BT_GATT_CHARACTERISTIC(&status_uuid.uuid,
                             BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-                            BT_GATT_PERM_READ,
+                            COMP_PERM_READ,
                             status_read, NULL, s_status_buf),
     BT_GATT_CCC(status_ccc_changed,
-                BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+                BT_GATT_PERM_READ | COMP_PERM_WRITE),
 );
 
 /* Export attribute table pointer used by notify helpers */
@@ -1103,10 +1296,10 @@ static void conn_cb_disconnected(struct bt_conn *conn, uint8_t reason)
     s_conn = NULL;
     LOG_INF("Companion: phone disconnected (reason 0x%02x)", reason);
 
-    /* Clean up any in-progress transfer */
-    if (s_xfer.active) {
-        akira_free_buffer(s_xfer.buf);
-        memset(&s_xfer, 0, sizeof(s_xfer));
+    /* Drop any in-progress transfer on the workqueue, which owns frees. */
+    if (s_initialised) {
+        k_work_submit_to_queue(&s_cmd_workq, &s_xfer_cleanup_work);
+        k_work_reschedule(&s_readvertise_work, K_MSEC(500));
     }
 }
 
@@ -1118,6 +1311,23 @@ BT_CONN_CB_DEFINE(companion_conn_cb) = {
 /* --------------------------------------------------------------------------
  * Periodic status timer
  * -------------------------------------------------------------------------- */
+
+/* A1524C02-0001-4E56-8D4E-494B52413001 in LE byte order */
+static const uint8_t companion_uuid128[16] = {
+    0x01, 0x30, 0x41, 0x52, 0x4B, 0x49, 0x4E, 0x8D,
+    0x56, 0x4E, 0x01, 0x00, 0x02, 0x4C, 0x52, 0xA1
+};
+
+/* The lazy BT init leaves auto-advertising off, so without this the device
+ * stays undiscoverable after the first phone disconnects. */
+static void readvertise_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    if (s_initialised && !s_conn &&
+        bt_manager_start_advertising_custom(companion_uuid128) == -EBUSY) {
+        k_work_reschedule(&s_readvertise_work, K_MSEC(500));
+    }
+}
 
 static void status_timer_handler(struct k_work *work)
 {
@@ -1148,7 +1358,10 @@ int companion_svc_init(void)
                        K_PRIO_PREEMPT(7), NULL);
 
     k_work_init(&s_cmd_work, cmd_work_handler);
+    k_work_init(&s_xfer_flush_work, xfer_flush_handler);
+    k_work_init(&s_xfer_cleanup_work, xfer_cleanup_handler);
     k_work_init_delayable(&s_status_timer, status_timer_handler);
+    k_work_init_delayable(&s_readvertise_work, readvertise_handler);
 
     /* Start periodic status notifications */
     k_work_reschedule(&s_status_timer,
@@ -1158,11 +1371,6 @@ int companion_svc_init(void)
     LOG_INF("Companion GATT service initialised");
 
     /* Start advertising with companion service UUID */
-    static const uint8_t companion_uuid128[16] = {
-        /* A1524C02-0001-4E56-8D4E-494B52413001 in LE byte order */
-        0x01, 0x30, 0x41, 0x52, 0x4B, 0x49, 0x4E, 0x8D,
-        0x56, 0x4E, 0x01, 0x00, 0x02, 0x4C, 0x52, 0xA1
-    };
     bt_manager_start_advertising_custom(companion_uuid128);
 
     return 0;
@@ -1182,10 +1390,12 @@ int companion_svc_deinit(void)
         s_conn = NULL;
     }
 
+    k_work_cancel_delayable(&s_readvertise_work);
+    k_mutex_lock(&s_xfer_lock, K_FOREVER);
     if (s_xfer.active) {
-        akira_free_buffer(s_xfer.buf);
-        memset(&s_xfer, 0, sizeof(s_xfer));
+        xfer_reset_locked();
     }
+    k_mutex_unlock(&s_xfer_lock);
 
     bt_manager_set_mode(BT_MODE_NONE);
     s_initialised = false;

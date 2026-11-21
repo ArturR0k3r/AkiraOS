@@ -50,6 +50,8 @@ must not block, and must not call back into the subsystem that raised the event.
 | `AKIRA_HOOK_OTA_PRE_REBOOT` | `ota_reboot_to_apply_update()` / `akira_ota_reboot()` is about to reboot | caller | — |
 | `AKIRA_HOOK_OTA_CONFIRMED` | the running trial image was confirmed | boot guard / caller | — |
 | `AKIRA_HOOK_OTA_ERROR` | an update failed (flash, hash, downgrade, boot request), or the previous boot rolled back (`ota.error = -ECANCELED`, at `BOOT_READY`) | OTA worker / main | `ota.state`, `ota.error` (an `enum ota_result` or `-ECANCELED`) |
+| `AKIRA_HOOK_BT_PASSKEY_DISPLAY` | a phone is pairing by passkey entry (`CONFIG_AKIRA_BT_SECURE_PAIRING`, any mode but HID): show the six digits until `BT_PAIRING_DONE` | BT RX | `bt.passkey` (0–999999, show zero-padded) |
+| `AKIRA_HOOK_BT_PAIRING_DONE` | that pairing completed, failed or was cancelled | BT RX | `bt.paired` |
 
 Handlers on the WASM app thread (stopped, crashed) and the BT RX thread run with
 small stacks (8 KB and ~2 KB on akiraconsole_prod); keep them short.

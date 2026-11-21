@@ -28,6 +28,7 @@
 #ifndef AKIRA_HOOKS_H
 #define AKIRA_HOOKS_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <zephyr/sys/iterable_sections.h>
 #include <zephyr/sys/util.h>
@@ -80,6 +81,14 @@ enum akira_hook_event_type {
     /** An OTA failed or rolled back. `ota.error`. */
     AKIRA_HOOK_OTA_ERROR,
 
+    /** A Bluetooth peer is pairing with passkey entry: show `bt.passkey`
+     *  (six digits) to the user, who types it on the peer. Only a pairing
+     *  that completes this way can use the companion service. */
+    AKIRA_HOOK_BT_PASSKEY_DISPLAY,
+    /** The passkey pairing ended (`bt.paired` false if it failed or was
+     *  cancelled): stop showing the passkey. */
+    AKIRA_HOOK_BT_PAIRING_DONE,
+
     AKIRA_HOOK_EVENT_COUNT
 };
 
@@ -109,6 +118,10 @@ struct akira_hook_event {
             int state; /**< akira_ota_state_t */
             int error; /**< errno, 0 if none */
         } ota;
+        struct {
+            unsigned int passkey; /**< 0-999999, AKIRA_HOOK_BT_PASSKEY_DISPLAY */
+            bool paired;          /**< AKIRA_HOOK_BT_PAIRING_DONE */
+        } bt;
     };
 };
 

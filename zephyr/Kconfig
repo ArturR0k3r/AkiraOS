@@ -717,6 +717,31 @@ config AKIRA_BT_COMPANION_MAX_TRANSFER_KB
       Affects the size of the staging buffer allocated at transfer start.
       Ensure adequate heap is available (PSRAM recommended).
 
+config AKIRA_BT_COMPANION_SHELL
+    bool "Companion: shell command passthrough (shell.exec)"
+    default y if !AKIRA_RELEASE_BUILD
+    depends on AKIRA_BT_COMPANION && SHELL_BACKEND_DUMMY
+    help
+      Let the paired companion app run any shell command (`shell.exec`),
+      including whatever debug commands the image has. Off by default in
+      release builds; the release checks refuse it.
+
+config AKIRA_BT_SECURE_PAIRING
+    bool "Authenticated (passkey) pairing for Bluetooth management"
+    default y
+    depends on BT_SMP
+    help
+      The companion service and BLE app transfer accept writes only over an
+      authenticated LE Secure Connections bond. Outside HID mode the device
+      pairs as DisplayOnly: it raises AKIRA_HOOK_BT_PASSKEY_DISPLAY (and logs)
+      a six-digit passkey that the user types on the phone, and refuses
+      Just Works pairing. Products must show the passkey on their display
+      (hook handler); without that, pairing needs the serial console.
+
+      With n, anyone in radio range can use these services without pairing
+      (companion) or after silent Just Works pairing (app transfer). The
+      release checks refuse n.
+
 menu "Advanced Connectivity"
 
 config AKIRA_RADIO_MANAGER

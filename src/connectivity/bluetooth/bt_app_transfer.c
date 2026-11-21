@@ -11,6 +11,7 @@
 #include <storage/fs_manager.h>
 #include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/logging/log.h>
@@ -74,6 +75,25 @@ static void status_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value);
 static uint8_t status_value[4] = {0};
 static bool notify_enabled = false;
 
+/* Installing, deleting, starting and stopping apps needs an authenticated
+ * LE Secure Connections bond (passkey shown by the device, bt_manager.c):
+ * plain ENCRYPT accepted silent Just Works pairing from anyone in range. */
+#if defined(CONFIG_AKIRA_BT_SECURE_PAIRING)
+#define XFER_PERM_WRITE (BT_GATT_PERM_WRITE_AUTHEN | BT_GATT_PERM_WRITE_LESC)
+#else
+#define XFER_PERM_WRITE BT_GATT_PERM_WRITE_ENCRYPT
+#endif
+
+static bool peer_authenticated(struct bt_conn *conn)
+{
+#if defined(CONFIG_AKIRA_BT_SECURE_PAIRING)
+    return conn && bt_conn_get_security(conn) >= BT_SECURITY_L4;
+#else
+    ARG_UNUSED(conn);
+    return true;
+#endif
+}
+
 /* GATT Service Definition */
 BT_GATT_SERVICE_DEFINE(app_xfer_svc,
                        BT_GATT_PRIMARY_SERVICE(BT_UUID_APP_XFER),
@@ -82,7 +102,7 @@ BT_GATT_SERVICE_DEFINE(app_xfer_svc,
                         * (encrypted link required — carries the app binary) */
                        BT_GATT_CHARACTERISTIC(BT_UUID_APP_RX_DATA,
                                               BT_GATT_CHRC_WRITE_WITHOUT_RESP,
-                                              BT_GATT_PERM_WRITE_ENCRYPT,
+                                              XFER_PERM_WRITE,
                                               NULL, rx_data_write, NULL),
 
                        /* TX_STATUS: Notify for status updates */
@@ -91,13 +111,13 @@ BT_GATT_SERVICE_DEFINE(app_xfer_svc,
                                               BT_GATT_PERM_NONE,
                                               NULL, NULL, status_value),
                        BT_GATT_CCC(status_ccc_changed,
-                                   BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+                                   BT_GATT_PERM_READ | XFER_PERM_WRITE),
 
                        /* CONTROL: Write for transfer control commands
                         * (encrypted link required — install/start/stop/delete) */
                        BT_GATT_CHARACTERISTIC(BT_UUID_APP_CONTROL,
                                               BT_GATT_CHRC_WRITE,
-                                              BT_GATT_PERM_WRITE_ENCRYPT,
+                                              XFER_PERM_WRITE,
                                               NULL, control_write, NULL), );
 
 static void status_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
@@ -247,9 +267,9 @@ static int finalize_transfer(void)
         g_xfer.callback(true, g_xfer.app_name, 0);
     }
 
-    /* Reset to idle */
+    /* Reset to idle; frees the staging buffer (up to the max app size). */
+    cleanup_transfer();
     g_xfer.state = BT_APP_XFER_IDLE;
-    memset(g_xfer.app_name, 0, sizeof(g_xfer.app_name));
 
     return 0;
 }
@@ -259,21 +279,30 @@ static ssize_t rx_data_write(struct bt_conn *conn,
                              const void *buf, uint16_t len,
                              uint16_t offset, uint8_t flags)
 {
-    ARG_UNUSED(conn);
     ARG_UNUSED(attr);
     ARG_UNUSED(offset);
     ARG_UNUSED(flags);
 
+    if (!peer_authenticated(conn))
+    {
+        return BT_GATT_ERR(BT_ATT_ERR_AUTHENTICATION);
+    }
+
+    /* Never block the BT RX thread behind an install in progress. */
+    if (k_mutex_lock(&xfer_mutex, K_NO_WAIT) != 0)
+    {
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+    }
+
     if (g_xfer.state != BT_APP_XFER_RECEIVING)
     {
+        k_mutex_unlock(&xfer_mutex);
         LOG_WRN("Not in receiving state");
         return BT_GATT_ERR(BT_ATT_ERR_WRITE_NOT_PERMITTED);
     }
 
-    k_mutex_lock(&xfer_mutex, K_FOREVER);
-
     /* Check for overflow */
-    if (g_xfer.received_bytes + len > g_xfer.total_size)
+    if (len > g_xfer.total_size - g_xfer.received_bytes)
     {
         LOG_ERR("Received more data than expected");
         k_mutex_unlock(&xfer_mutex);
@@ -308,16 +337,47 @@ static void finalize_work_handler(struct k_work *work)
 
 static K_WORK_DEFINE(g_finalize_work, finalize_work_handler);
 
+/* A transfer belongs to the connection that started it: drop it when that
+ * peer goes, so the next peer can't continue (or stall) it. */
+static void abort_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    k_mutex_lock(&xfer_mutex, K_FOREVER);
+    if (g_xfer.state == BT_APP_XFER_RECEIVING)
+    {
+        LOG_INF("Peer disconnected: dropping app transfer");
+        cleanup_transfer();
+        g_xfer.state = BT_APP_XFER_IDLE;
+    }
+    k_mutex_unlock(&xfer_mutex);
+}
+
+static K_WORK_DEFINE(g_abort_work, abort_work_handler);
+
+static void xfer_disconnected(struct bt_conn *conn, uint8_t reason)
+{
+    ARG_UNUSED(conn);
+    ARG_UNUSED(reason);
+    k_work_submit(&g_abort_work);
+}
+
+BT_CONN_CB_DEFINE(app_xfer_conn_cb) = {
+    .disconnected = xfer_disconnected,
+};
+
 static ssize_t control_write(struct bt_conn *conn,
                              const struct bt_gatt_attr *attr,
                              const void *buf, uint16_t len,
                              uint16_t offset, uint8_t flags)
 {
-    ARG_UNUSED(conn);
     ARG_UNUSED(attr);
     ARG_UNUSED(offset);
     ARG_UNUSED(flags);
 
+    if (!peer_authenticated(conn))
+    {
+        return BT_GATT_ERR(BT_ATT_ERR_AUTHENTICATION);
+    }
     if (len < 1)
     {
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
@@ -326,7 +386,10 @@ static ssize_t control_write(struct bt_conn *conn,
     const uint8_t *data = buf;
     bt_app_cmd_t cmd = data[0];
 
-    k_mutex_lock(&xfer_mutex, K_FOREVER);
+    if (k_mutex_lock(&xfer_mutex, K_NO_WAIT) != 0)
+    {
+        return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+    }
 
     switch (cmd)
     {
@@ -336,7 +399,11 @@ static ssize_t control_write(struct bt_conn *conn,
             k_mutex_unlock(&xfer_mutex);
             return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
         }
-        start_transfer((const struct bt_app_xfer_header *)&data[1]);
+        if (start_transfer((const struct bt_app_xfer_header *)&data[1]) < 0)
+        {
+            k_mutex_unlock(&xfer_mutex);
+            return BT_GATT_ERR(BT_ATT_ERR_UNLIKELY);
+        }
         break;
 
     case BT_APP_CMD_ABORT:

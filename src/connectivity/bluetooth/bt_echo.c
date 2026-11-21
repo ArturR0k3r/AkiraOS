@@ -51,16 +51,10 @@ static ssize_t echo_write(struct bt_conn *conn,
         LOG_ERR("Echo notify failed: %d", rc);
     }
 
-    /* Show received payload at INFO level for easier testing */
-    char hex[129] = {0};
-    int hpos = 0;
-    for (int i = 0; i < len && i < 64; i++) {
-        hpos += snprintf(hex + hpos, sizeof(hex) - hpos, "%02x ", data[i]);
-    }
-    if (len > 64) {
-        snprintf(hex + hpos, sizeof(hex) - hpos, "... (%d bytes total)", len);
-    }
-    LOG_INF("Echo write received (%d bytes): %s", len, hex);
+    /* Show received payload at INFO level for easier testing. (A hand-built
+     * hex string here overflowed its buffer for writes of 43+ bytes.) */
+    LOG_INF("Echo write received (%u bytes)", len);
+    LOG_HEXDUMP_INF(data, MIN(len, 64U), "echo");
     return len;
 }
 
