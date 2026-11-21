@@ -379,6 +379,7 @@ struct akira_setting_work
     uint16_t max_len;
     uint8_t encrypted;
     bool is_app;    /* key lives in app's namespace (akira_settings_app_*) */
+    bool no_secrets; /* GET: refuse an encrypted entry instead of decrypting it */
     bool counted;   /* counted in s_app_pending */
 
     settings_wq_callback_t callback;
@@ -435,7 +436,13 @@ static int parse_key(const char *full_key, char *namespace, char *key)
 
     strcpy(key, last + 1);
 
+    /* Keys may be up to AKIRA_SETTINGS_MAX_KEY_LEN (up to 256) long, the
+     * namespace buffer is MAX_NAMESPACE_LEN. */
     size_t ns_len = last - full_key;
+    if (ns_len >= MAX_NAMESPACE_LEN)
+    {
+        return -ENAMETOOLONG;
+    }
     memcpy(namespace, full_key, ns_len);
     namespace[ns_len] = '\0';
 
@@ -1152,7 +1159,7 @@ static int settings_set(const char *key, const char *value, uint8_t is_encrypted
     return -1;
 }
 
-static int settings_get(const char *key, char *value, size_t max_len)
+static int settings_get(const char *key, char *value, size_t max_len, bool no_secrets)
 {
     int ret = -1;
 
@@ -1173,6 +1180,10 @@ static int settings_get(const char *key, char *value, size_t max_len)
             return ret;
         }
 
+        if (entry.encrypted && no_secrets)
+        {
+            return -EACCES;
+        }
         if (entry.encrypted)
         {
 #ifdef CONFIG_AKIRA_SETTINGS_ENCRYPTION
@@ -1423,7 +1434,7 @@ static void run_request(struct akira_setting_work *sw)
             result = settings_set(sw->key, sw->value, sw->encrypted);
             break;
         case AKIRA_SETTINGS_OP_GET:
-            result = settings_get(sw->key, sw->value, sw->max_len);
+            result = settings_get(sw->key, sw->value, sw->max_len, sw->no_secrets);
             break;
         case AKIRA_SETTINGS_OP_DELETE:
             result = settings_delete(sw->key);
@@ -1792,7 +1803,7 @@ static int app_request(struct akira_setting_work *sw)
             return -ENOENT;
         }
         app_ns_key(full, ns, sw->key);
-        ret = settings_get(full, sw->value, sw->max_len);
+        ret = settings_get(full, sw->value, sw->max_len, false); /* its own value */
         return (ret == -1) ? -ENOENT : ret;
 
     case AKIRA_SETTINGS_OP_DELETE:
@@ -2085,7 +2096,8 @@ int akira_settings_set(const char *key, const char *value, uint8_t is_encrypted)
     return result;
 }
 
-int akira_settings_get(const char *key, char *value, size_t max_len)
+static int settings_get_sync(const char *key, char *value, size_t max_len,
+                             bool no_secrets)
 {
     if (!key || !value || max_len == 0 || !storage.initialized)
     {
@@ -2106,6 +2118,7 @@ int akira_settings_get(const char *key, char *value, size_t max_len)
     /* Stored values (and their decryptions) are shorter than MAX_VALUE_LEN,
      * so capping the length changes no result. */
     work->max_len = (uint16_t)MIN(max_len, sizeof(work->value));
+    work->no_secrets = no_secrets;
 
     int result = run_sync(work, value, max_len);
 
@@ -2114,6 +2127,16 @@ int akira_settings_get(const char *key, char *value, size_t max_len)
         LOG_DBG("GET: %s", key);
     }
     return result;
+}
+
+int akira_settings_get(const char *key, char *value, size_t max_len)
+{
+    return settings_get_sync(key, value, max_len, false);
+}
+
+int akira_settings_get_exportable(const char *key, char *value, size_t max_len)
+{
+    return settings_get_sync(key, value, max_len, true);
 }
 
 int akira_settings_delete(const char *key)
@@ -2202,30 +2225,12 @@ int akira_settings_list(settings_iterator_t *iter)
         strncpy(iter->key, entry.key, MAX_KEY_LEN - 1);
         iter->key[MAX_KEY_LEN - 1] = '\0';
 
+        /* Listing is for display and export (shell, BLE companion): an
+         * encrypted entry is a secret (Wi-Fi PSK, broker password, mesh
+         * identity key) and never leaves the device decrypted. */
         if (entry.encrypted)
         {
-#ifdef CONFIG_AKIRA_SETTINGS_ENCRYPTION
-            uint8_t decoded[MAX_VALUE_LEN];
-            size_t decoded_len;
-            ret = base64_decode(decoded, sizeof(decoded), &decoded_len,
-                                entry.value, strlen(entry.value));
-
-            if (ret == 0)
-            {
-                ret = crypto_decrypt(decoded, decoded_len, iter->value, MAX_VALUE_LEN);
-                if (ret < 0)
-                {
-                    LOG_WRN("Failed to decrypt value at index %d", entry_id);
-                    strncpy(iter->value, "[ENCRYPTED]", MAX_VALUE_LEN - 1);
-                }
-            }
-            else
-            {
-                strncpy(iter->value, "[ENCRYPTED]", MAX_VALUE_LEN - 1);
-            }
-#else
             strncpy(iter->value, "[ENCRYPTED]", MAX_VALUE_LEN - 1);
-#endif
         }
         else
         {
@@ -2313,23 +2318,29 @@ static int cmd_settings_get(const struct shell *sh, size_t argc, char **argv)
         shell_print(sh, "");
         shell_print(sh, "Description:");
         shell_print(sh, "  Retrieves the value associated with a key.");
-        shell_print(sh, "  Automatically decrypts encrypted values.");
+        shell_print(sh, "  Encrypted values are shown as [ENCRYPTED], never decrypted.");
         shell_print(sh, "");
         shell_print(sh, "Examples:");
         shell_print(sh, "  settings get user/name");
         shell_print(sh, "  settings get config/timeout");
         shell_print(sh, "  settings get device/id");
-        shell_print(sh, "  settings get user/password    # Auto-decrypts if encrypted");
+        shell_print(sh, "  settings get user/password    # [ENCRYPTED] if stored with -e");
         return -EINVAL;
     }
 
     char value[MAX_VALUE_LEN];
 
-    int ret = akira_settings_get(argv[1], value, sizeof(value));
+    /* The shell has no login: never print a decrypted secret. */
+    int ret = akira_settings_get_exportable(argv[1], value, sizeof(value));
 
     if (ret == 0)
     {
         shell_print(sh, "%s = %s", argv[1], value);
+    }
+    else if (ret == -EACCES)
+    {
+        shell_print(sh, "%s = [ENCRYPTED]", argv[1]);
+        ret = 0;
     }
     else if (ret == -ENOENT)
     {
@@ -2364,7 +2375,7 @@ static int cmd_settings_set(const struct shell *sh, size_t argc, char **argv)
         shell_print(sh, "  settings set -e api/token \"sk-abc123xyz\"");
         shell_print(sh, "");
         shell_print(sh, "Note:");
-        shell_print(sh, "  - Encrypted values are transparently decrypted when retrieved");
+        shell_print(sh, "  - Encrypted values are decrypted only for firmware use, never shown");
         shell_print(sh, "  - Encryption requires CONFIG_AKIRA_SETTINGS_ENCRYPTION=y");
         return -EINVAL;
     }
@@ -2434,7 +2445,7 @@ static int cmd_settings_list(const struct shell *sh, size_t argc, char **argv)
     shell_print(sh, "");
     shell_print(sh, "Description:");
     shell_print(sh, "  Lists all stored key-value pairs.");
-    shell_print(sh, "  Encrypted values are automatically decrypted for display.");
+    shell_print(sh, "  Encrypted values are shown as [ENCRYPTED].");
     shell_print(sh, "");
 
     char key_buf[MAX_KEY_LEN];

@@ -88,6 +88,14 @@ int akira_settings_init(void);
  */
 int akira_settings_get(const char *key, char *value, size_t max_len);
 
+/**
+ * Like akira_settings_get(), for callers that show or send the value off the
+ * device (shell, BLE companion): an encrypted entry is refused with -EACCES
+ * instead of being decrypted. akira_settings_list() always reports encrypted
+ * entries as "[ENCRYPTED]".
+ */
+int akira_settings_get_exportable(const char *key, char *value, size_t max_len);
+
 
 /**
  * Set Key to Value
