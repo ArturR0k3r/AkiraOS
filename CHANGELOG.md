@@ -16,6 +16,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   AkiraPlatform builds for this board need (they overflowed `dram0_0_seg` by 1.3 KB on
   upstream Zephyr after the 1.7.1 security fixes). Turn `CONFIG_AKIRA_HTTP_SERVER` back
   on together with `CONFIG_WIFI`.
+- `ci(release)`: The release workflow never built: the Zephyr CI container has no
+  registered Zephyr SDK, so every board failed at CMake (`Could not find ...
+  "Zephyr-sdk"`, also in the 1.6.5–1.6.7 runs). It now installs SDK 0.17.4 with the
+  board's toolchain, both checked against the published SHA-256 sums.
 
 ---
 

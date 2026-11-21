@@ -24,8 +24,8 @@ permissions:
 jobs:
   firmware:
     runs-on: ubuntu-latest
-    # The Zephyr CI image bundles the Zephyr SDK with every toolchain, so no
-    # per-board SDK install is needed.
+    # The Zephyr CI image has no registered Zephyr SDK (ci.yml installs one
+    # too): the "Zephyr SDK" step installs 0.17.4 with the board's toolchain.
     container: ghcr.io/zephyrproject-rtos/ci:v0.28.6@sha256:427a55fe95911ea97aa99fa0aedce95cb5550cbdd74f3525d23e35b2221f2335
     strategy:
       fail-fast: false
@@ -33,12 +33,14 @@ jobs:
         include:
           - board: akiraconsole/esp32s3/procpu
             slug: akiraconsole
+            toolchain: xtensa-espressif_esp32s3_zephyr-elf
             blobs: true
             sign: true
             esp_chip: esp32s3          # build a merged full-flash image for the web flasher
             build_alias: akiraconsole
           - board: akiraconsole_prod/esp32s3/procpu
             slug: akiraconsole_prod
+            toolchain: xtensa-espressif_esp32s3_zephyr-elf
             blobs: true
             sign: true
             release: true
@@ -46,16 +48,19 @@ jobs:
             build_alias: akiraconsole_prod
           - board: esp32s3_devkitm/esp32s3/procpu
             slug: esp32s3_devkitm
+            toolchain: xtensa-espressif_esp32s3_zephyr-elf
             blobs: true
             sign: false
             esp_chip: esp32s3
             build_alias: esp32s3_devkitm_esp32s3_procpu
           - board: nrf54l15dk/nrf54l15/cpuapp
             slug: nrf54l15dk
+            toolchain: arm-zephyr-eabi
             blobs: false
             sign: false
           - board: rpi_pico2/rp2350a/m33
             slug: rpi_pico2
+            toolchain: arm-zephyr-eabi
             blobs: false
             sign: false
     steps:
@@ -64,6 +69,40 @@ jobs:
           path: akira-os
           submodules: recursive
           persist-credentials: false
+
+      # Pinned to the sha256.sum published with SDK 0.17.4; the toolchain is
+      # fetched and checked here rather than by setup.sh.
+      - name: Zephyr SDK
+        env:
+          TOOLCHAIN: ${{ matrix.toolchain }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_VER=0.17.4
+          SDK=/opt/toolchains/zephyr-sdk-$SDK_VER
+          URL=https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v$SDK_VER
+          declare -A SUM=(
+            [zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz]=a7258bf50c892c4669712b2aacdfcd5e303245bcf36cb458a296039a664594f5
+            [toolchain_linux-x86_64_arm-zephyr-eabi.tar.xz]=1b61084fe12076a3639aa2d028b5258f41eb3d0f7d46a16264949e1d213f1915
+            [toolchain_linux-x86_64_xtensa-espressif_esp32s3_zephyr-elf.tar.xz]=ed2c737bb12d6b68fc13590f9e3abae6c4bc0a7bdd4b06e6a024f56ab4acd231
+          )
+          fetch() {
+            wget -q "$URL/$1" -O "/tmp/$1"
+            echo "${SUM[$1]}  /tmp/$1" | sha256sum -c -
+          }
+          mkdir -p /opt/toolchains
+          if [ ! -f "$SDK/sdk_version" ]; then
+            fetch "zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz"
+            tar xf "/tmp/zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz" -C /opt/toolchains
+          fi
+          if [ ! -d "$SDK/$TOOLCHAIN" ]; then
+            fetch "toolchain_linux-x86_64_${TOOLCHAIN}.tar.xz"
+            tar xf "/tmp/toolchain_linux-x86_64_${TOOLCHAIN}.tar.xz" -C "$SDK"
+          fi
+          rm -f /tmp/*.tar.xz
+          (cd "$SDK" && ./setup.sh -c)
+          echo "ZEPHYR_SDK_INSTALL_DIR=$SDK" >> "$GITHUB_ENV"
+          echo "ZEPHYR_TOOLCHAIN_VARIANT=zephyr" >> "$GITHUB_ENV"
 
       - name: West workspace
         working-directory: akira-os
