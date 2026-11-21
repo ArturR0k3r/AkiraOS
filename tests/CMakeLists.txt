@@ -73,6 +73,22 @@ target_sources(app PRIVATE
     src/test_admission.c
     src/test_app_resources.c
     src/test_ed25519_sign.c
+    src/test_hardening.c
+
+    # AkiraMesh session table (replay window); HKDF stubbed in the test
+    ${AKIRA_SRC}/connectivity/mesh/mesh_session.c
+    stubs/stub_mesh_crypto.c
+)
+
+# mesh_session.c is gated by CONFIG_AKIRA_MESH_E2E_CRYPTO, whose dependency
+# chain (radio, PSA ECDH) is not wanted here: define it for the sources that
+# use the session table.
+set_source_files_properties(
+    ${AKIRA_SRC}/connectivity/mesh/mesh_session.c
+    src/test_hardening.c
+    stubs/stub_mesh_crypto.c
+    PROPERTIES COMPILE_DEFINITIONS
+    "CONFIG_AKIRA_MESH_E2E_CRYPTO=1;CONFIG_AKIRA_MESH_MAX_SESSIONS=4"
 )
 
 # The baseline app signature provider reads CONFIG_AKIRA_APP_PUBKEY, which
