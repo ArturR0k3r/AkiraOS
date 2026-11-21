@@ -35,6 +35,12 @@ int akira_ota_finish(void)
 	return -ENOTSUP;
 }
 
+int akira_ota_finish_ex(uint32_t flags)
+{
+	ARG_UNUSED(flags);
+	return -ENOTSUP;
+}
+
 int akira_ota_abort(void)
 {
 	return -ENOTSUP;

@@ -76,6 +76,11 @@ int akira_ota_finish(void)
 	return to_errno(ota_finalize_update());
 }
 
+int akira_ota_finish_ex(uint32_t flags)
+{
+	return to_errno(ota_finalize_update_ex((flags & AKIRA_OTA_FINISH_REQUIRE_NEWER) != 0));
+}
+
 int akira_ota_abort(void)
 {
 	return to_errno(ota_abort_update());

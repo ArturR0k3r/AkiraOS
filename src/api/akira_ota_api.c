@@ -40,6 +40,7 @@ LOG_MODULE_REGISTER(akira_ota_api, CONFIG_AKIRA_LOG_LEVEL);
 #include <zephyr/sys/atomic.h>
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
 #include <connectivity/ota/ota_manager.h>
+#include <zephyr/dfu/mcuboot.h>
 #endif
 #include <zephyr/kernel.h>
 #include <string.h>
@@ -149,7 +150,15 @@ static int ota_url_policy_gate(wasm_exec_env_t exec_env, const char *url)
         return -EINVAL;
     }
     p += 3;
-    while (p[n] != '\0' && p[n] != '/' && p[n] != ':' && p[n] != '?') {
+    /* "https://allowed.example:443@evil.example/" names evil.example to the
+     * HTTP client (userinfo) but allowed.example to a naive split: refuse
+     * userinfo and backslashes in the authority outright. */
+    for (size_t i = 0; p[i] != '\0' && p[i] != '/' && p[i] != '?' && p[i] != '#'; i++) {
+        if (p[i] == '@' || p[i] == '\\') {
+            return -EINVAL;
+        }
+    }
+    while (p[n] != '\0' && p[n] != '/' && p[n] != ':' && p[n] != '?' && p[n] != '#') {
         n++;
     }
     if (n == 0 || n >= sizeof(host)) {
@@ -218,7 +227,8 @@ static int ota_split_url(const char *url, char *host, size_t host_sz,
     if (http_parser_parse_url(url, strlen(url), 0, &u) != 0) {
         return -EINVAL;
     }
-    if (!(u.field_set & (1 << UF_SCHEMA)) || !(u.field_set & (1 << UF_HOST))) {
+    if (!(u.field_set & (1 << UF_SCHEMA)) || !(u.field_set & (1 << UF_HOST)) ||
+        (u.field_set & (1 << UF_USERINFO))) {
         return -EINVAL;
     }
 
@@ -799,7 +809,9 @@ static int ota_download_and_apply(wasm_exec_env_t exec_env,
      * critical section; if the app dies here the worker still finishes the
      * (complete) image on its own. */
     atomic_set(&g_ota_session, OTA_SESS_FINALIZING);
-    r = ota_finalize_update();
+    /* The manifest (and its version) come from the network: require the
+     * staged MCUboot header itself to be newer than the running image. */
+    r = ota_finalize_update_ex(true);
     atomic_set(&g_ota_session, OTA_SESS_NONE);
     if (r != OTA_OK) {
         LOG_ERR("OTA: finalize failed (%d) - hash mismatch or invalid image", r);
@@ -1030,6 +1042,16 @@ int akira_native_ota_rollback(wasm_exec_env_t exec_env)
     AKIRA_CHECK_CAP_OR_RETURN(exec_env, AKIRA_CAP_OTA_TRIGGER, -EPERM);
 
 #if defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
+    /* A rollback boots the previous - older - image. During a trial boot it
+     * would undo an update that was just installed (often a security fix),
+     * which is why ota_confirm is system-only; and with downgrade refusal on
+     * an app may not downgrade the firmware at all. Rollback stays available
+     * to the system (boot guard, shell). */
+    if (IS_ENABLED(CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE) || !boot_is_img_confirmed()) {
+        LOG_WRN_RATELIMIT("OTA API: ota_rollback refused for apps");
+        return -EPERM;
+    }
+
     /* Never pull the state machine back to IDLE (and reboot) under an
      * update that is still being written or validated, by any transport.
      * Holding the OTA API claim keeps an app download from starting

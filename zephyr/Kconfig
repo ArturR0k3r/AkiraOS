@@ -1843,10 +1843,13 @@ config AKIRA_OTA_HTTP
 
 config AKIRA_OTA_BLE
     bool "Enable BLE OTA transport"
-    default y
     depends on AKIRA_OTA && BT
     help
-      Enable OTA updates via Bluetooth Low Energy.
+      Enable OTA updates via Bluetooth Low Energy (static GATT service).
+      The service sends no expected image hash, so it can never stage an
+      image under AKIRA_OTA_REQUIRE_HASH; what it can do is erase the update
+      slot (including the rollback image) and abort other transports'
+      updates. Development only; the release checks refuse it.
 
 config AKIRA_OTA_USB
     bool "Enable USB OTA transport"

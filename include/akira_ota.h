@@ -53,6 +53,21 @@ int akira_ota_write(const uint8_t *data, size_t len);
  */
 int akira_ota_finish(void);
 
+/** akira_ota_finish_ex() flag: the staged image must be strictly newer than
+ *  the running one (MCUboot header version, then build number). Use it when
+ *  a remote party picks the image: re-staging the running image would
+ *  otherwise be a reboot nobody signed. */
+#define AKIRA_OTA_FINISH_REQUIRE_NEWER (1U << 0)
+
+/**
+ * @brief akira_ota_finish() with extra checks.
+ * @param flags AKIRA_OTA_FINISH_* flags.
+ * @return 0, -EBADMSG on a hash or image mismatch or an image that fails a
+ *         flag's check, or negative errno.
+ * @since 1.7
+ */
+int akira_ota_finish_ex(uint32_t flags);
+
 /** Abandon the update in progress. */
 int akira_ota_abort(void);
 

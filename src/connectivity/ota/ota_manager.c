@@ -467,41 +467,47 @@ static enum ota_result do_write_chunk(const uint8_t *data, uint16_t length)
     return result;
 }
 
-#ifdef CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE
 /**
- * @brief True if the staged image's version is lower than the running image's.
+ * @brief Compare the staged image's version with the running image's.
  *
  * Compares major.minor.revision from the MCUboot headers of both slots, as
- * MCUboot's downgrade prevention does. An unreadable header counts as a
- * downgrade (fail closed).
+ * MCUboot's downgrade prevention does; the headers are covered by the image
+ * signature MCUboot verifies.
+ *
+ * @param[out] cmp   <0 if the staged image is older, 0 if equal, >0 if newer.
+ * @param[out] build Same comparison for the build number (tie-breaker).
+ * @return 0, or negative errno if a header cannot be read (callers fail closed).
  */
-static bool is_downgrade(void)
+static int staged_version_cmp(int *cmp, int *build)
 {
     struct mcuboot_img_header run, img;
 
     if (boot_read_bank_header(FLASH_AREA_IMAGE_PRIMARY, &run, sizeof(run)) != 0 ||
         boot_read_bank_header(FLASH_AREA_IMAGE_SECONDARY, &img, sizeof(img)) != 0)
     {
-        LOG_ERR("Downgrade check: cannot read image headers");
-        return true;
+        LOG_ERR("Version check: cannot read image headers");
+        return -EIO;
     }
 
     const struct mcuboot_img_sem_ver *a = &img.h.v1.sem_ver;
     const struct mcuboot_img_sem_ver *b = &run.h.v1.sem_ver;
-    int cmp = (a->major != b->major)       ? (a->major < b->major ? -1 : 1)
-            : (a->minor != b->minor)       ? (a->minor < b->minor ? -1 : 1)
-            : (a->revision != b->revision) ? (a->revision < b->revision ? -1 : 1)
-            : 0;
-
-    if (cmp < 0)
+    *cmp = (a->major != b->major)       ? (a->major < b->major ? -1 : 1)
+         : (a->minor != b->minor)       ? (a->minor < b->minor ? -1 : 1)
+         : (a->revision != b->revision) ? (a->revision < b->revision ? -1 : 1)
+         : 0;
+    *build = (a->build_num == b->build_num) ? 0 : (a->build_num < b->build_num ? -1 : 1);
+    if (*cmp < 0 || (*cmp == 0 && *build <= 0))
     {
-        LOG_WRN("Refusing downgrade %u.%u.%u -> %u.%u.%u", b->major, b->minor,
-                b->revision, a->major, a->minor, a->revision);
-        return true;
+        LOG_WRN("Staged image %u.%u.%u+%u is not newer than running %u.%u.%u+%u",
+                a->major, a->minor, a->revision, a->build_num,
+                b->major, b->minor, b->revision, b->build_num);
     }
-    return false;
+    return 0;
 }
-#endif /* CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE */
+
+/* Set by ota_finalize_update_ex() for the finalize in flight: refuse a staged
+ * image that is not strictly newer than the running one. */
+static bool ota_require_newer;
 
 /**
  * @brief Verify the written image against the expected SHA-256.
@@ -636,16 +642,22 @@ static enum ota_result do_finalize_update(void)
         return OTA_ERROR_INVALID_IMAGE;
     }
 
-#ifdef CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE
-    /* Same rule as MCUboot's CONFIG_MCUBOOT_DOWNGRADE_PREVENTION, applied before
-     * the reboot so the sender gets an error instead of a silent erase. The
-     * header is covered by the image signature MCUboot verifies. */
-    if (is_downgrade())
+    /* CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE: same rule as MCUboot's
+     * CONFIG_MCUBOOT_DOWNGRADE_PREVENTION, applied before the reboot so the
+     * sender gets an error instead of a silent erase. Update clients that let
+     * a remote party choose the image (a fleet hub) also refuse an equal
+     * version: re-staging the running image is an unsigned reboot. */
+    if (IS_ENABLED(CONFIG_AKIRA_OTA_REFUSE_DOWNGRADE) || ota_require_newer)
     {
-        set_error(OTA_ERROR_INVALID_IMAGE, "Older than running firmware");
-        return OTA_ERROR_INVALID_IMAGE;
+        int cmp = 0, build = 0;
+
+        if (staged_version_cmp(&cmp, &build) != 0 || cmp < 0 ||
+            (ota_require_newer && cmp == 0 && build <= 0))
+        {
+            set_error(OTA_ERROR_INVALID_IMAGE, "Not newer than running firmware");
+            return OTA_ERROR_INVALID_IMAGE;
+        }
     }
-#endif
 
     /* Authenticity/integrity gate: the image content must match the expected
      * SHA-256 before we ever request a boot upgrade. Without this, the magic
@@ -983,13 +995,30 @@ int ota_manager_init(void)
  */
 enum ota_result ota_start_update(size_t expected_size)
 {
+    /* Starting erases the whole secondary slot. Refuse while it holds
+     * something that must survive: a staged image waiting for its reboot
+     * (COMPLETE), or - while the running image is still on trial - the
+     * previous image MCUboot would revert to. */
+#ifdef CONFIG_AKIRA_BOOT_GUARD
+    if (akira_boot_guard_is_trial())
+    {
+        LOG_WRN("OTA refused: running image is on trial (confirm or roll back first)");
+        return OTA_ERROR_ALREADY_IN_PROGRESS;
+    }
+#endif
+
+    /* Check and claim in one critical section so two transports can't both
+     * start (and erase under each other). */
     k_mutex_lock(&ota_mutex, K_FOREVER);
     enum ota_state cur = ota_status.state;
-    k_mutex_unlock(&ota_mutex);
 
-    if (cur != OTA_STATE_IDLE && cur != OTA_STATE_ERROR &&
-        cur != OTA_STATE_COMPLETE)
+    if (cur != OTA_STATE_IDLE && cur != OTA_STATE_ERROR)
     {
+        k_mutex_unlock(&ota_mutex);
+        if (cur == OTA_STATE_COMPLETE)
+        {
+            LOG_WRN("OTA refused: an update is staged; reboot to apply it first");
+        }
         return OTA_ERROR_ALREADY_IN_PROGRESS;
     }
 
@@ -998,7 +1027,6 @@ enum ota_result ota_start_update(size_t expected_size)
      * Clear any expected hash from a prior session here (synchronously, before
      * the worker starts) so the caller can set the new one right after this
      * returns without racing the worker thread. */
-    k_mutex_lock(&ota_mutex, K_FOREVER);
     ota_status.state = OTA_STATE_IN_PROGRESS;
     ota_expected_hash_set = false;
     memset(ota_expected_sha256, 0, sizeof(ota_expected_sha256));
@@ -1077,8 +1105,14 @@ enum ota_result ota_write_chunk(const uint8_t *data, size_t length)
  */
 enum ota_result ota_finalize_update(void)
 {
+    return ota_finalize_update_ex(false);
+}
+
+enum ota_result ota_finalize_update_ex(bool require_newer)
+{
     /* Drain any stale semaphore count from a previous error path */
     k_sem_take(&ota_done_sem, K_NO_WAIT);
+    ota_require_newer = require_newer;
 
     struct ota_cmd cmd = {.type = OTA_CMD_FINALIZE, .size = 0};
     int ret = k_msgq_put(&ota_cmd_q, &cmd, K_MSEC(100));

@@ -153,6 +153,12 @@ enum ota_result ota_write_chunk(const uint8_t *data, size_t length);
 enum ota_result ota_finalize_update(void);
 
 /**
+ * Like ota_finalize_update(); with @p require_newer the staged image must also
+ * be strictly newer (MCUboot header version) than the running image.
+ */
+enum ota_result ota_finalize_update_ex(bool require_newer);
+
+/**
  * @brief Abort ongoing OTA update
  *
  * @return ota_result code
