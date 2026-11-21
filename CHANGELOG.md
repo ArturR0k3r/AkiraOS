@@ -7,7 +7,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [1.7.0] — Unreleased
+## [1.7.1] — Unreleased
 
 ### Security
 Fixes from a STRIDE review of AkiraOS and AkiraPlatform (2026-11-21). Several change
@@ -92,6 +92,10 @@ behaviour; the breaking ones are marked **(breaking)**.
   job, and pins third-party actions. `west akira release` gains `--release` and `-D`.
 - `fix(settings)`: SD-mode key parsing bounds the namespace copy; the crash record's app
   name is terminated before it is printed.
+
+---
+
+## [1.7.0] — Not tagged (ships as part of 1.7.1)
 
 ### Added
 - `feat(security)`: App admission (`include/akira_admission.h`). Providers registered with

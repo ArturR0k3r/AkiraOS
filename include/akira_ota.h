@@ -64,7 +64,7 @@ int akira_ota_finish(void);
  * @param flags AKIRA_OTA_FINISH_* flags.
  * @return 0, -EBADMSG on a hash or image mismatch or an image that fails a
  *         flag's check, or negative errno.
- * @since 1.7
+ * @since 1.7.1
  */
 int akira_ota_finish_ex(uint32_t flags);
 
