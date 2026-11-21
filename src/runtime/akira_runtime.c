@@ -703,6 +703,7 @@ static int load_wasm_ex(const uint8_t *buffer, uint32_t size,
         .binary_sha256 = binary_hash,
         .manifest_sha256 = json_in_use ? manifest_hash : NULL,
         .manifest_embedded = manifest_from_binary,
+        .is_aot = memcmp(buffer, "\0aot", 4) == 0,
         .net_policy = manifest.valid ? &manifest.net_policy : NULL,
         .record = record,
     };

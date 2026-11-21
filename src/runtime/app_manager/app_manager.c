@@ -18,6 +18,7 @@
 #include "../../akira_platform_stubs.h"
 #include <akira_hooks.h>
 #include <akira_admission.h>
+#include <akira_apps.h>
 #include "../akira_abi_check.h"
 #include "../manifest_parser.h"
 #include <zephyr/fs/fs.h>
@@ -176,6 +177,7 @@ static app_entry_t *find_free_slot(void);
 static int validate_wasm(const void *binary, size_t size);
 static int save_app_binary(const char *name, const void *binary, size_t size);
 static int delete_app_binary(const char *name);
+static void purge_app_data(const char *name);
 static void set_app_state(app_entry_t *app, app_state_t new_state);
 static void restart_work_handler(struct k_work *work);
 static int ensure_dirs_exist(void);
@@ -351,9 +353,18 @@ static int admit_install(const char *app_name, const void *binary, size_t size,
         return -ENOMEM;
     }
 
-    bool parsed = manifest_parse_with_fallback((const uint8_t *)binary, size,
-                                               have_json ? x->json : NULL,
-                                               have_json ? x->json_len : 0, m) == 0;
+    /* Same rule as the load path (akira_runtime.c): the embedded manifest
+     * wins and the JSON is bound to the record only when it is the one in
+     * use, so INSTALL and LOAD hand providers the same manifest hash. */
+    manifest_init_defaults(m);
+    bool embedded = manifest_parse_wasm_section((const uint8_t *)binary, size, m) == 0;
+    bool parsed = embedded;
+    bool json_in_use = !embedded && have_json;
+    if (json_in_use)
+    {
+        manifest_init_defaults(m);
+        parsed = manifest_parse_json(x->json, x->json_len, m) == 0;
+    }
     if (parsed)
     {
         ret = akira_abi_check_default(m);
@@ -370,7 +381,7 @@ static int admit_install(const char *app_name, const void *binary, size_t size,
     rec->source = (uint8_t)source;
 
     ret = app_compute_hash(binary, size, rec->binary_sha256);
-    if (ret == 0 && have_json)
+    if (ret == 0 && json_in_use)
     {
         ret = app_compute_hash(x->json, x->json_len, mf_hash);
         memcpy(rec->manifest_sha256, mf_hash, sizeof(mf_hash));
@@ -388,9 +399,9 @@ static int admit_install(const char *app_name, const void *binary, size_t size,
         .version = parsed ? m->version : "",
         .requested_caps = parsed && m->valid ? m->cap_mask : 0,
         .binary_sha256 = rec->binary_sha256,
-        .manifest_sha256 = have_json ? rec->manifest_sha256 : NULL,
-        .manifest_embedded = manifest_parse_wasm_section((const uint8_t *)binary,
-                                                         size, m) == 0,
+        .manifest_sha256 = json_in_use ? rec->manifest_sha256 : NULL,
+        .manifest_embedded = embedded,
+        .is_aot = size >= 4 && memcmp(binary, "\0aot", 4) == 0,
         .net_policy = parsed ? &m->net_policy : NULL,
         .package_digest = x ? x->package_digest : NULL,
         .sig_ed25519 = x ? x->sig_ed25519 : NULL,
@@ -462,6 +473,16 @@ static int install_admitted(const char *name, const void *binary, size_t size,
                  crc32_ieee((const uint8_t *)binary, size > 256 ? 256 : size));
     }
 
+    /* The name becomes file names under APPS_DIR and the app's data folder:
+     * "x/../002_victim" would overwrite another app, "a/../../akp/policy" a
+     * platform file. Refuse rather than rewrite it. */
+    if (!akira_app_name_valid(app_name))
+    {
+        LOG_ERR("Invalid app name '%s' (allowed: [a-z0-9_.-], max %d)", app_name,
+                APP_NAME_MAX_LEN - 1);
+        return -EINVAL;
+    }
+
     /* Refuse an incompatible or unadmitted app before touching the registry. */
     struct akira_admission_result adm;
     struct akira_admission_record rec;
@@ -476,6 +497,26 @@ static int install_admitted(const char *name, const void *binary, size_t size,
 
     /* Check if already exists */
     app_entry_t *existing = find_app_by_name(app_name);
+
+    /* An update keeps the app's data folder, settings namespace and IPC
+     * topics, so it must come from whoever the installed app's signature
+     * named: an unsigned or differently signed package can't take over an
+     * attested app by reusing its name. */
+    if (existing)
+    {
+        struct akira_admission_record old;
+
+        if (record_load(existing->id, app_name, &old) == 0 && old.attested &&
+            (!rec.attested ||
+             memcmp(old.signer_id, rec.signer_id, sizeof(old.signer_id)) != 0))
+        {
+            k_mutex_unlock(&g_registry_mutex);
+            LOG_ERR("Refusing to replace attested app '%s' with one from a "
+                    "different signer", app_name);
+            return -EPERM;
+        }
+    }
+
     if (existing && existing->container_id >= 0)
     {
         /* Zero container_id under the lock first so a second concurrent install
@@ -753,6 +794,10 @@ int app_manager_uninstall(const char *name)
     /* Drop its private settings namespace, or stale namespaces use up the
      * all-apps key budget. */
     (void)akira_settings_app_purge(name);
+
+    /* And its data folder: the next app installed under this name must not
+     * inherit this one's files. */
+    purge_app_data(name);
 
     int uninstalled_id = app->id;
 
@@ -1391,6 +1436,12 @@ int app_manager_install_begin(const char *name, size_t total_size, app_source_t 
     {
         return -EINVAL;
     }
+    /* An empty name lets install_admitted() take the manifest name (which it
+     * validates); anything else must already be a valid name. */
+    if (name[0] != '\0' && !akira_app_name_valid(name))
+    {
+        return -EINVAL;
+    }
 
     if (total_size > CONFIG_AKIRA_APP_MAX_SIZE_KB * 1024)
     {
@@ -1422,7 +1473,8 @@ int app_manager_install_begin(const char *name, size_t total_size, app_source_t 
         return -ENOMEM;
     }
 
-    strncpy(g_sessions[session].name, name, APP_NAME_MAX_LEN);
+    strncpy(g_sessions[session].name, name, APP_NAME_MAX_LEN - 1);
+    g_sessions[session].name[APP_NAME_MAX_LEN - 1] = '\0';
     g_sessions[session].total_size = total_size;
     g_sessions[session].received = 0;
     g_sessions[session].source = source;
@@ -1874,6 +1926,83 @@ static int save_app_binary(const char *name, const void *binary, size_t size)
     return 0;
 }
 
+/* Remove @p dir and everything under it, at most @p depth levels deep.
+ * Re-opens the directory after each removal: deleting while iterating is not
+ * safe on every filesystem. */
+static void purge_tree(const char *dir, int depth)
+{
+    struct purge_work
+    {
+        struct fs_dir_t d;
+        struct fs_dirent e;
+        char child[APP_PATH_MAX_LEN];
+    } *w = akira_malloc_buffer(sizeof(*w));
+
+    if (!w)
+    {
+        return;
+    }
+    for (int guard = 0; guard < 512; guard++)
+    {
+        bool found = false;
+        bool is_dir = false;
+
+        fs_dir_t_init(&w->d);
+        if (fs_opendir(&w->d, dir) != 0)
+        {
+            break;
+        }
+        while (fs_readdir(&w->d, &w->e) == 0 && w->e.name[0])
+        {
+            if (strcmp(w->e.name, ".") == 0 || strcmp(w->e.name, "..") == 0)
+            {
+                continue;
+            }
+            int n = snprintf(w->child, sizeof(w->child), "%s/%s", dir, w->e.name);
+
+            found = n > 0 && (size_t)n < sizeof(w->child);
+            is_dir = w->e.type == FS_DIR_ENTRY_DIR;
+            break;
+        }
+        fs_closedir(&w->d);
+        if (!found)
+        {
+            break;
+        }
+        if (is_dir && depth > 0)
+        {
+            purge_tree(w->child, depth - 1);
+        }
+        if (fs_unlink(w->child) != 0)
+        {
+            LOG_WRN("Could not remove %s", w->child);
+            break;
+        }
+    }
+    akira_free_buffer(w);
+    (void)fs_unlink(dir);
+}
+
+static void purge_app_data(const char *name)
+{
+    static const char *const roots[] = { "/SD:/apps", APPS_DIR };
+    char dir[APP_PATH_MAX_LEN];
+
+    if (!akira_app_name_valid(name))
+    {
+        return;
+    }
+    for (size_t i = 0; i < ARRAY_SIZE(roots); i++)
+    {
+        int n = snprintf(dir, sizeof(dir), "%s/%s", roots[i], name);
+
+        if (n > 0 && (size_t)n < sizeof(dir) && fs_manager_exists(dir) == 1)
+        {
+            purge_tree(dir, 3);
+        }
+    }
+}
+
 static int delete_app_binary(const char *name)
 {
     app_entry_t *app = find_app_by_name(name);
@@ -2087,6 +2216,11 @@ int app_manager_run_from_sd(const char *name_or_path)
         }
     }
 
+    if (!akira_app_name_valid(name) || strstr(path, "..")) {
+        LOG_ERR("SD XIP: invalid app name or path: %s", path);
+        return -EINVAL;
+    }
+
     if (!fs_manager_exists(path)) {
         LOG_ERR("SD XIP: app not found on SD: %s", path);
         return -ENOENT;
@@ -2214,7 +2348,8 @@ int app_manager_install_akpkg(char *name, size_t name_size,
     if (!g_initialized) {
         return -ENODEV;
     }
-    if (!pkg || pkg_len == 0) {
+    /* A gzip member is at least 18 bytes (10 header + 8 trailer). */
+    if (!pkg || pkg_len < 18) {
         return -EINVAL;
     }
     if (!akpkg_is_gzip(pkg, pkg_len)) {
@@ -2348,8 +2483,6 @@ int app_manager_install_akpkg(char *name, size_t name_size,
     return app_id;
 }
 /* ===== Public façade (include/akira_apps.h) ===== */
-
-#include <akira_apps.h>
 
 BUILD_ASSERT((int)AKIRA_APP_SOURCE_FLEET == (int)APP_SOURCE_FLEET &&
              (int)AKIRA_APP_SOURCE_FIRMWARE == (int)APP_SOURCE_FIRMWARE,

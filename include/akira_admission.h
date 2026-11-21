@@ -128,6 +128,10 @@ struct akira_admission_ctx {
     const uint8_t *manifest_sha256;
     /** True if the binary carries an embedded .akira.manifest section. */
     bool manifest_embedded;
+    /** True if the binary is WAMR AOT (native machine code), not WASM
+     *  bytecode. The sandbox only confines AOT as far as its compiler did,
+     *  so a provider may refuse AOT from signers it does not trust with it. */
+    bool is_aot;
     /** The manifest's "network_policy" (present=false if none), or NULL. */
     const struct akira_net_policy_decl *net_policy;
 

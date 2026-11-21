@@ -149,7 +149,8 @@ extern "C" {
         AKIRA_CAP_WIFI_INJECT | AKIRA_CAP_OTA_TRIGGER | AKIRA_CAP_HID | \
         AKIRA_CAP_STORAGE_WRITE | AKIRA_CAP_FS_WRITE | AKIRA_CAP_SETTINGS | \
         AKIRA_CAP_CRYPTO | AKIRA_CAP_POWER_CTRL | AKIRA_CAP_MATTER | \
-        AKIRA_CAP_MQTT | AKIRA_CAP_WDT | AKIRA_CAP_MESH )
+        AKIRA_CAP_MQTT | AKIRA_CAP_WDT | AKIRA_CAP_MESH | \
+        AKIRA_CAP_APP_CONTROL | AKIRA_CAP_BLE_SPAM )
 
 /**
  * @brief Sanitize a capability mask that came from an app-supplied manifest.

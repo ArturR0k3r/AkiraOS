@@ -32,6 +32,37 @@ extern "C" {
 #endif
 #define AKIRA_APPS_VERSION_LEN 16
 
+/**
+ * @brief True if @p name is a valid app name.
+ *
+ * App names become file names (/lfs/apps/NNN_<name>.wasm, the app's data
+ * folder, its settings namespace and IPC topics), and FAT matches names
+ * case-insensitively and drops trailing dots. So a name is 1 to
+ * AKIRA_APPS_NAME_LEN - 1 characters from [a-z0-9_.-], starts with a letter or
+ * digit, does not end with '.', and has no "..". Install refuses any other
+ * name; nothing is truncated or rewritten.
+ */
+static inline bool akira_app_name_valid(const char *name)
+{
+    size_t n = 0;
+
+    if (!name) {
+        return false;
+    }
+    for (; n < AKIRA_APPS_NAME_LEN && name[n] != '\0'; n++) {
+        char c = name[n];
+        bool alnum = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+
+        if (n == 0 ? !alnum : !(alnum || c == '_' || c == '-' || c == '.')) {
+            return false;
+        }
+        if (c == '.' && name[n + 1] == '.') {
+            return false;
+        }
+    }
+    return n > 0 && n < AKIRA_APPS_NAME_LEN && name[n - 1] != '.';
+}
+
 /** App state. Values match the app manager's app_state_t. */
 enum akira_app_state {
     AKIRA_APP_STATE_NEW = 0,

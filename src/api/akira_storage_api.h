@@ -128,6 +128,7 @@ int akira_native_storage_list(wasm_exec_env_t exec_env,
 #include <zephyr/spinlock.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/util.h>
+#include <akira_apps.h>
 
 /** Longest path an app may pass (relative to its sandbox). */
 #define AKIRA_SANDBOX_REL_MAX 192
@@ -198,24 +199,17 @@ static inline void akira_sandbox_file_put(void)
 
 /**
  * The sandbox directory is named after the app, and the name comes from the
- * app's own manifest: it must be one plain path component.
+ * app's own manifest: it must be one plain path component. With an SD card the
+ * jail is on FAT, which matches names case-insensitively, drops trailing dots
+ * and spaces, and has 8.3 aliases ("WALLET~1"); only the install-time app name
+ * rule (lowercase [a-z0-9_.-], see akira_app_name_valid()) keeps two apps from
+ * sharing one folder.
  */
 static inline bool akira_sandbox_name_ok(const char *name)
 {
     size_t n = akira_sandbox_strnlen(name, AKIRA_SANDBOX_NAME_MAX);
 
-    if (n == 0 || n >= AKIRA_SANDBOX_NAME_MAX || strstr(name, "..") ||
-        (n == 1 && name[0] == '.')) {
-        return false;
-    }
-    for (size_t i = 0; i < n; i++) {
-        unsigned char c = (unsigned char)name[i];
-
-        if (c < 0x20 || c == 0x7f || c == '/' || c == '\\' || c == ':') {
-            return false;
-        }
-    }
-    return true;
+    return n > 0 && n < AKIRA_SANDBOX_NAME_MAX && akira_app_name_valid(name);
 }
 
 /**
