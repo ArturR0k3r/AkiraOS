@@ -9,6 +9,90 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [1.7.0] — Unreleased
 
+### Security
+Fixes from a STRIDE review of AkiraOS and AkiraPlatform (2026-11-21). Several change
+behaviour; the breaking ones are marked **(breaking)**.
+- `fix(bt)!`: The BLE companion service accepted commands from any unpaired device in radio
+  range, including `shell.exec`, file read/write anywhere on `/lfs`, settings read
+  (decrypted Wi-Fi PSK) and app install. Its characteristics, and BLE app transfer's, now
+  need an authenticated LE Secure Connections bond (`CONFIG_AKIRA_BT_SECURE_PAIRING`,
+  default y): outside HID mode the device pairs as DisplayOnly and raises the new
+  `AKIRA_HOOK_BT_PASSKEY_DISPLAY` / `AKIRA_HOOK_BT_PAIRING_DONE` hooks so the product can
+  show the passkey; Just Works pairing is refused there. HID mode keeps Just Works.
+  **(breaking)**: phones must re-pair with the passkey; products must show it.
+- `fix(bt)`: Companion `shell.exec` is behind `CONFIG_AKIRA_BT_COMPANION_SHELL` (off in
+  release builds). File operations are limited to `/lfs` and `/SD:` without `..`;
+  `/lfs/akp` is never readable and app storage (`/lfs/apps`, `/SD:/apps`) is never
+  writable over BLE. App names are validated before they name a staging file. Transfer
+  state is locked between the BT RX thread and the work queue (use-after-free on
+  disconnect), JSON builders no longer write past their buffers on truncation, file
+  writes are flushed off the BT thread, and advertising restarts after a disconnect.
+- `fix(bt)`: BLE app transfer frees its staging buffer after an install, drops a transfer
+  when its peer disconnects, reports a failed start, and never blocks the BT RX thread.
+  The echo service's hex dump no longer overflows its stack buffer.
+- `fix(settings)`: Encrypted settings never leave the device: `settings get` / `list` and the
+  BLE companion show `[ENCRYPTED]`. New `akira_settings_get_exportable()`.
+- `fix(release)!`: `akira-release` turns off `DEVMEM_SHELL` (Zephyr enables it whenever the
+  shell is full-size), `I2C_SHELL`, `GPIO_SHELL`, `FLASH_SHELL`, `FILE_SYSTEM_SHELL` and
+  `AKIRA_OTA_BLE`, and the release checks refuse them, `AKIRA_BT_COMPANION_SHELL`, BLE
+  management without secure pairing, and the published default
+  `AKIRA_SETTINGS_ENCRYPTION_KEY_HEX` when no settings key provider is built in. A USB HID
+  app handler is reported as an advisory. **(breaking)**: release builds need a product
+  settings key (`AKIRA_SETTINGS_KEY_HEX` for `build.sh`) or a key provider.
+- `fix(apps)!`: App names must be lowercase `[a-z0-9_.-]` (start with a letter or digit, no
+  `..`, no trailing dot, `akira_app_name_valid()`): a name such as `x/../002_victim` or
+  `acme/../../../akp/policy` wrote outside `/lfs/apps`, and FAT case folding or trailing
+  dots let two apps share a data folder. Install, streaming install, SD-XIP and the data
+  jail all apply the rule. **(breaking)** for apps with other names.
+- `fix(apps)`: Updating an attested app requires the same signer. Uninstalling an app
+  deletes its data folder. `app.control` and `ble.spam` join the privileged capabilities
+  hardened builds withhold from unattested apps.
+- `fix(ipc)`: `<app>.cmd` / `<app>.evt` belong to `<app>`: no other app can subscribe to or
+  publish on them, so an app can no longer read the commands the companion or a fleet hub
+  sends another app, or forge its replies. Apps cannot publish on `akira.*`.
+- `fix(runtime)`: The WASM and AOT custom-section scanners (manifest and integrity checks,
+  which run before admission) used `pos + size > total`, which wraps on 32-bit targets: a
+  crafted section size made the installer loop forever or read past the buffer. The tar
+  header name in `.akpkg` is bounded, and packages shorter than a gzip header are refused.
+- `fix(admission)`: INSTALL and LOAD now pass providers the same manifest hash (none when the
+  binary embeds `.akira.manifest`) and the manifest version at install is no longer lost;
+  signed packages with an embedded manifest were refused at load as "tampered". The
+  context gains `is_aot`.
+- `fix(ota)`: `ota_start_update()` refuses while an update is staged or the running image is
+  on trial (erasing the slot would destroy the rollback image) and claims the OTA state
+  atomically. New `akira_ota_finish_ex(AKIRA_OTA_FINISH_REQUIRE_NEWER)`; app-driven OTA
+  requires the staged MCUboot header to be newer instead of trusting the manifest's
+  version. Apps can no longer roll back during a trial boot or when downgrades are refused.
+  Firmware URLs with userinfo are refused (egress-policy bypass). `AKIRA_OTA_BLE` now
+  defaults to n.
+- `fix(mesh)!`: An RREP for a destination without a session no longer sends the mesh into an
+  endless re-queue/RREQ loop. DATA MACs now cover the header (all but the TTL) and are
+  checked against a per-session replay window, so frames can't be re-sent under a new
+  sequence number or reflected to their sender. **(breaking)**: wire version 2, not
+  compatible with version 1 nodes. Mesh identity keys are still not authenticated (see the
+  security docs). `mesh_init` no longer tears down another app's radio session, and
+  `mesh_get_nodes` / `mesh_get_stats` check the caller owns the mesh.
+- `fix(aiinfer)`: Models whose tensors don't match their buffers (declared shape larger than
+  the buffer, operator outputs or graph inputs backed by model data, unknown types) are
+  refused, and input/output tensors must lie in the arena: a crafted model let
+  `aiinfer_run()` copy past the model buffer into host memory.
+- `fix(http)`: State-changing routes refuse requests whose `Origin` the CORS policy doesn't
+  allow (cross-site and DNS-rebinding requests from a browser); `*.akiraos.dev` origins
+  must be https. The multipart parser searches only received bytes (out-of-bounds read),
+  connections time out, and a refused transfer start no longer leaves the transport busy.
+- `fix(se050)!`: `se050_object_exists()` returns 1 / 0 / negative errno instead of `bool`: a
+  failed exchange used to read as "absent", which let key generation overwrite a
+  provisioned object. The T=1' receive loop rejects empty chained blocks and bounds the
+  chain (a bus device could hang boot).
+- `fix(build)`: `build.sh` rebuilds before flashing when `--release` or `-k` is given (an
+  existing development build was flashed silently), checks the MCUboot it flashes, and
+  detects published development keys by public key, not file name. The release workflow
+  builds `akiraconsole_prod` with `--release`, fails instead of shipping unsigned images,
+  keeps the signing key out of steps that run third-party code, publishes from a separate
+  job, and pins third-party actions. `west akira release` gains `--release` and `-D`.
+- `fix(settings)`: SD-mode key parsing bounds the namespace copy; the crash record's app
+  name is terminated before it is printed.
+
 ### Added
 - `feat(security)`: App admission (`include/akira_admission.h`). Providers registered with
   `AKIRA_APP_ADMISSION_DEFINE()` see every install (HTTP, BLE, USB, SD, shell, fleet) with
