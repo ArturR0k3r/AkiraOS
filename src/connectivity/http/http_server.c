@@ -345,11 +345,27 @@ static bool origin_allowed_by_policy(const char *origin)
     if (strcmp(host, "localhost") == 0 || strcmp(host, "127.0.0.1") == 0 || strcmp(host, "::1") == 0)
         return true;
 
-    /* Allow any subdomain of akiraos.dev */
-    if (strcmp(host, "akiraos.dev") == 0 || host_ends_with(host, ".akiraos.dev"))
+    /* Allow akiraos.dev and its subdomains, over https only: a page served
+     * over plain http could be injected by anyone on the path. */
+    if ((strcmp(host, "akiraos.dev") == 0 || host_ends_with(host, ".akiraos.dev")) &&
+        strncmp(origin, "https://", 8) == 0)
         return true;
 
     return false;
+}
+
+bool http_server_origin_ok(const char *raw)
+{
+    char origin[256] = {0};
+
+    if (!raw)
+    {
+        return true;
+    }
+    extract_header_value(raw, "Origin:", origin, sizeof(origin));
+    /* Browsers send Origin on every POST/DELETE, cross-site "no-cors" ones
+     * and DNS-rebound pages included; tools such as akira-cli send none. */
+    return origin[0] == '\0' || origin_allowed_by_policy(origin);
 }
 
 /* Wrappers so handlers can call res->send/res->send_json without ctx param */
@@ -1120,6 +1136,12 @@ static void server_thread_fn(void *p1, void *p2, void *p3)
         }
 
         http_srv.stats.active_connections++;
+
+        /* One connection is served at a time: without a timeout a single
+         * idle client blocks the server forever. Handlers that stream a
+         * body set their own (longer) timeout. */
+        struct timeval rcv_tv = { .tv_sec = 10, .tv_usec = 0 };
+        (void)setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
 
         /* Read request */
         char buffer[HTTP_BUFFER_SIZE];

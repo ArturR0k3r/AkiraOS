@@ -91,6 +91,13 @@ static bool route_check_auth(const http_request_t *req)
  * changes device state (install, start, stop, delete, firmware) uses it. */
 static bool route_require_auth(const http_request_t *req, http_response_t *res)
 {
+    if (!http_server_origin_ok(req->raw))
+    {
+        res->status_code = 403;
+        res->content_type = HTTP_CONTENT_JSON;
+        res->body = "{\"error\":\"Origin not allowed\"}";
+        return false;
+    }
     if (route_check_auth(req))
     {
         return true;
@@ -434,11 +441,8 @@ static int route_app_install(const http_request_t *req, http_response_t *res,
     return 0;
 #else
 
-    if (!route_check_auth(req))
+    if (!route_require_auth(req, res))
     {
-        res->status_code = 401;
-        res->content_type = HTTP_CONTENT_JSON;
-        res->body = "{\"error\":\"Unauthorized\"}";
         return 0;
     }
 
@@ -578,11 +582,8 @@ static int route_firmware_upload(const http_request_t *req,
     res->body = "{\"error\":\"OTA not supported on this build\"}";
     return 0;
 #else
-    if (!route_check_auth(req))
+    if (!route_require_auth(req, res))
     {
-        res->status_code = 401;
-        res->content_type = HTTP_CONTENT_JSON;
-        res->body = "{\"error\":\"Unauthorized\"}";
         return 0;
     }
 
@@ -675,11 +676,13 @@ static int route_firmware_upload(const http_request_t *req,
 
         if (!past_part_header)
         {
-            const char *hdr_end = strstr(data_start, "\r\n\r\n");
+            /* Search only the bytes received (the body need not be
+             * NUL-terminated at body_len). */
+            const char *hdr_end = memmem(data_start, data_len, "\r\n\r\n", 4);
             if (hdr_end)
             {
                 hdr_end += 4;
-                data_len -= (hdr_end - data_start);
+                data_len -= (size_t)(hdr_end - data_start);
                 data_start = hdr_end;
                 past_part_header = true;
             }
@@ -732,7 +735,10 @@ static int route_firmware_upload(const http_request_t *req,
         /* Strip multipart part header on first recv if needed */
         if (!past_part_header)
         {
-            const char *hdr_end = strstr((const char *)ubuf->data, "\r\n\r\n");
+            /* ubuf is not NUL-terminated and keeps stale bytes from earlier
+             * fills past ubuf->len: strstr() could match there and make
+             * chunk_len underflow. Search exactly what this recv returned. */
+            const char *hdr_end = memmem(ubuf->data, ubuf->len, "\r\n\r\n", 4);
             if (hdr_end)
             {
                 hdr_end += 4;

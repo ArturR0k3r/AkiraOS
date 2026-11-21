@@ -302,7 +302,18 @@ int transport_begin(enum transport_data_type type,
         .name = name,
     };
 
-    return transport_notify(type, NULL, 0, &info);
+    int ret = transport_notify(type, NULL, 0, &info);
+
+    if (ret != 0) {
+        /* A handler refused the start (e.g. an OTA already running): don't
+         * leave the type marked busy, or every later transfer gets -EBUSY
+         * until reboot. */
+        k_mutex_lock(&transport_mutex, K_FOREVER);
+        registry[type].transfer_active = false;
+        registry[type].transfer_name = NULL;
+        k_mutex_unlock(&transport_mutex);
+    }
+    return ret;
 }
 
 int transport_end(enum transport_data_type type, bool success)

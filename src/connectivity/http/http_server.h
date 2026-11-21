@@ -168,6 +168,14 @@ extern "C"
     bool akira_http_server_is_running(void);
 
     /**
+     * @brief True if a request may change device state given its Origin:
+     * no Origin header (a non-browser client), or an origin the CORS policy
+     * allows. Refusing the rest stops cross-site and DNS-rebinding requests
+     * from a browser on the LAN.
+     */
+    bool http_server_origin_ok(const char *raw);
+
+    /**
      * @brief Register a route handler
      * @param route Route definition
      * @return 0 on success
