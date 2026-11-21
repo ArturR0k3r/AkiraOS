@@ -243,6 +243,18 @@ jobs:
           path: out
           merge-multiple: true
 
+      # Never publish (or overwrite) a release without firmware in it.
+      - name: Require artifacts
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(out/*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No board produced firmware: not publishing a release"
+            exit 1
+          fi
+          ls -l out
+
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: out/*
