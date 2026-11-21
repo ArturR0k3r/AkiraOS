@@ -136,6 +136,132 @@ static InferSlot *slot_owned(int handle, int owner)
     return s;
 }
 
+/* Bytes per element for the tensor types the registered kernels use; 0 for
+ * anything else (strings, packed int4, resources): such a model is refused. */
+static size_t tensor_type_size(tflite::TensorType t)
+{
+    switch (t) {
+    case tflite::TensorType_BOOL:
+    case tflite::TensorType_INT8:
+    case tflite::TensorType_UINT8:
+        return 1;
+    case tflite::TensorType_INT16:
+    case tflite::TensorType_UINT16:
+    case tflite::TensorType_FLOAT16:
+        return 2;
+    case tflite::TensorType_INT32:
+    case tflite::TensorType_UINT32:
+    case tflite::TensorType_FLOAT32:
+        return 4;
+    case tflite::TensorType_INT64:
+    case tflite::TensorType_UINT64:
+    case tflite::TensorType_FLOAT64:
+        return 8;
+    default:
+        return 0;
+    }
+}
+
+static bool tensor_is_constant(const tflite::Model *model, const tflite::Tensor *t)
+{
+    const tflite::Buffer *b = model->buffers()->Get(t->buffer());
+
+    return b && b->data() && b->data()->size() > 0;
+}
+
+/* The flatbuffer verifier only proves the offsets are in bounds. TFLM then
+ * trusts the model: a tensor backed by a model buffer gets its byte size from
+ * its declared shape, never from the buffer, and is used in place. So an app
+ * could declare a 1-byte buffer with shape [N] and have aiinfer_run() (or a
+ * kernel writing an operator output) copy N bytes past the model copy into
+ * host memory, or read host memory back. Refuse such models up front. */
+static bool model_tensors_sane(const tflite::Model *model)
+{
+    const auto *buffers = model->buffers();
+    const auto *subgraphs = model->subgraphs();
+
+    if (!buffers || !subgraphs) {
+        return false;
+    }
+    for (const tflite::SubGraph *sg : *subgraphs) {
+        const auto *tensors = sg ? sg->tensors() : nullptr;
+
+        if (!tensors) {
+            return false;
+        }
+        for (const tflite::Tensor *t : *tensors) {
+            if (!t || t->buffer() >= buffers->size()) {
+                return false;
+            }
+            const tflite::Buffer *b = buffers->Get(t->buffer());
+
+            if (b && b->offset() != 0) {
+                return false; /* external (>2 GB layout) buffers: never ours */
+            }
+            if (!tensor_is_constant(model, t)) {
+                continue;
+            }
+            size_t esize = tensor_type_size(t->type());
+            uint64_t need = esize;
+
+            if (esize == 0) {
+                return false;
+            }
+            if (t->shape()) {
+                for (int32_t dim : *t->shape()) {
+                    if (dim < 0 || (dim != 0 && need > UINT32_MAX / (uint32_t)dim)) {
+                        return false;
+                    }
+                    need *= (uint32_t)dim;
+                }
+            }
+            if (b->data()->size() < need) {
+                return false;
+            }
+        }
+        /* Graph inputs and operator outputs are written at run time: they
+         * must live in the arena, not alias the (read-only) model data. */
+        const auto *ins = sg->inputs();
+        const auto *outs = sg->outputs();
+        const auto *ops = sg->operators();
+        auto writable_ok = [&](const flatbuffers::Vector<int32_t> *v) {
+            if (!v) {
+                return true;
+            }
+            for (int32_t idx : *v) {
+                if (idx < 0) {
+                    continue; /* optional tensor */
+                }
+                if ((uint32_t)idx >= tensors->size() ||
+                    tensor_is_constant(model, tensors->Get(idx))) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        if (!writable_ok(ins) || !writable_ok(outs)) {
+            return false;
+        }
+        if (ops) {
+            for (const tflite::Operator *op : *ops) {
+                if (!op || !writable_ok(op->outputs())) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+/* True if [p, p + n) lies inside this slot's arena. */
+static bool in_arena(const InferSlot *s, const void *p, size_t n)
+{
+    uintptr_t a = (uintptr_t)s->arena;
+    uintptr_t q = (uintptr_t)p;
+
+    return p && q >= a && n <= sizeof(s->arena) && q - a <= sizeof(s->arena) - n;
+}
+
 /* Build the interpreter for the model already copied into @p s.  Runs
  * without the mutex: only the claiming app touches a loading slot. */
 static int slot_build(InferSlot *s)
@@ -152,6 +278,10 @@ static int slot_build(InferSlot *s)
     if (model->version() != TFLITE_SCHEMA_VERSION) {
         LOG_WRN_RATELIMIT("aiinfer_load: schema version mismatch (%u != %u)",
                           (unsigned)model->version(), TFLITE_SCHEMA_VERSION);
+        return AIINFER_ERR_INVALID;
+    }
+    if (!model_tensors_sane(model)) {
+        LOG_WRN_RATELIMIT("aiinfer_load: model tensors do not match their buffers");
         return AIINFER_ERR_INVALID;
     }
 
@@ -174,6 +304,16 @@ static int slot_build(InferSlot *s)
     if (s->interpreter->AllocateTensors() != kTfLiteOk) {
         LOG_WRN_RATELIMIT("aiinfer_load: AllocateTensors failed (arena too small?)");
         return AIINFER_ERR_NOMEM;
+    }
+
+    /* aiinfer_run() copies app data into input 0 and out of output 0: both
+     * must be arena memory of exactly their size. */
+    TfLiteTensor *in = s->interpreter->input(0);
+    TfLiteTensor *out = s->interpreter->output(0);
+    if (!in || !out || !in_arena(s, in->data.raw, in->bytes) ||
+        !in_arena(s, out->data.raw, out->bytes)) {
+        LOG_WRN_RATELIMIT("aiinfer_load: model I/O tensors are not in the arena");
+        return AIINFER_ERR_INVALID;
     }
     return AIINFER_OK;
 }
