@@ -43,6 +43,49 @@ static int caller_slot(wasm_exec_env_t exec_env)
     return slot >= 0 ? slot : -EINVAL;
 }
 
+/* Topic ownership. "<app>.cmd" carries commands from the system (BLE
+ * companion, fleet hub) to <app>, and the first message on "<app>.evt" is
+ * taken as <app>'s reply (app_cmd_bridge.c). "akira.*" is system-only (e.g.
+ * akira.lifecycle). So an app may:
+ *   - subscribe to its own .cmd/.evt, but no other app's;
+ *   - publish to its own .cmd/.evt, but no other app's, and never to akira.*.
+ * Everything else stays an open, app-chosen topic. */
+static bool topic_has_suffix(const char *topic, size_t tlen, const char *sfx,
+                 size_t *prefix_len)
+{
+    size_t slen = strlen(sfx);
+
+    if (tlen <= slen || strcmp(topic + tlen - slen, sfx) != 0) {
+        return false;
+    }
+    *prefix_len = tlen - slen;
+    return true;
+}
+
+static bool topic_allowed(wasm_exec_env_t exec_env, const char *topic, bool publish)
+{
+    size_t tlen = strnlen(topic, AKIRA_IPC_TOPIC_NAME_MAX + 1);
+    size_t plen;
+
+    if (tlen > AKIRA_IPC_TOPIC_NAME_MAX) {
+        return true; /* akira_ipc rejects it with its own error */
+    }
+    if (strncmp(topic, "akira.", 6) == 0) {
+        return !publish;
+    }
+    if (!topic_has_suffix(topic, tlen, ".cmd", &plen) &&
+        !topic_has_suffix(topic, tlen, ".evt", &plen)) {
+        return true;
+    }
+
+    char self[AKIRA_IPC_APP_NAME_MAX];
+
+    if (akira_app_self_name(exec_env, self, sizeof(self)) != 0) {
+        return false;
+    }
+    return strlen(self) == plen && strncmp(topic, self, plen) == 0;
+}
+
 /* ── WASM Exports ──────────────────────────────────────────────────────────
  * Every akira_ipc_* call takes the IPC mutex: each is bracketed as a native
  * critical section so a stop never aborts the app while it holds it. */
@@ -58,6 +101,11 @@ int akira_native_msg_subscribe(wasm_exec_env_t exec_env, const char *topic)
     int slot = caller_slot(exec_env);
     if (slot < 0) {
         return slot;
+    }
+
+    if (!topic_allowed(exec_env, topic, false)) {
+        LOG_WRN_RATELIMIT("msg_subscribe: topic '%s' belongs to another app", topic);
+        return -EACCES;
     }
 
     char caller[AKIRA_IPC_APP_NAME_MAX];
@@ -100,6 +148,12 @@ int akira_native_msg_publish(wasm_exec_env_t exec_env,
 
     if (len == 0 || len > CONFIG_AKIRA_IPC_MSG_MAX_SIZE) {
         return -EMSGSIZE;
+    }
+
+    if (!topic_allowed(exec_env, topic, true)) {
+        LOG_WRN_RATELIMIT("msg_publish: topic '%s' belongs to another app or the system",
+                          topic);
+        return -EACCES;
     }
 
     /* Validates the whole [data_ptr, data_ptr + len) range. */
