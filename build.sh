@@ -50,6 +50,7 @@ CLEAN_BUILD=false
 FULL_CLEAN=false
 ENABLE_PLATFORM=false
 SIGN_KEY=""               # product firmware signing key (PEM), -k
+SIGN_KEY_PUBLISHED=false  # -k names a key published with MCUboot/Zephyr
 RELEASE_BUILD=false       # --release
 PORT=""
 BAUD="921600"
@@ -298,6 +299,28 @@ mcuboot_signature_options() {
     echo "-DCONFIG_BOOT_SIGNATURE_KEY_FILE=\"$key\""
 }
 
+# SHA-256 of a key's public half (DER), or nothing if openssl can't read it.
+pubkey_fingerprint() {
+    openssl pkey -in "$1" -pubout -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1
+}
+
+# True if key $1 is (a copy of) a key published with MCUboot or Zephyr: the
+# sample root-*.pem keys, the imgtool test keys and the like. Compared by public
+# key, not file name, so a renamed copy is still caught.
+is_published_dev_key() {
+    local fp
+    fp="$(pubkey_fingerprint "$1")"
+    [[ -n "$fp" && "$fp" != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ]] || return 1
+    local pem
+    while IFS= read -r -d '' pem; do
+        if [[ "$(pubkey_fingerprint "$pem")" == "$fp" ]]; then
+            return 0
+        fi
+    done < <(find "$WORKSPACE_ROOT/bootloader/mcuboot" "$WORKSPACE_ROOT/zephyr/samples" \
+                  "$WORKSPACE_ROOT/modules/crypto" -name '*.pem' -print0 2>/dev/null)
+    return 1
+}
+
 # Check the built MCUboot enforces signed, non-downgrading updates. Fatal for
 # --release builds, a warning otherwise.
 check_mcuboot_secure_update() {
@@ -465,6 +488,16 @@ build_application() {
     if [[ "$RELEASE_BUILD" == true ]]; then
         extra_cmake+=" -DSNIPPET=akira-release"
         print_info "Release build (akira-release snippet): development-only settings are errors"
+    fi
+    # Product settings-encryption key (64 hex digits), from the environment so
+    # it stays out of shell history and process listings of build.sh itself.
+    if [[ -n "${AKIRA_SETTINGS_KEY_HEX:-}" ]]; then
+        if [[ ! "$AKIRA_SETTINGS_KEY_HEX" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            print_error "AKIRA_SETTINGS_KEY_HEX must be 64 hex digits"
+            exit 1
+        fi
+        extra_cmake+=" -DCONFIG_AKIRA_SETTINGS_ENCRYPTION_KEY_HEX=\"$AKIRA_SETTINGS_KEY_HEX\""
+        print_info "Settings encryption key: from AKIRA_SETTINGS_KEY_HEX"
     fi
 
     if west build --pristine -b "$zephyr_board" AkiraOS -d "$build_dir" -- $extra_cmake; then
@@ -932,6 +965,10 @@ parse_args() {
                     exit 1
                 fi
                 SIGN_KEY="$(realpath "$2")"
+                if is_published_dev_key "$SIGN_KEY"; then
+                    print_warning "Signing key $2 is a published development key: anyone can sign images for it"
+                    SIGN_KEY_PUBLISHED=true
+                fi
                 shift 2
                 ;;
             --release)
@@ -990,13 +1027,29 @@ main() {
         fi
     fi
     
+    if [[ "$RELEASE_BUILD" == true && "$SIGN_KEY_PUBLISHED" == true ]]; then
+        print_error "Release build blocked: the signing key is a published development key"
+        exit 1
+    fi
+
     # Only flash (no build)
     if [[ -n "$FLASH_TARGET" && -z "$BUILD_BOOTLOADER" && "$CLEAN_BUILD" != true ]]; then
-        # Check if we need to build first
+        # Check if we need to build first. A release or signed flash always
+        # rebuilds: an existing build dir may be a development build, and
+        # flashing it would silently skip --release and -k.
         local build_dir=$(get_build_dir)
-        if [[ ! -d "$build_dir" ]]; then
-            print_info "No existing build found, building first..."
+        if [[ ! -d "$build_dir" || "$RELEASE_BUILD" == true || -n "$SIGN_KEY" ]]; then
+            [[ -d "$build_dir" ]] || print_info "No existing build found, building first..."
             build_application
+        fi
+        if [[ "$FLASH_TARGET" == "b" || "$FLASH_TARGET" == "all" ]]; then
+            # The bootloader is flashed from an earlier -bl build: check it.
+            check_mcuboot_secure_update "$(get_mcuboot_build_dir)"
+        fi
+        if [[ "$RELEASE_BUILD" == true ]] &&
+           ! grep -q "^CONFIG_AKIRA_RELEASE_BUILD=y" "$build_dir/zephyr/.config" 2>/dev/null; then
+            print_error "Release flash blocked: $build_dir is not a release build"
+            exit 1
         fi
         flash_board
         exit 0

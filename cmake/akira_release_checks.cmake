@@ -88,6 +88,42 @@ if(CONFIG_AKIRA_SHELL_DEBUG_COMMANDS)
   list(APPEND _akira_findings
     "CONFIG_AKIRA_SHELL_DEBUG_COMMANDS=y - `debug memdump` reads arbitrary memory")
 endif()
+# Zephyr shell modules that give a console (or BLE companion) user raw access.
+foreach(_akira_sh DEVMEM_SHELL I2C_SHELL GPIO_SHELL FLASH_SHELL FILE_SYSTEM_SHELL)
+  if(CONFIG_${_akira_sh})
+    list(APPEND _akira_findings
+      "CONFIG_${_akira_sh}=y - the shell (no login) gets raw memory, bus, pin, flash or file access")
+  endif()
+endforeach()
+
+# --- Bluetooth management ---------------------------------------------------
+if(CONFIG_AKIRA_BT_COMPANION_SHELL)
+  list(APPEND _akira_findings
+    "CONFIG_AKIRA_BT_COMPANION_SHELL=y - the BLE companion runs any shell command")
+endif()
+if((CONFIG_AKIRA_BT_COMPANION OR CONFIG_AKIRA_APP_SOURCE_BLE) AND NOT CONFIG_AKIRA_BT_SECURE_PAIRING)
+  list(APPEND _akira_findings
+    "CONFIG_AKIRA_BT_SECURE_PAIRING is not set - the BLE companion / app transfer accept unpaired or Just Works peers")
+endif()
+if(CONFIG_AKIRA_OTA_BLE)
+  list(APPEND _akira_findings
+    "CONFIG_AKIRA_OTA_BLE=y - any paired BLE peer can erase the update slot (no image hash, no sender check)")
+endif()
+
+# --- Settings encryption ----------------------------------------------------
+# The default base key is public; mixing in the device ID (readable over the
+# download port, BLE address, `akira version`) does not make it secret. Without
+# a key provider (AkiraPlatform keystore, eFuse/secure element) every unit's
+# encrypted settings - Wi-Fi PSK, broker password, mesh key - are readable
+# from a flash dump.
+if(CONFIG_AKIRA_SETTINGS_ENCRYPTION AND NOT CONFIG_AKIRA_PLATFORM_SETTINGS_KEY)
+  _akira_release_bare_string(CONFIG_AKIRA_SETTINGS_ENCRYPTION_KEY_HEX _akira_skey)
+  string(TOLOWER "${_akira_skey}" _akira_skey)
+  if(_akira_skey STREQUAL "c3c3a4e60f1991e85d7796890710e99338a4c5ac93bffc5c03dcf662bfcf9dee")
+    list(APPEND _akira_findings
+      "CONFIG_AKIRA_SETTINGS_ENCRYPTION_KEY_HEX is the published default - set a product key (and enable flash encryption) or use a settings key provider")
+  endif()
+endif()
 
 # Advisories: printed in release builds, never fatal. They need a deployment
 # decision rather than a code change (see docs/compliance/sesip-evaluated-configuration.md).
@@ -95,6 +131,10 @@ set(_akira_advisories "")
 if(CONFIG_SHELL)
   list(APPEND _akira_advisories
     "CONFIG_SHELL=y - the serial/USB shell has no login, so turn it off or lock the port in production")
+endif()
+if(CONFIG_AKIRA_HID_APP_HANDLER)
+  list(APPEND _akira_advisories
+    "CONFIG_AKIRA_HID_APP_HANDLER=y - any USB host (a PC, a hostile charger) can install, start, stop and delete apps without confirmation")
 endif()
 if(CONFIG_AKIRA_RELEASE_BUILD AND _akira_advisories)
   list(JOIN _akira_advisories "\n  - " _akira_advisory_text)

@@ -63,6 +63,11 @@ class Akira(WestCommand):
         p.add_argument("-s", "--source-dir", default=".", help="application source dir")
         p.add_argument("-k", "--key", help="MCUboot signing key (PEM); unsigned if omitted")
         p.add_argument("-o", "--out", default="dist", help="output directory (default: dist/)")
+        p.add_argument("--release", action="store_true",
+                       help="apply the akira-release snippet: configuration fails on "
+                            "development-only security settings")
+        p.add_argument("-D", dest="defines", action="append", default=[], metavar="VAR=VALUE",
+                       help="extra CMake/Kconfig definition, e.g. -D CONFIG_FOO=y (repeatable)")
 
         return parser
 
@@ -164,8 +169,15 @@ class Akira(WestCommand):
         out.mkdir(parents=True, exist_ok=True)
         bd = out / "build"
         log.inf(f"Building {args.source_dir} for {args.board}")
-        self.check_call(["west", "build", "-b", args.board, args.source_dir,
-                         "-d", str(bd), "--pristine"])
+        cmd = ["west", "build", "-b", args.board, args.source_dir, "-d", str(bd), "--pristine"]
+        if args.release:
+            cmd += ["-S", "akira-release"]
+        else:
+            log.wrn("no --release: development build (debug commands, relaxed app "
+                    "and update policy) - do not ship it")
+        if args.defines:
+            cmd += ["--"] + [f"-D{d}" for d in args.defines]
+        self.check_call(cmd)
         if args.key:
             self.check_call(["west", "sign", "-d", str(bd), "-t", "imgtool",
                              "--", "--key", args.key])

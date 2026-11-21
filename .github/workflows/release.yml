@@ -6,13 +6,20 @@
 # only), writes a per-board CycloneDX SBOM, and uploads everything to the
 # GitHub release. Artifact names carry the board slug so matrix jobs do not
 # overwrite each other on the release.
+#
+# Boards with `release: true` are built with the akira-release snippet (the
+# SESIP evaluated configuration); the others are development images.
+#
+# Key handling: the signing key exists only inside the build steps (0600 file,
+# removed on exit), no third-party code runs while it is on disk, and the job
+# that holds it cannot write to the repository - publishing is a separate job.
 name: release
 on:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   firmware:
@@ -34,6 +41,7 @@ jobs:
             slug: akiraconsole_prod
             blobs: true
             sign: true
+            release: true
             esp_chip: esp32s3
             build_alias: akiraconsole_prod
           - board: esp32s3_devkitm/esp32s3/procpu
@@ -51,10 +59,11 @@ jobs:
             blobs: false
             sign: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: akira-os
           submodules: recursive
+          persist-credentials: false
 
       - name: West workspace
         working-directory: akira-os
@@ -68,26 +77,34 @@ jobs:
         working-directory: akira-os
         run: west blobs fetch hal_espressif
 
-      - name: Provision signing key
-        if: matrix.sign
-        env:
-          MCUBOOT_KEY_PEM: ${{ secrets.MCUBOOT_KEY_PEM }}
-        run: printf '%s' "$MCUBOOT_KEY_PEM" > akira-os/mcuboot-signing.pem
-
       - name: Build + sign + SBOM
         working-directory: akira-os
         env:
           BOARD: ${{ matrix.board }}
           SIGN: ${{ matrix.sign }}
+          RELEASE: ${{ matrix.release }}
+          MCUBOOT_KEY_PEM: ${{ secrets.MCUBOOT_KEY_PEM }}
+        shell: bash
         run: |
-          KEY=""
-          if [ "$SIGN" = "true" ] && [ -s mcuboot-signing.pem ]; then
-            KEY="-k mcuboot-signing.pem"
-          elif [ "$SIGN" = "true" ]; then
-            echo "::warning::MCUBOOT_KEY_PEM not set — shipping an UNSIGNED ${BOARD} image"
+          set -eu
+          umask 077
+          trap 'rm -f mcuboot-signing.pem' EXIT
+          args=(-b "$BOARD" -s . -o dist)
+          if [ "$SIGN" = "true" ]; then
+            if [ -z "${MCUBOOT_KEY_PEM:-}" ]; then
+              echo "::error::MCUBOOT_KEY_PEM is not set: refusing to publish an unsigned ${BOARD} image"
+              exit 1
+            fi
+            printf '%s' "$MCUBOOT_KEY_PEM" > mcuboot-signing.pem
+            args+=(-k mcuboot-signing.pem)
           fi
-          west akira release -b "$BOARD" -s . -o dist $KEY
-          rm -f mcuboot-signing.pem
+          if [ "$RELEASE" = "true" ]; then
+            # Public reference image: its settings key is in the published
+            # binary either way, so this only avoids sharing the repository's
+            # default key. Products need a key provider (see SESIP doc).
+            args+=(--release -D "CONFIG_AKIRA_SETTINGS_ENCRYPTION_KEY_HEX=\"$(openssl rand -hex 32)\"")
+          fi
+          west akira release "${args[@]}"
 
       - name: Rename artifacts with the board slug
         working-directory: akira-os
@@ -115,27 +132,48 @@ jobs:
       # docs.akiraos.dev/flash. Named without the tag so the page's
       # releases/latest/download/akiraos-<slug>-flash.bin link stays stable. Best effort:
       # a failure here must not block the rest of the release.
-      - name: Merged flash image (ESP boards)
+      - name: Build MCUboot + app for the merged image (ESP boards)
+        id: merged_build
         if: matrix.esp_chip
         continue-on-error: true
         working-directory: akira-os
         env:
           MCUBOOT_KEY_PEM: ${{ secrets.MCUBOOT_KEY_PEM }}
-          CHIP: ${{ matrix.esp_chip }}
           ALIAS: ${{ matrix.build_alias }}
           SIGN: ${{ matrix.sign }}
-          SLUG: ${{ matrix.slug }}
+          RELEASE: ${{ matrix.release }}
         run: |
           set -eu
-          pip install --quiet esptool
+          umask 077
+          trap 'rm -f mcuboot-signing.pem' EXIT
           KEY=""
-          if [ "$SIGN" = "true" ] && [ -n "${MCUBOOT_KEY_PEM:-}" ]; then
+          if [ "$SIGN" = "true" ]; then
             printf '%s' "$MCUBOOT_KEY_PEM" > mcuboot-signing.pem
             KEY="-k mcuboot-signing.pem"
           fi
+          REL=""
+          if [ "$RELEASE" = "true" ]; then
+            REL="--release"
+            # See the note on the settings key in the build step above.
+            AKIRA_SETTINGS_KEY_HEX="$(openssl rand -hex 32)"
+            export AKIRA_SETTINGS_KEY_HEX
+          fi
           # Build MCUboot + app with the board's real snippets/overlays/offsets.
-          ./build.sh -b "$ALIAS" -bl y $KEY
-          rm -f mcuboot-signing.pem
+          ./build.sh -b "$ALIAS" -bl y $KEY $REL
+
+      # esptool comes from PyPI: installed only after the key is gone, in a step
+      # that gets no secrets.
+      - name: Merged flash image (ESP boards)
+        if: matrix.esp_chip && steps.merged_build.outcome == 'success'
+        continue-on-error: true
+        working-directory: akira-os
+        env:
+          CHIP: ${{ matrix.esp_chip }}
+          SLUG: ${{ matrix.slug }}
+        run: |
+          set -eu
+          [ ! -e mcuboot-signing.pem ]
+          pip install --quiet "esptool==4.8.1"
           boot=$(find .. -path '*build-mcuboot*/zephyr/zephyr.bin' | head -1)
           app=$(find .. -path '*/zephyr/zephyr.signed.bin' -not -path '*mcuboot*' | head -1)
           [ -n "$app" ] || app=$(find .. -path '*/zephyr/zephyr.bin' -not -path '*mcuboot*' -not -path '*/dist/*' | head -1)
@@ -146,6 +184,26 @@ jobs:
           ( cd out && sha256sum "akiraos-${SLUG}-flash.bin" >> "SHA256SUMS-${SLUG}.txt" )
           ls -l out
 
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          files: akira-os/out/*
+          name: firmware-${{ matrix.slug }}
+          path: akira-os/out/*
+          if-no-files-found: error
+
+  # Only this job can write to the repository, and it never sees a key.
+  publish:
+    needs: firmware
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: firmware-*
+          path: out
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: out/*

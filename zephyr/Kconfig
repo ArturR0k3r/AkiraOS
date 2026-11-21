@@ -2106,12 +2106,14 @@ config AKIRA_APP_SIGNING
       Uses mbedTLS SHA-256 + RSA-2048 or Ed25519.
 
 config AKIRA_ALLOW_UNSIGNED_APPS
-    bool "Allow unsigned WASM apps (development only)"
+    bool "Allow unsigned WASM apps (legacy, development only)"
     default n
     help
-      When set, unsigned apps are loaded with a warning instead of being
-      rejected. Set y only in development builds — never in production.
-      Checked directly in app_signing_v2.c; independent of AKIRA_APP_SIGNING.
+      Legacy switch of the pre-1.7 RSA verifier (app_verify_signature()),
+      which no install or load path calls any more: it does not change what
+      runs. Unsigned apps are governed by AKIRA_REQUIRE_SIGNED_APPS (refuse
+      them) and AKIRA_HARDEN_UNATTESTED_APPS (no privileged capabilities).
+      Kept so the release checks still refuse configurations that ask for it.
 
 config AKIRA_APP_PUBKEY
     string "OEM app signing key (Ed25519 public key, 64 hex digits)"
