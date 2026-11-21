@@ -239,23 +239,37 @@ static void security_changed_cb(struct bt_conn *conn, bt_security_t level,
     }
 }
 
-/* Pairing.
+/* Pairing (CONFIG_AKIRA_BT_MGMT_PAIRING_*).
  *
- * HID mode: NoInputNoOutput (Just Works), which every HID host accepts.
- * pairing_confirm MUST be provided and call bt_conn_auth_pairing_confirm()
- * otherwise Zephyr leaves the pairing request unanswered and iOS times out
- * showing "Pairing Unsuccessful".
+ * HID mode, and every mode unless PASSKEY is chosen: NoInputNoOutput (Just
+ * Works), which every HID host accepts. pairing_confirm MUST be provided and
+ * call bt_conn_auth_pairing_confirm() otherwise Zephyr leaves the pairing
+ * request unanswered and iOS times out showing "Pairing Unsuccessful".
+ * With JUST_WORKS and AKIRA_BT_MGMT_PAIRING_WINDOW_S, management modes accept
+ * new pairings only that long after boot.
  *
- * Every other mode with CONFIG_AKIRA_BT_SECURE_PAIRING: DisplayOnly. The
- * device shows a six-digit passkey (AKIRA_HOOK_BT_PASSKEY_DISPLAY) that the
- * user types on the phone, giving an authenticated LE Secure Connections bond
- * - the only kind the companion and app-transfer services accept. Just Works
- * is refused there: it authenticates nobody, and with one bond slot it would
- * let any passer-by evict the owner's bond. */
+ * PASSKEY, every mode but HID: DisplayOnly. The device shows a six-digit
+ * passkey (AKIRA_HOOK_BT_PASSKEY_DISPLAY) that the user types on the phone,
+ * giving an authenticated LE Secure Connections bond - the only kind the
+ * companion and app-transfer services then accept. Just Works is refused
+ * there: it authenticates nobody, and with one bond slot it would let any
+ * passer-by evict the owner's bond. */
 static void auth_pairing_confirm(struct bt_conn *conn)
 {
     char addr[BT_ADDR_LE_STR_LEN];
     bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+
+#if defined(CONFIG_AKIRA_BT_MGMT_PAIRING_JUST_WORKS) && CONFIG_AKIRA_BT_MGMT_PAIRING_WINDOW_S > 0
+    if (bt_mgr.mode != BT_MODE_HID &&
+        k_uptime_get() > (int64_t)CONFIG_AKIRA_BT_MGMT_PAIRING_WINDOW_S * MSEC_PER_SEC)
+    {
+        LOG_WRN("Refusing pairing from %s: the pairing window (%d s after boot) "
+                "is closed; power-cycle the device to pair", addr,
+                CONFIG_AKIRA_BT_MGMT_PAIRING_WINDOW_S);
+        bt_conn_auth_cancel(conn);
+        return;
+    }
+#endif
     LOG_INF("Pairing confirm (just-works): %s — accepting", addr);
     bt_conn_auth_pairing_confirm(conn);
 }

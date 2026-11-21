@@ -101,9 +101,10 @@ if(CONFIG_AKIRA_BT_COMPANION_SHELL)
   list(APPEND _akira_findings
     "CONFIG_AKIRA_BT_COMPANION_SHELL=y - the BLE companion runs any shell command")
 endif()
-if((CONFIG_AKIRA_BT_COMPANION OR CONFIG_AKIRA_APP_SOURCE_BLE) AND NOT CONFIG_AKIRA_BT_SECURE_PAIRING)
+if((CONFIG_AKIRA_BT_COMPANION OR CONFIG_AKIRA_APP_SOURCE_BLE) AND
+   NOT CONFIG_AKIRA_BT_MGMT_PAIRING_PASSKEY AND NOT CONFIG_AKIRA_BT_MGMT_PAIRING_JUST_WORKS)
   list(APPEND _akira_findings
-    "CONFIG_AKIRA_BT_SECURE_PAIRING is not set - the BLE companion / app transfer accept unpaired or Just Works peers")
+    "CONFIG_AKIRA_BT_MGMT_PAIRING_PASSKEY or _JUST_WORKS is not set - the BLE companion accepts commands with no pairing at all")
 endif()
 if(CONFIG_AKIRA_OTA_BLE)
   list(APPEND _akira_findings
@@ -131,6 +132,15 @@ set(_akira_advisories "")
 if(CONFIG_SHELL)
   list(APPEND _akira_advisories
     "CONFIG_SHELL=y - the serial/USB shell has no login, so turn it off or lock the port in production")
+endif()
+if((CONFIG_AKIRA_BT_COMPANION OR CONFIG_AKIRA_APP_SOURCE_BLE) AND CONFIG_AKIRA_BT_MGMT_PAIRING_JUST_WORKS)
+  if(CONFIG_AKIRA_BT_MGMT_PAIRING_WINDOW_S GREATER 0)
+    set(_akira_jw_window "new pairings only ${CONFIG_AKIRA_BT_MGMT_PAIRING_WINDOW_S} s after boot")
+  else()
+    set(_akira_jw_window "no pairing window, so at any time")
+  endif()
+  list(APPEND _akira_advisories
+    "CONFIG_AKIRA_BT_MGMT_PAIRING_JUST_WORKS=y - any device in BLE range can pair (${_akira_jw_window}) and manage apps, files and settings; use _PASSKEY on devices that can show a passkey")
 endif()
 if(CONFIG_AKIRA_HID_APP_HANDLER)
   list(APPEND _akira_advisories

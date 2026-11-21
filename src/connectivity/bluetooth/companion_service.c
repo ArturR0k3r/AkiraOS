@@ -1028,8 +1028,10 @@ static void cmd_work_handler(struct k_work *work)
  * can never silently reopen the service. */
 static bool peer_authenticated(struct bt_conn *conn)
 {
-#if defined(CONFIG_AKIRA_BT_SECURE_PAIRING)
+#if defined(CONFIG_AKIRA_BT_MGMT_PAIRING_PASSKEY)
     return conn && bt_conn_get_security(conn) >= BT_SECURITY_L4;
+#elif defined(CONFIG_AKIRA_BT_MGMT_PAIRING_JUST_WORKS)
+    return conn && bt_conn_get_security(conn) >= BT_SECURITY_L2;
 #else
     ARG_UNUSED(conn);
     return true;
@@ -1217,14 +1219,20 @@ static void status_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
  * 13  — STATUS CCC
  */
 
-/* Every companion operation (apps, files, settings, reboot) needs an
- * authenticated LE Secure Connections bond: passkey pairing, the device
- * showing the passkey (bt_manager.c). That also satisfies iOS, which asks for
- * MITM protection on any pairing it starts; the former open characteristics
- * worked around Just Works failing that and let anyone in range in. */
-#if defined(CONFIG_AKIRA_BT_SECURE_PAIRING)
+/* Every companion operation (apps, files, settings, reboot) needs the link
+ * the pairing mode asks for (CONFIG_AKIRA_BT_MGMT_PAIRING_*):
+ *   PASSKEY:    an authenticated LE Secure Connections bond, the device showing
+ *               the passkey (bt_manager.c). That also satisfies iOS, which asks
+ *               for MITM protection on any pairing it starts.
+ *   JUST_WORKS: an encrypted bond, for devices without a display; anyone in
+ *               range can pair (see the Kconfig help).
+ *   NONE:       nothing (development only). */
+#if defined(CONFIG_AKIRA_BT_MGMT_PAIRING_PASSKEY)
 #define COMP_PERM_WRITE (BT_GATT_PERM_WRITE_AUTHEN | BT_GATT_PERM_WRITE_LESC)
 #define COMP_PERM_READ  (BT_GATT_PERM_READ_AUTHEN | BT_GATT_PERM_READ_LESC)
+#elif defined(CONFIG_AKIRA_BT_MGMT_PAIRING_JUST_WORKS)
+#define COMP_PERM_WRITE BT_GATT_PERM_WRITE_ENCRYPT
+#define COMP_PERM_READ  BT_GATT_PERM_READ_ENCRYPT
 #else
 #define COMP_PERM_WRITE BT_GATT_PERM_WRITE
 #define COMP_PERM_READ  BT_GATT_PERM_READ

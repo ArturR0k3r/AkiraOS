@@ -60,7 +60,7 @@ Without `build.sh`: build MCUboot with the same options, then
 | `MCUBOOT_DOWNGRADE_PREVENTION` | MCUboot erases a staged image older than the running one | Secure Update of Platform |
 | `AKIRA_OTA_REFUSE_DOWNGRADE` | The device refuses an older image before rebooting and reports it to the sender | Secure Update of Platform |
 | MCUboot swap-using-move + boot guard | A new image runs as a trial and reverts unless it boots healthy | Secure Update of Platform |
-| `AKIRA_BT_SECURE_PAIRING`, `AKIRA_OTA_BLE=n` | BLE app transfer and the BLE companion service accept writes only over an authenticated LE Secure Connections bond (passkey shown by the device, typed on the phone); Just Works pairing is refused outside HID mode; the BLE OTA service is not built | Secure Update of Platform |
+| `AKIRA_BT_MGMT_PAIRING_PASSKEY` (the default), `AKIRA_OTA_BLE=n` | BLE app transfer and the BLE companion service accept writes only over an authenticated LE Secure Connections bond (passkey shown by the device, typed on the phone); Just Works pairing is refused outside HID mode; the BLE OTA service is not built. `AKIRA_BT_MGMT_PAIRING_JUST_WORKS`, for devices without a display, is outside the evaluated configuration | Secure Update of Platform |
 | `AKIRA_HTTP_SERVER=n` | No plain-HTTP firmware upload, app install or app control | Secure Update of Platform |
 | WAMR interpreter with full module validation (`AKIRA_WAMR_MINI_LOADER=n`) | Every app's bytecode is validated before it runs | Isolation of Platform |
 | Native API range checks | Every pointer an app passes is checked against its own linear memory for the full length | Isolation of Platform, Isolation of Application Parts |

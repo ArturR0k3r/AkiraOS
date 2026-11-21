@@ -75,23 +75,21 @@ static void status_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value);
 static uint8_t status_value[4] = {0};
 static bool notify_enabled = false;
 
-/* Installing, deleting, starting and stopping apps needs an authenticated
- * LE Secure Connections bond (passkey shown by the device, bt_manager.c):
- * plain ENCRYPT accepted silent Just Works pairing from anyone in range. */
-#if defined(CONFIG_AKIRA_BT_SECURE_PAIRING)
+/* Installing, deleting, starting and stopping apps needs, with
+ * CONFIG_AKIRA_BT_MGMT_PAIRING_PASSKEY, an authenticated LE Secure Connections
+ * bond (passkey shown by the device, bt_manager.c). The other modes accept an
+ * encrypted link, which silent Just Works pairing gives anyone in range. */
+#if defined(CONFIG_AKIRA_BT_MGMT_PAIRING_PASSKEY)
 #define XFER_PERM_WRITE (BT_GATT_PERM_WRITE_AUTHEN | BT_GATT_PERM_WRITE_LESC)
+#define XFER_MIN_LEVEL  BT_SECURITY_L4
 #else
 #define XFER_PERM_WRITE BT_GATT_PERM_WRITE_ENCRYPT
+#define XFER_MIN_LEVEL  BT_SECURITY_L2
 #endif
 
 static bool peer_authenticated(struct bt_conn *conn)
 {
-#if defined(CONFIG_AKIRA_BT_SECURE_PAIRING)
-    return conn && bt_conn_get_security(conn) >= BT_SECURITY_L4;
-#else
-    ARG_UNUSED(conn);
-    return true;
-#endif
+    return conn && bt_conn_get_security(conn) >= XFER_MIN_LEVEL;
 }
 
 /* GATT Service Definition */

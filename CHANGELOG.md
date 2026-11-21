@@ -7,6 +7,22 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+### Changed
+- `feat(bt)`: The pairing BLE management requires is a choice,
+  `CONFIG_AKIRA_BT_MGMT_PAIRING_*`, replacing the `CONFIG_AKIRA_BT_SECURE_PAIRING`
+  switch (which remains as a derived symbol):
+  - `PASSKEY` (default): authenticated LE Secure Connections, the device shows a
+    passkey - as in 1.7.1.
+  - `JUST_WORKS`: for devices without a display. The companion service and app
+    transfer need an encrypted bond, but anyone in range can pair; optionally only
+    during the first `CONFIG_AKIRA_BT_MGMT_PAIRING_WINDOW_S` seconds after power-on.
+    Allowed in release builds, reported as an advisory.
+  - `NONE`: no pairing (development only; the release checks refuse it).
+
+---
+
 ## [1.7.1] — 2026-11-21
 
 ### Security
