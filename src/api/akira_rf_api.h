@@ -8,6 +8,7 @@
 #ifndef AKIRA_RF_API_H
 #define AKIRA_RF_API_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <wasm_export.h>
@@ -28,6 +29,8 @@ typedef enum {
 /* Core RF API functions (no security checks) */
 int akira_rf_init(akira_rf_chip_t chip);
 int akira_rf_deinit(void);
+/* True if a WASM app other than runtime slot @p slot is driving the RF API. */
+bool akira_rf_api_used_by_other(int slot);
 /* Make `chip` the active RF chip. Hardware-inits it on first select, then just
  * flips the active pointer on later switches, preserving each chip's config. */
 int akira_rf_select(akira_rf_chip_t chip);

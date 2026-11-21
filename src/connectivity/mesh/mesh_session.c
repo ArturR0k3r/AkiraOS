@@ -41,7 +41,7 @@ void mesh_session_install(struct session_table *t,
         memcpy(salt, peer_id, AKIRA_MESH_NODE_ID_LEN);
         memcpy(salt + AKIRA_MESH_NODE_ID_LEN, local_id, AKIRA_MESH_NODE_ID_LEN);
     }
-    static const char info[] = "AkiraMesh-v1-session";
+    static const char info[] = "AkiraMesh-v2-session";
 
     uint8_t okm[MESH_CRYPTO_SESSION_KEY_LEN + MESH_CRYPTO_MAC_KEY_LEN];
     mesh_crypto_hkdf_sha256(shared_secret, shared_len, salt, sizeof(salt),
@@ -80,9 +80,40 @@ void mesh_session_install(struct session_table *t,
     memcpy(slot->mac_key, okm + MESH_CRYPTO_SESSION_KEY_LEN, MESH_CRYPTO_MAC_KEY_LEN);
     slot->expiry_ms = now_ms + ttl_ms;
     slot->valid = true;
+    slot->rx_any = false;
+    slot->rx_seq_max = 0;
+    slot->rx_window = 0;
 
     memset(salt, 0, sizeof(salt));
     memset(okm, 0, sizeof(okm));
+}
+
+bool mesh_session_rx_accept(struct session_entry *e, uint16_t seq)
+{
+    if (!e->rx_any) {
+        e->rx_any = true;
+        e->rx_seq_max = seq;
+        e->rx_window = 0;
+        return true;
+    }
+    int16_t d = (int16_t)(uint16_t)(seq - e->rx_seq_max);
+
+    if (d > 0) {
+        /* Newer: slide the window; bit n marks rx_seq_max - n - 1. */
+        e->rx_window = (d >= 32) ? 0 : ((e->rx_window << d) | (1U << (d - 1)));
+        e->rx_seq_max = seq;
+        return true;
+    }
+    if (d == 0 || -d > 32) {
+        return false;
+    }
+    uint32_t bit = 1U << (-d - 1);
+
+    if (e->rx_window & bit) {
+        return false;
+    }
+    e->rx_window |= bit;
+    return true;
 }
 
 void mesh_session_gc(struct session_table *t, uint32_t now_ms)

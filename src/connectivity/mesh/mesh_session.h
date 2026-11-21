@@ -18,6 +18,11 @@ struct session_entry {
     uint8_t  mac_key[MESH_CRYPTO_MAC_KEY_LEN];
     uint32_t expiry_ms;
     bool     valid;
+    /* Replay window over the peer's DATA sequence numbers (MAC-covered):
+     * highest seen plus a bitmap of the 32 before it. */
+    bool     rx_any;
+    uint16_t rx_seq_max;
+    uint32_t rx_window;
 };
 
 struct session_table { struct session_entry e[CONFIG_AKIRA_MESH_MAX_SESSIONS]; };
@@ -37,6 +42,11 @@ void mesh_session_install(struct session_table *t,
                           const uint8_t *local_id, const uint8_t *peer_id,
                           const uint8_t *shared_secret, size_t shared_len,
                           uint32_t now_ms, uint32_t ttl_ms);
+
+/* Replay check for an authenticated DATA frame from this session's peer:
+ * true (and recorded) if @p seq is new, false for a replay or a frame too
+ * old to tell. Caller holds the tables lock. */
+bool mesh_session_rx_accept(struct session_entry *e, uint16_t seq);
 
 /* Mark expired entries invalid (mirrors mesh_route_gc). */
 void mesh_session_gc(struct session_table *t, uint32_t now_ms);

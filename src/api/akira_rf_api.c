@@ -529,6 +529,17 @@ static int rf_pop_sliced(wasm_exec_env_t exec_env, struct rf_rx_packet *pkt,
 }
 #endif /* CONFIG_AKIRA_RF_RX_DAEMON */
 
+/* True if an app other than @p slot is driving the RF API. */
+bool akira_rf_api_used_by_other(int slot)
+{
+    atomic_val_t v = atomic_get(&s_rf_app_slots);
+
+    if (slot >= 0 && slot < AKIRA_MAX_WASM_INSTANCES) {
+        v &= ~(atomic_val_t)BIT(slot);
+    }
+    return v != 0;
+}
+
 /* Release everything RF app @p slot left running: resume the RX daemon if the
  * slot died inside a raw capture/replay, purge the RX queue, and drop RF
  * ownership of the active chip so the mesh or another app can claim it. No-op

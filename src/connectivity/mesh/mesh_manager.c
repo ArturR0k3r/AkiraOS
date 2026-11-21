@@ -36,6 +36,10 @@ LOG_MODULE_REGISTER(akira_mesh, CONFIG_AKIRA_LOG_LEVEL);
 
 #define MESH_ROUTE_LIFETIME_MS (CONFIG_AKIRA_MESH_ROUTE_LIFETIME_S * 1000U)
 
+/* Wire version. 2: DATA MACs cover the header (all but the TTL) and are
+ * replay-checked; not compatible with version 1 nodes. */
+#define MESH_PROTOCOL_VERSION 2
+
 /* Mesh protocol header */
 struct __packed mesh_header {
     uint8_t  version;
@@ -159,13 +163,35 @@ static bool is_broadcast(const uint8_t *id)
 
 static void fill_header(struct mesh_header *h, uint8_t type, uint8_t ttl, const uint8_t *dest)
 {
-    h->version = 1;
+    h->version = MESH_PROTOCOL_VERSION;
     h->msg_type = type;
     h->ttl = ttl;
     memcpy(h->src_id, mesh_state.config.node_id, AKIRA_MESH_NODE_ID_LEN);
     memcpy(h->dest_id, dest, AKIRA_MESH_NODE_ID_LEN);
     h->seq_num = mesh_state.seq_num++;
 }
+
+#if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+/* DATA tag: HMAC over the header (all but the per-hop TTL) and the body
+ * (nonce || ciphertext). Covering src, dest and seq stops a frame being
+ * re-sent under a new sequence number or reflected back to its sender. */
+static void data_mac(const uint8_t *mac_key, size_t key_len, const struct mesh_header *h,
+                     const uint8_t *body, size_t body_len, uint8_t tag[32])
+{
+    uint8_t aad[4 + 2 * AKIRA_MESH_NODE_ID_LEN];
+    size_t n = 0;
+
+    aad[n++] = h->version;
+    aad[n++] = h->msg_type;
+    memcpy(&aad[n], h->src_id, AKIRA_MESH_NODE_ID_LEN);
+    n += AKIRA_MESH_NODE_ID_LEN;
+    memcpy(&aad[n], h->dest_id, AKIRA_MESH_NODE_ID_LEN);
+    n += AKIRA_MESH_NODE_ID_LEN;
+    aad[n++] = (uint8_t)(h->seq_num & 0xFF);
+    aad[n++] = (uint8_t)(h->seq_num >> 8);
+    mesh_crypto_hmac_sha256_2(mac_key, key_len, aad, n, body, body_len, tag);
+}
+#endif
 
 /* ------------------------------------------------------------------ */
 /* AODV / control-frame TX builders (each builds buffer then TX).      */
@@ -261,9 +287,28 @@ static void forward_data(struct mesh_header *h, const uint8_t *full, size_t len)
     mesh_radio_tx(pkt, len);
 }
 
+/* Re-send what was queued for @p dest once an RREP made it reachable.
+ *
+ * Only when a route (and, with E2E crypto, a session key) now exists: any
+ * RREP naming @p dest reaches here - one addressed to another node, or one
+ * whose prekey failed ECDH - and re-sending without a session re-queues the
+ * payload into the slot just freed and sends another RREQ, forever. The loop
+ * is also bounded by the queue size, so a re-queue can never spin it. */
 static void flush_pending_for(const uint8_t *dest)
 {
-    while (1) {
+    uint32_t now = k_uptime_get_32();
+
+    k_mutex_lock(&mesh_state.tables_lock, K_FOREVER);
+    bool ready = mesh_route_lookup(&mesh_state.routes, dest, now) != NULL;
+#if defined(CONFIG_AKIRA_MESH_E2E_CRYPTO)
+    ready = ready && mesh_session_lookup(&mesh_state.sessions, dest, now) != NULL;
+#endif
+    k_mutex_unlock(&mesh_state.tables_lock);
+    if (!ready) {
+        return;
+    }
+
+    for (size_t budget = ARRAY_SIZE(mesh_state.proutes.e); budget > 0; budget--) {
         /* Copy one queued payload out under the lock, release, then send.
          * akira_mesh_send re-takes tables_lock — so we must NOT hold it here. */
         k_mutex_lock(&mesh_state.tables_lock, K_FOREVER);
@@ -348,7 +393,7 @@ static void mesh_dispatch(const uint8_t *buf, size_t len)
         return;
     }
     const struct mesh_header *h = (const struct mesh_header *)buf;
-    if (h->version != 1) {
+    if (h->version != MESH_PROTOCOL_VERSION) {
         return;
     }
     mesh_state.stats.messages_received++;
@@ -485,14 +530,29 @@ static void mesh_dispatch(const uint8_t *buf, size_t len)
             }
 
             uint8_t expect_tag[32];
-            mesh_crypto_hmac_sha256(mac_key, sizeof(mac_key), payload,
-                                    MESH_CRYPTO_NONCE_LEN + ct_len, expect_tag);
+            data_mac(mac_key, sizeof(mac_key), h, payload,
+                     MESH_CRYPTO_NONCE_LEN + ct_len, expect_tag);
             bool tag_ok = mesh_crypto_const_time_eq(expect_tag, tag, MESH_CRYPTO_MAC_LEN);
             if (!tag_ok) {
                 memset(enc_key, 0, sizeof(enc_key));
                 memset(mac_key, 0, sizeof(mac_key));
                 memset(expect_tag, 0, sizeof(expect_tag));
                 LOG_WRN("AkiraMesh: DATA MAC mismatch from %02x%02x, dropped",
+                        h->src_id[0], h->src_id[1]);
+                break;
+            }
+
+            /* Authentic; now refuse a replay. The (src, seq) duplicate cache
+             * above is shared and small, so it forgets old frames. */
+            k_mutex_lock(&mesh_state.tables_lock, K_FOREVER);
+            sess = mesh_session_lookup(&mesh_state.sessions, h->src_id, now);
+            bool fresh = sess && mesh_session_rx_accept(sess, h->seq_num);
+            k_mutex_unlock(&mesh_state.tables_lock);
+            if (!fresh) {
+                memset(enc_key, 0, sizeof(enc_key));
+                memset(mac_key, 0, sizeof(mac_key));
+                memset(expect_tag, 0, sizeof(expect_tag));
+                LOG_WRN("AkiraMesh: replayed DATA from %02x%02x, dropped",
                         h->src_id[0], h->src_id[1]);
                 break;
             }
@@ -874,8 +934,7 @@ static int mesh_send_reliable(const uint8_t *dest_id, const uint8_t *data, size_
         return -EIO;
     }
     uint8_t tag[32];
-    mesh_crypto_hmac_sha256(mac_key, sizeof(mac_key), body,
-                            MESH_CRYPTO_NONCE_LEN + len, tag);
+    data_mac(mac_key, sizeof(mac_key), h, body, MESH_CRYPTO_NONCE_LEN + len, tag);
     memcpy(ct + len, tag, MESH_CRYPTO_MAC_LEN);
     size_t total = sizeof(*h) + MESH_CRYPTO_NONCE_LEN + len + MESH_CRYPTO_MAC_LEN;
     memset(enc_key, 0, sizeof(enc_key));

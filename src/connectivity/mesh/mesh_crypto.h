@@ -60,6 +60,12 @@ void mesh_crypto_hmac_sha256(const uint8_t *key, size_t key_len,
                              const uint8_t *data, size_t data_len,
                              uint8_t out[32]);
 
+/** HMAC-SHA256(key, a || data), without concatenating the inputs. */
+void mesh_crypto_hmac_sha256_2(const uint8_t *key, size_t key_len,
+                               const uint8_t *a, size_t a_len,
+                               const uint8_t *data, size_t data_len,
+                               uint8_t out[32]);
+
 /**
  * @brief HKDF-SHA256 (RFC 5869) Extract-then-Expand, built on
  * mesh_crypto_hmac_sha256. Only supports okm_len <= 64 (two expand blocks)

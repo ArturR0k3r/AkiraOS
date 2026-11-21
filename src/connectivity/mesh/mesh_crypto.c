@@ -113,6 +113,14 @@ void mesh_crypto_hmac_sha256(const uint8_t *key, size_t key_len,
                              const uint8_t *data, size_t data_len,
                              uint8_t out[32])
 {
+    mesh_crypto_hmac_sha256_2(key, key_len, NULL, 0, data, data_len, out);
+}
+
+void mesh_crypto_hmac_sha256_2(const uint8_t *key, size_t key_len,
+                               const uint8_t *a, size_t a_len,
+                               const uint8_t *data, size_t data_len,
+                               uint8_t out[32])
+{
     uint8_t k_ipad[HMAC_BLOCK], k_opad[HMAC_BLOCK];
     memset(k_ipad, 0x36, HMAC_BLOCK);
     memset(k_opad, 0x5c, HMAC_BLOCK);
@@ -126,6 +134,9 @@ void mesh_crypto_hmac_sha256(const uint8_t *key, size_t key_len,
     mbedtls_sha256_init(&ctx);
     mbedtls_sha256_starts(&ctx, 0);
     mbedtls_sha256_update(&ctx, k_ipad, HMAC_BLOCK);
+    if (a_len > 0) {
+        mbedtls_sha256_update(&ctx, a, a_len);
+    }
     mbedtls_sha256_update(&ctx, data, data_len);
     mbedtls_sha256_finish(&ctx, inner);
     mbedtls_sha256_starts(&ctx, 0);
@@ -268,6 +279,15 @@ void mesh_crypto_hmac_sha256(const uint8_t *key, size_t key_len,
                              uint8_t out[32])
 {
     (void)key; (void)key_len; (void)data; (void)data_len;
+    memset(out, 0, 32);
+}
+
+void mesh_crypto_hmac_sha256_2(const uint8_t *key, size_t key_len,
+                               const uint8_t *a, size_t a_len,
+                               const uint8_t *data, size_t data_len,
+                               uint8_t out[32])
+{
+    (void)key; (void)key_len; (void)a; (void)a_len; (void)data; (void)data_len;
     memset(out, 0, 32);
 }
 

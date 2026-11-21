@@ -270,7 +270,13 @@ int akira_native_mesh_init(wasm_exec_env_t exec_env, int node_id,
      * documented as unsupported, so this is a convenience, not a policy hole.
      */
 #ifdef CONFIG_AKIRA_MODULE_RF
-    (void)akira_rf_deinit();
+    /* ...but only the caller's own claim: tearing down another app's radio
+     * session is not this app's call. */
+    if (akira_rf_api_used_by_other(akira_runtime_slot_of_exec_env(exec_env))) {
+        mesh_unlock(exec_env);
+        return -EBUSY;
+    }
+    akira_rf_api_release(akira_runtime_slot_of_exec_env(exec_env));
 #endif
 
     akira_mesh_config_t cfg;
@@ -490,6 +496,9 @@ int akira_native_mesh_get_nodes(wasm_exec_env_t exec_env, void *buf,
     if (!s_session) {
         return -ENODEV;
     }
+    if (!mesh_caller_owns(exec_env)) {
+        return -EPERM;
+    }
 
     /* akira_mesh_get_nodes() always copies from the table head, so it cannot
      * be windowed — it writes straight into the (already bounds-checked) WASM
@@ -508,6 +517,10 @@ int akira_native_mesh_get_stats(wasm_exec_env_t exec_env, void *buf)
 
     wasm_module_inst_t inst = wasm_runtime_get_module_inst(exec_env);
     WASM_ADDR_CHECK(inst, buf, sizeof(wasm_mesh_stats_t));
+
+    if (!mesh_caller_owns(exec_env)) {
+        return -EPERM;
+    }
 
     akira_mesh_stats_t stats;
     int ret = akira_mesh_get_stats(&stats);
