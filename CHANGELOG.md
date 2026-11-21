@@ -7,6 +7,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- `fix(akiraconsole_prod)`: The reference configuration no longer builds the HTTP
+  management server: the board has no Wi-Fi there, so the server could never bind,
+  but its 6 KB thread stack and buffers sat in internal DRAM. Frees about 9 KB, which
+  AkiraPlatform builds for this board need (they overflowed `dram0_0_seg` by 1.3 KB on
+  upstream Zephyr after the 1.7.1 security fixes). Turn `CONFIG_AKIRA_HTTP_SERVER` back
+  on together with `CONFIG_WIFI`.
+
+---
+
 ## [1.7.1] — Unreleased
 
 ### Security
