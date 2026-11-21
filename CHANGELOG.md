@@ -105,6 +105,9 @@ behaviour; the breaking ones are marked **(breaking)**.
   registered Zephyr SDK, so every board failed at CMake (`Could not find ...
   "Zephyr-sdk"`, also in the 1.6.5–1.6.7 runs). It now installs SDK 0.17.4 with the
   board's toolchain, both checked against the published SHA-256 sums.
+- `fix(build)`: `build.sh` built the app from a directory literally named `AkiraOS`
+  in the workspace; a checkout under another name (the release workflow's
+  `akira-os`) failed, so the merged web-flasher images were never produced.
 
 ---
 

@@ -500,7 +500,8 @@ build_application() {
         print_info "Settings encryption key: from AKIRA_SETTINGS_KEY_HEX"
     fi
 
-    if west build --pristine -b "$zephyr_board" AkiraOS -d "$build_dir" -- $extra_cmake; then
+    # The repository may be checked out under any name (CI uses akira-os).
+    if west build --pristine -b "$zephyr_board" "$SCRIPT_DIR" -d "$build_dir" -- $extra_cmake; then
         print_success "AkiraOS build complete!"
         print_info "Binary: $build_dir/zephyr/zephyr.bin"
         
