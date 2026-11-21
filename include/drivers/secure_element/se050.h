@@ -82,8 +82,13 @@ int se050_write_binary(const struct device *dev, uint32_t objid,
 int se050_read_binary(const struct device *dev, uint32_t objid,
                       uint8_t *buf, size_t cap, size_t *out_len);
 
-/** @brief True if a secure object with @p objid exists. */
-bool se050_object_exists(const struct device *dev, uint32_t objid);
+/**
+ * @brief Check whether a secure object with @p objid exists.
+ * @return 1 if it exists, 0 if the SE050 reports it absent, or a negative
+ *         errno if the exchange failed. Treat errors as "unknown": never
+ *         create or overwrite an object because this call failed.
+ */
+int se050_object_exists(const struct device *dev, uint32_t objid);
 
 /**
  * @brief Generate a P-256 key pair on-die under @p objid (private key is

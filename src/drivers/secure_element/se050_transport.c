@@ -264,6 +264,7 @@ int se050_transport_apdu(struct se050_transport *t,
      * reassembling any SE->host I-block chaining. */
     size_t total = 0;
     int wtx_grants = 0;
+    size_t chained = 0; /* I-blocks received: each carries >= 1 byte */
 
     for (;;) {
         uint8_t pcb = 0;
@@ -298,7 +299,17 @@ int se050_transport_apdu(struct se050_transport *t,
             return -EPROTO;
         }
 
-        /* I-block: append payload. */
+        /* I-block: append payload. A chained block must carry data, and
+         * the chain can't be longer than the buffer allows: otherwise a
+         * device on the bus answering "more, 0 bytes" forever keeps this
+         * loop (and the SE050 lock) spinning, at boot before the watchdog. */
+        if ((pcb & PCB_I_MORE) && inf_len == 0) {
+            LOG_ERR("SE050 empty chained I-block");
+            return -EPROTO;
+        }
+        if (++chained > rx_cap + 1) {
+            return -EPROTO;
+        }
         if (total + inf_len > rx_cap) {
             return -ENOSPC;
         }

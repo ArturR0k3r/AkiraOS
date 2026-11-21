@@ -361,13 +361,13 @@ int se050_write_binary(const struct device *dev, uint32_t objid,
     return 0;
 }
 
-bool se050_object_exists(const struct device *dev, uint32_t objid)
+int se050_object_exists(const struct device *dev, uint32_t objid)
 {
     struct se050_data *d = dev->data;
     uint8_t id[4]; put_u32(id, objid);
     uint8_t tlv[8]; size_t off = 0;
     if (tlv_put(tlv, sizeof(tlv), &off, TAG_1, id, sizeof(id)) < 0) {
-        return false;
+        return -EINVAL;
     }
 
     k_mutex_lock(&d->lock, K_FOREVER);
@@ -375,21 +375,33 @@ bool se050_object_exists(const struct device *dev, uint32_t objid)
     int ret = se05x_apdu(d, INS_MGMT, P1_DEFAULT, P2_EXIST, tlv, off,
                          resp, sizeof(resp), &rlen, &sw);
     k_mutex_unlock(&d->lock);
-    if (ret < 0 || sw != SW_OK || rlen < 1) {
-        return false;
+    if (ret < 0) {
+        return ret;
     }
-    /* SE05x returns a Result TLV: 0x01 = exists. */
+    /* A failed exchange is not proof of absence: callers that create keys on
+     * "absent" would otherwise overwrite a provisioned object after one
+     * glitched or injected response. */
+    if (sw != SW_OK || rlen < 1) {
+        LOG_WRN("CheckObjectExists 0x%08X: SW=0x%04X len=%u", objid, sw,
+                (unsigned int)rlen);
+        return -EIO;
+    }
+    /* SE05x returns a Result TLV: 0x01 = exists, 0x02 = does not exist. */
     size_t vlen = 0;
     const uint8_t *r = tlv_find(resp, rlen, TAG_1, &vlen);
-    return r && vlen >= 1 && r[0] == 0x01;
+    if (!r || vlen < 1 || (r[0] != 0x01 && r[0] != 0x02)) {
+        return -EIO;
+    }
+    return r[0] == 0x01 ? 1 : 0;
 }
 
 int se050_read_binary(const struct device *dev, uint32_t objid,
                       uint8_t *buf, size_t cap, size_t *out_len)
 {
     struct se050_data *d = dev->data;
-    if (!se050_object_exists(dev, objid)) {
-        return -ENOENT;
+    int ex = se050_object_exists(dev, objid);
+    if (ex <= 0) {
+        return ex < 0 ? ex : -ENOENT;
     }
 
     uint8_t id[4]; put_u32(id, objid);
@@ -429,8 +441,10 @@ int se050_read_binary(const struct device *dev, uint32_t objid,
 int se050_ecc_gen_key(const struct device *dev, uint32_t objid)
 {
     struct se050_data *d = dev->data;
-    if (se050_object_exists(dev, objid)) {
-        return 0;   /* already provisioned */
+    int ex = se050_object_exists(dev, objid);
+    if (ex != 0) {
+        /* 1: already provisioned. <0: unknown, so never generate over it. */
+        return ex < 0 ? ex : 0;
     }
 
     uint8_t id[4]; put_u32(id, objid);
@@ -837,8 +851,9 @@ int se050_hmac_sha256(const struct device *dev, uint32_t objid,
 int se050_delete_object(const struct device *dev, uint32_t objid)
 {
     struct se050_data *d = dev->data;
-    if (!se050_object_exists(dev, objid)) {
-        return -ENOENT;
+    int ex = se050_object_exists(dev, objid);
+    if (ex <= 0) {
+        return ex < 0 ? ex : -ENOENT;
     }
 
     uint8_t id[4]; put_u32(id, objid);
