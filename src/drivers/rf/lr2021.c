@@ -125,8 +125,9 @@ LOG_MODULE_REGISTER(akira_lr2021, LOG_LEVEL_INF);
 #define LR2021_STANDBY_RC               0x00
 #define LR2021_STANDBY_XOSC             0x01
 
-/* Sleep config: retain data RAM, wake on NSS */
-#define LR2021_SLEEP_RAM_RETENTION      0x04
+/* SetSleep sleep_config (datasheet §6.3.1): bit 0 = 32 kHz clock on,
+ * bit 1 = data retention. Wake is an NSS low for >= 100 us. */
+#define LR2021_SLEEP_RAM_RETENTION      0x02
 
 /* Fallback mode: return to Standby RC after Rx/Tx */
 #define LR2021_FALLBACK_STDBY_RC        0x02
@@ -297,7 +298,8 @@ static int lr2021_spi_transceive(const uint8_t *tx, uint8_t *rx, size_t len) {
  * SPI frame: Op(16) | Arg0 | Arg1 | ... | ArgN
  * MISO:      Stat(16) | Irq(32) | 0...
  */
-static int lr2021_write_command(uint16_t opcode, const uint8_t *args, size_t args_len) {
+static int lr2021_write_command_ex(uint16_t opcode, const uint8_t *args, size_t args_len,
+                                   bool wait_done) {
     int ret;
 
     ret = lr2021_wait_busy();
@@ -330,11 +332,19 @@ static int lr2021_write_command(uint16_t opcode, const uint8_t *args, size_t arg
         return ret;
     }
 
+    if (!wait_done) {
+        return 0;
+    }
+
     ret = lr2021_wait_busy();
     if (ret < 0) {
         LOG_ERR("Cmd 0x%04X BUSY timeout", opcode);
     }
     return ret;
+}
+
+static int lr2021_write_command(uint16_t opcode, const uint8_t *args, size_t args_len) {
+    return lr2021_write_command_ex(opcode, args, args_len, true);
 }
 
 /**
@@ -1002,7 +1012,9 @@ static int lr2021_set_mode(radio_mode_t mode) {
             k_msleep(1);
         }
         uint8_t args[5] = { LR2021_SLEEP_RAM_RETENTION, 0, 0, 0, 0 };
-        ret = lr2021_write_command(LR2021_CMD_SET_SLEEP, args, 5);
+        /* The chip holds BUSY high while asleep, so there is no completion
+         * edge to wait for; the NSS wake in lr2021_wake_from_sleep() drops it. */
+        ret = lr2021_write_command_ex(LR2021_CMD_SET_SLEEP, args, 5, false);
         break;
     }
     case RADIO_MODE_STANDBY: {
