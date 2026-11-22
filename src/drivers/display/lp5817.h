@@ -39,7 +39,8 @@ extern "C" {
  * Performs a soft reset, enables the chip, turns on OUT0..OUT2, programs the
  * per-channel analog dot-current to full scale, and latches the configuration
  * with the update command.  Brightness is left at 0; call
- * akira_lp5817_set_brightness() to light the panel.
+ * akira_lp5817_set_brightness() to light the panel.  Tries up to three times;
+ * returns 0 at once if the device is already initialised.
  *
  * @return 0 on success, negative errno on error.
  */
@@ -49,8 +50,10 @@ int akira_lp5817_init(void);
  * @brief Set backlight brightness.
  *
  * Writes the 8-bit manual PWM value to all three channels and latches it.
- * 0 also clears CHIP_EN (standby, near-zero quiescent current); the next
- * non-zero value re-enables the device first.
+ * 0 also clears CHIP_EN (standby, near-zero quiescent current); every
+ * non-zero value re-asserts the enable/output/current setup first.  If
+ * akira_lp5817_init() has failed, each call retries it once; before the first
+ * akira_lp5817_init() call this returns -ENODEV without touching the device.
  *
  * @param brightness 0 = off, 255 = full scale.
  * @return 0 on success, negative errno on error.

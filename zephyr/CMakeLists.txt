@@ -614,6 +614,10 @@ if(CONFIG_AKIRA_LP5817)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/display/lp5817.c)
 endif()
 
+if(CONFIG_AKIRA_I2C_BOOT_RECOVERY)
+    zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/i2c_bus_recovery.c)
+endif()
+
 if(CONFIG_CHARGER_BQ25601)
     zephyr_library_sources(${AKIRA_OS_DIR}/src/drivers/charger/bq25601.c)
 endif()

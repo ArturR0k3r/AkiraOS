@@ -1,0 +1,38 @@
+# Copyright (c) 2026 PenEngineering S.R.L
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Boot-time bus clear for an I2C controller (src/drivers/i2c_bus_recovery.c).
+
+  Before the I2C driver starts, SCL is clocked (up to nine pulses) until no
+  target holds SDA low, then a STOP is sent.  I2C parts on an always-on rail
+  are not reset with the MCU, and one caught mid-transfer by a reset keeps
+  SDA low, failing every transfer after the reboot.
+
+  A separate node rather than scl-gpios/sda-gpios on the controller: the
+  Zephyr ESP32-S3 I2C driver rejects those properties at build time.
+
+    i2c0_bus_clear: i2c0-bus-clear {
+        compatible = "akira,i2c-bus-clear";
+        i2c-bus = <&i2c0>;
+        scl-gpios = <&gpio0 18 GPIO_ACTIVE_HIGH>;
+        sda-gpios = <&gpio0 8 GPIO_ACTIVE_HIGH>;
+    };
+
+compatible: "akira,i2c-bus-clear"
+
+properties:
+  i2c-bus:
+    type: phandle
+    required: true
+    description: The I2C controller whose pins these are.
+
+  scl-gpios:
+    type: phandle-array
+    required: true
+    description: The controller's SCL pin, driven open-drain during the clear.
+
+  sda-gpios:
+    type: phandle-array
+    required: true
+    description: The controller's SDA pin, driven open-drain during the clear.

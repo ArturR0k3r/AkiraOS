@@ -34,6 +34,17 @@
 		zephyr,display        = &st7789v_prod;
 	};
 
+	// I2C0 pins as GPIOs, for the boot-time bus clear (src/drivers/
+	// i2c_bus_recovery.c).  Every part on I2C0 stays powered across an ESP32
+	// reset; one caught mid-transfer holds SDA low and takes the TCA6408, SPI2
+	// (its chip selects), the panel and the LP5817 backlight down with it.
+	i2c0_bus_clear: i2c0-bus-clear {
+		compatible = "akira,i2c-bus-clear";
+		i2c-bus    = <&i2c0>;
+		scl-gpios  = <&gpio0 18 GPIO_ACTIVE_HIGH>; // I2C0 SCL
+		sda-gpios  = <&gpio0 8 GPIO_ACTIVE_HIGH>;  // I2C0 SDA
+	};
+
 	// =========================================================================
 	// Buttons — direct ESP32-S3 GPIO connections
 	//

@@ -367,6 +367,19 @@ config AKIRA_CRYPTO_ED25519_SELFTEST
       Keep enabled for bring-up and when changing crypto code; disable on
       battery-powered builds once a firmware image has been validated.
 
+config AKIRA_I2C_BOOT_RECOVERY
+    bool "Clear stuck I2C buses at boot"
+    default y
+    depends on DT_HAS_AKIRA_I2C_BUS_CLEAR_ENABLED && GPIO && I2C
+    help
+      Before the I2C driver starts, clock SCL (up to nine pulses) and send a
+      STOP on every bus described by an akira,i2c-bus-clear devicetree node.
+      I2C parts on an always-on rail survive an MCU reset; one caught
+      mid-transfer keeps SDA low and every transfer after the reboot fails.
+      Zephyr's ESP32 I2C driver does not clear the bus at init, and on the
+      ESP32-S3 its runtime recovery cannot (it requests the clear while the
+      controller is held in reset).
+
 config AKIRA_LP5817
     bool "LP5817 I2C backlight LED driver (AkiraConsole Prod)"
     depends on DISPLAY && I2C

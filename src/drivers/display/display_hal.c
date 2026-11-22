@@ -108,15 +108,19 @@ int akira_display_hal_init(void)
 #ifdef CONFIG_AKIRA_LP5817
     /* AkiraConsole Prod: the panel backlight is an LP5817 I2C LED driver
      * (U7), not a PWM GPIO.  It powers up with every register cleared, so
-     * without this the panel is completely dark no matter what is drawn. */
+     * without this the panel is completely dark no matter what is drawn.
+     *
+     * s_last_brightness, not the boot constant: the OS-shell thread runs
+     * during bring-up and may already have asked for the user's level
+     * (refused until now) — overwriting it would leave the boot at 50 %. */
     if (akira_lp5817_init() == 0)
     {
-        akira_display_hal_set_brightness(AKIRA_BOOT_BRIGHTNESS);
-        LOG_INF("LP5817 backlight on (%u)", AKIRA_BOOT_BRIGHTNESS);
+        akira_display_hal_set_brightness(s_last_brightness);
+        LOG_INF("LP5817 backlight on (%u)", s_last_brightness);
     }
     else
     {
-        LOG_WRN("LP5817 backlight init failed — panel will stay dark");
+        LOG_ERR("LP5817 backlight init failed — retried on each brightness change");
     }
 #elif DT_NODE_EXISTS(BACKLIGHT_NODE)
     if (pwm_is_ready_dt(&bl_pwm))
