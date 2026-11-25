@@ -6,7 +6,15 @@
 #include <string.h>
 #include <runtime/security.h>
 
-LOG_MODULE_REGISTER(akira_common_api, CONFIG_AKIRA_LOG_LEVEL);
+/* App output (printf_native) is logged at INFO; this module logs nothing else
+ * at INFO, so it keeps INFO even where CONFIG_AKIRA_LOG_LEVEL is WRN. The
+ * per-app output budget below bounds what apps can print. */
+#if CONFIG_AKIRA_LOG_LEVEL > 3
+#define APP_OUT_LOG_LEVEL CONFIG_AKIRA_LOG_LEVEL
+#else
+#define APP_OUT_LOG_LEVEL 3 /* LOG_LEVEL_INF */
+#endif
+LOG_MODULE_REGISTER(akira_common_api, APP_OUT_LOG_LEVEL);
 
 #ifdef CONFIG_AKIRA_WASM_RUNTIME
 #include <runtime/akira_runtime.h>
@@ -171,7 +179,7 @@ static void app_out_line(wasm_exec_env_t exec_env, int slot, int level,
 void akira_app_log_write(wasm_exec_env_t exec_env, int level, const char *buf, size_t len)
 {
     /* Same filter as the LOG_* macros below: compiled-out levels cost nothing. */
-    if (!buf || len == 0 || level > CONFIG_AKIRA_LOG_LEVEL) {
+    if (!buf || len == 0 || level > APP_OUT_LOG_LEVEL) {
         return;
     }
 
