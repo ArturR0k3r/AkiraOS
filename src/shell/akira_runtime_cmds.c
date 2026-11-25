@@ -147,7 +147,7 @@ static int cmd_app_stop(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_mem_report(const struct shell *sh, size_t argc, char **argv)
 {
-    ARG_UNUSED(argc);
+    ARG_UNUSED(argc); /* used only with CONFIG_SYS_HEAP_INFO */
     ARG_UNUSED(argv);
 
     /* Zephyr kernel heap stats */
@@ -162,7 +162,29 @@ static int cmd_mem_report(const struct shell *sh, size_t argc, char **argv)
                 kheap.allocated_bytes, kheap.free_bytes);
 
 #ifdef CONFIG_AKIRA_PSRAM
+#if (CONFIG_SYS_HEAP_ARRAY_SIZE > 0) && defined(CONFIG_SYS_HEAP_RUNTIME_STATS)
+    /* Every sys_heap, including the PSRAM shared multi-heap (the one at a
+     * 0x3c... address). "akira mem -v" adds the free-chunk histogram, whose
+     * "largest" column is the biggest block an allocation can still get. */
+    struct sys_heap **heaps;
+    int nheaps = sys_heap_array_get(&heaps);
+
+    for (int i = 0; i < nheaps; i++) {
+        struct sys_memory_stats st = {0};
+
+        sys_heap_runtime_stats_get(heaps[i], &st);
+        shell_print(sh, "Heap %d @%p size=%zu: allocated=%zu free=%zu peak=%zu",
+                    i, heaps[i]->init_mem, heaps[i]->init_bytes,
+                    st.allocated_bytes, st.free_bytes, st.max_allocated_bytes);
+#ifdef CONFIG_SYS_HEAP_INFO
+        if (argc > 1 && strcmp(argv[1], "-v") == 0) {
+            sys_heap_print_info(heaps[i], false);
+        }
+#endif
+    }
+#else
     shell_print(sh, "PSRAM: (external — size board-dependent)");
+#endif
 #else
     shell_print(sh, "PSRAM: not available on this board");
 #endif

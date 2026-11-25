@@ -10,6 +10,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased] — AkiraConsole firmware
 
 ### Added
+- `feat(shell)`: `akira mem` lists every heap (PSRAM included) with size, allocated, free and peak bytes; `akira mem -v` adds each heap's free-chunk histogram, whose "largest" column is the biggest block an allocation can still get. Prod enables it (`CONFIG_SYS_HEAP_ARRAY_SIZE`, `CONFIG_SYS_HEAP_INFO`).
 - `feat(crystal)`: **Akira**, the console's crystal: a procedural low-poly crystal grown from use. Its core grows with days used, each sealed (app, power) adds a shard in its domain colour, games award glints, and refused undeclared powers leave cracks to mend. Growth persists in `/lfs/akira` and is mirrored into the SE050. Shown on the boot splash, the wait screen and in Settings → Akira & Seals (Seal history, always-allowed powers, cracks).
 - `feat(security)`: **The Seal**, OS-owned consent for restricted powers (radio TX, Wi-Fi injection, BLE spam, HID injection, SE050 vault signing) and system actions (AkiraPlay install, USB SD sharing). Hold A+B: one lap grants *this time*, two laps *always* (bound to the app build). It is enforced inside the native APIs, works over running apps, and writes every answer to a hash-chained ledger signed with an on-chip P-256 key. The `crystal` shell commands audit it (`CONFIG_AKIRA_CRYSTAL`).
 - `feat(api)`: WASM natives `seal_request()`, `akira_glint()`, `seal_record()`; `app_manager_identity()`.
