@@ -3058,15 +3058,6 @@ config AKIRA_NET_MAX_STREAMS
       WASM linear memory. With more than one app slot, one app may hold all
       stream slots but one.
 
-config AKIRA_NET_POLL_STACK_SIZE
-    int "Network poll thread stack size (bytes)"
-    default 2048
-    range 1024 8192
-    depends on AKIRA_WASM_NET
-    help
-      Stack size of the internal poll thread that drives all sockets.
-      Its receive and send buffers are static, not on this stack.
-
 config AKIRA_NET_EVENT_QUEUE_DEPTH
     int "Network event queue depth (messages)"
     default 8

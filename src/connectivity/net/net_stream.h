@@ -12,8 +12,8 @@
  *
  * Data path uses a **shared-memory ring buffer** living in the owner's memory
  * (WASM linear memory for apps):
- *   - TX ring: the owner writes packets, the poll thread drains them.
- *   - RX ring: the poll thread fills it from the socket, the owner reads it.
+ *   - TX ring: the owner writes packets, the poll work drains them.
+ *   - RX ring: the poll work fills it from the socket, the owner reads it.
  *
  * Only net_tx_flush() / net_event_pop() require a WASM→host context switch.
  * Bulk data never does — it flows through the ring without any syscall per packet.
@@ -120,14 +120,14 @@ struct net_event {
  * NET_OWNER_SYSTEM for firmware code (console shell, app catalogue).
  *
  * None of these wait on the network: socket I/O and close are done by the
- * poll thread, DNS, connect and the TLS handshake by the connect worker on
+ * poll work, DNS, connect and the TLS handshake by the connect worker on
  * the system workqueue. The only waits are bounded: a stream-table lock (-EBUSY if it
  * cannot be had within a second) and net_stream_close(), which waits up to
  * 200 ms for the socket to be closed.
  * ======================================================================= */
 
 /**
- * @brief Initialise the network stream subsystem and start the poll thread.
+ * @brief Initialise the network stream subsystem and set up the poll work.
  *
  * Idempotent and safe to call concurrently from any thread.
  *
@@ -185,7 +185,7 @@ int net_stream_bind(int owner, int handle, uint16_t port);
 /**
  * @brief Mark a bound TCP socket as listening for inbound connections.
  *
- * On each accepted connection the poll thread allocates a new handle with the
+ * On each accepted connection the poll work allocates a new handle with the
  * same owner and posts NET_EVT_ACCEPT (extra = new handle).
  *
  * @param owner    Owner of @p handle.
@@ -199,7 +199,7 @@ int net_stream_listen(int owner, int handle, int backlog);
  * @brief Close a stream and free its slot.
  *
  * The rings are detached immediately (the host never touches them again).
- * The socket itself is closed by the poll thread; this call waits up to
+ * The socket itself is closed by the poll work; this call waits up to
  * 200 ms for that so a following open can reuse the socket. If a connect is
  * in flight it returns at once, and the socket is closed as soon as that
  * connect step returns.
@@ -235,9 +235,9 @@ int net_stream_tx_bind(int owner, int handle, uint8_t *native_ptr, uint32_t tota
 int net_stream_rx_bind(int owner, int handle, uint8_t *native_ptr, uint32_t total_size);
 
 /**
- * @brief Ask the poll thread to drain the TX ring now.
+ * @brief Ask the poll work to drain the TX ring now.
  *
- * Sending is done by the poll thread only (non-blocking, partial sends
+ * Sending is done by the poll work only (non-blocking, partial sends
  * resumed when the socket is writable); it drains every ring on each of its
  * ≤10 ms iterations anyway, this just wakes it. Send errors arrive as
  * NET_EVT_ERROR.
@@ -264,7 +264,7 @@ int net_stream_event_pop(int owner, struct net_event *evt);
  *
  * When this returns the host no longer touches any memory the app bound as a
  * ring, so the WASM instance may be freed. Sockets are closed asynchronously
- * by the poll thread. Never blocks for long: safe from the stopping thread,
+ * by the poll work. Never blocks for long: safe from the stopping thread,
  * the system workqueue and the app's own thread. Idempotent; a no-op for a
  * slot that owns nothing.
  *
