@@ -169,6 +169,11 @@ struct akira_admission_record;
 int akira_runtime_install_admitted(const char *name, const void *binary, size_t size,
                                    const char *manifest_json, size_t manifest_size,
                                    const struct akira_admission_record *record);
+/* Same as akira_runtime_install_admitted(), but takes ownership of `binary`
+ * (freed on every outcome) instead of copying it. */
+int akira_runtime_install_admitted_owned(const char *name, uint8_t *binary, size_t size,
+                                         const char *manifest_json, size_t manifest_size,
+                                         const struct akira_admission_record *record);
 int akira_runtime_install(const char *name, const void *binary, size_t size);
 
 /* Same as akira_runtime_install_with_manifest(), but takes ownership of

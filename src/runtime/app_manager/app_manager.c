@@ -1055,12 +1055,13 @@ int app_manager_start(const char *name)
         struct akira_admission_record rec;
         bool have_rec = record_load(app->id, app->name, &rec) == 0;
 
-        int load_ret = akira_runtime_install_admitted(
+        /* Hand the read buffer over instead of having the runtime copy it:
+         * no second full copy of the app in PSRAM while it loads. */
+        int load_ret = akira_runtime_install_admitted_owned(
             name, buffer, app->size,
             json_len > 0 ? manifest_json : NULL,
             json_len > 0 ? (size_t)json_len : 0,
             have_rec ? &rec : NULL);
-        akira_free_buffer(buffer);
         akira_free_buffer(manifest_json);
 
         if (load_ret < 0)

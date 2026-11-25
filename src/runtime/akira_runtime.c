@@ -820,7 +820,9 @@ static int load_wasm_ex(const uint8_t *buffer, uint32_t size,
         }
     }
 
-    /* Load the WASM module — owned_binary is intentionally NOT freed here */
+    /* Load the WASM module — owned_binary is intentionally NOT freed here.
+     * Not after a wasm_binary_freeable load either: on ESP32-S3 the loaded
+     * module still uses the buffer, and freeing it corrupts the PSRAM heap. */
     module = wasm_runtime_load(owned_binary, size, error_buf, sizeof(error_buf));
 
     if (!module)
@@ -1740,6 +1742,14 @@ int akira_runtime_install_admitted(const char *name, const void *binary, size_t 
 {
     return install_admitted_impl(name, binary, size, manifest_json, manifest_size,
                                  record, false);
+}
+
+int akira_runtime_install_admitted_owned(const char *name, uint8_t *binary, size_t size,
+                                         const char *manifest_json, size_t manifest_size,
+                                         const struct akira_admission_record *record)
+{
+    return install_admitted_impl(name, binary, size, manifest_json, manifest_size,
+                                 record, true);
 }
 
 int akira_runtime_install_with_manifest(const char *name, const void *binary, size_t size, const char *manifest_json, size_t manifest_size)
