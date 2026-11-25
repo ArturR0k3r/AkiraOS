@@ -85,9 +85,9 @@ Flashing:
 
 - ESP32 → `esptool`; Nordic/STM32 → `west flash`; RP2040/RP2350 → a UF2 you copy to
   the `RPI-RP2` mass-storage drive (no auto-flash).
-- **AkiraConsole Prod has no auto-download-reset** (GPIO46 strap). Start the flash,
-  then during "Connecting…" **hold BOOT + tap RESET** and keep BOOT held until
-  "Writing at…". Console: 115200 baud on `/dev/ttyUSB0` (CP2102N).
+- **AkiraConsole Prod auto-enters download mode** (esptool via DTR/RTS on the
+  CP2102N); no BOOT/RESET needed. If the first attempt fails, retry.
+  Console: 115200 baud on `/dev/ttyUSB0`.
 
 ## Building WASM apps — `AkiraSDK/wasm_apps/build.sh`
 
