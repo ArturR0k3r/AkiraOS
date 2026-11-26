@@ -415,6 +415,39 @@ uint64_t akira_runtime_get_cap_mask_for_module_inst(wasm_module_inst_t inst)
     return 0;
 }
 
+int akira_runtime_peek(const char *name, uint32_t app_addr, void *out, uint32_t len)
+{
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
+    /* Debug read of a running app's linear memory (shell "akira peek"). No
+     * lock, like the native-side lookups: the app keeps running and may change
+     * what is read; the range is checked against its memory. */
+    for (int i = 0; i < AKIRA_MAX_WASM_INSTANCES; i++)
+    {
+        akira_managed_app_t *app = &g_apps[i];
+        wasm_module_inst_t inst = app->instance;
+
+        if (!app->used || app->status != AKIRA_APP_STATUS_RUNNING || !inst ||
+            strncmp(app->name, name, sizeof(app->name)) != 0)
+        {
+            continue;
+        }
+        if (!wasm_runtime_validate_app_addr(inst, app_addr, len))
+        {
+            return -EFAULT;
+        }
+        memcpy(out, wasm_runtime_addr_app_to_native(inst, app_addr), len);
+        return 0;
+    }
+    return -ENOENT;
+#else
+    ARG_UNUSED(name);
+    ARG_UNUSED(app_addr);
+    ARG_UNUSED(out);
+    ARG_UNUSED(len);
+    return -ENOTSUP;
+#endif
+}
+
 int akira_runtime_get_name_for_module_inst(wasm_module_inst_t inst, char *buf, size_t buflen)
 {
     if (!inst || !buf || buflen == 0)

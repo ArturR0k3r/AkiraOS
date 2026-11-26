@@ -38,6 +38,8 @@ LOG_MODULE_REGISTER(akira_runtime_cmds, CONFIG_AKIRA_LOG_LEVEL);
 
 #ifdef CONFIG_AKIRA_WASM_IPC
 #include <runtime/akira_ipc.h>
+#include <runtime/akira_runtime.h>
+#include <stdlib.h>
 #endif
 
 #if defined(CONFIG_AKIRA_OTA) && defined(CONFIG_FLASH_MAP) && defined(CONFIG_BOOTLOADER_MCUBOOT)
@@ -367,6 +369,45 @@ static int cmd_version(const struct shell *sh, size_t argc, char **argv)
     return 0;
 }
 
+/* akira peek <app> <addr> [words]: read a running app's linear memory, to
+ * look at an app that is stuck in a loop (e.g. a breadcrumb it keeps there). */
+static int cmd_app_peek(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc < 3)
+    {
+        shell_print(sh, "Usage: akira peek <app> <addr> [words, max 64]");
+        return -EINVAL;
+    }
+    uint32_t addr = (uint32_t)strtoul(argv[2], NULL, 0);
+    uint32_t words = argc > 3 ? (uint32_t)strtoul(argv[3], NULL, 0) : 1;
+    uint32_t buf[64];
+
+    if (words == 0 || words > ARRAY_SIZE(buf))
+    {
+        shell_error(sh, "words must be 1..64");
+        return -EINVAL;
+    }
+    int ret = akira_runtime_peek(argv[1], addr, buf, words * sizeof(uint32_t));
+
+    if (ret < 0)
+    {
+        shell_error(sh, "peek failed: %d", ret);
+        return ret;
+    }
+    for (uint32_t i = 0; i < words; i += 8)
+    {
+        char line[96];
+        int n = 0;
+
+        for (uint32_t j = i; j < words && j < i + 8; j++)
+        {
+            n += snprintf(line + n, sizeof(line) - n, "%u ", buf[j]);
+        }
+        shell_print(sh, "%u: %s", addr + i * 4, line);
+    }
+    return 0;
+}
+
 /* ── command tree ───────────────────────────────────────────────────────── */
 
 SHELL_STATIC_SUBCMD_SET_CREATE(akira_cmds,
@@ -374,6 +415,7 @@ SHELL_STATIC_SUBCMD_SET_CREATE(akira_cmds,
     SHELL_CMD(start,   NULL, "Start app: akira start <name>",        cmd_app_start),
     SHELL_CMD(stop,    NULL, "Stop app:  akira stop <name>",         cmd_app_stop),
     SHELL_CMD(mem,     NULL, "Memory usage report",                  cmd_mem_report),
+    SHELL_CMD(peek,    NULL, "Read app memory: akira peek <app> <addr> [words]", cmd_app_peek),
     SHELL_CMD(caps,    NULL, "Show app capabilities: akira caps [name]", cmd_caps_show),
     SHELL_CMD(ipc,     NULL, "IPC channel statistics",               cmd_ipc_stats),
     SHELL_CMD(ota,     NULL, "OTA status/control: akira ota [confirm|rollback]", cmd_ota_status),

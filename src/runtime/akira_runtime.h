@@ -151,6 +151,14 @@ int akira_runtime_load_wasm_owned(uint8_t *buffer, uint32_t size);
 
 /* Start/stop a loaded instance by id */
 int akira_runtime_start(int instance_id);
+
+/**
+ * @brief Copy @p len bytes at @p app_addr of running app @p name's linear
+ *        memory to @p out (debugging: shell "akira peek").
+ * @return 0, -ENOENT if no such running app, -EFAULT if the range is outside
+ *         its memory.
+ */
+int akira_runtime_peek(const char *name, uint32_t app_addr, void *out, uint32_t len);
 int akira_runtime_stop(int instance_id);
 
 /* Persistent installation: save binary and optional manifest to /lfs/apps
