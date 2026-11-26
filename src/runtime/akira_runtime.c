@@ -121,6 +121,57 @@ typedef struct
 
 static slot_cleanup_ctx_t g_slot_cleanup[AKIRA_MAX_WASM_INSTANCES];
 
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
+/* Stacks larger than the pre-allocated one, for apps whose manifest asks for
+ * more ("stack_kb"): allocated on start, freed once the slot's thread is
+ * dead. g_big_stack_mutex is held across allocate + k_thread_create, so a
+ * late cleanup of the previous run cannot free the stack of a new one: it
+ * frees only when the slot's k_thread is joinable without waiting. */
+static k_thread_stack_t *g_big_stacks[AKIRA_MAX_WASM_INSTANCES];
+static bool g_big_stack_libc[AKIRA_MAX_WASM_INSTANCES];
+static K_MUTEX_DEFINE(g_big_stack_mutex);
+
+/* Internal SRAM for a big stack. First the libc malloc arena: on ESP32-S3
+ * it is the DRAM left after .bss, which nothing else uses, so the kernel
+ * heap (BT, SPI DMA) keeps its room. Then the kernel heap. Same alignment
+ * and length as k_thread_stack_alloc() gives a kernel thread. */
+static k_thread_stack_t *alloc_big_stack(int slot, size_t size)
+{
+    k_thread_stack_t *stack = aligned_alloc(Z_KERNEL_STACK_OBJ_ALIGN,
+                                            K_KERNEL_STACK_LEN(size));
+
+    g_big_stack_libc[slot] = stack != NULL;
+    if (!stack)
+    {
+        stack = k_thread_stack_alloc(size, 0);
+    }
+    return stack;
+}
+
+static void free_big_stack(int slot)
+{
+    if (g_big_stack_libc[slot])
+    {
+        free(g_big_stacks[slot]);
+    }
+    else
+    {
+        k_thread_stack_free(g_big_stacks[slot]);
+    }
+    g_big_stacks[slot] = NULL;
+}
+
+static void release_big_stack(int slot)
+{
+    k_mutex_lock(&g_big_stack_mutex, K_FOREVER);
+    if (g_big_stacks[slot] && k_thread_join(&g_app_threads[slot], K_NO_WAIT) == 0)
+    {
+        free_big_stack(slot);
+    }
+    k_mutex_unlock(&g_big_stack_mutex);
+}
+#endif
+
 static void slot_cleanup_work_fn(struct k_work *work)
 {
     slot_cleanup_ctx_t *ctx = CONTAINER_OF(work, slot_cleanup_ctx_t, work);
@@ -130,6 +181,9 @@ static void slot_cleanup_work_fn(struct k_work *work)
      * (work is submitted right before wasm_app_thread_fn returns), but
      * a short timeout makes this robust against scheduling races. */
     k_thread_join(&g_app_threads[slot], K_MSEC(500));
+#ifdef CONFIG_AKIRA_WASM_RUNTIME
+    release_big_stack(slot);
+#endif
 
     /* Static stack — pre-allocated at init and held permanently; no heap to
      * free. Slot is ready for reuse by the next app launch. */
@@ -867,6 +921,13 @@ static int load_wasm_ex(const uint8_t *buffer, uint32_t size,
                 (unsigned long long)g_apps[slot].cap_mask, adm.attested);
     }
     g_apps[slot].memory_quota = manifest.valid ? manifest.memory_quota : 0;
+    g_apps[slot].stack_size = 0;
+    if (manifest.valid && manifest.stack_kb * 1024u > CONFIG_AKIRA_WASM_APP_STACK_SIZE &&
+        CONFIG_AKIRA_WASM_APP_STACK_MAX_KB > 0)
+    {
+        g_apps[slot].stack_size =
+            MIN(manifest.stack_kb, CONFIG_AKIRA_WASM_APP_STACK_MAX_KB) * 1024u;
+    }
     strncpy(g_apps[slot].commands_json, manifest.commands_json,
             sizeof(g_apps[slot].commands_json) - 1);
     g_apps[slot].commands_json[sizeof(g_apps[slot].commands_json) - 1] = '\0';
@@ -1293,6 +1354,7 @@ static void fault_work_fn(struct k_work *work)
 
         /* Zephyr aborted the thread when the fatal handler returned. */
         k_thread_join(&g_app_threads[slot], K_MSEC(200));
+        release_big_stack(slot);
 
         k_mutex_lock(&app->exit_mutex, K_FOREVER);
         /* Whatever state the thread reached (running, or already in its exit
@@ -1462,17 +1524,43 @@ int akira_runtime_start(int instance_id)
      * function gets the CPU back, and the exit path and the fault cleanup
      * act only on a RUNNING slot. Setting it afterwards turned a crash in
      * the first instructions into a zombie slot. */
+    k_thread_stack_t *stack = g_app_stacks[instance_id];
+    size_t stack_size = CONFIG_AKIRA_WASM_APP_STACK_SIZE;
+
+    k_mutex_lock(&g_big_stack_mutex, K_FOREVER);
+    /* The previous thread is joined above: its big stack can go. */
+    if (g_big_stacks[instance_id])
+    {
+        free_big_stack(instance_id);
+    }
+    if (app->stack_size)
+    {
+        g_big_stacks[instance_id] = alloc_big_stack(instance_id, app->stack_size);
+        if (!g_big_stacks[instance_id])
+        {
+            k_mutex_unlock(&g_big_stack_mutex);
+            LOG_ERR("Slot %d: no %u B SRAM stack for '%s' (manifest stack_kb)",
+                    instance_id, app->stack_size, app->name);
+            return -ENOMEM;
+        }
+        stack = g_big_stacks[instance_id];
+        stack_size = app->stack_size;
+        LOG_INF("Slot %d: %u B stack from the %s (manifest stack_kb)", instance_id,
+                app->stack_size, g_big_stack_libc[instance_id] ? "libc arena" : "kernel heap");
+    }
+
     app->status = AKIRA_APP_STATUS_RUNNING;
 
     app->tid = k_thread_create(
         &g_app_threads[instance_id],
-        g_app_stacks[instance_id],
-        CONFIG_AKIRA_WASM_APP_STACK_SIZE,
+        stack,
+        stack_size,
         wasm_app_thread_fn,
         (void *)(intptr_t)instance_id, NULL, NULL,
         CONFIG_AKIRA_WASM_APP_PRIORITY,
         0, K_NO_WAIT);
     g_app_thread_created[instance_id] = true;
+    k_mutex_unlock(&g_big_stack_mutex);
 
     if (!app->tid)
     {
@@ -1493,6 +1581,7 @@ int akira_runtime_start(int instance_id)
         LOG_ERR("Timeout waiting for WASM instantiation (slot %d) — aborting", instance_id);
         k_thread_abort(app->tid);
         k_thread_join(&g_app_threads[instance_id], K_MSEC(200));
+        release_big_stack(instance_id);
         app->tid = NULL;
         /* Free the module and binary too, or each timed-out start leaks them. */
         k_mutex_lock(&app->exit_mutex, K_FOREVER);

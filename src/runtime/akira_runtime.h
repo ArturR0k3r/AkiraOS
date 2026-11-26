@@ -90,6 +90,7 @@ typedef struct {
     uint64_t cap_mask;        /**< capability bitmask from manifest */
     bool attested;            /**< an admission provider trusted its signature */
     uint32_t memory_quota;    /**< memory quota from manifest (0 = unlimited) */
+    uint32_t stack_size;      /**< thread stack from manifest "stack_kb" (0 = pre-allocated one) */
     atomic_t memory_used;     /**< current memory usage (bytes) — updated atomically */
     char commands_json[MANIFEST_COMMANDS_JSON_MAX_LEN]; /**< raw "commands" array from manifest */
 
