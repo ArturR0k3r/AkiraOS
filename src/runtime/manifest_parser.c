@@ -243,6 +243,12 @@ int manifest_parse_json(const char *json, size_t json_len, akira_manifest_t *man
             if (!p)
                 return -EINVAL;
         }
+        else if (strcmp(key, "stack_kb") == 0)
+        {
+            p = json_parse_int(p, end, &manifest->stack_kb);
+            if (!p)
+                return -EINVAL;
+        }
         else if (strcmp(key, "abi") == 0)
         {
             /* "MAJOR.MINOR": the AkiraOS WASM import ABI the app was built for. */

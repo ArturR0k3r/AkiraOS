@@ -9,6 +9,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `feat(runtime)`: An app's manifest `"stack_kb"` now sets its thread stack. AOT apps keep
+  their call frames on that stack, and deep engines (a Build-engine game) need more than the
+  8 KB default. A larger request gets its own internal-SRAM stack while the app runs, first
+  from the libc malloc arena (on ESP32-S3 the DRAM left after `.bss`, otherwise unused), then
+  from the kernel heap; the app fails to start with -ENOMEM if neither has the block. At most
+  `CONFIG_AKIRA_WASM_APP_STACK_MAX_KB` (default 16, 0 ignores the key); other apps keep the
+  pre-allocated stack.
+
 ### Changed
 - `feat(bt)`: The pairing BLE management requires is a choice,
   `CONFIG_AKIRA_BT_MGMT_PAIRING_*`, replacing the `CONFIG_AKIRA_BT_SECURE_PAIRING`
