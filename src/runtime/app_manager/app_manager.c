@@ -1059,6 +1059,7 @@ int app_manager_stop(const char *name)
     /* Snapshot name before unlock for post-unlock IPC publish */
     char lc_name_s[APP_NAME_MAX_LEN];
     strncpy(lc_name_s, app->name, APP_NAME_MAX_LEN);
+    int lc_id_s = app->id;
 
     /* Release g_registry_mutex BEFORE calling akira_runtime_stop().
      *
@@ -1109,6 +1110,8 @@ int app_manager_stop(const char *name)
         akira_ipc_publish(AKIRA_LIFECYCLE_TOPIC, &ev, sizeof(ev));
     }
 #endif
+    /* The exit callback cannot match this app: container_id was cleared above. */
+    akira_hooks_emit_app(AKIRA_HOOK_APP_STOPPED, lc_name_s, lc_id_s, container_id, NULL, 0);
 
     LOG_INF("Stopped app: %s", name);
     return ret < 0 ? ret : 0;
