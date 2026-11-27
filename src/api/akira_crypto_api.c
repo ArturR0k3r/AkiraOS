@@ -794,12 +794,13 @@ static const NativeSymbol akira_crypto_natives[] = {
     {"crypto_p256_keygen",       (void *)akira_native_crypto_p256_keygen,       "(**)i",     NULL},
     /* priv_ptr(32B), msg_ptr+msg_len pair (auto-validated), sig_ptr(64B raw r||s) */
     {"crypto_p256_sign",         (void *)akira_native_crypto_p256_sign,         "(**~*)i",   NULL},
-#ifdef CONFIG_AKIRA_SE050_U2F
-    /* SE050 hardware-backed P-256 (non-exportable) — slot(i), pub_ptr(65B) */
+    /* SE050 hardware-backed P-256 (non-exportable) — slot(i), pub_ptr(65B).
+     * Exported in every crypto build: without CONFIG_AKIRA_SE050_U2F the
+     * stubs return -ENOTSUP, so an app can probe for the secure element
+     * instead of trapping on an unlinked import. */
     {"crypto_p256_keygen_se050", (void *)akira_native_crypto_p256_keygen_se050, "(i*)i",     NULL},
     /* slot(i), hash_ptr(32B), sig_ptr(64B raw r||s) */
     {"crypto_p256_sign_se050",   (void *)akira_native_crypto_p256_sign_se050,   "(i**)i",    NULL},
-#endif
 };
 
 AKIRA_NATIVE_API_DEFINE(akira_crypto_api, "env", akira_crypto_natives);
