@@ -167,9 +167,9 @@ int akira_native_net_rx_bind(wasm_exec_env_t exec_env, int32_t handle,
 			     int32_t wasm_ptr, int32_t total_size);
 
 /**
- * @brief Wake the poll thread to drain the TX ring now.
+ * @brief Wake the poll work to drain the TX ring now.
  *
- * The poll thread drains automatically on each 10 ms tick and is the only
+ * The poll work drains automatically on each 10 ms tick and is the only
  * thread that sends (non-blocking, so a stalled peer never blocks the app).
  * Call this for lower-latency sends without waiting for the next tick.
  *

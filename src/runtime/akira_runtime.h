@@ -90,6 +90,7 @@ typedef struct {
     uint64_t cap_mask;        /**< capability bitmask from manifest */
     bool attested;            /**< an admission provider trusted its signature */
     uint32_t memory_quota;    /**< memory quota from manifest (0 = unlimited) */
+    uint32_t stack_size;      /**< thread stack from manifest "stack_kb" (0 = pre-allocated one) */
     atomic_t memory_used;     /**< current memory usage (bytes) — updated atomically */
     char commands_json[MANIFEST_COMMANDS_JSON_MAX_LEN]; /**< raw "commands" array from manifest */
 
@@ -150,6 +151,14 @@ int akira_runtime_load_wasm_owned(uint8_t *buffer, uint32_t size);
 
 /* Start/stop a loaded instance by id */
 int akira_runtime_start(int instance_id);
+
+/**
+ * @brief Copy @p len bytes at @p app_addr of running app @p name's linear
+ *        memory to @p out (debugging: shell "akira peek").
+ * @return 0, -ENOENT if no such running app, -EFAULT if the range is outside
+ *         its memory.
+ */
+int akira_runtime_peek(const char *name, uint32_t app_addr, void *out, uint32_t len);
 int akira_runtime_stop(int instance_id);
 
 /* Persistent installation: save binary and optional manifest to /lfs/apps
@@ -169,6 +178,11 @@ struct akira_admission_record;
 int akira_runtime_install_admitted(const char *name, const void *binary, size_t size,
                                    const char *manifest_json, size_t manifest_size,
                                    const struct akira_admission_record *record);
+/* Same as akira_runtime_install_admitted(), but takes ownership of `binary`
+ * (freed on every outcome) instead of copying it. */
+int akira_runtime_install_admitted_owned(const char *name, uint8_t *binary, size_t size,
+                                         const char *manifest_json, size_t manifest_size,
+                                         const struct akira_admission_record *record);
 int akira_runtime_install(const char *name, const void *binary, size_t size);
 
 /* Same as akira_runtime_install_with_manifest(), but takes ownership of

@@ -465,7 +465,7 @@ static void kb_move(int dr, int dc) {
 static void kb_update_hints(void)
 {
     /* B deletes; on an empty field it backs out to the list. */
-    screen_set_hints(g_kb.len ? "A:Type|B:Del" : "A:Type|B:Back", "Y:Shift|X:Connect");
+    screen_set_hints(g_kb.len ? "A:Type|B:Del" : "A:Type|B:Back", "Y:Caps Lock|X:Connect");
 }
 
 static void kb_draw_key(int row, int col, bool hi)
@@ -586,7 +586,7 @@ static const shell_screen_t wifi_kb_screen = {
     .title = "Wi-Fi password",
     .flags = SCR_F_STATUSBAR | SCR_F_FOOTER,
     .hint_l = "A:Type|B:Back",
-    .hint_r = "Y:Shift|X:Connect",
+    .hint_r = "Y:Caps Lock|X:Connect",
     .enter = kb_enter,
     .leave = kb_leave,
     .on_key = kb_key,

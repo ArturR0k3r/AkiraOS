@@ -168,6 +168,22 @@ config AKIRA_WASM_APP_STACK_SIZE
       Total SRAM consumed: CONFIG_MAX_CONTAINERS * this value.
       Override per-board in boards/<board>.conf.
 
+config AKIRA_WASM_APP_STACK_MAX_KB
+    int "Largest app thread stack a manifest may request (KB)"
+    default 16
+    range 0 64
+    depends on AKIRA_WASM_RUNTIME
+    help
+      An app whose manifest has "stack_kb" above AKIRA_WASM_APP_STACK_SIZE
+      gets its own SRAM stack of that size (at most this) while it runs,
+      instead of the pre-allocated one: from the libc malloc arena (on
+      ESP32-S3 the DRAM left after .bss, ~12 KB on akiraconsole_prod), else
+      from the kernel heap. AOT code keeps
+      its call frames on this stack, so deep engines (e.g. a Build-engine
+      game) need more than the default. Starting such an app fails with
+      -ENOMEM if neither has a contiguous block that large.
+      0 ignores "stack_kb".
+
 config AKIRA_WASM_APP_PRIORITY
     int "WASM app thread scheduling priority"
     # 14 matches Zephyr's default shell thread priority so WASM apps and the
@@ -3057,15 +3073,6 @@ config AKIRA_NET_MAX_STREAMS
       The stream table lives in PSRAM where available; data rings live in
       WASM linear memory. With more than one app slot, one app may hold all
       stream slots but one.
-
-config AKIRA_NET_POLL_STACK_SIZE
-    int "Network poll thread stack size (bytes)"
-    default 2048
-    range 1024 8192
-    depends on AKIRA_WASM_NET
-    help
-      Stack size of the internal poll thread that drives all sockets.
-      Its receive and send buffers are static, not on this stack.
 
 config AKIRA_NET_EVENT_QUEUE_DEPTH
     int "Network event queue depth (messages)"

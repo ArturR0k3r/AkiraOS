@@ -22,7 +22,7 @@ LOG_MODULE_REGISTER(akira_net_api, CONFIG_AKIRA_LOG_LEVEL);
  *
  * Streams, rings and queued events belong to the app's slot and are released
  * by net_release() however the app ends — first of all release hooks, since
- * the poll thread writes into the app's RX rings.
+ * the poll work writes into the app's RX rings.
  */
 
 #include "akira_net_api.h"
@@ -164,7 +164,7 @@ static int net_policy_gate(wasm_exec_env_t exec_env, int owner, enum akira_net_o
 /**
  * @brief True if the app's linear memory can never move.
  *
- * The poll thread keeps native pointers to ring buffers in linear memory and
+ * The poll work keeps native pointers to ring buffers in linear memory and
  * uses them from its own thread. WAMR reallocates linear memory on
  * memory.grow (os_mremap / realloc on Zephyr), so a growable memory could
  * move underneath it — a use-after-free no lock can prevent, since
@@ -222,7 +222,7 @@ int akira_native_net_open(wasm_exec_env_t exec_env, int32_t type)
 		return owner;
 	}
 
-	/* Lazy-starts the poll thread on first use. */
+	/* Lazy-initialises the stream subsystem on first use. */
 	return NET_CRITICAL(exec_env, net_stream_open(owner, (int)type));
 }
 
@@ -408,7 +408,7 @@ int akira_native_net_tx_flush(wasm_exec_env_t exec_env, int32_t handle)
 	}
 
 	/*
-	 * Only wakes the poll thread, which sends non-blocking: sending never
+	 * Only wakes the poll work, which sends non-blocking: sending never
 	 * happens on the app thread, so a stalled peer cannot block the app.
 	 * Returns 0 rather than a byte count (the bytes leave asynchronously);
 	 * send errors arrive as NET_EVT_ERROR.
@@ -526,7 +526,7 @@ int akira_native_net_get_ip(wasm_exec_env_t exec_env,
  * ======================================================================= */
 
 /*
- * Order 10, first of all release hooks: the poll thread copies received data
+ * Order 10, first of all release hooks: the poll work copies received data
  * into the app's RX rings, and nothing may write into the app's memory once
  * it can be freed. Detaches every ring and drops the slot's events under the
  * stream-table lock; the sockets are closed asynchronously by the poll

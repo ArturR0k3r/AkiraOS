@@ -12,10 +12,13 @@ LOG_MODULE_REGISTER(akira_net_stream, CONFIG_AKIRA_LOG_LEVEL);
  * @brief TCP/UDP/TLS stream engine with shared-memory ring buffers.
  *
  * Threads and who may do what:
- *   - Poll thread: the only thread that sends, receives, accepts, touches a
- *     ring, or closes a socket that is not being connected. It drains TX
- *     rings and fills RX rings with non-blocking socket calls, so one stalled
- *     peer never holds up the others.
+ *   - Poll work (system workqueue, one k_work_delayable): the only context
+ *     that sends, receives, accepts, touches a ring, or closes a socket that
+ *     is not being connected. It drains TX rings and fills RX rings with
+ *     non-blocking socket calls, so one stalled peer never holds up the
+ *     others. It shares the workqueue with the connect worker, so it never
+ *     runs during a TLS handshake. Running there keeps TLS record crypto on
+ *     the workqueue stack instead of a dedicated one.
  *   - Connect worker (system workqueue, one k_work_delayable): one connect at
  *     a time system-wide (the system owner's requests first). DNS (bounded by
  *     CONFIG_NET_SOCKETS_DNS_TIMEOUT) and the TLS handshake (bounded by
@@ -32,16 +35,16 @@ LOG_MODULE_REGISTER(akira_net_stream, CONFIG_AKIRA_LOG_LEVEL);
  *
  * Memory safety against the app: ring capacity is fixed at bind time, the
  * host keeps its own copy of the index it produces/consumes, every offset is
- * reduced modulo that capacity, and the poll thread accesses ring memory only
+ * reduced modulo that capacity, and the poll work accesses ring memory only
  * while holding g_mutex with the pointer re-checked — so detaching a ring
  * (close / net_stream_release_owner) under g_mutex ends all access to it.
  *
  * Slot lifetime: close/release only mark a stream "closing" and detach its
- * rings; the poll thread closes the socket — once the connect worker has let
+ * rings; the poll work closes the socket — once the connect worker has let
  * go of it, if it was connecting — and only then is the slot freed and its
- * generation bumped. Because only the poll thread closes stream sockets, an
+ * generation bumped. Because only the poll work closes stream sockets, an
  * fd number is never reused (by another stream, or another subsystem's
- * socket) while the poll thread may still use it.
+ * socket) while the poll work may still use it.
  */
 
 #ifdef CONFIG_AKIRA_WASM_NET
@@ -84,10 +87,6 @@ LOG_MODULE_REGISTER(akira_net_stream, CONFIG_AKIRA_LOG_LEVEL);
 #define CONFIG_AKIRA_NET_EVENT_QUEUE_DEPTH 8
 #endif
 
-#ifndef CONFIG_AKIRA_NET_POLL_STACK_SIZE
-#define CONFIG_AKIRA_NET_POLL_STACK_SIZE  2048
-#endif
-
 #ifndef CONFIG_AKIRA_NET_MAX_MSG_SIZE
 #define CONFIG_AKIRA_NET_MAX_MSG_SIZE     1500
 #endif
@@ -117,7 +116,7 @@ LOG_MODULE_REGISTER(akira_net_stream, CONFIG_AKIRA_LOG_LEVEL);
 #define NET_POLL_EVENTS_MAX (2 * NET_MAX_STREAMS)
 #endif
 
-#define NET_POLL_TICK_MS        10    /* poll thread iteration                */
+#define NET_POLL_TICK_MS        10    /* poll work re-check interval when idle */
 #define NET_CONNECT_POLL_MS     50    /* connect worker re-check interval     */
 #define NET_TCP_CONNECT_MS      10000 /* plain TCP connect deadline           */
 #define NET_TLS_PROBE_MS        6000  /* TLS: TCP reachability probe deadline */
@@ -213,18 +212,23 @@ static K_MUTEX_DEFINE(g_init_lock);
 static bool g_initialized;
 static uint32_t g_conn_seq;
 
-/* Poll thread */
-static void net_poll_thread_fn(void *a, void *b, void *c);
-K_THREAD_STACK_DEFINE(g_poll_stack, CONFIG_AKIRA_NET_POLL_STACK_SIZE);
-static struct k_thread g_poll_thread;
+/* Poll work (system workqueue). It runs there, not on its own thread, so
+ * the mbedTLS record decrypt/encrypt that zsock_poll()/recv()/send()/close()
+ * do on TLS sockets uses the workqueue stack already sized for the TLS
+ * handshake. It never blocks: zsock_poll() runs with a zero timeout. */
+static void net_poll_work_fn(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(g_poll_work, net_poll_work_fn);
 
-/* Poll-thread-only buffers (never shared with another thread). */
+/* Poll-work-only buffers (never shared with another thread). */
 static AKIRA_BULK_BSS uint8_t g_rx_buf[CONFIG_AKIRA_NET_MAX_MSG_SIZE];
 static AKIRA_BULK_BSS uint8_t g_tx_stage[CONFIG_AKIRA_NET_MAX_MSG_SIZE];
 
-/* Wakes the poll thread: a stream became pollable, something must be reaped,
- * or a flush was requested. A give before the take is remembered. */
-static K_SEM_DEFINE(g_poll_wake, 0, 1);
+/* Runs the poll work now: a stream became pollable, something must be
+ * reaped, or a flush was requested. */
+static void poll_kick(void)
+{
+	k_work_reschedule(&g_poll_work, K_NO_WAIT);
+}
 
 /* Connect worker: the single connect in flight. Only the worker touches g_job. */
 enum {
@@ -606,7 +610,7 @@ static int rx_push_locked(struct net_stream_ctx *c, const uint8_t *buf, uint16_t
 }
 
 /* =========================================================================
- * Poll thread: TX drain, RX fill, accept, reap
+ * Poll work: TX drain, RX fill, accept, reap
  * ======================================================================= */
 
 /**
@@ -816,7 +820,7 @@ static void accept_service(int h, int fd, uint32_t gen)
 
 /* Close the sockets of streams marked closing (unless the connect worker
  * owns them) and free their slots; close the socket of a failed connect but
- * keep its slot for the owner to close. Only the poll thread closes stream
+ * keep its slot for the owner to close. Only the poll work closes stream
  * sockets, so a socket is never closed while this thread is inside a call on
  * it, and an fd number is never reused under its snapshot. */
 static void reap_closing(void)
@@ -911,131 +915,136 @@ static int poll_batched(struct zsock_pollfd *pfds, int nfds, int timeout_ms)
 	return total;
 }
 
-static void net_poll_thread_fn(void *a, void *b, void *c_)
+/* One pass: reap, drain TX, poll (zero timeout), service events. Re-runs
+ * itself at once while data moves, after NET_POLL_TICK_MS while a stream is
+ * live but quiet, and not at all with no stream (poll_kick() restarts it). */
+static void net_poll_work_fn(struct k_work *work)
 {
-	ARG_UNUSED(a);
-	ARG_UNUSED(b);
-	ARG_UNUSED(c_);
+	ARG_UNUSED(work);
 
 	struct zsock_pollfd pfds[NET_MAX_STREAMS];
 	int                 handles[NET_MAX_STREAMS];
 	uint32_t            gens[NET_MAX_STREAMS];
 
-	LOG_INF("Net poll thread started");
+	/* ---- 1. Close what was asked to close ---- */
+	reap_closing();
 
-	while (1) {
-		/* ---- 1. Close what was asked to close ---- */
-		reap_closing();
+	/* ---- 2. Drain TX rings (non-blocking) ---- */
+	bool tx_more = false;
 
-		/* ---- 2. Drain TX rings (non-blocking) ---- */
-		bool tx_more = false;
+	for (int h = 0; h < NET_MAX_STREAMS; h++) {
+		tx_more |= tx_drain(h);
+	}
 
-		for (int h = 0; h < NET_MAX_STREAMS; h++) {
-			tx_more |= tx_drain(h);
+	/* ---- 3. Snapshot what to poll ---- */
+	int  nfds = 0;
+	bool any_live = false;
+
+	k_mutex_lock(&g_mutex, K_FOREVER);
+	for (int i = 0; i < NET_MAX_STREAMS; i++) {
+		struct net_stream_ctx *c = &g_streams[i];
+		short events = 0;
+
+		if (!c->used || c->closing || c->fd < 0) {
+			continue;
 		}
 
-		/* ---- 3. Snapshot what to poll ---- */
-		int  nfds = 0;
-		bool any_live = false;
+		/* Only connected streams, listeners and UDP sockets are
+		 * polled. An unconnected TCP/TLS socket has nothing to
+		 * read, and one the connect worker owns is not ours to
+		 * touch (polling one it is handshaking on would block this
+		 * thread on its socket lock for the whole handshake). */
+		bool data_stream = c->state == NET_STATE_CONNECTED ||
+				   (c->state == NET_STATE_OPEN &&
+				    c->type == NET_TYPE_UDP);
+
+		if (c->state == NET_STATE_LISTENING) {
+			events = ZSOCK_POLLIN;
+		} else if (data_stream) {
+			/* Parked streams (RX ring full, TX waiting for
+			 * the app) need a re-check every tick. */
+			any_live = true;
+			if (!c->rx_native || rx_room_locked(c) >= 3) {
+				events |= ZSOCK_POLLIN;
+			}
+			if (c->state == NET_STATE_CONNECTED && c->tx_wait_out) {
+				events |= ZSOCK_POLLOUT;
+			}
+		}
+		if (events == 0) {
+			continue;
+		}
+		pfds[nfds].fd      = c->fd;
+		pfds[nfds].events  = events;
+		pfds[nfds].revents = 0;
+		handles[nfds]      = i;
+		gens[nfds]         = c->gen;
+		nfds++;
+	}
+	k_mutex_unlock(&g_mutex);
+
+	if (nfds == 0) {
+		/* Nothing to poll. Streams that exist but are parked (RX ring
+		 * full, TX waiting for the app) are re-checked every tick;
+		 * with no stream at all, wait for poll_kick(). */
+		if (any_live || tx_more) {
+			k_work_schedule(&g_poll_work, K_MSEC(NET_POLL_TICK_MS));
+		}
+		return;
+	}
+
+	/* ---- 4. Poll (never blocks the workqueue) ---- */
+	int n = poll_batched(pfds, nfds, 0);
+
+	if (n < 0) {
+		LOG_DBG("zsock_poll failed: %d", errno);
+		/* never spin on a poll error */
+		k_work_schedule(&g_poll_work, K_MSEC(NET_POLL_TICK_MS));
+		return;
+	}
+	if (n == 0) {
+		k_work_schedule(&g_poll_work,
+				tx_more ? K_NO_WAIT : K_MSEC(NET_POLL_TICK_MS));
+		return;
+	}
+
+	/* ---- 5. Process events ---- */
+	for (int i = 0; i < nfds; i++) {
+		short rev = pfds[i].revents;
+
+		if (rev == 0) {
+			continue;
+		}
+
+		int h = handles[i];
+		struct net_stream_ctx *c = &g_streams[h];
 
 		k_mutex_lock(&g_mutex, K_FOREVER);
-		for (int i = 0; i < NET_MAX_STREAMS; i++) {
-			struct net_stream_ctx *c = &g_streams[i];
-			short events = 0;
+		bool live = ctx_live(c, gens[i]);
+		net_state_t state = c->state;
 
-			if (!c->used || c->closing || c->fd < 0) {
-				continue;
-			}
-
-			/* Only connected streams, listeners and UDP sockets are
-			 * polled. An unconnected TCP/TLS socket has nothing to
-			 * read, and one the connect worker owns is not ours to
-			 * touch (polling one it is handshaking on would block this
-			 * thread on its socket lock for the whole handshake). */
-			bool data_stream = c->state == NET_STATE_CONNECTED ||
-					   (c->state == NET_STATE_OPEN &&
-					    c->type == NET_TYPE_UDP);
-
-			if (c->state == NET_STATE_LISTENING) {
-				events = ZSOCK_POLLIN;
-			} else if (data_stream) {
-				/* Parked streams (RX ring full, TX waiting for
-				 * the app) need a re-check every tick. */
-				any_live = true;
-				if (!c->rx_native || rx_room_locked(c) >= 3) {
-					events |= ZSOCK_POLLIN;
-				}
-				if (c->state == NET_STATE_CONNECTED && c->tx_wait_out) {
-					events |= ZSOCK_POLLOUT;
-				}
-			}
-			if (events == 0) {
-				continue;
-			}
-			pfds[nfds].fd      = c->fd;
-			pfds[nfds].events  = events;
-			pfds[nfds].revents = 0;
-			handles[nfds]      = i;
-			gens[nfds]         = c->gen;
-			nfds++;
+		if (live && (rev & ZSOCK_POLLOUT)) {
+			c->tx_wait_out = false; /* writable: drain next pass */
 		}
 		k_mutex_unlock(&g_mutex);
 
-		if (nfds == 0) {
-			/* Nothing to poll. Streams that exist but are parked (RX ring
-			 * full, TX waiting for the app) are re-checked every tick;
-			 * with no stream at all, sleep until one opens. */
-			k_sem_take(&g_poll_wake,
-				   (any_live || tx_more) ? K_MSEC(NET_POLL_TICK_MS) : K_FOREVER);
+		if (!live) {
 			continue;
 		}
-
-		/* ---- 4. Poll ---- */
-		int n = poll_batched(pfds, nfds, tx_more ? 0 : NET_POLL_TICK_MS);
-
-		if (n < 0) {
-			LOG_DBG("zsock_poll failed: %d", errno);
-			k_sleep(K_MSEC(NET_POLL_TICK_MS)); /* never spin on a poll error */
+		if (state == NET_STATE_LISTENING) {
+			if (rev & ZSOCK_POLLIN) {
+				accept_service(h, pfds[i].fd, gens[i]);
+			}
 			continue;
 		}
-		if (n == 0) {
-			continue;
-		}
-
-		/* ---- 5. Process events ---- */
-		for (int i = 0; i < nfds; i++) {
-			short rev = pfds[i].revents;
-
-			if (rev == 0) {
-				continue;
-			}
-
-			int h = handles[i];
-			struct net_stream_ctx *c = &g_streams[h];
-
-			k_mutex_lock(&g_mutex, K_FOREVER);
-			bool live = ctx_live(c, gens[i]);
-			net_state_t state = c->state;
-
-			if (live && (rev & ZSOCK_POLLOUT)) {
-				c->tx_wait_out = false; /* writable: drain next pass */
-			}
-			k_mutex_unlock(&g_mutex);
-
-			if (!live) {
-				continue;
-			}
-			if (state == NET_STATE_LISTENING) {
-				if (rev & ZSOCK_POLLIN) {
-					accept_service(h, pfds[i].fd, gens[i]);
-				}
-				continue;
-			}
-			if (rev & (ZSOCK_POLLIN | ZSOCK_POLLERR | ZSOCK_POLLHUP | ZSOCK_POLLNVAL)) {
-				rx_service(h, pfds[i].fd, gens[i], rev);
-			}
+		if (rev & (ZSOCK_POLLIN | ZSOCK_POLLERR | ZSOCK_POLLHUP | ZSOCK_POLLNVAL)) {
+			rx_service(h, pfds[i].fd, gens[i], rev);
 		}
 	}
+
+	/* Data moved: go again now, so bulk transfers are not capped by
+	 * the tick. Other workqueue items still run in between. */
+	k_work_schedule(&g_poll_work, K_NO_WAIT);
 }
 
 /* =========================================================================
@@ -1295,7 +1304,7 @@ static void job_finish_locked(int err)
 			LOG_DBG("stream %d: connected to \"%s\":%u",
 				g_job.h, g_job.host, g_job.port);
 		} else {
-			/* The poll thread closes the socket (and frees its TLS
+			/* The poll work closes the socket (and frees its TLS
 			 * context) right away; the slot stays until the owner
 			 * closes the handle. */
 			c->state   = NET_STATE_ERROR;
@@ -1352,7 +1361,7 @@ static void connect_work_fn(struct k_work *work)
 	job_finish_locked(ret);
 	k_mutex_unlock(&g_mutex);
 
-	k_sem_give(&g_poll_wake); /* poll it, or reap it */
+	poll_kick(); /* poll it, or reap it */
 
 	/* Next queued connect (if any) in a fresh run, so other workqueue items
 	 * get to run in between. */
@@ -1410,15 +1419,8 @@ int net_stream_init(void)
 	g_job.fd       = -1;
 	g_job.probe_fd = -1;
 
-	/* Created suspended so it can be pinned: a ready thread can't be. */
-	k_thread_create(&g_poll_thread, g_poll_stack,
-			K_THREAD_STACK_SIZEOF(g_poll_stack),
-			net_poll_thread_fn, NULL, NULL, NULL,
-			CONFIG_AKIRA_WASM_APP_PRIORITY, 0, K_FOREVER);
-	k_thread_name_set(&g_poll_thread, "akira_net_poll");
-
-	/* Under SMP, this thread's zsock_recv()/zsock_poll() calls (and the
-	 * connect worker, on k_sys_work_q) drop straight into the WiFi blob's
+	/* Under SMP, the poll work's zsock_recv()/zsock_poll() calls and the
+	 * connect worker (both on k_sys_work_q) drop straight into the WiFi blob's
 	 * send/recv path via net_if_try_queue_tx() — CONFIG_NET_TC_TX_COUNT=0
 	 * means there's no TX thread for net_tc.c's own core0 pin to apply to,
 	 * so without this, TLS traffic runs on whichever core the scheduler
@@ -1427,10 +1429,8 @@ int net_stream_init(void)
 	 * thread already is (net_tc.c). Confirmed root cause of SMP-only TLS
 	 * fetch failures. */
 #if defined(CONFIG_SCHED_CPU_MASK) && defined(CONFIG_SMP)
-	k_thread_cpu_pin(&g_poll_thread, 0);
 	k_thread_cpu_pin(&k_sys_work_q.thread, 0);
 #endif
-	k_thread_start(&g_poll_thread);
 
 	g_initialized = true;
 	k_mutex_unlock(&g_init_lock);
@@ -1507,7 +1507,7 @@ int net_stream_open(int owner, int type)
 		return h;
 	}
 
-	k_sem_give(&g_poll_wake);
+	poll_kick();
 	LOG_DBG("stream %d opened (%s fd=%d owner=%d)", h, type_name, fd, owner);
 	return h;
 }
@@ -1610,7 +1610,7 @@ int net_stream_bind(int owner, int handle, uint16_t port)
 		return -err;
 	}
 
-	k_sem_give(&g_poll_wake); /* a bound UDP socket becomes pollable */
+	poll_kick(); /* a bound UDP socket becomes pollable */
 	LOG_DBG("stream %d: bound to port %u", handle, port);
 	return 0;
 }
@@ -1635,7 +1635,7 @@ int net_stream_listen(int owner, int handle, int backlog)
 		return -EINVAL;
 	}
 
-	/* Non-blocking so the poll thread's accept() can never wait. */
+	/* Non-blocking so the poll work's accept() can never wait. */
 	int ret = set_nonblock(c->fd);
 
 	if (ret == 0 && zsock_listen(c->fd, CLAMP(backlog, 1, NET_MAX_STREAMS)) < 0) {
@@ -1651,7 +1651,7 @@ int net_stream_listen(int owner, int handle, int backlog)
 		return ret;
 	}
 
-	k_sem_give(&g_poll_wake); /* a listening socket is pollable for accepts */
+	poll_kick(); /* a listening socket is pollable for accepts */
 	LOG_DBG("stream %d: listening (backlog=%d)", handle, backlog);
 	return 0;
 }
@@ -1682,14 +1682,14 @@ int net_stream_close(int owner, int handle)
 		return 0;
 	}
 
-	/* The poll thread (after the connect worker lets go, if it holds it)
+	/* The poll work (after the connect worker lets go, if it holds it)
 	 * closes the socket and frees the slot. */
 	c->closing = true;
 	uint32_t gen = c->gen;
 	bool wait = !c->conn_active;
 
 	k_mutex_unlock(&g_mutex);
-	k_sem_give(&g_poll_wake);
+	poll_kick();
 
 	if (wait) {
 		/* Bounded and fixed: lets a following open reuse the socket. The
@@ -1722,7 +1722,7 @@ static int ring_bind(int owner, int handle, uint8_t *native_ptr, uint32_t total_
 		return -ENOENT;
 	}
 
-	/* Header written under g_mutex: the poll thread never sees a half-set-up
+	/* Header written under g_mutex: the poll work never sees a half-set-up
 	 * ring, and the old ring (if any) is no longer used once we unlock. */
 	ring_hdr_init(native_ptr, cap);
 	if (tx) {
@@ -1740,7 +1740,7 @@ static int ring_bind(int owner, int handle, uint8_t *native_ptr, uint32_t total_
 	}
 	k_mutex_unlock(&g_mutex);
 
-	k_sem_give(&g_poll_wake);
+	poll_kick();
 	LOG_DBG("stream %d: %s ring bound (%u bytes data area)", handle, tx ? "TX" : "RX", cap);
 	return 0;
 }
@@ -1771,7 +1771,7 @@ int net_stream_tx_flush(int owner, int handle)
 	k_mutex_unlock(&g_mutex);
 
 	if (ret == 0) {
-		k_sem_give(&g_poll_wake);
+		poll_kick();
 	}
 	return ret;
 }
@@ -1825,7 +1825,7 @@ void net_stream_release_owner(int owner)
 	k_mutex_unlock(&g_mutex);
 
 	if (released > 0) {
-		k_sem_give(&g_poll_wake);
+		poll_kick();
 		LOG_INF("app slot %d: released %d stream(s)", owner, released);
 	}
 }

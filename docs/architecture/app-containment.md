@@ -110,7 +110,7 @@ path, before the app's memory is freed:
 
 | Area (order) | Released |
 |---|---|
-| Network (10) | TCP/UDP streams closed, rings in app memory detached, queued events purged. First, because the poll thread writes into app memory |
+| Network (10) | TCP/UDP streams closed, rings in app memory detached, queued events purged. First, because the poll work writes into app memory |
 | Display (20) | pending auto-flush cancelled |
 | Mesh (40) | the session, only if this app owns it |
 | BLE (50) | the app's advert stopped, its GATT services removed, BLE mode, device name and bonding restored |

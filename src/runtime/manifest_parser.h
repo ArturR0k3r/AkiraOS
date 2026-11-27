@@ -52,6 +52,7 @@ extern "C"
     {
         uint64_t cap_mask;                      /**< Capability bitmask */
         uint32_t memory_quota;                  /**< Memory quota in bytes (0 = default) */
+        uint32_t stack_kb;                      /**< App thread stack in KB (0 = default) */
         char name[32];                          /**< Application name */
         char version[16];                       /**< Version string (e.g., "1.0.0") */
         bool valid;                             /**< True if manifest was successfully parsed */
