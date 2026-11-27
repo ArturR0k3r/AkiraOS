@@ -159,6 +159,25 @@ int akira_apps_get_commands(const char *name, char *buf, size_t size);
 int akira_apps_send_command(const char *name, const void *cmd, size_t cmd_len,
                             void *reply, size_t reply_size, uint32_t timeout_ms);
 
+/**
+ * @brief Read the newest state an app published on its "<name>.evt" topic.
+ *
+ * The first call for an app subscribes a system reader to that topic, so only
+ * messages published after it are seen. Each call drains what arrived since the
+ * last one and returns the newest message: the topic carries the app's state
+ * and command replies (the app_cmd_bridge convention), so the latest one wins.
+ * A message longer than @p size is cut to it. Never blocks. Needs
+ * CONFIG_AKIRA_WASM_IPC.
+ *
+ * @return length of the newest message (> 0), 0 if nothing new,
+ *         -ENOTSUP without CONFIG_AKIRA_WASM_IPC, -ENOMEM, -ENAMETOOLONG,
+ *         or -EINVAL.
+ */
+int akira_apps_state_read(const char *name, void *buf, size_t size);
+
+/** @brief Drop the reader akira_apps_state_read() subscribed for @p name. */
+void akira_apps_state_forget(const char *name);
+
 #ifdef __cplusplus
 }
 #endif

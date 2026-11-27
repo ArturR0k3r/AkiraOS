@@ -2701,3 +2701,62 @@ int akira_apps_send_command(const char *name, const void *cmd, size_t cmd_len,
     return -ENOTSUP;
 #endif
 }
+
+/* System subscriber that watches every app's ".evt" topic for its state. */
+#define STATE_READER "__app_state"
+
+static int state_topic(const char *name, char *topic, size_t size)
+{
+    if (!name || !name[0]) {
+        return -EINVAL;
+    }
+    int n = snprintf(topic, size, "%s.evt", name);
+
+    return (n > 0 && (size_t)n < size) ? 0 : -ENAMETOOLONG;
+}
+
+int akira_apps_state_read(const char *name, void *buf, size_t size)
+{
+#ifdef CONFIG_AKIRA_WASM_IPC
+    char topic[AKIRA_IPC_TOPIC_NAME_MAX];
+    int rc = state_topic(name, topic, sizeof(topic));
+
+    if (rc != 0 || !buf || size == 0) {
+        return rc != 0 ? rc : -EINVAL;
+    }
+    rc = akira_ipc_subscribe(topic, STATE_READER); /* 0 if already subscribed */
+    if (rc < 0) {
+        return rc;
+    }
+    /* Drain: earlier messages are superseded by the newest one. */
+    int latest = 0;
+
+    while (akira_ipc_pending(topic, STATE_READER) > 0) {
+        int n = akira_ipc_recv(topic, STATE_READER, buf, size, K_NO_WAIT);
+
+        if (n < 0) {
+            break;
+        }
+        latest = n;
+    }
+    return latest;
+#else
+    ARG_UNUSED(name);
+    ARG_UNUSED(buf);
+    ARG_UNUSED(size);
+    return -ENOTSUP;
+#endif
+}
+
+void akira_apps_state_forget(const char *name)
+{
+#ifdef CONFIG_AKIRA_WASM_IPC
+    char topic[AKIRA_IPC_TOPIC_NAME_MAX];
+
+    if (state_topic(name, topic, sizeof(topic)) == 0) {
+        (void)akira_ipc_unsubscribe(topic, STATE_READER);
+    }
+#else
+    ARG_UNUSED(name);
+#endif
+}
