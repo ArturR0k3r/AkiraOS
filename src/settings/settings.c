@@ -551,27 +551,6 @@ static char *unescape_value(const char *value)
     return unescaped;
 }
 
-/* Read one settings record. A record written by a build with a 64-byte value
- * (CONFIG_AKIRA_SETTINGS_MAX_VALUE_LEN default) is shorter than this struct
- * when the value length is larger: its `encrypted` byte then sits where this
- * layout has value[64]. Move it, so those records keep reading correctly. */
-#define LEGACY_VALUE_LEN 64
-#define LEGACY_ENTRY_LEN (MAX_KEY_LEN + LEGACY_VALUE_LEN + 1)
-
-static int entry_read(uint16_t id, settings_entry_t *e)
-{
-    memset(e, 0, sizeof(*e));
-    int r = nvs_read(&storage.nvs, id, e, sizeof(*e));
-
-#if CONFIG_AKIRA_SETTINGS_MAX_VALUE_LEN > LEGACY_VALUE_LEN
-    if (r == LEGACY_ENTRY_LEN) {
-        e->encrypted = (uint8_t)e->value[LEGACY_VALUE_LEN];
-        e->value[LEGACY_VALUE_LEN] = '\0';
-    }
-#endif
-    return r;
-}
-
 /* Compact NVS entries: reads all valid entries, rewrites them sequentially
  * from SETTINGS_START_ID, and updates the counter.  Called at init when
  * holes are detected (e.g. after OTA that wiped the old NVS partition address
@@ -594,7 +573,7 @@ static int compact_entries(uint16_t counter)
     uint16_t valid = 0;
     for (uint16_t i = 0; i < counter; i++)
     {
-        int r = entry_read(SETTINGS_START_ID + i, &buf[valid]);
+        int r = nvs_read(&storage.nvs, SETTINGS_START_ID + i, &buf[valid], sizeof(settings_entry_t));
         if (r >= 0)
         {
             valid++;
@@ -638,7 +617,7 @@ static int settings_get_id(const char *key)
         settings_entry_t entry;
         for (uint16_t i = 0; i < counter; i++)
         {
-            ret = entry_read(SETTINGS_START_ID + i, &entry);
+            ret = nvs_read(&storage.nvs, SETTINGS_START_ID + i, &entry, sizeof(entry));
             if (ret < 0)
             {
                 if (ret == -ENOENT)
@@ -1026,7 +1005,7 @@ static int init_flash(void)
         settings_entry_t probe;
         for (uint16_t i = 0; i < counter; i++)
         {
-            if (entry_read(SETTINGS_START_ID + i, &probe) < 0)
+            if (nvs_read(&storage.nvs, SETTINGS_START_ID + i, &probe, sizeof(probe)) < 0)
             {
                 has_holes = true;
                 break;
@@ -1194,7 +1173,7 @@ static int settings_get(const char *key, char *value, size_t max_len, bool no_se
         }
 
         settings_entry_t entry;
-        ret = entry_read(entry_id, &entry);
+        ret = nvs_read(&storage.nvs, entry_id, &entry, sizeof(entry));
         if (ret < 0)
         {
             LOG_WRN("Failed to read key %s at index %d", key, entry_id);
@@ -1282,7 +1261,7 @@ static int settings_delete(const char *key)
         if (entry_id != last_entry_id)
         { // Write the last key to the value we want to remove. This is done to avoid shifting all of the settings.
             settings_entry_t last_entry;
-            ret = entry_read(last_entry_id, &last_entry);
+            ret = nvs_read(&storage.nvs, last_entry_id, &last_entry, sizeof(last_entry));
             if (ret < 0)
             {
                 LOG_WRN("Failed to read last entry at index: %d (%d)", last_entry_id, ret);
@@ -1652,7 +1631,7 @@ static int app_ns_scan(const char *app, const char *key, struct app_ns_scan *s)
     for (uint16_t i = 0; i < counter; i++)
     {
         memset(&entry, 0, sizeof(entry));
-        ret = entry_read(SETTINGS_START_ID + i, &entry);
+        ret = nvs_read(&storage.nvs, SETTINGS_START_ID + i, &entry, sizeof(entry));
         if (ret == -ENOENT)
         {
             continue; /* hole */
@@ -1778,7 +1757,7 @@ static int app_purge(int ns)
     for (int i = (int)counter - 1; i >= 0; i--)
     {
         memset(&entry, 0, sizeof(entry));
-        if (entry_read(SETTINGS_START_ID + i, &entry) < 0)
+        if (nvs_read(&storage.nvs, SETTINGS_START_ID + i, &entry, sizeof(entry)) < 0)
         {
             continue;
         }
@@ -2236,7 +2215,7 @@ int akira_settings_list(settings_iterator_t *iter)
 
         settings_entry_t entry;
         int entry_id = SETTINGS_START_ID + iter->index;
-        ret = entry_read(entry_id, &entry);
+        ret = nvs_read(&storage.nvs, entry_id, &entry, sizeof(entry));
         if (ret < 0)
         {
             LOG_WRN("Failed to read at index %d", entry_id);
