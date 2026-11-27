@@ -175,6 +175,13 @@ int akira_apps_send_command(const char *name, const void *cmd, size_t cmd_len,
  */
 int akira_apps_state_read(const char *name, void *buf, size_t size);
 
+/**
+ * @brief Subscribe the reader for @p name without reading, so messages the app
+ * publishes from now on are kept for akira_apps_state_read() (e.g. before the
+ * app starts). @return 0, -ENOTSUP, -ENOMEM, -ENAMETOOLONG, or -EINVAL.
+ */
+int akira_apps_state_watch(const char *name);
+
 /** @brief Drop the reader akira_apps_state_read() subscribed for @p name. */
 void akira_apps_state_forget(const char *name);
 

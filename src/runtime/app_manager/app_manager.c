@@ -2715,6 +2715,19 @@ static int state_topic(const char *name, char *topic, size_t size)
     return (n > 0 && (size_t)n < size) ? 0 : -ENAMETOOLONG;
 }
 
+int akira_apps_state_watch(const char *name)
+{
+#ifdef CONFIG_AKIRA_WASM_IPC
+    char topic[AKIRA_IPC_TOPIC_NAME_MAX];
+    int rc = state_topic(name, topic, sizeof(topic));
+
+    return rc != 0 ? rc : akira_ipc_subscribe(topic, STATE_READER); /* 0 if already */
+#else
+    ARG_UNUSED(name);
+    return -ENOTSUP;
+#endif
+}
+
 int akira_apps_state_read(const char *name, void *buf, size_t size)
 {
 #ifdef CONFIG_AKIRA_WASM_IPC
@@ -2724,7 +2737,7 @@ int akira_apps_state_read(const char *name, void *buf, size_t size)
     if (rc != 0 || !buf || size == 0) {
         return rc != 0 ? rc : -EINVAL;
     }
-    rc = akira_ipc_subscribe(topic, STATE_READER); /* 0 if already subscribed */
+    rc = akira_apps_state_watch(name);
     if (rc < 0) {
         return rc;
     }
